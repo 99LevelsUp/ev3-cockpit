@@ -112,6 +112,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `EV3 Cockpit: Deploy and Run .rbf (active)` — pick a local `.rbf`, upload to active EV3 default root and start it
 - `EV3 Cockpit: Preview Deploy Changes (active)` — pick a local folder and preview upload/skip/cleanup result without modifying EV3
 - `EV3 Cockpit: Sync Project to EV3 (active)` — pick a local folder and upload/sync project tree to active EV3 (without starting program)
+- `EV3 Cockpit: Preview Workspace Deploy Changes (active)` — preview deploy changes for current workspace folder directly (or choose one in multi-root workspace)
 - `EV3 Cockpit: Sync Workspace to EV3 (active)` — sync current workspace folder directly (or choose one in multi-root workspace) without folder dialog
 - `EV3 Cockpit: Deploy Project and Run .rbf (active)` — pick a local folder, upload project tree to EV3 and run selected `.rbf`
 - `EV3 Cockpit: Run Remote Program (.rbf)` — run a chosen remote `.rbf` path (`/path/file.rbf` or `ev3://active/...`)

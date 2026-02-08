@@ -1375,6 +1375,19 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 	});
 
+	const previewWorkspaceDeploy = vscode.commands.registerCommand('ev3-cockpit.previewWorkspaceDeploy', async () => {
+		const workspaceUri = await pickWorkspaceProjectFolder();
+		if (!workspaceUri) {
+			return;
+		}
+
+		await executeProjectDeploy({
+			runAfterDeploy: false,
+			previewOnly: true,
+			projectUri: workspaceUri
+		});
+	});
+
 	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
@@ -1887,6 +1900,7 @@ export function activate(context: vscode.ExtensionContext) {
 		deployAndRunRbf,
 		previewProjectDeploy,
 		deployProject,
+		previewWorkspaceDeploy,
 		deployWorkspace,
 		deployProjectAndRunRbf,
 		runRemoteProgram,
