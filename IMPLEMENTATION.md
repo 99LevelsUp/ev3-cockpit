@@ -78,6 +78,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - HW smoke mapuje transientni post-probe transport chyby (napr. BT COM 121/1256 pri emergency-check) na `SKIP` misto `FAIL`.
   - HW smoke obsahuje volitelny scenar reconnect-recovery (`EV3_COCKPIT_HW_RECONNECT_CHECK=true`) pro USB/TCP/BT (`open -> probe -> close -> reopen -> probe`).
   - HW smoke reconnect-recovery pro USB/BT umi volitelne simulovat in-flight drop (`EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK`, default `true`) scenarem `pending probe -> forced close -> reopen -> probe`.
+  - HW smoke obsahuje volitelny manualni driver-drop reconnect check (`EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK`) pro USB/BT, ktery pri fyzickem odpojeni/pripojeni overuje obnovu spojeni; bez detekovaneho dropu vraci `SKIP`.
   - pridany HW matrix runner (`npm run test:hw:matrix`) pro scenare `baseline/reconnect/reconnect-glitch` s JSON report artefaktem (`artifacts/hw/hardware-matrix.json`).
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.
   - pridana command akce `EV3 Cockpit: Reconnect EV3 (active settings)` pro rychly reconnect pres stejny connect-probe/capability flow.
@@ -103,7 +104,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.
 
 Zbyva:
-- doplnit HW/integration reconnect-recovery scenare pro USB/Bluetooth pri realnem driver-level vypadku (unit testy adapteru jsou hotove, chybi end-to-end verifikace),
+- provozne overit manualni HW driver-drop reconnect check na realnem USB/Bluetooth vypadku (v kodu je pripraveny, chybi stabilni serie e2e behu),
 - doladit BT HW smoke stabilitu (port lock/unknown 121 je stale intermitentni v nekterych behach).
 
 ## Checkpoint pred prerusenim (2026-02-07)

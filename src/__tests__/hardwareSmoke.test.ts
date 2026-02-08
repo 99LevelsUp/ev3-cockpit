@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import test from 'node:test';
 import {
 	resolveEmergencyStopCheckFromEnv,
+	resolveReconnectDriverDropCheckFromEnv,
 	resolveReconnectGlitchCheckFromEnv,
 	resolveReconnectCheckFromEnv,
 	isLikelyUnavailableError,
@@ -117,4 +118,13 @@ test('hardware smoke reconnect glitch check is enabled by default', () => {
 test('hardware smoke reconnect glitch check can be disabled by env', () => {
 	assert.equal(resolveReconnectGlitchCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: '0' }), false);
 	assert.equal(resolveReconnectGlitchCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false' }), false);
+});
+
+test('hardware smoke reconnect driver-drop check is disabled by default', () => {
+	assert.equal(resolveReconnectDriverDropCheckFromEnv({}), false);
+});
+
+test('hardware smoke reconnect driver-drop check can be enabled by env', () => {
+	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: '1' }), true);
+	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'true' }), true);
 });

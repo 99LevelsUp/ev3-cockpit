@@ -72,6 +72,9 @@ const DEFAULT_BT_RETRY_DELAY_MS = 300;
 const DEFAULT_EMERGENCY_STOP_CHECK = true;
 const DEFAULT_RECONNECT_CHECK = false;
 const DEFAULT_RECONNECT_GLITCH_CHECK = true;
+const DEFAULT_RECONNECT_DRIVER_DROP_CHECK = false;
+const DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS = 20_000;
+const DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS = 500;
 const SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
 const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-run-fixture.rbf';
 
@@ -285,6 +288,22 @@ export function resolveReconnectGlitchCheckFromEnv(env: NodeJS.ProcessEnv = proc
 		return false;
 	}
 	return DEFAULT_RECONNECT_GLITCH_CHECK;
+}
+
+export function resolveReconnectDriverDropCheckFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK?.trim();
+	if (!raw) {
+		return DEFAULT_RECONNECT_DRIVER_DROP_CHECK;
+	}
+
+	const normalized = raw.toLowerCase();
+	if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+		return true;
+	}
+	if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+		return false;
+	}
+	return DEFAULT_RECONNECT_DRIVER_DROP_CHECK;
 }
 
 export function isLikelyUnavailableError(transport: TransportKind, error: unknown): boolean {
@@ -589,9 +608,82 @@ async function runReconnectRecoveryCheck(
 	}
 }
 
+async function runDriverDropRecoveryCheck(
+	transport: TransportKind,
+	createAdapter: () => TransportAdapter,
+	timeoutMs: number,
+	windowMs: number,
+	pollMs: number
+): Promise<{ ok: boolean; skipped?: boolean; message?: string }> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: createAdapter()
+	});
+
+	try {
+		await client.open();
+		await runProbeWithClient(client, timeoutMs);
+		console.log(
+			`[HW][${transport.toUpperCase()}] Driver-drop reconnect check active: disconnect and reconnect the transport within ${windowMs}ms.`
+		);
+
+		const startedAt = Date.now();
+		let dropObserved = false;
+		while (Date.now() - startedAt < windowMs) {
+			await sleep(pollMs);
+			try {
+				await runProbeWithClient(client, timeoutMs);
+				if (dropObserved) {
+					return { ok: true };
+				}
+			} catch (error) {
+				if (!isLikelyUnavailableError(transport, error)) {
+					return {
+						ok: false,
+						message: errorMessage(error)
+					};
+				}
+
+				dropObserved = true;
+				await client.close().catch(() => undefined);
+				await sleep(Math.min(Math.max(50, pollMs), 500));
+				try {
+					await client.open();
+				} catch {
+					// Keep polling until reconnect window expires.
+				}
+			}
+		}
+
+		if (!dropObserved) {
+			return {
+				ok: false,
+				skipped: true,
+				message: `No driver-level disconnect observed within ${windowMs}ms window.`
+			};
+		}
+
+		return {
+			ok: false,
+			message: `Driver-level disconnect observed, but reconnect did not recover within ${windowMs}ms window.`
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			message: errorMessage(error)
+		};
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
 function mapPostProbeCheckFailure(
 	transport: TransportKind,
-	checkName: 'Program run check' | 'Emergency stop check' | 'Reconnect recovery check',
+	checkName: 'Program run check' | 'Emergency stop check' | 'Reconnect recovery check' | 'Reconnect driver-drop check',
 	message: string
 ): HardwareCaseResult {
 	if (isLikelyUnavailableError(transport, message)) {
@@ -613,11 +705,22 @@ async function runUsbCase(
 	runSpecResolution: RunProgramSpecResolution,
 	emergencyStopCheckEnabled: boolean,
 	reconnectCheckEnabled: boolean,
-	reconnectGlitchCheckEnabled: boolean
+	reconnectGlitchCheckEnabled: boolean,
+	reconnectDriverDropCheckEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const vendorId = envNumber('EV3_COCKPIT_HW_USB_VENDOR_ID', 0x0694, 0);
 	const productId = envNumber('EV3_COCKPIT_HW_USB_PRODUCT_ID', 0x0005, 0);
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 50);
+	const reconnectDriverDropWindowMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS,
+		1000
+	);
+	const reconnectDriverDropPollMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_POLL_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS,
+		50
+	);
 	const path = process.env.EV3_COCKPIT_HW_USB_PATH?.trim() || undefined;
 	const candidates = await listUsbHidCandidates(vendorId, productId);
 	const runSpec = runSpecResolution.spec;
@@ -675,23 +778,55 @@ async function runUsbCase(
 			}
 		}
 
+		if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
+			const driverDropCheck = await runDriverDropRecoveryCheck(
+				'usb',
+				createAdapter,
+				timeoutMs,
+				reconnectDriverDropWindowMs,
+				reconnectDriverDropPollMs
+			);
+			if (driverDropCheck.skipped) {
+				return {
+					transport: 'usb',
+					status: 'SKIP',
+					reason: `USB driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+				};
+			}
+			if (!driverDropCheck.ok) {
+				return mapPostProbeCheckFailure(
+					'usb',
+					'Reconnect driver-drop check',
+					driverDropCheck.message ?? 'unknown error'
+				);
+			}
+		}
+
 		return {
 			transport: 'usb',
 			status: 'PASS',
 			reason: runSpec
 				? emergencyStopCheckEnabled
 					? reconnectCheckEnabled
-						? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+						? reconnectDriverDropCheckEnabled
+							? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+							: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
 						: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
 					: reconnectCheckEnabled
-						? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+						? reconnectDriverDropCheckEnabled
+							? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
+							: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
 						: 'Connect, capability probe and run-program check succeeded.'
 				: emergencyStopCheckEnabled
 					? reconnectCheckEnabled
-						? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+						? reconnectDriverDropCheckEnabled
+							? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+							: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
 						: 'Connect, capability probe and emergency-stop check succeeded.'
 					: reconnectCheckEnabled
-						? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+						? reconnectDriverDropCheckEnabled
+							? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
+							: 'Connect, capability probe and reconnect-recovery checks succeeded.'
 						: 'Connect and capability probe succeeded.',
 			detail: {
 				path: path ?? candidates[0]?.path ?? 'auto',
@@ -702,6 +837,7 @@ async function runUsbCase(
 				emergencyStopChecked: emergencyStopCheckEnabled,
 				reconnectChecked: reconnectCheckEnabled,
 				reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
+				reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
 				fwVersion: probe.capability.fwVersion,
 				fwBuild: probe.capability.fwBuild
 			}
@@ -883,11 +1019,22 @@ async function runBluetoothCase(
 	runSpecResolution: RunProgramSpecResolution,
 	emergencyStopCheckEnabled: boolean,
 	reconnectCheckEnabled: boolean,
-	reconnectGlitchCheckEnabled: boolean
+	reconnectGlitchCheckEnabled: boolean,
+	reconnectDriverDropCheckEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS', DEFAULT_BT_PROBE_TIMEOUT_MS, 50);
 	const baudRate = envNumber('EV3_COCKPIT_HW_BT_BAUD_RATE', 115200, 300);
 	const dtr = envBoolean('EV3_COCKPIT_HW_BT_DTR', false);
+	const reconnectDriverDropWindowMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS,
+		1000
+	);
+	const reconnectDriverDropPollMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_POLL_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS,
+		50
+	);
 	const preferredPort = process.env.EV3_COCKPIT_HW_BT_PORT?.trim().toUpperCase();
 	const perPortAttempts = envNumber('EV3_COCKPIT_HW_BT_PORT_ATTEMPTS', DEFAULT_BT_PORT_ATTEMPTS, 1);
 	const retryDelayMs = envNumber('EV3_COCKPIT_HW_BT_RETRY_DELAY_MS', DEFAULT_BT_RETRY_DELAY_MS, 0);
@@ -956,23 +1103,55 @@ async function runBluetoothCase(
 					}
 				}
 
+				if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
+					const driverDropCheck = await runDriverDropRecoveryCheck(
+						'bluetooth',
+						createAdapter,
+						timeoutMs,
+						reconnectDriverDropWindowMs,
+						reconnectDriverDropPollMs
+					);
+					if (driverDropCheck.skipped) {
+						return {
+							transport: 'bluetooth',
+							status: 'SKIP',
+							reason: `Bluetooth driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+						};
+					}
+					if (!driverDropCheck.ok) {
+						return mapPostProbeCheckFailure(
+							'bluetooth',
+							'Reconnect driver-drop check',
+							driverDropCheck.message ?? 'unknown error'
+						);
+					}
+				}
+
 				return {
 					transport: 'bluetooth',
 					status: 'PASS',
 					reason: runSpec
 						? emergencyStopCheckEnabled
 							? reconnectCheckEnabled
-								? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+								? reconnectDriverDropCheckEnabled
+									? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+									: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
 								: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
 							: reconnectCheckEnabled
-								? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+								? reconnectDriverDropCheckEnabled
+									? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
+									: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
 								: 'Connect, capability probe and run-program check succeeded.'
 						: emergencyStopCheckEnabled
 							? reconnectCheckEnabled
-								? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+								? reconnectDriverDropCheckEnabled
+									? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+									: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
 								: 'Connect, capability probe and emergency-stop check succeeded.'
 							: reconnectCheckEnabled
-								? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+								? reconnectDriverDropCheckEnabled
+									? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
+									: 'Connect, capability probe and reconnect-recovery checks succeeded.'
 								: 'Connect and capability probe succeeded.',
 					detail: {
 						port,
@@ -984,6 +1163,7 @@ async function runBluetoothCase(
 						emergencyStopChecked: emergencyStopCheckEnabled,
 						reconnectChecked: reconnectCheckEnabled,
 						reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
+						reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
 						fwVersion: probe.capability.fwVersion,
 						fwBuild: probe.capability.fwBuild
 					}
@@ -1018,6 +1198,7 @@ async function runHardwareSuite(): Promise<{
 	emergencyStopCheckEnabled: boolean;
 	reconnectCheckEnabled: boolean;
 	reconnectGlitchCheckEnabled: boolean;
+	reconnectDriverDropCheckEnabled: boolean;
 	warning?: string;
 }> {
 	const results: HardwareCaseResult[] = [];
@@ -1026,6 +1207,7 @@ async function runHardwareSuite(): Promise<{
 	const emergencyStopCheckEnabled = resolveEmergencyStopCheckFromEnv();
 	const reconnectCheckEnabled = resolveReconnectCheckFromEnv();
 	const reconnectGlitchCheckEnabled = resolveReconnectGlitchCheckFromEnv();
+	const reconnectDriverDropCheckEnabled = resolveReconnectDriverDropCheckFromEnv();
 
 	for (const transport of selection.transports) {
 		if (transport === 'usb') {
@@ -1034,7 +1216,8 @@ async function runHardwareSuite(): Promise<{
 					runSpecResolution,
 					emergencyStopCheckEnabled,
 					reconnectCheckEnabled,
-					reconnectGlitchCheckEnabled
+					reconnectGlitchCheckEnabled,
+					reconnectDriverDropCheckEnabled
 				)
 			);
 		} else if (transport === 'tcp') {
@@ -1045,7 +1228,8 @@ async function runHardwareSuite(): Promise<{
 					runSpecResolution,
 					emergencyStopCheckEnabled,
 					reconnectCheckEnabled,
-					reconnectGlitchCheckEnabled
+					reconnectGlitchCheckEnabled,
+					reconnectDriverDropCheckEnabled
 				)
 			);
 		}
@@ -1057,6 +1241,7 @@ async function runHardwareSuite(): Promise<{
 		emergencyStopCheckEnabled,
 		reconnectCheckEnabled,
 		reconnectGlitchCheckEnabled,
+		reconnectDriverDropCheckEnabled,
 		warning: selection.warning
 	};
 }
@@ -1067,6 +1252,7 @@ function printSummary(
 	emergencyStopCheckEnabled: boolean,
 	reconnectCheckEnabled: boolean,
 	reconnectGlitchCheckEnabled: boolean,
+	reconnectDriverDropCheckEnabled: boolean,
 	warning?: string
 ): void {
 	console.log(`[HW] Running hardware smoke tests in order: ${selectedTransports.join(' -> ')}`);
@@ -1074,6 +1260,9 @@ function printSummary(
 	console.log(`[HW] Reconnect recovery check: ${reconnectCheckEnabled ? 'enabled' : 'disabled'}`);
 	console.log(
 		`[HW] Reconnect in-flight drop simulation: ${reconnectCheckEnabled ? (reconnectGlitchCheckEnabled ? 'enabled' : 'disabled') : 'disabled'}`
+	);
+	console.log(
+		`[HW] Reconnect driver-drop check: ${reconnectCheckEnabled ? (reconnectDriverDropCheckEnabled ? 'enabled' : 'disabled') : 'disabled'}`
 	);
 	if (warning) {
 		console.log(`[HW] Selection warning: ${warning}`);
@@ -1096,6 +1285,7 @@ export async function main(): Promise<number> {
 		suite.emergencyStopCheckEnabled,
 		suite.reconnectCheckEnabled,
 		suite.reconnectGlitchCheckEnabled,
+		suite.reconnectDriverDropCheckEnabled,
 		suite.warning
 	);
 	const results = suite.results;
