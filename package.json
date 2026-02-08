@@ -17,6 +17,8 @@
     "onCommand:ev3-cockpit.deployProject",
     "onCommand:ev3-cockpit.previewWorkspaceDeploy",
     "onCommand:ev3-cockpit.deployWorkspace",
+    "onCommand:ev3-cockpit.previewWorkspaceDeployToBrick",
+    "onCommand:ev3-cockpit.deployWorkspaceToBrick",
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
     "onCommand:ev3-cockpit.deployWorkspaceAndRunRbf",
     "onCommand:ev3-cockpit.applyDeployProfile",
@@ -62,6 +64,14 @@
       {
         "command": "ev3-cockpit.deployWorkspace",
         "title": "EV3 Cockpit: Sync Workspace to EV3 (active)"
+      },
+      {
+        "command": "ev3-cockpit.previewWorkspaceDeployToBrick",
+        "title": "EV3 Cockpit: Preview Workspace Deploy (selected brick)"
+      },
+      {
+        "command": "ev3-cockpit.deployWorkspaceToBrick",
+        "title": "EV3 Cockpit: Sync Workspace to EV3 (selected brick)"
       },
       {
         "command": "ev3-cockpit.deployProjectAndRunRbf",
@@ -159,6 +169,16 @@
           "command": "ev3-cockpit.uploadToBrickFolder",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3RemoteDirectory)",
           "group": "2_modification"
+        },
+        {
+          "command": "ev3-cockpit.previewWorkspaceDeployToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
+          "command": "ev3-cockpit.deployWorkspaceToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deleteRemoteEntryFromTree",

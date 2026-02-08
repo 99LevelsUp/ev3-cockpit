@@ -104,6 +104,13 @@ interface ConnectedBrickDescriptor {
 	rootPath: string;
 }
 
+interface DeployTargetContext {
+	brickId: string;
+	authority: string;
+	rootPath?: string;
+	fsService: RemoteFsService;
+}
+
 function normalizeBrickRootPath(input: string): string {
 	let rootPath = input.trim();
 	if (!rootPath.startsWith('/')) {
@@ -636,6 +643,27 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 	};
 
+	const resolveDeployTargetFromArg = (arg: unknown): DeployTargetContext | { error: string } => {
+		const fsContext = resolveFsAccessContext(arg);
+		if ('error' in fsContext) {
+			return fsContext;
+		}
+
+		const rootPath =
+			isBrickRootNode(arg)
+				? arg.rootPath
+				: isBrickDirectoryNode(arg)
+				? arg.remotePath
+				: brickRegistry.getSnapshot(fsContext.brickId)?.rootPath;
+
+		return {
+			brickId: fsContext.brickId,
+			authority: fsContext.authority,
+			rootPath,
+			fsService: fsContext.fsService
+		};
+	};
+
 	const disposable = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async () => {
 		vscode.window.showInformationMessage('Connecting to EV3 brick...');
 		const activeClient = commandClient;
@@ -899,12 +927,26 @@ export function activate(context: vscode.ExtensionContext) {
 		runAfterDeploy: boolean;
 		previewOnly: boolean;
 		projectUri?: vscode.Uri;
+		target?: DeployTargetContext;
 	}): Promise<void> => {
-		if (!activeFsService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
+		const fsTarget: DeployTargetContext | undefined = options.target ?? (() => {
+			const resolved = resolveFsAccessContext('active');
+			if ('error' in resolved) {
+				return undefined;
+			}
+			return {
+				brickId: resolved.brickId,
+				authority: resolved.authority,
+				fsService: resolved.fsService
+			};
+		})();
+		if (!fsTarget) {
+			vscode.window.showErrorMessage('No EV3 connection available for deploy. Connect to a brick first.');
 			return;
 		}
-		const fsService = activeFsService;
+		const fsService = fsTarget.fsService;
+		const targetBrickId = fsTarget.brickId;
+		const targetAuthority = fsTarget.authority;
 		const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 		const isCancellationError = (error: unknown): boolean =>
 			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
@@ -967,7 +1009,7 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 		};
-		const defaultRoot = featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
+		const defaultRoot = fsTarget.rootPath ?? featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 		let remoteProjectRoot: string;
 		try {
 			remoteProjectRoot = buildRemoteProjectRoot(projectUri.fsPath, defaultRoot);
@@ -1464,6 +1506,8 @@ export function activate(context: vscode.ExtensionContext) {
 				{
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
+				brickId: targetBrickId,
+				authority: targetAuthority,
 				filesScanned: files.length,
 				filesUploaded: uploadedFilesCount,
 				filesVerified: verifiedFilesCount,
@@ -1545,12 +1589,12 @@ export function activate(context: vscode.ExtensionContext) {
 			} else {
 				const verifySummary =
 					verifyAfterUpload !== 'none'
-						? `; verified ${verifiedFilesCount} file(s) (${verifyAfterUpload})`
+					? `; verified ${verifiedFilesCount} file(s) (${verifyAfterUpload})`
 						: '';
 				const targetSummary =
 					options.runAfterDeploy && runTarget
-						? ` and started: ev3://active${runTarget}`
-						: ` to ev3://active${remoteProjectRoot}`;
+						? ` and started: ev3://${targetAuthority}${runTarget}`
+						: ` to ev3://${targetAuthority}${remoteProjectRoot}`;
 				vscode.window.showInformationMessage(
 					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}${verifySummary}${conflictSummary}`
 				);
@@ -1577,6 +1621,7 @@ export function activate(context: vscode.ExtensionContext) {
 				{
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
+				brickId: targetBrickId,
 				message
 			});
 			vscode.window.showErrorMessage(
@@ -1664,6 +1709,52 @@ export function activate(context: vscode.ExtensionContext) {
 			projectUri: workspaceUri
 		});
 	});
+
+	const previewWorkspaceDeployToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.previewWorkspaceDeployToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			const workspaceUri = await pickWorkspaceProjectFolder();
+			if (!workspaceUri) {
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: false,
+				previewOnly: true,
+				projectUri: workspaceUri,
+				target
+			});
+		}
+	);
+
+	const deployWorkspaceToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			const workspaceUri = await pickWorkspaceProjectFolder();
+			if (!workspaceUri) {
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: false,
+				previewOnly: false,
+				projectUri: workspaceUri,
+				target
+			});
+		}
+	);
 
 	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
@@ -2356,6 +2447,8 @@ export function activate(context: vscode.ExtensionContext) {
 		deployProject,
 		previewWorkspaceDeploy,
 		deployWorkspace,
+		previewWorkspaceDeployToBrick,
+		deployWorkspaceToBrick,
 		deployProjectAndRunRbf,
 		deployWorkspaceAndRunRbf,
 		applyDeployProfile,
