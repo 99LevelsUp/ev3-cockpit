@@ -92,9 +92,13 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/could not resolve host/i,
 		/udp discovery timeout/i,
 		/econnrefused/i,
+		/econnreset/i,
+		/econnaborted/i,
+		/socket hang up/i,
 		/ehostunreach/i,
 		/enetunreach/i,
-		/tcp connect timeout/i
+		/tcp connect timeout/i,
+		/transport is not open/i
 	],
 	bluetooth: [
 		/requires package "serialport"/i,
@@ -904,10 +908,21 @@ async function runUsbCase(
 async function runTcpCase(
 	runSpecResolution: RunProgramSpecResolution,
 	emergencyStopCheckEnabled: boolean,
-	reconnectCheckEnabled: boolean
+	reconnectCheckEnabled: boolean,
+	reconnectDriverDropCheckEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const host = process.env.EV3_COCKPIT_HW_TCP_HOST?.trim() ?? '';
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 50);
+	const reconnectDriverDropWindowMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS,
+		1000
+	);
+	const reconnectDriverDropPollMs = envNumber(
+		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_POLL_MS',
+		DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS,
+		50
+	);
 	const useDiscovery = envBoolean('EV3_COCKPIT_HW_TCP_USE_DISCOVERY', host.length === 0);
 	const port = envNumber('EV3_COCKPIT_HW_TCP_PORT', 5555, 1);
 	const discoveryPort = envNumber('EV3_COCKPIT_HW_TCP_DISCOVERY_PORT', 3015, 1);
@@ -976,23 +991,55 @@ async function runTcpCase(
 				}
 			}
 
+			if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
+				const driverDropCheck = await runDriverDropRecoveryCheck(
+					'tcp',
+					createAdapter,
+					timeoutMs,
+					reconnectDriverDropWindowMs,
+					reconnectDriverDropPollMs
+				);
+				if (driverDropCheck.skipped) {
+					return {
+						transport: 'tcp',
+						status: 'SKIP',
+						reason: `TCP driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+					};
+				}
+				if (!driverDropCheck.ok) {
+					return mapPostProbeCheckFailure(
+						'tcp',
+						'Reconnect driver-drop check',
+						driverDropCheck.message ?? 'unknown error'
+					);
+				}
+			}
+
 			return {
 				transport: 'tcp',
 				status: 'PASS',
 				reason: runSpec
 					? emergencyStopCheckEnabled
 						? reconnectCheckEnabled
-							? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
 							: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
 						: reconnectCheckEnabled
-							? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
 							: 'Connect, capability probe and run-program check succeeded.'
 					: emergencyStopCheckEnabled
 						? reconnectCheckEnabled
-							? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
 							: 'Connect, capability probe and emergency-stop check succeeded.'
 						: reconnectCheckEnabled
-							? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe and reconnect-recovery checks succeeded.'
 							: 'Connect and capability probe succeeded.',
 				detail: {
 					host: host || 'discovery',
@@ -1004,6 +1051,7 @@ async function runTcpCase(
 					runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
 					emergencyStopChecked: emergencyStopCheckEnabled,
 					reconnectChecked: reconnectCheckEnabled,
+					reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
 					fwVersion: probe.capability.fwVersion,
 					fwBuild: probe.capability.fwBuild
 				}
@@ -1275,7 +1323,14 @@ async function runHardwareSuite(): Promise<{
 				)
 			);
 		} else if (transport === 'tcp') {
-			results.push(await runTcpCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+			results.push(
+				await runTcpCase(
+					runSpecResolution,
+					emergencyStopCheckEnabled,
+					reconnectCheckEnabled,
+					reconnectDriverDropCheckEnabled
+				)
+			);
 		} else {
 			results.push(
 				await runBluetoothCase(

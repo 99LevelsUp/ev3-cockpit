@@ -93,7 +93,7 @@ Optional hardware env vars:
 - `EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK` (optional, default `true`): include emergency-stop validation (`PROGRAM_STOP` + `OUTPUT_STOP`) in hardware smoke.
 - `EV3_COCKPIT_HW_RECONNECT_CHECK` (optional, default `false`): include disconnect/reconnect recovery scenario (open -> probe -> close -> reopen -> probe) for selected transports (`usb|tcp|bluetooth`).
 - `EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK` (optional, default `true`): when reconnect check is enabled, include simulated in-flight disconnect recovery (close during pending probe -> reopen -> probe) for `usb|bluetooth`.
-- `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK` (optional, default `false`): when reconnect check is enabled, run manual real driver-drop scenario for `usb|bluetooth` (physical disconnect/reconnect within time window).
+- `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK` (optional, default `false`): when reconnect check is enabled, run manual real driver-drop scenario for `usb|tcp|bluetooth` (physical disconnect/reconnect within time window).
 - `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS`, `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_POLL_MS`: timing controls for driver-drop reconnect scenario.
 - `EV3_COCKPIT_HW_TCP_HOST`, `EV3_COCKPIT_HW_TCP_USE_DISCOVERY`, `EV3_COCKPIT_HW_TCP_DISCOVERY_TIMEOUT_MS`, `EV3_COCKPIT_HW_TCP_ATTEMPTS`, `EV3_COCKPIT_HW_TCP_RETRY_DELAY_MS`
 - `EV3_COCKPIT_HW_BT_PORT`, `EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS`, `EV3_COCKPIT_HW_BT_PORT_ATTEMPTS`, `EV3_COCKPIT_HW_BT_RETRY_DELAY_MS`, `EV3_COCKPIT_HW_BT_DTR`

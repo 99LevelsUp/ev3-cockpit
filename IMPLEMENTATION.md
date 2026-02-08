@@ -78,7 +78,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - HW smoke mapuje transientni post-probe transport chyby (napr. BT COM 121/1256 pri emergency-check) na `SKIP` misto `FAIL`.
   - HW smoke obsahuje volitelny scenar reconnect-recovery (`EV3_COCKPIT_HW_RECONNECT_CHECK=true`) pro USB/TCP/BT (`open -> probe -> close -> reopen -> probe`).
   - HW smoke reconnect-recovery pro USB/BT umi volitelne simulovat in-flight drop (`EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK`, default `true`) scenarem `pending probe -> forced close -> reopen -> probe`.
-  - HW smoke obsahuje volitelny manualni driver-drop reconnect check (`EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK`) pro USB/BT, ktery pri fyzickem odpojeni/pripojeni overuje obnovu spojeni; bez detekovaneho dropu vraci `SKIP`.
+  - HW smoke obsahuje volitelny manualni driver-drop reconnect check (`EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK`) pro USB/TCP/BT, ktery pri fyzickem odpojeni/pripojeni overuje obnovu spojeni; bez detekovaneho dropu vraci `SKIP`.
   - BT HW smoke probe/run/emergency flow sdili jednu otevrenou session (bez mezikrokoveho reopen), coz snizuje intermitentni COM reopen chyby mezi navazujicimi kontrolami.
   - pridany HW matrix runner (`npm run test:hw:matrix`) pro scenare `baseline/reconnect/reconnect-glitch` s JSON report artefaktem (`artifacts/hw/hardware-matrix.json`).
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.

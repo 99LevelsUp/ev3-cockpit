@@ -22,6 +22,8 @@ test('hardware smoke classifies unavailable USB errors', () => {
 
 test('hardware smoke classifies unavailable TCP errors', () => {
 	assert.equal(isLikelyUnavailableError('tcp', new Error('UDP discovery timeout after 1500ms.')), true);
+	assert.equal(isLikelyUnavailableError('tcp', new Error('connect ECONNRESET 192.168.1.7:5555')), true);
+	assert.equal(isLikelyUnavailableError('tcp', new Error('Request execution failed: TCP transport is not open.')), true);
 	assert.equal(isLikelyUnavailableError('tcp', new Error('Unexpected capability reply type.')), false);
 });
 
