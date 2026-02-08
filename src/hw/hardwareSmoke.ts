@@ -20,11 +20,30 @@ type TransportKind = 'usb' | 'tcp' | 'bluetooth';
 type HardwareStatus = 'PASS' | 'SKIP' | 'FAIL';
 const TRANSPORT_ORDER: TransportKind[] = ['usb', 'tcp', 'bluetooth'];
 
+export interface HardwareSummary {
+	pass: number;
+	skip: number;
+	fail: number;
+}
+
 export interface HardwareCaseResult {
 	transport: TransportKind;
 	status: HardwareStatus;
 	reason: string;
 	detail?: Record<string, unknown>;
+}
+
+export interface HardwareSmokeReport {
+	generatedAtIso: string;
+	selectedTransports: TransportKind[];
+	emergencyStopCheckEnabled: boolean;
+	reconnectCheckEnabled: boolean;
+	reconnectGlitchCheckEnabled: boolean;
+	reconnectDriverDropCheckEnabled: boolean;
+	warning?: string;
+	results: HardwareCaseResult[];
+	summary: HardwareSummary;
+	exitCode: number;
 }
 
 interface ProbeSuccess {
@@ -363,6 +382,43 @@ export function resolveHardwareTransportsFromEnv(
 	}
 
 	return { transports };
+}
+
+function summarizeResults(results: HardwareCaseResult[]): HardwareSummary {
+	return {
+		pass: results.filter((entry) => entry.status === 'PASS').length,
+		skip: results.filter((entry) => entry.status === 'SKIP').length,
+		fail: results.filter((entry) => entry.status === 'FAIL').length
+	};
+}
+
+export function resolveHardwareSmokeReportPath(env: NodeJS.ProcessEnv = process.env): string {
+	const raw = env.EV3_COCKPIT_HW_REPORT?.trim();
+	const relative = raw && raw.length > 0 ? raw : path.join('artifacts', 'hw', 'hardware-smoke.json');
+	return path.isAbsolute(relative) ? relative : path.resolve(process.cwd(), relative);
+}
+
+export function buildHardwareSmokeReport(
+	suite: Awaited<ReturnType<typeof runHardwareSuite>>,
+	exitCode: number
+): HardwareSmokeReport {
+	return {
+		generatedAtIso: new Date().toISOString(),
+		selectedTransports: [...suite.selectedTransports],
+		emergencyStopCheckEnabled: suite.emergencyStopCheckEnabled,
+		reconnectCheckEnabled: suite.reconnectCheckEnabled,
+		reconnectGlitchCheckEnabled: suite.reconnectGlitchCheckEnabled,
+		reconnectDriverDropCheckEnabled: suite.reconnectDriverDropCheckEnabled,
+		warning: suite.warning,
+		results: suite.results,
+		summary: summarizeResults(suite.results),
+		exitCode
+	};
+}
+
+export async function writeHardwareSmokeReport(report: HardwareSmokeReport, reportPath: string): Promise<void> {
+	await fsPromises.mkdir(path.dirname(reportPath), { recursive: true });
+	await fsPromises.writeFile(reportPath, `${JSON.stringify(report, null, '\t')}\n`, 'utf8');
 }
 
 function formatResult(result: HardwareCaseResult): string {
@@ -1420,9 +1476,7 @@ function printSummary(
 		console.log(formatResult(result));
 	}
 
-	const pass = results.filter((entry) => entry.status === 'PASS').length;
-	const skip = results.filter((entry) => entry.status === 'SKIP').length;
-	const fail = results.filter((entry) => entry.status === 'FAIL').length;
+	const { pass, skip, fail } = summarizeResults(results);
 	console.log(`[HW] Summary: PASS=${pass} SKIP=${skip} FAIL=${fail}`);
 }
 
@@ -1437,8 +1491,12 @@ export async function main(): Promise<number> {
 		suite.reconnectDriverDropCheckEnabled,
 		suite.warning
 	);
-	const results = suite.results;
-	return results.some((entry) => entry.status === 'FAIL') ? 1 : 0;
+	const exitCode = suite.results.some((entry) => entry.status === 'FAIL') ? 1 : 0;
+	const report = buildHardwareSmokeReport(suite, exitCode);
+	const reportPath = resolveHardwareSmokeReportPath();
+	await writeHardwareSmokeReport(report, reportPath);
+	console.log(`[HW] Report written to ${reportPath}`);
+	return exitCode;
 }
 
 if (require.main === module) {

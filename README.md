@@ -94,6 +94,7 @@ Hardware smoke returns explicit status per transport:
 Optional hardware env vars:
 - `EV3_COCKPIT_HW_TIMEOUT_MS`, `EV3_COCKPIT_HW_USB_PATH`
 - `EV3_COCKPIT_HW_TRANSPORTS` (optional): comma-separated transport subset for hardware smoke, for example `usb,tcp` to skip Bluetooth.
+- `EV3_COCKPIT_HW_REPORT` (optional): output path for hardware-smoke JSON report (default `artifacts/hw/hardware-smoke.json`).
 - `EV3_COCKPIT_HW_MATRIX_SCENARIOS` (optional): comma-separated hardware matrix scenarios (`baseline,reconnect,reconnect-glitch,driver-drop`).
 - `EV3_COCKPIT_HW_MATRIX_REPORT` (optional): output path for matrix JSON report (default `artifacts/hw/hardware-matrix.json`).
 - `EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK` (optional, default `true`): include emergency-stop validation (`PROGRAM_STOP` + `OUTPUT_STOP`) in hardware smoke.

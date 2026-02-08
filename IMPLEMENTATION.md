@@ -81,6 +81,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - HW smoke obsahuje volitelny manualni driver-drop reconnect check (`EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK`) pro USB/TCP/BT, ktery pri fyzickem odpojeni/pripojeni overuje obnovu spojeni; bez detekovaneho dropu vraci `SKIP`.
   - BT HW smoke probe/run/emergency flow sdili jednu otevrenou session (bez mezikrokoveho reopen), coz snizuje intermitentni COM reopen chyby mezi navazujicimi kontrolami.
   - pridany HW matrix runner (`npm run test:hw:matrix`) pro scenare `baseline/reconnect/reconnect-glitch` + volitelny `driver-drop` (opt-in) s JSON report artefaktem (`artifacts/hw/hardware-matrix.json`).
+  - `test:hw` nově zapisuje i JSON report (`EV3_COCKPIT_HW_REPORT`, default `artifacts/hw/hardware-smoke.json`) se summary + detaily per transport.
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.
   - pridana command akce `EV3 Cockpit: Reconnect EV3 (active settings)` pro rychly reconnect pres stejny connect-probe/capability flow.
   - pridana command akce `EV3 Cockpit: Deploy and Run .rbf (active)` (`local pick -> upload -> run`) nad `RemoteFsService`.

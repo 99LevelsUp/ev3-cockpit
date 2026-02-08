@@ -39,6 +39,7 @@ jobs:
         continue-on-error: true
         env:
           EV3_COCKPIT_HW_TRANSPORTS: ${{ inputs.transports }}
+          EV3_COCKPIT_HW_REPORT: artifacts/hw/hardware-smoke.json
         run: |
           npm run test:hw 2>&1 | Tee-Object artifacts/hw/hardware-smoke.log
 
@@ -57,4 +58,3 @@ jobs:
         with:
           name: hardware-artifacts
           path: artifacts/hw
-

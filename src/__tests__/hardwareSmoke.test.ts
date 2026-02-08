@@ -10,7 +10,9 @@ import {
 	resolveReconnectCheckFromEnv,
 	isLikelyUnavailableError,
 	resolveHardwareTransportsFromEnv,
-	resolveRunProgramSpecFromEnv
+	resolveRunProgramSpecFromEnv,
+	resolveHardwareSmokeReportPath,
+	buildHardwareSmokeReport
 } from '../hw/hardwareSmoke';
 
 test('hardware smoke classifies unavailable USB errors', () => {
@@ -135,4 +137,39 @@ test('hardware smoke reconnect driver-drop check is disabled by default', () => 
 test('hardware smoke reconnect driver-drop check can be enabled by env', () => {
 	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: '1' }), true);
 	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'true' }), true);
+});
+
+test('hardware smoke report path defaults to artifacts/hw/hardware-smoke.json', () => {
+	const reportPath = resolveHardwareSmokeReportPath({});
+	assert.match(reportPath, /artifacts[\\/]+hw[\\/]+hardware-smoke\.json$/i);
+});
+
+test('hardware smoke report path respects EV3_COCKPIT_HW_REPORT override', () => {
+	const reportPath = resolveHardwareSmokeReportPath({
+		EV3_COCKPIT_HW_REPORT: 'custom/hw/report.json'
+	});
+	assert.match(reportPath, /custom[\\/]+hw[\\/]+report\.json$/i);
+});
+
+test('hardware smoke report builder computes summary counters', () => {
+	const report = buildHardwareSmokeReport(
+		{
+			selectedTransports: ['usb', 'tcp'],
+			emergencyStopCheckEnabled: true,
+			reconnectCheckEnabled: true,
+			reconnectGlitchCheckEnabled: false,
+			reconnectDriverDropCheckEnabled: true,
+			warning: undefined,
+			results: [
+				{ transport: 'usb', status: 'PASS', reason: 'ok' },
+				{ transport: 'tcp', status: 'SKIP', reason: 'unavailable' },
+				{ transport: 'bluetooth', status: 'FAIL', reason: 'error' }
+			]
+		},
+		1
+	);
+	assert.equal(report.summary.pass, 1);
+	assert.equal(report.summary.skip, 1);
+	assert.equal(report.summary.fail, 1);
+	assert.equal(report.exitCode, 1);
 });
