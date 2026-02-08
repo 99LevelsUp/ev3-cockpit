@@ -336,3 +336,40 @@ Poznamka:
 - Primarni cil je stock firmware.
 - Scheduler musi byt pripraveny na capability/profile rezim pro firmware odchylky.
 - Remote FS rezimy (`safe`/`full`) se opiraji o scheduler stejne jako ostatni commandy.
+
+## Context Compact (2026-02-08)
+
+Aktualni stav:
+- Projekt je prejmenovany na `ev3-cockpit` / `EV3 Cockpit` (kod + UI nazvy).
+- Git remote je `https://github.com/99LevelsUp/ev3-cockpit.git`.
+- Lokalni git identita pro tento repozitar je nastavena na `99LevelsUp`.
+- Workflow pravidlo: kazda funkcni + otestovana zmena se commituje a pushuje.
+
+Hotove implementacni celky:
+- Scheduler + lane priority + retry + orphan-risk recovery.
+- Transporty USB/TCP/BT + connect/capability flow.
+- Remote FS provider (`ev3://active/...`) + browse/upload/mkdir/delete/open/download/run `.rbf`.
+- Run-control commandy (`Run`, `Stop`, `Restart`) + session metadata.
+- Deploy workflow:
+  - single-file deploy/run,
+  - project/workspace preview/sync/deploy+run commandy,
+  - incremental + cleanup + atomic swap/rollback,
+  - conflict policy + ask fallback,
+  - deploy resilience (`retry/reconnect/cancel/finalizer cleanup`),
+  - deploy profile presets (`Safe Sync`, `Atomic Sync`, `Full Sync`).
+- Test infrastruktura:
+  - unit testy,
+  - extension-host testy (vcetne fake TCP EV3 e2e a workspace deploy e2e),
+  - hardware smoke + matrix,
+  - `test:hw` i `test:hw:matrix` zapisuji JSON reporty.
+- CI:
+  - `.github/workflows/ci.yml` (`lint + test:unit + test:host`),
+  - `.github/workflows/hardware.yml` (manual optional HW, artifacty).
+
+HW realita (operacni):
+- USB: funkcni, overene probe/capability/FS/reconnect scenare.
+- TCP/Wi-Fi: funkcni, overene probe/capability/FS/reconnect scenare.
+- Bluetooth: podpora implementovana + scenare existuji, ale host stack je intermitentne nestabilni; zatim neni blocker.
+
+Nejblizsi otevrena priorita:
+- provozni stabilizace realneho BT prostredi (driver/COM stack) a nasledne tvrde HW verifikace BT bez SKIP fallbacku.
