@@ -529,7 +529,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
+	const executeProjectDeploy = async (options: { runAfterDeploy: boolean }): Promise<void> => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
 			return;
@@ -540,7 +540,7 @@ export function activate(context: vscode.ExtensionContext) {
 			canSelectMany: false,
 			canSelectFiles: false,
 			canSelectFolders: true,
-			openLabel: 'Deploy Project to EV3'
+			openLabel: options.runAfterDeploy ? 'Deploy Project to EV3' : 'Sync Project to EV3'
 		});
 		if (!selection || selection.length === 0) {
 			return;
@@ -577,31 +577,34 @@ export function activate(context: vscode.ExtensionContext) {
 				};
 			});
 
-			const rbfFiles = files.filter((entry) => entry.isRbf);
-			if (rbfFiles.length === 0) {
-				vscode.window.showErrorMessage(`No .rbf file found in project folder "${projectUri.fsPath}".`);
-				return;
-			}
-
-			let runTarget = choosePreferredRunCandidate(rbfFiles.map((entry) => entry.remotePath));
-			if (!runTarget) {
-				vscode.window.showErrorMessage('Could not determine run target .rbf file.');
-				return;
-			}
-
-			if (rbfFiles.length > 1) {
-				const quickPickItems = rbfFiles.map((entry) => ({
-					label: entry.relativePath,
-					description: entry.remotePath
-				}));
-				const selected = await vscode.window.showQuickPick(quickPickItems, {
-					title: 'Select .rbf file to run after deploy',
-					placeHolder: 'Choose run target'
-				});
-				if (!selected) {
+			let runTarget: string | undefined;
+			if (options.runAfterDeploy) {
+				const rbfFiles = files.filter((entry) => entry.isRbf);
+				if (rbfFiles.length === 0) {
+					vscode.window.showErrorMessage(`No .rbf file found in project folder "${projectUri.fsPath}".`);
 					return;
 				}
-				runTarget = selected.description ?? runTarget;
+
+				runTarget = choosePreferredRunCandidate(rbfFiles.map((entry) => entry.remotePath));
+				if (!runTarget) {
+					vscode.window.showErrorMessage('Could not determine run target .rbf file.');
+					return;
+				}
+
+				if (rbfFiles.length > 1) {
+					const quickPickItems = rbfFiles.map((entry) => ({
+						label: entry.relativePath,
+						description: entry.remotePath
+					}));
+					const selected = await vscode.window.showQuickPick(quickPickItems, {
+						title: 'Select .rbf file to run after deploy',
+						placeHolder: 'Choose run target'
+					});
+					if (!selected) {
+						return;
+					}
+					runTarget = selected.description ?? runTarget;
+				}
 			}
 
 			let incrementalEnabled = featureConfig.deploy.incrementalEnabled;
@@ -790,8 +793,11 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			);
 
-			await fsService.runProgram(runTarget);
-			logger.info('Deploy project and run completed', {
+			if (options.runAfterDeploy && runTarget) {
+				await fsService.runProgram(runTarget);
+			}
+
+			logger.info(options.runAfterDeploy ? 'Deploy project and run completed' : 'Deploy project sync completed', {
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
 				filesScanned: files.length,
@@ -808,7 +814,8 @@ export function activate(context: vscode.ExtensionContext) {
 				skippedDirectories: scan.skippedDirectories.length,
 				skippedByExtension: scan.skippedByExtension.length,
 				skippedBySize: scan.skippedBySize.length,
-				runTarget
+				runAfterDeploy: options.runAfterDeploy,
+				runTarget: runTarget ?? null
 			});
 
 			if (scan.skippedDirectories.length > 0 || scan.skippedByExtension.length > 0 || scan.skippedBySize.length > 0) {
@@ -826,18 +833,30 @@ export function activate(context: vscode.ExtensionContext) {
 					? `; cleanup deleted ${deletedStaleFilesCount} file(s), ${deletedStaleDirectoriesCount} director${deletedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
 					: '';
 
-			vscode.window.showInformationMessage(
-				`Deployed ${uploadedFilesCount}/${files.length} file(s) and started: ev3://active${runTarget}${cleanupSummary}`
-			);
+			const targetSummary =
+				options.runAfterDeploy && runTarget
+					? ` and started: ev3://active${runTarget}`
+					: ` to ev3://active${remoteProjectRoot}`;
+			vscode.window.showInformationMessage(`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			logger.warn('Deploy project and run failed', {
+			logger.warn(options.runAfterDeploy ? 'Deploy project and run failed' : 'Deploy project sync failed', {
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
 				message
 			});
-			vscode.window.showErrorMessage(`Deploy project and run failed: ${message}`);
+			vscode.window.showErrorMessage(
+				options.runAfterDeploy ? `Deploy project and run failed: ${message}` : `Deploy project sync failed: ${message}`
+			);
 		}
+	};
+
+	const deployProject = vscode.commands.registerCommand('ev3-cockpit.deployProject', async () => {
+		await executeProjectDeploy({ runAfterDeploy: false });
+	});
+
+	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
+		await executeProjectDeploy({ runAfterDeploy: true });
 	});
 
 	const emergencyStop = vscode.commands.registerCommand('ev3-cockpit.emergencyStop', async () => {
@@ -1216,6 +1235,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		disposable,
 		deployAndRunRbf,
+		deployProject,
 		deployProjectAndRunRbf,
 		reconnect,
 		disconnect,
