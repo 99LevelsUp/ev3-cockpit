@@ -8,6 +8,9 @@ scripts/**
 resources/**
 test-fixtures/**
 artifacts/**
+out/__tests__/**
+out/hw/**
+out/testHost/**
 *.ts
 *.map
 *.log
