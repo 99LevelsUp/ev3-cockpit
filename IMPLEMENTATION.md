@@ -88,6 +88,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - project deploy podporuje volitelny cleanup/sync rezim (`ev3-cockpit.deploy.cleanup.enabled`) pro mazani stale remote souboru/adresaru mimo lokalni projektovy snapshot.
   - cleanup rezim ma potvrzovaci UX guard (`ev3-cockpit.deploy.cleanup.confirmBeforeDelete`, default `true`) s preview stale entry seznamu pred mazanim.
   - cleanup rezim podporuje `dry-run` variantu (`ev3-cockpit.deploy.cleanup.dryRun`), ktera stale entry pouze reportuje bez mazani.
+  - project deploy podporuje `atomic` rezim (`ev3-cockpit.deploy.atomic.enabled`) se staging root + swap + rollback fallbackem.
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.

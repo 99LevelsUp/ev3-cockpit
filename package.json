@@ -295,6 +295,11 @@
           "default": false,
           "description": "When enabled, deploy cleanup reports stale remote files/directories but does not delete them."
         },
+        "ev3-cockpit.deploy.atomic.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use staged project upload with swap/rollback semantics to reduce partial deploy risk."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

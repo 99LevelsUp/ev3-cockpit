@@ -6,8 +6,10 @@ import {
 	DEFAULT_DEPLOY_CLEANUP_ENABLED,
 	DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE,
 	DEFAULT_DEPLOY_CLEANUP_DRY_RUN,
+	DEFAULT_DEPLOY_ATOMIC_ENABLED,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
+	sanitizeDeployAtomicEnabled,
 	sanitizeDeployCleanupEnabled,
 	sanitizeDeployCleanupConfirmBeforeDelete,
 	sanitizeDeployCleanupDryRun,
@@ -73,4 +75,10 @@ test('deployConfig sanitizes cleanup dry-run flag', () => {
 	assert.equal(sanitizeDeployCleanupDryRun(undefined), DEFAULT_DEPLOY_CLEANUP_DRY_RUN);
 	assert.equal(sanitizeDeployCleanupDryRun(true), true);
 	assert.equal(sanitizeDeployCleanupDryRun(false), false);
+});
+
+test('deployConfig sanitizes atomic enabled flag', () => {
+	assert.equal(sanitizeDeployAtomicEnabled(undefined), DEFAULT_DEPLOY_ATOMIC_ENABLED);
+	assert.equal(sanitizeDeployAtomicEnabled(true), true);
+	assert.equal(sanitizeDeployAtomicEnabled(false), false);
 });

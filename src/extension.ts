@@ -8,7 +8,6 @@ import { OutputChannelLogger } from './diagnostics/logger';
 import { buildRemoteChildPath, buildRemotePathFromLocal, isValidRemoteEntryName } from './fs/browserActions';
 import {
 	buildRemoteDeployPath,
-	buildRemoteProjectFilePath,
 	buildRemoteProjectRoot,
 	choosePreferredRunCandidate,
 	isRbfFileName
@@ -17,6 +16,7 @@ import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployIncremental';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
+import { deleteRemotePath, getRemotePathKind, renameRemotePath } from './fs/remoteFsOps';
 import { RemoteFsService } from './fs/remoteFsService';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from './protocol/capabilityProbe';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
@@ -561,6 +561,19 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
 			return;
 		}
+		const atomicEnabled = featureConfig.deploy.atomicEnabled && !options.previewOnly;
+		const remoteProjectParent = path.posix.dirname(remoteProjectRoot);
+		const remoteProjectName = path.posix.basename(remoteProjectRoot);
+		const atomicTag = `${Date.now().toString(36)}-${Math.floor(Math.random() * 10_000).toString(36)}`;
+		const atomicStagingRoot = path.posix.join(
+			remoteProjectParent,
+			`.${remoteProjectName}.ev3-cockpit-staging-${atomicTag}`
+		);
+		const atomicBackupRoot = path.posix.join(
+			remoteProjectParent,
+			`.${remoteProjectName}.ev3-cockpit-backup-${atomicTag}`
+		);
+		const deployProjectRoot = atomicEnabled ? atomicStagingRoot : remoteProjectRoot;
 
 		try {
 			const scan = await collectLocalFilesRecursive(projectUri, featureConfig.deploy);
@@ -572,10 +585,11 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const files: LocalProjectFileEntry[] = scan.files.map((entry) => {
+				const relativePosix = entry.relativePath.split(path.sep).join('/');
 				return {
 					localUri: entry.localUri,
 					relativePath: entry.relativePath,
-					remotePath: buildRemoteProjectFilePath(projectUri.fsPath, entry.localUri.fsPath, defaultRoot),
+					remotePath: path.posix.join(deployProjectRoot, relativePosix),
 					sizeBytes: entry.sizeBytes,
 					isRbf: isRbfFileName(path.basename(entry.localUri.fsPath))
 				};
@@ -589,7 +603,9 @@ export function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				runTarget = choosePreferredRunCandidate(rbfFiles.map((entry) => entry.remotePath));
+				runTarget = choosePreferredRunCandidate(
+					rbfFiles.map((entry) => path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/')))
+				);
 				if (!runTarget) {
 					vscode.window.showErrorMessage('Could not determine run target .rbf file.');
 					return;
@@ -598,7 +614,7 @@ export function activate(context: vscode.ExtensionContext) {
 				if (rbfFiles.length > 1) {
 					const quickPickItems = rbfFiles.map((entry) => ({
 						label: entry.relativePath,
-						description: entry.remotePath
+						description: path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/'))
 					}));
 					const selected = await vscode.window.showQuickPick(quickPickItems, {
 						title: 'Select .rbf file to run after deploy',
@@ -615,6 +631,20 @@ export function activate(context: vscode.ExtensionContext) {
 			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
 			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
 			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
+			if (atomicEnabled && incrementalEnabled) {
+				incrementalEnabled = false;
+				logger.info('Project deploy incremental mode disabled because atomic deploy is enabled.', {
+					remoteProjectRoot,
+					atomicStagingRoot
+				});
+			}
+			if (atomicEnabled && cleanupEnabled) {
+				cleanupEnabled = false;
+				logger.info('Project deploy cleanup mode disabled because atomic deploy performs full root swap.', {
+					remoteProjectRoot,
+					atomicStagingRoot
+				});
+			}
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
 			if (incrementalEnabled || cleanupEnabled) {
@@ -733,7 +763,7 @@ export function activate(context: vscode.ExtensionContext) {
 				async (progress) => {
 					if (!options.previewOnly) {
 						const directories = new Set<string>();
-						directories.add(remoteProjectRoot);
+						directories.add(deployProjectRoot);
 						for (const file of files) {
 							directories.add(path.posix.dirname(file.remotePath));
 						}
@@ -816,6 +846,77 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			);
 
+			if (atomicEnabled && !options.previewOnly) {
+				logger.info('Atomic deploy swap started', {
+					remoteProjectRoot,
+					atomicStagingRoot,
+					atomicBackupRoot
+				});
+
+				let backupCreated = false;
+				try {
+					const currentRootKind = await getRemotePathKind(fsService, remoteProjectRoot);
+					if (currentRootKind !== 'missing') {
+						await renameRemotePath(fsService, remoteProjectRoot, atomicBackupRoot, { overwrite: true });
+						backupCreated = true;
+					}
+
+					await renameRemotePath(fsService, atomicStagingRoot, remoteProjectRoot, { overwrite: true });
+
+					if (backupCreated) {
+						try {
+							await deleteRemotePath(fsService, atomicBackupRoot, { recursive: true });
+						} catch (cleanupError) {
+							logger.warn('Atomic deploy backup cleanup failed', {
+								path: atomicBackupRoot,
+								message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+							});
+						}
+					}
+				} catch (swapError) {
+					logger.warn('Atomic deploy swap failed, attempting rollback.', {
+						remoteProjectRoot,
+						atomicStagingRoot,
+						atomicBackupRoot,
+						message: swapError instanceof Error ? swapError.message : String(swapError)
+					});
+
+					if (backupCreated) {
+						try {
+							const rootKindAfterSwapError = await getRemotePathKind(fsService, remoteProjectRoot);
+							if (rootKindAfterSwapError !== 'missing') {
+								await deleteRemotePath(fsService, remoteProjectRoot, { recursive: true });
+							}
+							await renameRemotePath(fsService, atomicBackupRoot, remoteProjectRoot, { overwrite: true });
+							logger.info('Atomic deploy rollback completed.', {
+								remoteProjectRoot,
+								atomicBackupRoot
+							});
+						} catch (rollbackError) {
+							logger.error('Atomic deploy rollback failed.', {
+								remoteProjectRoot,
+								atomicBackupRoot,
+								message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+							});
+						}
+					}
+
+					throw swapError;
+				} finally {
+					try {
+						const stagingKind = await getRemotePathKind(fsService, atomicStagingRoot);
+						if (stagingKind !== 'missing') {
+							await deleteRemotePath(fsService, atomicStagingRoot, { recursive: true });
+						}
+					} catch (stagingCleanupError) {
+						logger.warn('Atomic deploy staging cleanup failed', {
+							path: atomicStagingRoot,
+							message: stagingCleanupError instanceof Error ? stagingCleanupError.message : String(stagingCleanupError)
+						});
+					}
+				}
+			}
+
 			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
 				await fsService.runProgram(runTarget);
 			}
@@ -836,6 +937,7 @@ export function activate(context: vscode.ExtensionContext) {
 				incrementalEnabled,
 				cleanupEnabled,
 				cleanupDryRun,
+				atomicEnabled,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
