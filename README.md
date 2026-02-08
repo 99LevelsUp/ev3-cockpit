@@ -76,6 +76,8 @@ Override it in workspace/user settings when you need `bluetooth` or `tcp` test r
   - mock connect flow wiring (`ev3-cockpit.transport.mode=mock`) for active provider path,
   - fake TCP EV3 end-to-end provider flow (`ev3://active/...` read/write/copy/rename/delete) without physical hardware.
 - `npm run test:hw` - hardware smoke category (`[HW]`) in fixed order: USB -> TCP (WiFi) -> Bluetooth.
+- `npm run test:hw:matrix` - hardware matrix category (`[HW-MATRIX]`) that runs multiple hardware-smoke scenarios (`baseline`, `reconnect`, `reconnect-glitch`) and writes JSON report artifact.
+- `npm run test:hw:all` - `test:hw` followed by `test:hw:matrix`.
 - `npm run test:all` - unit + extension-host + hardware categories.
 
 Hardware smoke returns explicit status per transport:
@@ -86,6 +88,8 @@ Hardware smoke returns explicit status per transport:
 Optional hardware env vars:
 - `EV3_COCKPIT_HW_TIMEOUT_MS`, `EV3_COCKPIT_HW_USB_PATH`
 - `EV3_COCKPIT_HW_TRANSPORTS` (optional): comma-separated transport subset for hardware smoke, for example `usb,tcp` to skip Bluetooth.
+- `EV3_COCKPIT_HW_MATRIX_SCENARIOS` (optional): comma-separated hardware matrix scenarios (`baseline,reconnect,reconnect-glitch`).
+- `EV3_COCKPIT_HW_MATRIX_REPORT` (optional): output path for matrix JSON report (default `artifacts/hw/hardware-matrix.json`).
 - `EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK` (optional, default `true`): include emergency-stop validation (`PROGRAM_STOP` + `OUTPUT_STOP`) in hardware smoke.
 - `EV3_COCKPIT_HW_RECONNECT_CHECK` (optional, default `false`): include disconnect/reconnect recovery scenario (open -> probe -> close -> reopen -> probe) for selected transports (`usb|tcp|bluetooth`).
 - `EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK` (optional, default `true`): when reconnect check is enabled, include simulated in-flight disconnect recovery (close during pending probe -> reopen -> probe) for `usb|bluetooth`.

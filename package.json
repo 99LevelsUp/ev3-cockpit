@@ -421,6 +421,8 @@
     "test:unit": "npm run compile && node --test \"out/__tests__/**/*.test.js\"",
     "test:host": "npm run compile && node out/testHost/runTestHost.js",
     "test:hw": "npm run compile && node out/hw/hardwareSmoke.js",
+    "test:hw:matrix": "npm run compile && node out/hw/hardwareMatrix.js",
+    "test:hw:all": "npm run test:hw && npm run test:hw:matrix",
     "test:all": "npm run test:unit && npm run test:host && npm run test:hw"
   },
   "optionalDependencies": {
