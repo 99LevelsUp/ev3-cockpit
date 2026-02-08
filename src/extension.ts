@@ -712,28 +712,34 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	const executeProjectDeploy = async (options: { runAfterDeploy: boolean; previewOnly: boolean }): Promise<void> => {
+	const executeProjectDeploy = async (options: {
+		runAfterDeploy: boolean;
+		previewOnly: boolean;
+		projectUri?: vscode.Uri;
+	}): Promise<void> => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
 			return;
 		}
 		const fsService = activeFsService;
 
-		const selection = await vscode.window.showOpenDialog({
-			canSelectMany: false,
-			canSelectFiles: false,
-			canSelectFolders: true,
-			openLabel: options.previewOnly
-				? 'Preview Project Deploy Changes'
-				: options.runAfterDeploy
-				? 'Deploy Project to EV3'
-				: 'Sync Project to EV3'
-		});
-		if (!selection || selection.length === 0) {
-			return;
+		let projectUri = options.projectUri;
+		if (!projectUri) {
+			const selection = await vscode.window.showOpenDialog({
+				canSelectMany: false,
+				canSelectFiles: false,
+				canSelectFolders: true,
+				openLabel: options.previewOnly
+					? 'Preview Project Deploy Changes'
+					: options.runAfterDeploy
+					? 'Deploy Project to EV3'
+					: 'Sync Project to EV3'
+			});
+			if (!selection || selection.length === 0) {
+				return;
+			}
+			projectUri = selection[0];
 		}
-
-		const projectUri = selection[0];
 		const featureConfig = readFeatureConfig();
 		const defaultRoot = featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 		let remoteProjectRoot: string;
@@ -1331,6 +1337,44 @@ export function activate(context: vscode.ExtensionContext) {
 		await executeProjectDeploy({ runAfterDeploy: false, previewOnly: false });
 	});
 
+	const pickWorkspaceProjectFolder = async (): Promise<vscode.Uri | undefined> => {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) {
+			vscode.window.showErrorMessage('No workspace folder is open.');
+			return undefined;
+		}
+
+		if (workspaceFolders.length === 1) {
+			return workspaceFolders[0].uri;
+		}
+
+		const pick = await vscode.window.showQuickPick(
+			workspaceFolders.map((folder) => ({
+				label: folder.name,
+				description: folder.uri.fsPath,
+				uri: folder.uri
+			})),
+			{
+				title: 'Select workspace folder to sync',
+				placeHolder: 'Choose local project folder'
+			}
+		);
+		return pick?.uri;
+	};
+
+	const deployWorkspace = vscode.commands.registerCommand('ev3-cockpit.deployWorkspace', async () => {
+		const workspaceUri = await pickWorkspaceProjectFolder();
+		if (!workspaceUri) {
+			return;
+		}
+
+		await executeProjectDeploy({
+			runAfterDeploy: false,
+			previewOnly: false,
+			projectUri: workspaceUri
+		});
+	});
+
 	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
@@ -1843,6 +1887,7 @@ export function activate(context: vscode.ExtensionContext) {
 		deployAndRunRbf,
 		previewProjectDeploy,
 		deployProject,
+		deployWorkspace,
 		deployProjectAndRunRbf,
 		runRemoteProgram,
 		stopProgram,

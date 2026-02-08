@@ -15,6 +15,7 @@
     "onCommand:ev3-cockpit.deployAndRunRbf",
     "onCommand:ev3-cockpit.previewProjectDeploy",
     "onCommand:ev3-cockpit.deployProject",
+    "onCommand:ev3-cockpit.deployWorkspace",
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
     "onCommand:ev3-cockpit.runRemoteProgram",
     "onCommand:ev3-cockpit.stopProgram",
@@ -45,6 +46,10 @@
       {
         "command": "ev3-cockpit.deployProject",
         "title": "EV3 Cockpit: Sync Project to EV3 (active)"
+      },
+      {
+        "command": "ev3-cockpit.deployWorkspace",
+        "title": "EV3 Cockpit: Sync Workspace to EV3 (active)"
       },
       {
         "command": "ev3-cockpit.deployProjectAndRunRbf",

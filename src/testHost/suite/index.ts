@@ -532,6 +532,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.deployAndRunRbf'));
 	assert.ok(commands.includes('ev3-cockpit.previewProjectDeploy'));
 	assert.ok(commands.includes('ev3-cockpit.deployProject'));
+	assert.ok(commands.includes('ev3-cockpit.deployWorkspace'));
 	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
 	assert.ok(commands.includes('ev3-cockpit.runRemoteProgram'));
 	assert.ok(commands.includes('ev3-cockpit.stopProgram'));
@@ -761,6 +762,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunRbf');
 	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProject');
+	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspace');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbf');
 	await vscode.commands.executeCommand('ev3-cockpit.runRemoteProgram');
 	await vscode.commands.executeCommand('ev3-cockpit.stopProgram');

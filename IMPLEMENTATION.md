@@ -86,6 +86,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - pridana command akce `EV3 Cockpit: Deploy and Run .rbf (active)` (`local pick -> upload -> run`) nad `RemoteFsService`.
   - pridana command akce `EV3 Cockpit: Preview Deploy Changes (active)` pro dry planning upload/skip/cleanup bez zmen na EV3.
   - pridana command akce `EV3 Cockpit: Sync Project to EV3 (active)` (`folder pick -> recursive upload/sync`) bez automatickeho spusteni programu.
+  - pridana command akce `EV3 Cockpit: Sync Workspace to EV3 (active)` (`workspace folder -> recursive upload/sync`), ktera v single-root workspace neotevira folder dialog.
   - pridana command akce `EV3 Cockpit: Deploy Project and Run .rbf (active)` (`folder pick -> recursive upload -> run selected .rbf`).
   - pridany run-control workflow commandy: `Run Remote Program (.rbf)`, `Stop Program (active)`, `Restart Program (active)` s pamatovanim posledniho run targetu.
   - runtime drzi `program session` metadata (path/time/source/transport) pro restart + diagnostiku (`Transport Health Report`).
