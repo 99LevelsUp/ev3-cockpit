@@ -16,6 +16,7 @@ import {
 test('hardware smoke classifies unavailable USB errors', () => {
 	assert.equal(isLikelyUnavailableError('usb', new Error('No EV3 USB HID device found.')), true);
 	assert.equal(isLikelyUnavailableError('usb', new Error('Request execution failed: could not read from HID device.')), true);
+	assert.equal(isLikelyUnavailableError('usb', new Error('Request execution failed: USB transport is not open.')), true);
 	assert.equal(isLikelyUnavailableError('usb', new Error('Probe reply command mismatch.')), false);
 });
 
@@ -26,6 +27,7 @@ test('hardware smoke classifies unavailable TCP errors', () => {
 
 test('hardware smoke classifies unavailable Bluetooth errors', () => {
 	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Opening COM4: Unknown error code 121')), true);
+	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Request execution failed: Bluetooth transport is not open.')), true);
 	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Probe reply returned status 0x2.')), false);
 });
 

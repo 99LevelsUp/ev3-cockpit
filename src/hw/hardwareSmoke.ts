@@ -84,7 +84,8 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/requires package "node-hid"/i,
 		/could not read from hid device/i,
 		/could not write to hid device/i,
-		/device has been disconnected/i
+		/device has been disconnected/i,
+		/transport is not open/i
 	],
 	tcp: [
 		/requires non-empty host/i,
@@ -103,7 +104,8 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/access is denied/i,
 		/unknown error code 121/i,
 		/unknown error code 1256/i,
-		/timed out/i
+		/timed out/i,
+		/transport is not open/i
 	]
 };
 
@@ -655,8 +657,25 @@ async function runDriverDropRecoveryCheck(
 
 		const startedAt = Date.now();
 		let dropObserved = false;
+		let connectionOpen = true;
 		while (Date.now() - startedAt < windowMs) {
 			await sleep(pollMs);
+
+			if (!connectionOpen) {
+				try {
+					await client.open();
+					connectionOpen = true;
+				} catch (error) {
+					if (isLikelyUnavailableError(transport, error)) {
+						continue;
+					}
+					return {
+						ok: false,
+						message: errorMessage(error)
+					};
+				}
+			}
+
 			try {
 				await runProbeWithClient(client, timeoutMs);
 				if (dropObserved) {
@@ -671,13 +690,11 @@ async function runDriverDropRecoveryCheck(
 				}
 
 				dropObserved = true;
-				await client.close().catch(() => undefined);
-				await sleep(Math.min(Math.max(50, pollMs), 500));
-				try {
-					await client.open();
-				} catch {
-					// Keep polling until reconnect window expires.
+				if (connectionOpen) {
+					await client.close().catch(() => undefined);
+					connectionOpen = false;
 				}
+				await sleep(Math.min(Math.max(50, pollMs), 500));
 			}
 		}
 
