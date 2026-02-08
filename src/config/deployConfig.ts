@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 export type DeployVerifyMode = 'none' | 'size' | 'md5';
+export type DeployConflictPolicy = 'overwrite' | 'skip' | 'ask';
 
 export interface DeployConfigSnapshot {
 	excludeDirectories: string[];
@@ -14,6 +15,7 @@ export interface DeployConfigSnapshot {
 	cleanupDryRun: boolean;
 	atomicEnabled: boolean;
 	verifyAfterUpload: DeployVerifyMode;
+	conflictPolicy: DeployConflictPolicy;
 }
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
@@ -27,6 +29,7 @@ export const DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE = true;
 export const DEFAULT_DEPLOY_CLEANUP_DRY_RUN = false;
 export const DEFAULT_DEPLOY_ATOMIC_ENABLED = false;
 export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = 'none';
+export const DEFAULT_DEPLOY_CONFLICT_POLICY: DeployConflictPolicy = 'overwrite';
 
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
@@ -130,6 +133,13 @@ export function sanitizeDeployVerifyAfterUpload(value: unknown): DeployVerifyMod
 	return DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD;
 }
 
+export function sanitizeDeployConflictPolicy(value: unknown): DeployConflictPolicy {
+	if (value === 'overwrite' || value === 'skip' || value === 'ask') {
+		return value;
+	}
+	return DEFAULT_DEPLOY_CONFLICT_POLICY;
+}
+
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
@@ -144,6 +154,7 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 		),
 		cleanupDryRun: sanitizeDeployCleanupDryRun(cfg.get('deploy.cleanup.dryRun')),
 		atomicEnabled: sanitizeDeployAtomicEnabled(cfg.get('deploy.atomic.enabled')),
-		verifyAfterUpload: sanitizeDeployVerifyAfterUpload(cfg.get('deploy.verifyAfterUpload'))
+		verifyAfterUpload: sanitizeDeployVerifyAfterUpload(cfg.get('deploy.verifyAfterUpload')),
+		conflictPolicy: sanitizeDeployConflictPolicy(cfg.get('deploy.conflictPolicy'))
 	};
 }

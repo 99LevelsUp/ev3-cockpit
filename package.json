@@ -348,6 +348,16 @@
           ],
           "description": "Optional post-upload verification mode for deploy operations: none, size check, or md5 checksum."
         },
+        "ev3-cockpit.deploy.conflictPolicy": {
+          "type": "string",
+          "default": "overwrite",
+          "enum": [
+            "overwrite",
+            "skip",
+            "ask"
+          ],
+          "description": "Conflict policy when remote file already exists during deploy."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

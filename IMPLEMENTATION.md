@@ -95,6 +95,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - project deploy podporuje `atomic` rezim (`ev3-cockpit.deploy.atomic.enabled`) se staging root + swap + rollback fallbackem.
   - deploy podporuje volitelnou post-upload validaci integrity (`ev3-cockpit.deploy.verifyAfterUpload`: `none|size|md5`) s fail-fast pri mismatch.
   - project deploy podporuje selective sync pravidla pres glob filtry (`ev3-cockpit.deploy.includeGlobs`, `ev3-cockpit.deploy.excludeGlobs`).
+  - project deploy podporuje conflict policy (`ev3-cockpit.deploy.conflictPolicy`: `overwrite|skip|ask`) pro remote file kolize.
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.

@@ -10,6 +10,7 @@ import {
 	DEFAULT_DEPLOY_CLEANUP_DRY_RUN,
 	DEFAULT_DEPLOY_ATOMIC_ENABLED,
 	DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD,
+	DEFAULT_DEPLOY_CONFLICT_POLICY,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployAtomicEnabled,
@@ -22,7 +23,8 @@ import {
 	sanitizeDeployExcludeGlobs,
 	sanitizeDeployIncrementalEnabled,
 	sanitizeDeployMaxFileBytes,
-	sanitizeDeployVerifyAfterUpload
+	sanitizeDeployVerifyAfterUpload,
+	sanitizeDeployConflictPolicy
 } from '../config/deployConfig';
 
 test('deployConfig uses defaults for invalid exclude directories', () => {
@@ -113,4 +115,12 @@ test('deployConfig sanitizes verify-after-upload mode', () => {
 	assert.equal(sanitizeDeployVerifyAfterUpload('size'), 'size');
 	assert.equal(sanitizeDeployVerifyAfterUpload('md5'), 'md5');
 	assert.equal(sanitizeDeployVerifyAfterUpload('invalid'), DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD);
+});
+
+test('deployConfig sanitizes conflict policy', () => {
+	assert.equal(sanitizeDeployConflictPolicy(undefined), DEFAULT_DEPLOY_CONFLICT_POLICY);
+	assert.equal(sanitizeDeployConflictPolicy('overwrite'), 'overwrite');
+	assert.equal(sanitizeDeployConflictPolicy('skip'), 'skip');
+	assert.equal(sanitizeDeployConflictPolicy('ask'), 'ask');
+	assert.equal(sanitizeDeployConflictPolicy('invalid'), DEFAULT_DEPLOY_CONFLICT_POLICY);
 });

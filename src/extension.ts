@@ -814,6 +814,8 @@ export function activate(context: vscode.ExtensionContext) {
 			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
 			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
 			const verifyAfterUpload = featureConfig.deploy.verifyAfterUpload;
+			const conflictPolicy = featureConfig.deploy.conflictPolicy;
+			const effectiveConflictPolicy = options.previewOnly ? 'overwrite' : conflictPolicy;
 			if (atomicEnabled && incrementalEnabled) {
 				incrementalEnabled = false;
 				logger.info('Project deploy incremental mode disabled because atomic deploy is enabled.', {
@@ -830,7 +832,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
-			if (incrementalEnabled || cleanupEnabled) {
+			if (incrementalEnabled || cleanupEnabled || effectiveConflictPolicy !== 'overwrite') {
 				const remoteIndexResult = await collectRemoteFileIndexRecursive(fsService, remoteProjectRoot);
 				if (!remoteIndexResult.available) {
 					if (incrementalEnabled) {
@@ -847,6 +849,13 @@ export function activate(context: vscode.ExtensionContext) {
 							remoteProjectRoot
 						});
 					}
+					if (effectiveConflictPolicy !== 'overwrite') {
+						logger.info('Project deploy conflict policy will use per-file lookup; remote index unavailable.', {
+							reason: remoteIndexResult.message ?? 'remote-index-unavailable',
+							remoteProjectRoot,
+							conflictPolicy: effectiveConflictPolicy
+						});
+					}
 				} else if (remoteIndexResult.truncated) {
 					if (incrementalEnabled) {
 						incrementalEnabled = false;
@@ -858,6 +867,12 @@ export function activate(context: vscode.ExtensionContext) {
 						cleanupEnabled = false;
 						logger.info('Project deploy cleanup mode disabled due to truncated remote listing.', {
 							remoteProjectRoot
+						});
+					}
+					if (effectiveConflictPolicy !== 'overwrite') {
+						logger.info('Project deploy conflict policy will use per-file lookup due to truncated remote listing.', {
+							remoteProjectRoot,
+							conflictPolicy: effectiveConflictPolicy
 						});
 					}
 				} else {
@@ -874,6 +889,8 @@ export function activate(context: vscode.ExtensionContext) {
 			let uploadedFilesCount = 0;
 			let verifiedFilesCount = 0;
 			let skippedUnchangedCount = 0;
+			let skippedByConflictCount = 0;
+			let overwrittenConflictCount = 0;
 			let uploadedBytes = 0;
 			let plannedUploadCount = 0;
 			let deletedStaleFilesCount = 0;
@@ -885,6 +902,28 @@ export function activate(context: vscode.ExtensionContext) {
 			let cleanupPlan = {
 				filesToDelete: [] as string[],
 				directoriesToDelete: [] as string[]
+			};
+			const conflictDirectoryCache = new Map<string, Set<string>>();
+			let conflictBulkDecision: 'overwrite' | 'skip' | undefined;
+
+			const remoteFileExists = async (remotePath: string): Promise<boolean> => {
+				if (remoteIndex.has(remotePath)) {
+					return true;
+				}
+
+				const parent = path.posix.dirname(remotePath);
+				const fileName = path.posix.basename(remotePath);
+				const cached = conflictDirectoryCache.get(parent);
+				if (cached) {
+					return cached.has(fileName);
+				}
+
+				const listing = await fsService.listDirectory(parent);
+				const names = new Set(listing.files.map((entry) => entry.name));
+				if (!listing.truncated) {
+					conflictDirectoryCache.set(parent, names);
+				}
+				return names.has(fileName);
 			};
 
 			if (cleanupEnabled) {
@@ -990,6 +1029,52 @@ export function activate(context: vscode.ExtensionContext) {
 								message: `Would upload ${index + 1}/${files.length}: ${file.relativePath}`
 							});
 						} else {
+							if (effectiveConflictPolicy !== 'overwrite') {
+								const exists = await remoteFileExists(file.remotePath);
+								if (exists) {
+									let decision: 'overwrite' | 'skip';
+									if (effectiveConflictPolicy === 'skip') {
+										decision = 'skip';
+									} else if (conflictBulkDecision) {
+										decision = conflictBulkDecision;
+									} else {
+										const choice = await vscode.window.showWarningMessage(
+											`Remote file already exists: ${file.remotePath}`,
+											{
+												modal: true,
+												detail: 'Choose how deploy should resolve this file conflict.'
+											},
+											'Overwrite',
+											'Skip',
+											'Overwrite All',
+											'Skip All'
+										);
+										if (choice === 'Overwrite All') {
+											conflictBulkDecision = 'overwrite';
+											decision = 'overwrite';
+										} else if (choice === 'Skip All') {
+											conflictBulkDecision = 'skip';
+											decision = 'skip';
+										} else if (choice === 'Overwrite') {
+											decision = 'overwrite';
+										} else {
+											decision = 'skip';
+										}
+									}
+
+									if (decision === 'skip') {
+										skippedByConflictCount += 1;
+										progress.report({
+											increment: 100 / files.length,
+											message: `Skipped conflict ${index + 1}/${files.length}: ${file.relativePath}`
+										});
+										continue;
+									}
+
+									overwrittenConflictCount += 1;
+								}
+							}
+
 							await fsService.writeFile(file.remotePath, bytes ?? new Uint8Array());
 							if (verifyAfterUpload !== 'none') {
 								await verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload);
@@ -1124,11 +1209,14 @@ export function activate(context: vscode.ExtensionContext) {
 				filesVerified: verifiedFilesCount,
 				filesPlannedUpload: plannedUploadCount,
 				filesSkippedUnchanged: skippedUnchangedCount,
+				filesSkippedByConflict: skippedByConflictCount,
+				filesOverwrittenConflict: overwrittenConflictCount,
 				incrementalEnabled,
 				cleanupEnabled,
 				cleanupDryRun,
 				atomicEnabled,
 				verifyAfterUpload,
+				conflictPolicy: effectiveConflictPolicy,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
@@ -1179,6 +1267,10 @@ export function activate(context: vscode.ExtensionContext) {
 					: cleanupEnabled || deletedStaleFilesCount > 0 || deletedStaleDirectoriesCount > 0
 					? `; cleanup deleted ${deletedStaleFilesCount} file(s), ${deletedStaleDirectoriesCount} director${deletedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
 					: '';
+			const conflictSummary =
+				effectiveConflictPolicy !== 'overwrite'
+					? `; conflict skipped ${skippedByConflictCount}, overwritten ${overwrittenConflictCount} (${effectiveConflictPolicy})`
+					: '';
 
 			if (options.previewOnly) {
 				vscode.window.showInformationMessage(
@@ -1194,7 +1286,7 @@ export function activate(context: vscode.ExtensionContext) {
 						? ` and started: ev3://active${runTarget}`
 						: ` to ev3://active${remoteProjectRoot}`;
 				vscode.window.showInformationMessage(
-					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}${verifySummary}`
+					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}${verifySummary}${conflictSummary}`
 				);
 			}
 		} catch (error) {

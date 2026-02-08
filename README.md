@@ -137,6 +137,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.deploy.cleanup.dryRun`: preview stale remote files/directories without deleting them (default `false`)
 - `ev3-cockpit.deploy.atomic.enabled`: stage project to temporary remote root and swap with rollback semantics (default `false`)
 - `ev3-cockpit.deploy.verifyAfterUpload`: post-upload integrity verification mode (`none`/`size`/`md5`, default `none`)
+- `ev3-cockpit.deploy.conflictPolicy`: behavior when remote file already exists (`overwrite`/`skip`/`ask`, default `overwrite`)
 
 Runtime keeps in-memory program session metadata (last path, start timestamp, source command, transport mode) and uses it for restart and diagnostics output.
 
