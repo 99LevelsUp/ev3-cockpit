@@ -540,6 +540,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.disconnectEV3'));
 	assert.ok(commands.includes('ev3-cockpit.emergencyStop'));
 	assert.ok(commands.includes('ev3-cockpit.inspectTransports'));
+	assert.ok(commands.includes('ev3-cockpit.transportHealthReport'));
 	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
 }
 
@@ -724,6 +725,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
 	await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
 	await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
+	await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
 	await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
 }
 

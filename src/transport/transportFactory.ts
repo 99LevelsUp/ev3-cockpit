@@ -353,10 +353,13 @@ function createTcpTransport(cfg: vscode.WorkspaceConfiguration, timeoutMs: numbe
 	});
 }
 
-export function createProbeTransportFromWorkspace(logger: OutputChannelLogger, timeoutMs: number): TransportAdapter {
-	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-	const mode = sanitizeTransportMode(cfg.get('transport.mode'));
-
+export function createProbeTransportForMode(
+	cfg: vscode.WorkspaceConfiguration,
+	logger: OutputChannelLogger,
+	timeoutMs: number,
+	modeRaw: unknown
+): TransportAdapter {
+	const mode = sanitizeTransportMode(modeRaw);
 	if (mode === 'mock') {
 		logger.info('Using mock transport for connect probe (ev3-cockpit.transport.mode=mock).');
 		return createMockProbeTransport(logger);
@@ -397,4 +400,9 @@ export function createProbeTransportFromWorkspace(logger: OutputChannelLogger, t
 			create: () => createMockProbeTransport(logger)
 		}
 	]);
+}
+
+export function createProbeTransportFromWorkspace(logger: OutputChannelLogger, timeoutMs: number): TransportAdapter {
+	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+	return createProbeTransportForMode(cfg, logger, timeoutMs, cfg.get('transport.mode'));
 }

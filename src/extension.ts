@@ -24,7 +24,7 @@ import { EV3_COMMAND, EV3_REPLY } from './protocol/ev3Packet';
 import { CommandScheduler } from './scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from './scheduler/orphanRecovery';
 import { listSerialCandidates, listUsbHidCandidates } from './transport/discovery';
-import { createProbeTransportFromWorkspace, TransportMode } from './transport/transportFactory';
+import { createProbeTransportForMode, createProbeTransportFromWorkspace, TransportMode } from './transport/transportFactory';
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
@@ -318,6 +318,85 @@ export function activate(context: vscode.ExtensionContext) {
 			throw new Error('Only .rbf program paths are supported.');
 		}
 		return normalized;
+	};
+
+	const isTransportLikelyUnavailable = (message: string): boolean =>
+		/not found|requires setting|timeout|unknown error code 121|unknown error code 1256|access is denied|send aborted/i.test(
+			message
+		);
+
+	const runTransportProbe = async (
+		mode: 'usb' | 'tcp' | 'bluetooth'
+	): Promise<{ mode: 'usb' | 'tcp' | 'bluetooth'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const timeoutMs = resolveProbeTimeoutMs();
+		let probeScheduler: CommandScheduler | undefined;
+		let probeClient: Ev3CommandClient | undefined;
+
+		try {
+			probeScheduler = new CommandScheduler({
+				defaultTimeoutMs: timeoutMs,
+				logger,
+				defaultRetryPolicy: readSchedulerConfig().defaultRetryPolicy,
+				orphanRecoveryStrategy: new LoggingOrphanRecoveryStrategy((msg, meta) => logger.info(msg, meta))
+			});
+			probeClient = new Ev3CommandClient({
+				scheduler: probeScheduler,
+				transport: createProbeTransportForMode(cfg, logger, timeoutMs, mode),
+				logger
+			});
+
+			await probeClient.open();
+			const probeResult = await probeClient.send({
+				id: `transport-health-${mode}-probe`,
+				lane: 'high',
+				idempotent: true,
+				timeoutMs,
+				type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+				payload: new Uint8Array([0x9d])
+			});
+			if (probeResult.reply.type !== EV3_REPLY.SYSTEM_REPLY && probeResult.reply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
+				throw new Error(`Unexpected probe reply type 0x${probeResult.reply.type.toString(16)}.`);
+			}
+			if (probeResult.reply.type === EV3_REPLY.SYSTEM_REPLY_ERROR) {
+				throw new Error('Probe returned SYSTEM_REPLY_ERROR.');
+			}
+
+			const capabilityResult = await probeClient.send({
+				id: `transport-health-${mode}-capability`,
+				lane: 'high',
+				idempotent: true,
+				timeoutMs,
+				type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+				payload: buildCapabilityProbeDirectPayload()
+			});
+			if (capabilityResult.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+				throw new Error(`Unexpected capability reply type 0x${capabilityResult.reply.type.toString(16)}.`);
+			}
+			const capability = parseCapabilityProbeReply(capabilityResult.reply.payload);
+			return {
+				mode,
+				status: 'PASS',
+				message: `probe+capability ok (fw=${capability.fwVersion || '?'}, build=${capability.fwBuild || '?'})`
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (isTransportLikelyUnavailable(message)) {
+				return {
+					mode,
+					status: 'SKIP',
+					message
+				};
+			}
+			return {
+				mode,
+				status: 'FAIL',
+				message
+			};
+		} finally {
+			await probeClient?.close().catch(() => undefined);
+			probeScheduler?.dispose();
+		}
 	};
 
 	const disposable = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async () => {
@@ -1184,6 +1263,33 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	});
 
+	const transportHealthReport = vscode.commands.registerCommand('ev3-cockpit.transportHealthReport', async () => {
+		const [usbCandidates, serialCandidates] = await Promise.all([
+			listUsbHidCandidates(),
+			listSerialCandidates()
+		]);
+
+		logger.info('Transport health report discovery snapshot', {
+			usbCandidates,
+			serialCandidates
+		});
+
+		const modes: Array<'usb' | 'tcp' | 'bluetooth'> = ['usb', 'tcp', 'bluetooth'];
+		const results: Array<{ mode: 'usb' | 'tcp' | 'bluetooth'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> = [];
+		for (const mode of modes) {
+			const result = await runTransportProbe(mode);
+			results.push(result);
+			logger.info('Transport health probe result', result);
+		}
+
+		const pass = results.filter((entry) => entry.status === 'PASS').length;
+		const skip = results.filter((entry) => entry.status === 'SKIP').length;
+		const fail = results.filter((entry) => entry.status === 'FAIL').length;
+		vscode.window.showInformationMessage(
+			`Transport health report: PASS=${pass}, SKIP=${skip}, FAIL=${fail}. See EV3 Cockpit output for details.`
+		);
+	});
+
 	const browseRemoteFs = vscode.commands.registerCommand('ev3-cockpit.browseRemoteFs', async () => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
@@ -1539,6 +1645,7 @@ export function activate(context: vscode.ExtensionContext) {
 		disconnect,
 		emergencyStop,
 		inspectTransports,
+		transportHealthReport,
 		browseRemoteFs,
 		configWatcher,
 		fsDisposable,

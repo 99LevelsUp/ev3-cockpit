@@ -23,6 +23,7 @@
     "onCommand:ev3-cockpit.disconnectEV3",
     "onCommand:ev3-cockpit.emergencyStop",
     "onCommand:ev3-cockpit.inspectTransports",
+    "onCommand:ev3-cockpit.transportHealthReport",
     "onCommand:ev3-cockpit.browseRemoteFs",
     "onFileSystem:ev3"
   ],
@@ -76,6 +77,10 @@
       {
         "command": "ev3-cockpit.inspectTransports",
         "title": "EV3 Cockpit: Inspect Transport Candidates"
+      },
+      {
+        "command": "ev3-cockpit.transportHealthReport",
+        "title": "EV3 Cockpit: Transport Health Report"
       },
       {
         "command": "ev3-cockpit.browseRemoteFs",

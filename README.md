@@ -111,6 +111,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `EV3 Cockpit: Disconnect EV3 (active)` — close active session and clear in-memory EV3 services
 - `EV3 Cockpit: Emergency Stop (active)` — sends emergency lane stop command (`PROGRAM_STOP` + `OUTPUT_STOP`) to active connection
 - `EV3 Cockpit: Inspect Transport Candidates` — show USB/serial discovery snapshot
+- `EV3 Cockpit: Transport Health Report` — run probe+capability checks over USB/TCP/Bluetooth and print PASS/SKIP/FAIL summary
 - `EV3 Cockpit: Browse Remote FS (active)` — interactive browser for `ev3://active/...` with actions:
   - upload file(s) to current folder,
   - create folder,
