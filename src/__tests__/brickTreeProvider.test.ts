@@ -159,7 +159,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 		assert.equal(readyRoot.brickId, 'usb-auto');
 
 		const readyItem = provider.getTreeItem(readyRoot);
-		assert.equal(readyItem.contextValue, 'ev3BrickRootReady');
+		assert.equal(readyItem.contextValue, 'ev3BrickRootReadyActive');
 		assert.equal(readyItem.command?.command, 'ev3-cockpit.browseRemoteFs');
 		assert.match(readyItem.description ?? '', /ACTIVE/);
 

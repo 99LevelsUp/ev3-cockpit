@@ -160,7 +160,8 @@
       },
       {
         "command": "ev3-cockpit.runRemoteRbfFromTree",
-        "title": "EV3 Cockpit: Run .rbf from Remote FS"
+        "title": "EV3 Cockpit: Run .rbf from Remote FS",
+        "icon": "$(play)"
       }
     ],
     "views": {
@@ -182,7 +183,7 @@
       "view/item/context": [
         {
           "command": "ev3-cockpit.browseRemoteFs",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline"
         },
         {
@@ -192,42 +193,67 @@
         },
         {
           "command": "ev3-cockpit.uploadToBrickFolder",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3RemoteDirectory)",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory)",
           "group": "2_modification"
         },
         {
+          "command": "ev3-cockpit.reconnectEV3",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.disconnectEV3",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.emergencyStop",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.stopProgram",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.restartProgram",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "group": "1_connection"
+        },
+        {
           "command": "ev3-cockpit.previewWorkspaceDeployToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.previewProjectDeployToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployProjectToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployProjectAndRunRbfToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.applyDeployProfileToBrick",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
@@ -238,7 +264,7 @@
         {
           "command": "ev3-cockpit.runRemoteRbfFromTree",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileRbf",
-          "group": "navigation"
+          "group": "inline"
         }
       ]
     },

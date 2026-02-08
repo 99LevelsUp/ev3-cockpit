@@ -37,6 +37,7 @@ import {
 	isBrickFileNode,
 	isBrickRootNode
 } from './ui/brickTreeProvider';
+import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
@@ -2526,9 +2527,22 @@ export function activate(context: vscode.ExtensionContext) {
 		isCaseSensitive: true,
 		isReadonly: false
 	});
+	const brickTreeDragAndDrop = new BrickTreeDragAndDropController({
+		resolveFsService: async (brickId) => {
+			const service = brickRegistry.resolveFsService(brickId);
+			if (!service) {
+				throw new Error(`Brick "${brickId}" is unavailable for filesystem access.`);
+			}
+			return service;
+		},
+		refreshTree: () => treeProvider.refreshThrottled(),
+		logger: logger!
+	});
+
 	const brickTreeView = vscode.window.createTreeView('ev3-cockpit.bricksView', {
 		treeDataProvider: treeProvider,
-		showCollapseAll: true
+		showCollapseAll: true,
+		dragAndDropController: brickTreeDragAndDrop
 	});
 	treeProvider.refresh();
 

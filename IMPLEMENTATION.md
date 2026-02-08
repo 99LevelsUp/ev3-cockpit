@@ -350,6 +350,7 @@ Aktualni stav:
   - zmeny v programu a testech lze commit/push automaticky,
   - pokud tyto zmeny vyzaduji upravy `design.md`, `IMPLEMENTATION.md` nebo `README.md`, lze je pushnout take bez potvrzeni,
   - pokud uzivatel explicitne vyzada zmenu `design.md`, `IMPLEMENTATION.md` nebo `README.md`, pred pushem je nutne pockat na kontrolu/potvrzeni.
+  - u kazde uzivatelsky viditelne nebo funkcni zmeny doplnit odpovidajici kapitolu/sekci do `README.md`.
 
 Hotove implementacni celky:
 - Scheduler + lane priority + retry + orphan-risk recovery.

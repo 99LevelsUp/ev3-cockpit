@@ -107,7 +107,12 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				item.tooltip = element.lastError
 					? `${element.displayName}\n${element.rootPath}\n${element.lastError}`
 					: `${element.displayName}\n${element.rootPath}`;
-				item.contextValue = element.status === 'READY' ? 'ev3BrickRootReady' : 'ev3BrickRootUnavailable';
+				item.contextValue =
+					element.status === 'READY'
+						? element.isActive
+							? 'ev3BrickRootReadyActive'
+							: 'ev3BrickRootReady'
+						: 'ev3BrickRootUnavailable';
 				item.iconPath = new vscode.ThemeIcon(
 					element.status === 'READY' ? (element.isActive ? 'plug' : 'device-camera-video') : 'warning'
 				);
@@ -136,9 +141,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
 				item.id = `file:${element.brickId}:${element.remotePath}`;
 				item.description = `${element.size} B`;
-				item.contextValue = element.remotePath.toLowerCase().endsWith('.rbf')
-					? 'ev3RemoteFileRbf'
-					: 'ev3RemoteFile';
+				const isRbf = element.remotePath.toLowerCase().endsWith('.rbf');
+				item.contextValue = isRbf ? 'ev3RemoteFileRbf' : 'ev3RemoteFile';
+				item.iconPath = new vscode.ThemeIcon(isRbf ? 'play' : 'file');
 				item.resourceUri = buildEv3Uri(element.brickId, element.remotePath);
 				item.command = {
 					command: 'vscode.open',
