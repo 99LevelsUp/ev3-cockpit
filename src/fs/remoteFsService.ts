@@ -2,7 +2,7 @@ import { CapabilityProfile } from '../compat/capabilityProfile';
 import { FsConfigSnapshot } from '../config/featureConfig';
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
-import { concatBytes, lc0, uint16le } from '../protocol/ev3Bytecode';
+import { concatBytes, cString, gv0, lc0, lc2, lcs, readUint32le, uint16le, uint32le } from '../protocol/ev3Bytecode';
 import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { evaluateFsAccess } from './pathPolicy';
 
@@ -112,45 +112,6 @@ interface SystemCommandReply {
 
 interface SystemCommandSendOptions {
 	idempotent: boolean;
-}
-
-function uint32le(value: number): Uint8Array {
-	const out = new Uint8Array(4);
-	new DataView(out.buffer).setUint32(0, value >>> 0, true);
-	return out;
-}
-
-function cString(text: string): Uint8Array {
-	const encoded = Buffer.from(text, 'utf8');
-	return concatBytes(encoded, new Uint8Array([0x00]));
-}
-
-function lc2(value: number): Uint8Array {
-	if (!Number.isInteger(value) || value < -32768 || value > 32767) {
-		throw new Error(`LC2 value out of range: ${value}`);
-	}
-	const out = new Uint8Array(3);
-	out[0] = 0x82;
-	new DataView(out.buffer).setInt16(1, value, true);
-	return out;
-}
-
-function lcs(text: string): Uint8Array {
-	return concatBytes(new Uint8Array([0x84]), cString(text));
-}
-
-function gv0(offset: number): Uint8Array {
-	if (!Number.isInteger(offset) || offset < 0 || offset > 31) {
-		throw new Error(`GV0 offset out of range: ${offset}`);
-	}
-	return new Uint8Array([0x60 | offset]);
-}
-
-function readUint32le(bytes: Uint8Array, offset: number): number {
-	if (bytes.length < offset + 4) {
-		throw new Error('Expected 4-byte little-endian integer in system command payload.');
-	}
-	return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true);
 }
 
 function parseListPayload(data: Uint8Array): { folders: string[]; files: FsFileEntry[] } {
