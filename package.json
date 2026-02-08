@@ -1,32 +1,346 @@
 {
-  "name": "ev3io",
-  "displayName": "ev3io",
+  "name": "ev3-cockpit",
+  "displayName": "EV3 Cockpit",
   "description": "Connect and control LEGO Mindstorms EV3 from VS Code",
   "version": "0.0.1",
-  "publisher": "ev3io",
+  "publisher": "ev3-cockpit",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:ev3-cockpit.connectEV3",
+    "onCommand:ev3-cockpit.deployAndRunRbf",
+    "onCommand:ev3-cockpit.deployProjectAndRunRbf",
+    "onCommand:ev3-cockpit.reconnectEV3",
+    "onCommand:ev3-cockpit.disconnectEV3",
+    "onCommand:ev3-cockpit.emergencyStop",
+    "onCommand:ev3-cockpit.inspectTransports",
+    "onCommand:ev3-cockpit.browseRemoteFs",
+    "onFileSystem:ev3"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "ev3io.connectEV3",
-        "title": "ev3io: Connect to EV3 Robot"
+        "command": "ev3-cockpit.connectEV3",
+        "title": "EV3 Cockpit: Connect to EV3 Brick"
+      },
+      {
+        "command": "ev3-cockpit.deployAndRunRbf",
+        "title": "EV3 Cockpit: Deploy and Run .rbf (active)"
+      },
+      {
+        "command": "ev3-cockpit.deployProjectAndRunRbf",
+        "title": "EV3 Cockpit: Deploy Project and Run .rbf (active)"
+      },
+      {
+        "command": "ev3-cockpit.reconnectEV3",
+        "title": "EV3 Cockpit: Reconnect EV3 (active settings)"
+      },
+      {
+        "command": "ev3-cockpit.disconnectEV3",
+        "title": "EV3 Cockpit: Disconnect EV3 (active)"
+      },
+      {
+        "command": "ev3-cockpit.emergencyStop",
+        "title": "EV3 Cockpit: Emergency Stop (active)"
+      },
+      {
+        "command": "ev3-cockpit.inspectTransports",
+        "title": "EV3 Cockpit: Inspect Transport Candidates"
+      },
+      {
+        "command": "ev3-cockpit.browseRemoteFs",
+        "title": "EV3 Cockpit: Browse Remote FS (active)"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "EV3 Cockpit",
+      "properties": {
+        "ev3-cockpit.transport.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "usb",
+            "bluetooth",
+            "tcp",
+            "mock"
+          ],
+          "description": "Transport mode for connect probe. Auto tries USB, then Bluetooth, then TCP, then mock fallback."
+        },
+        "ev3-cockpit.transport.timeoutMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 50,
+          "description": "Default timeout (ms) for scheduler requests."
+        },
+        "ev3-cockpit.transport.usb.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit USB HID device path. Empty value auto-selects first EV3 VID/PID device."
+        },
+        "ev3-cockpit.transport.usb.vendorId": {
+          "type": "number",
+          "default": 1684,
+          "minimum": 0,
+          "description": "USB vendor ID (default LEGO 0x0694)."
+        },
+        "ev3-cockpit.transport.usb.productId": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "description": "USB product ID (default EV3 0x0005)."
+        },
+        "ev3-cockpit.transport.usb.reportId": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "USB HID report ID used for writes."
+        },
+        "ev3-cockpit.transport.usb.reportSize": {
+          "type": "number",
+          "default": 1025,
+          "minimum": 2,
+          "description": "USB HID report size in bytes including report ID."
+        },
+        "ev3-cockpit.transport.bluetooth.port": {
+          "type": "string",
+          "default": "",
+          "description": "Bluetooth SPP serial port path (for example COM5 on Windows)."
+        },
+        "ev3-cockpit.transport.bluetooth.baudRate": {
+          "type": "number",
+          "default": 115200,
+          "minimum": 300,
+          "description": "Baud rate for Bluetooth SPP serial transport."
+        },
+        "ev3-cockpit.transport.bluetooth.dtr": {
+          "type": "boolean",
+          "default": false,
+          "description": "Data Terminal Ready line state for Bluetooth SPP COM port. Some drivers work better with false."
+        },
+        "ev3-cockpit.transport.bluetooth.autoPortFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "Try multiple discovered COM ports when opening Bluetooth transport."
+        },
+        "ev3-cockpit.transport.bluetooth.portProbeTimeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 100,
+          "description": "Probe timeout for each Bluetooth COM candidate during auto port fallback."
+        },
+        "ev3-cockpit.transport.bluetooth.portAttempts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "Retry attempts per Bluetooth COM candidate before switching to next candidate."
+        },
+        "ev3-cockpit.transport.bluetooth.retryDelayMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Delay between Bluetooth retries on the same COM candidate."
+        },
+        "ev3-cockpit.transport.bluetooth.postOpenDelayMs": {
+          "type": "number",
+          "default": 120,
+          "minimum": 0,
+          "description": "Stabilization delay after opening Bluetooth COM port before EV3 probe."
+        },
+        "ev3-cockpit.transport.bluetooth.probeTimeoutMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 50,
+          "description": "Timeout for connect probe when Bluetooth transport mode is active."
+        },
+        "ev3-cockpit.transport.tcp.host": {
+          "type": "string",
+          "default": "",
+          "description": "EV3 TCP host (IP or hostname). Optional when discovery is enabled."
+        },
+        "ev3-cockpit.transport.tcp.port": {
+          "type": "number",
+          "default": 5555,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "EV3 TCP port for VMTP transport."
+        },
+        "ev3-cockpit.transport.tcp.serialNumber": {
+          "type": "string",
+          "default": "",
+          "description": "Optional EV3 serial number used in TCP unlock request."
+        },
+        "ev3-cockpit.transport.tcp.useDiscovery": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use UDP beacon discovery/ACK before TCP connect. Can resolve host/port/serial automatically."
+        },
+        "ev3-cockpit.transport.tcp.discoveryPort": {
+          "type": "number",
+          "default": 3015,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "UDP discovery port for EV3 WiFi beacon."
+        },
+        "ev3-cockpit.transport.tcp.discoveryTimeoutMs": {
+          "type": "number",
+          "default": 7000,
+          "minimum": 100,
+          "description": "Timeout waiting for EV3 UDP discovery beacon."
+        },
+        "ev3-cockpit.transport.tcp.handshakeTimeoutMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 50,
+          "description": "Timeout for TCP connect and unlock handshake."
+        },
+        "ev3-cockpit.logging.level": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
+          "description": "Log verbosity for EV3 Cockpit output channel."
+        },
+        "ev3-cockpit.fs.mode": {
+          "type": "string",
+          "default": "safe",
+          "enum": [
+            "safe",
+            "full"
+          ],
+          "description": "Remote filesystem access mode. Safe restricts operations to approved roots."
+        },
+        "ev3-cockpit.fs.defaultRoots": {
+          "type": "array",
+          "default": [
+            "/home/root/lms2012/prjs/",
+            "/media/card/"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed roots for remote filesystem operations in safe mode."
+        },
+        "ev3-cockpit.fs.fullMode.confirmationRequired": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require explicit confirmation before enabling full filesystem mode."
+        },
+        "ev3-cockpit.deploy.excludeDirectories": {
+          "type": "array",
+          "default": [
+            ".git",
+            "node_modules",
+            ".vscode-test",
+            "out"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Directory names to skip during project deploy recursion."
+        },
+        "ev3-cockpit.deploy.excludeExtensions": {
+          "type": "array",
+          "default": [
+            ".map"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "File extensions to skip during project deploy (for example .map)."
+        },
+        "ev3-cockpit.deploy.maxFileBytes": {
+          "type": "number",
+          "default": 5242880,
+          "minimum": 1,
+          "description": "Maximum single file size (bytes) accepted by project deploy."
+        },
+        "ev3-cockpit.deploy.incremental.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, project deploy compares remote md5/size and uploads only changed files."
+        },
+        "ev3-cockpit.compat.profile": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "stock-strict"
+          ],
+          "description": "Capability profile selection mode based on firmware detection."
+        },
+        "ev3-cockpit.scheduler.retry.maxRetries": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Default retry attempts for idempotent scheduler requests."
+        },
+        "ev3-cockpit.scheduler.retry.initialBackoffMs": {
+          "type": "number",
+          "default": 25,
+          "minimum": 0,
+          "description": "Initial retry backoff in milliseconds."
+        },
+        "ev3-cockpit.scheduler.retry.backoffFactor": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "Backoff multiplier for each retry attempt."
+        },
+        "ev3-cockpit.scheduler.retry.maxBackoffMs": {
+          "type": "number",
+          "default": 500,
+          "minimum": 0,
+          "description": "Maximum retry backoff in milliseconds."
+        },
+        "ev3-cockpit.scheduler.retry.retryOn": {
+          "type": "array",
+          "default": [
+            "TIMEOUT",
+            "EXECUTION_FAILED"
+          ],
+          "items": {
+            "type": "string",
+            "enum": [
+              "TIMEOUT",
+              "EXECUTION_FAILED",
+              "CANCELLED",
+              "ORPHAN_RISK"
+            ]
+          },
+          "description": "Error codes eligible for retry when request is idempotent."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
+    "clean": "node -e \"const fs=require('node:fs'); for (const p of ['out','.vscode-test']) fs.rmSync(p,{recursive:true,force:true});\"",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run test:unit",
+    "test:unit": "npm run compile && node --test \"out/__tests__/**/*.test.js\"",
+    "test:host": "npm run compile && node out/testHost/runTestHost.js",
+    "test:hw": "npm run compile && node out/hw/hardwareSmoke.js",
+    "test:all": "npm run test:unit && npm run test:host && npm run test:hw"
+  },
+  "optionalDependencies": {
+    "node-hid": "^3.1.2",
+    "serialport": "^12.0.0"
   },
   "devDependencies": {
+    "@vscode/test-electron": "^2.5.2",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",

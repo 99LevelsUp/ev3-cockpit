@@ -4,7 +4,24 @@
       "Bash(npm install)",
       "Bash(npm run compile:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(gh repo view:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:c4ev3.github.io)",
+      "WebFetch(domain:www.lego.com)",
+      "WebFetch(domain:ev3-dc.readthedocs.io)",
+      "WebFetch(domain:ev3.fantastic.computer)",
+      "WebFetch(domain:analyticphysics.com)",
+      "WebFetch(domain:siouxnetontrack.wordpress.com)",
+      "WebFetch(domain:r.jander.me.uk)",
+      "WebFetch(domain:www.monobrick.dk)",
+      "WebFetch(domain:docs.ev3dev.org)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

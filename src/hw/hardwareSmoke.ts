@@ -1,0 +1,1045 @@
+import * as fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
+import * as path from 'node:path';
+import { buildCapabilityProfile } from '../compat/capabilityProfile';
+import { BrickControlService } from '../device/brickControlService';
+import { RemoteFsService } from '../fs/remoteFsService';
+import { EMPTY_RBF_BYTES, EMPTY_RBF_META } from './fixtures/emptyProgram';
+import { canonicalizeEv3Path } from '../fs/pathPolicy';
+import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from '../protocol/capabilityProbe';
+import { Ev3CommandClient } from '../protocol/ev3CommandClient';
+import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
+import { CommandScheduler } from '../scheduler/commandScheduler';
+import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
+import { listSerialCandidates, listUsbHidCandidates } from '../transport/discovery';
+import { TcpAdapter } from '../transport/tcpAdapter';
+import { TransportAdapter } from '../transport/transportAdapter';
+import { UsbHidAdapter } from '../transport/usbHidAdapter';
+
+type TransportKind = 'usb' | 'tcp' | 'bluetooth';
+type HardwareStatus = 'PASS' | 'SKIP' | 'FAIL';
+const TRANSPORT_ORDER: TransportKind[] = ['usb', 'tcp', 'bluetooth'];
+
+export interface HardwareCaseResult {
+	transport: TransportKind;
+	status: HardwareStatus;
+	reason: string;
+	detail?: Record<string, unknown>;
+}
+
+interface ProbeSuccess {
+	messageCounter: number;
+	durationMs: number;
+	capability: {
+		osVersion: string;
+		hwVersion: string;
+		fwVersion: string;
+		osBuild: string;
+		fwBuild: string;
+	};
+}
+
+interface RunProgramCheckResult {
+	ok: boolean;
+	path: string;
+	mode: 'remote' | 'fixture-upload';
+	localFixturePath?: string;
+	fixtureSource?: string;
+	fixtureBytes?: number;
+	message?: string;
+}
+
+interface RunProgramSpec {
+	mode: 'remote' | 'fixture-upload';
+	remotePath: string;
+	localFixturePath?: string;
+	fixtureBytes?: Uint8Array;
+	fixtureSource?: string;
+}
+
+interface RunProgramSpecResolution {
+	spec?: RunProgramSpec;
+	error?: string;
+}
+
+const DEFAULT_TIMEOUT_MS = 2_000;
+const DEFAULT_BT_PROBE_TIMEOUT_MS = 12_000;
+const DEFAULT_TCP_DISCOVERY_TIMEOUT_MS = 7_000;
+const DEFAULT_TCP_ATTEMPTS = 2;
+const DEFAULT_TCP_RETRY_DELAY_MS = 300;
+const DEFAULT_BT_PORT_ATTEMPTS = 2;
+const DEFAULT_BT_RETRY_DELAY_MS = 300;
+const DEFAULT_EMERGENCY_STOP_CHECK = true;
+const DEFAULT_RECONNECT_CHECK = false;
+const SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
+const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-run-fixture.rbf';
+
+const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
+	usb: [
+		/no ev3 usb hid device found/i,
+		/requires package "node-hid"/i
+	],
+	tcp: [
+		/requires non-empty host/i,
+		/could not resolve host/i,
+		/udp discovery timeout/i,
+		/econnrefused/i,
+		/ehostunreach/i,
+		/enetunreach/i,
+		/tcp connect timeout/i
+	],
+	bluetooth: [
+		/requires package "serialport"/i,
+		/could not resolve any serial com candidates/i,
+		/non-empty serial port path/i,
+		/file not found/i,
+		/access is denied/i,
+		/unknown error code 121/i,
+		/unknown error code 1256/i,
+		/timed out/i
+	]
+};
+
+function envNumber(name: string, fallback: number, min: number): number {
+	const raw = process.env[name];
+	if (!raw) {
+		return fallback;
+	}
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) {
+		return fallback;
+	}
+	return Math.max(min, parsed);
+}
+
+function envBoolean(name: string, fallback: boolean): boolean {
+	const raw = process.env[name]?.trim().toLowerCase();
+	if (raw === undefined || raw.length === 0) {
+		return fallback;
+	}
+	if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') {
+		return true;
+	}
+	if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
+		return false;
+	}
+	return fallback;
+}
+
+function errorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
+}
+
+async function sleep(ms: number): Promise<void> {
+	if (ms <= 0) {
+		return;
+	}
+	await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveOptionalRunProgramPath(rawValue: string | undefined): string | undefined {
+	const raw = rawValue?.trim();
+	if (!raw) {
+		return undefined;
+	}
+
+	const fromUri = /^ev3:\/\/[^/]+(\/.*)$/i.exec(raw);
+	const candidate = fromUri?.[1] ?? raw;
+	try {
+		return canonicalizeEv3Path(candidate);
+	} catch {
+		return undefined;
+	}
+}
+
+function resolveExistingFixturePath(raw: string): string | undefined {
+	const normalized = raw.trim();
+	if (!normalized) {
+		return undefined;
+	}
+
+	const absolute = path.isAbsolute(normalized) ? normalized : path.resolve(process.cwd(), normalized);
+	return fs.existsSync(absolute) ? absolute : undefined;
+}
+
+function resolveRemoteFixtureUploadPath(rawValue: string | undefined): string | undefined {
+	const raw = rawValue?.trim() || DEFAULT_RUN_FIXTURE_REMOTE_PATH;
+	const fromUri = /^ev3:\/\/[^/]+(\/.*)$/i.exec(raw);
+	const candidate = fromUri?.[1] ?? raw;
+	try {
+		return canonicalizeEv3Path(candidate);
+	} catch {
+		return undefined;
+	}
+}
+
+export function resolveRunProgramSpecFromEnv(env: NodeJS.ProcessEnv = process.env): RunProgramSpecResolution {
+	const remoteRunPath = resolveOptionalRunProgramPath(env.EV3_COCKPIT_HW_RUN_RBF_PATH);
+	if (env.EV3_COCKPIT_HW_RUN_RBF_PATH?.trim()) {
+		if (!remoteRunPath) {
+			return {
+				error: `Invalid EV3_COCKPIT_HW_RUN_RBF_PATH value: "${env.EV3_COCKPIT_HW_RUN_RBF_PATH}".`
+			};
+		}
+		return {
+			spec: {
+				mode: 'remote',
+				remotePath: remoteRunPath
+			}
+		};
+	}
+
+	const fixtureRaw = env.EV3_COCKPIT_HW_RUN_RBF_FIXTURE?.trim();
+	if (!fixtureRaw) {
+		return {};
+	}
+
+	if (fixtureRaw.toLowerCase() === 'auto') {
+		const remoteUploadPath = resolveRemoteFixtureUploadPath(env.EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH);
+		if (!remoteUploadPath) {
+			return {
+				error: `Invalid EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH value: "${env.EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH ?? DEFAULT_RUN_FIXTURE_REMOTE_PATH}".`
+			};
+		}
+		return {
+			spec: {
+				mode: 'fixture-upload',
+				remotePath: remoteUploadPath,
+				fixtureBytes: new Uint8Array(EMPTY_RBF_BYTES),
+				fixtureSource: `embedded:${EMPTY_RBF_META.sourcePath}`
+			}
+		};
+	}
+
+	const fixturePath = resolveExistingFixturePath(fixtureRaw);
+	if (!fixturePath) {
+		return {
+			error: `Could not resolve local fixture file from EV3_COCKPIT_HW_RUN_RBF_FIXTURE="${fixtureRaw}".`
+		};
+	}
+
+	const remoteUploadPath = resolveRemoteFixtureUploadPath(env.EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH);
+	if (!remoteUploadPath) {
+		return {
+			error: `Invalid EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH value: "${env.EV3_COCKPIT_HW_RUN_RBF_REMOTE_PATH ?? DEFAULT_RUN_FIXTURE_REMOTE_PATH}".`
+		};
+	}
+
+	return {
+		spec: {
+			mode: 'fixture-upload',
+			remotePath: remoteUploadPath,
+			localFixturePath: fixturePath,
+			fixtureSource: fixturePath
+		}
+	};
+}
+
+export function resolveEmergencyStopCheckFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK?.trim();
+	if (!raw) {
+		return DEFAULT_EMERGENCY_STOP_CHECK;
+	}
+
+	const normalized = raw.toLowerCase();
+	if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+		return true;
+	}
+	if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+		return false;
+	}
+	return DEFAULT_EMERGENCY_STOP_CHECK;
+}
+
+export function resolveReconnectCheckFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.EV3_COCKPIT_HW_RECONNECT_CHECK?.trim();
+	if (!raw) {
+		return DEFAULT_RECONNECT_CHECK;
+	}
+
+	const normalized = raw.toLowerCase();
+	if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+		return true;
+	}
+	if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+		return false;
+	}
+	return DEFAULT_RECONNECT_CHECK;
+}
+
+export function isLikelyUnavailableError(transport: TransportKind, error: unknown): boolean {
+	const message = errorMessage(error);
+	return UNAVAILABLE_PATTERNS[transport].some((pattern) => pattern.test(message));
+}
+
+export function resolveHardwareTransportsFromEnv(
+	env: NodeJS.ProcessEnv = process.env
+): { transports: TransportKind[]; warning?: string } {
+	const raw = env.EV3_COCKPIT_HW_TRANSPORTS?.trim();
+	if (!raw) {
+		return {
+			transports: [...TRANSPORT_ORDER]
+		};
+	}
+
+	const seen = new Set<TransportKind>();
+	const unknown: string[] = [];
+	for (const token of raw.split(',')) {
+		const normalized = token.trim().toLowerCase();
+		if (!normalized) {
+			continue;
+		}
+		if (normalized === 'usb' || normalized === 'tcp' || normalized === 'bluetooth') {
+			seen.add(normalized);
+			continue;
+		}
+		unknown.push(normalized);
+	}
+
+	const transports = TRANSPORT_ORDER.filter((kind) => seen.has(kind));
+	if (transports.length === 0) {
+		return {
+			transports: [...TRANSPORT_ORDER],
+			warning: `EV3_COCKPIT_HW_TRANSPORTS="${raw}" did not contain valid transports (usb,tcp,bluetooth). Falling back to all.`
+		};
+	}
+
+	if (unknown.length > 0) {
+		return {
+			transports,
+			warning: `Ignored unknown transports in EV3_COCKPIT_HW_TRANSPORTS: ${unknown.join(', ')}`
+		};
+	}
+
+	return { transports };
+}
+
+function formatResult(result: HardwareCaseResult): string {
+	const prefix = `[HW][${result.transport.toUpperCase()}] ${result.status}`;
+	if (!result.detail || Object.keys(result.detail).length === 0) {
+		return `${prefix} ${result.reason}`;
+	}
+	return `${prefix} ${result.reason} ${JSON.stringify(result.detail)}`;
+}
+
+async function runProbeWithClient(client: Ev3CommandClient, timeoutMs: number): Promise<ProbeSuccess> {
+	const probeCommand = 0x9d;
+	const probeResult = await client.send({
+		id: 'hw-connect-probe',
+		lane: 'high',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: new Uint8Array([probeCommand])
+	});
+	const probeReply = probeResult.reply;
+	if (probeReply.type !== EV3_REPLY.SYSTEM_REPLY && probeReply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
+		throw new Error(`Unexpected probe reply type 0x${probeReply.type.toString(16)}.`);
+	}
+	if (probeReply.payload.length < 2) {
+		throw new Error('Probe reply payload is too short.');
+	}
+	const echoedCommand = probeReply.payload[0];
+	const status = probeReply.payload[1];
+	if (echoedCommand !== probeCommand) {
+		throw new Error(
+			`Probe reply command mismatch: expected 0x${probeCommand.toString(16)}, got 0x${echoedCommand.toString(16)}.`
+		);
+	}
+	if (probeReply.type === EV3_REPLY.SYSTEM_REPLY_ERROR || status !== 0x00) {
+		throw new Error(`Probe reply returned status 0x${status.toString(16)}.`);
+	}
+
+	const capabilityResult = await client.send({
+		id: 'hw-capability-probe',
+		lane: 'high',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: buildCapabilityProbeDirectPayload()
+	});
+	const capabilityReply = capabilityResult.reply;
+	if (capabilityReply.type !== EV3_REPLY.DIRECT_REPLY) {
+		throw new Error(`Unexpected capability reply type 0x${capabilityReply.type.toString(16)}.`);
+	}
+
+	return {
+		messageCounter: probeResult.messageCounter,
+		durationMs: probeResult.durationMs,
+		capability: parseCapabilityProbeReply(capabilityReply.payload)
+	};
+}
+
+async function runProbe(adapter: TransportAdapter, timeoutMs: number): Promise<ProbeSuccess> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: adapter
+	});
+
+	try {
+		await client.open();
+		return await runProbeWithClient(client, timeoutMs);
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
+async function runProgramCheck(
+	createAdapter: () => TransportAdapter,
+	timeoutMs: number,
+	capability: ProbeSuccess['capability'],
+	spec: RunProgramSpec
+): Promise<RunProgramCheckResult> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: createAdapter()
+	});
+
+	try {
+		await client.open();
+		const profile = buildCapabilityProfile(capability, 'auto');
+		const service = new RemoteFsService({
+			commandClient: client,
+			capabilityProfile: profile,
+			fsConfig: {
+				mode: 'safe',
+				defaultRoots: [...SAFE_ROOTS],
+				fullModeConfirmationRequired: true
+			},
+			defaultTimeoutMs: Math.max(timeoutMs, profile.recommendedTimeoutMs)
+		});
+
+		if (spec.mode === 'fixture-upload') {
+			const fixturePath = spec.localFixturePath;
+			let fixtureBytes: Uint8Array;
+			if (spec.fixtureBytes) {
+				fixtureBytes = new Uint8Array(spec.fixtureBytes);
+			} else {
+				if (!fixturePath) {
+					throw new Error('Fixture-upload run mode requires local fixture path or fixture bytes.');
+				}
+				fixtureBytes = new Uint8Array(await fsPromises.readFile(fixturePath));
+			}
+			if (fixtureBytes.length === 0) {
+				throw new Error('Fixture-upload run mode resolved an empty fixture binary.');
+			}
+			// Best-effort cleanup from a previous interrupted run.
+			await service.deleteFile(spec.remotePath).catch(() => undefined);
+			await service.writeFile(spec.remotePath, fixtureBytes);
+			let runError: unknown;
+			try {
+				await service.runProgram(spec.remotePath);
+			} catch (error) {
+				runError = error;
+			}
+
+			let lastDeleteError: unknown;
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				try {
+					await service.deleteFile(spec.remotePath);
+					lastDeleteError = undefined;
+					break;
+				} catch (error) {
+					lastDeleteError = error;
+					if (attempt < 2) {
+						await sleep(120);
+					}
+				}
+			}
+
+			if (runError) {
+				throw runError;
+			}
+			if (lastDeleteError) {
+				throw lastDeleteError;
+			}
+			return {
+				ok: true,
+				mode: spec.mode,
+				path: spec.remotePath,
+				localFixturePath: fixturePath,
+				fixtureSource: spec.fixtureSource,
+				fixtureBytes: fixtureBytes.length
+			};
+		}
+
+		await service.runProgram(spec.remotePath);
+		return {
+			ok: true,
+			mode: spec.mode,
+			path: spec.remotePath
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			mode: spec.mode,
+			path: spec.remotePath,
+			localFixturePath: spec.localFixturePath,
+			fixtureSource: spec.fixtureSource,
+			message: errorMessage(error)
+		};
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
+async function runEmergencyStopCheck(createAdapter: () => TransportAdapter, timeoutMs: number): Promise<{ ok: boolean; message?: string }> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: createAdapter()
+	});
+
+	try {
+		await client.open();
+		const controls = new BrickControlService({
+			commandClient: client,
+			defaultTimeoutMs: timeoutMs
+		});
+		await controls.emergencyStopAll();
+		return { ok: true };
+	} catch (error) {
+		return {
+			ok: false,
+			message: errorMessage(error)
+		};
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
+async function runReconnectRecoveryCheck(
+	createAdapter: () => TransportAdapter,
+	timeoutMs: number
+): Promise<{ ok: boolean; message?: string }> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const adapter = createAdapter();
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: adapter
+	});
+
+	try {
+		await client.open();
+		await runProbeWithClient(client, timeoutMs);
+		await client.close();
+		await client.open();
+		await runProbeWithClient(client, timeoutMs);
+		return { ok: true };
+	} catch (error) {
+		return {
+			ok: false,
+			message: errorMessage(error)
+		};
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
+function mapPostProbeCheckFailure(
+	transport: TransportKind,
+	checkName: 'Program run check' | 'Emergency stop check' | 'Reconnect recovery check',
+	message: string
+): HardwareCaseResult {
+	if (isLikelyUnavailableError(transport, message)) {
+		return {
+			transport,
+			status: 'SKIP',
+			reason: `${transport.toUpperCase()} transport became unavailable during ${checkName.toLowerCase()} (${message}).`
+		};
+	}
+
+	return {
+		transport,
+		status: 'FAIL',
+		reason: `${checkName} failed (${message}).`
+	};
+}
+
+async function runUsbCase(
+	runSpecResolution: RunProgramSpecResolution,
+	emergencyStopCheckEnabled: boolean,
+	reconnectCheckEnabled: boolean
+): Promise<HardwareCaseResult> {
+	const vendorId = envNumber('EV3_COCKPIT_HW_USB_VENDOR_ID', 0x0694, 0);
+	const productId = envNumber('EV3_COCKPIT_HW_USB_PRODUCT_ID', 0x0005, 0);
+	const timeoutMs = envNumber('EV3_COCKPIT_HW_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 50);
+	const path = process.env.EV3_COCKPIT_HW_USB_PATH?.trim() || undefined;
+	const candidates = await listUsbHidCandidates(vendorId, productId);
+	const runSpec = runSpecResolution.spec;
+	if (runSpecResolution.error) {
+		return {
+			transport: 'usb',
+			status: 'FAIL',
+			reason: runSpecResolution.error
+		};
+	}
+
+	if (!path && candidates.length === 0) {
+		return {
+			transport: 'usb',
+			status: 'SKIP',
+			reason: 'USB transport unavailable (EV3 HID device not found).',
+			detail: { vendorId, productId }
+		};
+	}
+
+	try {
+		const createAdapter = () =>
+			new UsbHidAdapter({
+				path,
+				vendorId,
+				productId
+			});
+		const probe = await runProbe(
+			createAdapter(),
+			timeoutMs
+		);
+
+		if (runSpec) {
+			const runCheck = await runProgramCheck(createAdapter, timeoutMs, probe.capability, runSpec);
+			if (!runCheck.ok) {
+				return mapPostProbeCheckFailure('usb', 'Program run check', runCheck.message ?? 'unknown error');
+			}
+		}
+
+		if (emergencyStopCheckEnabled) {
+			const stopCheck = await runEmergencyStopCheck(createAdapter, timeoutMs);
+			if (!stopCheck.ok) {
+				return mapPostProbeCheckFailure('usb', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+			}
+		}
+
+		if (reconnectCheckEnabled) {
+			const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+			if (!reconnectCheck.ok) {
+				return mapPostProbeCheckFailure('usb', 'Reconnect recovery check', reconnectCheck.message ?? 'unknown error');
+			}
+		}
+
+		return {
+			transport: 'usb',
+			status: 'PASS',
+			reason: runSpec
+				? emergencyStopCheckEnabled
+					? reconnectCheckEnabled
+						? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+						: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
+					: reconnectCheckEnabled
+						? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+						: 'Connect, capability probe and run-program check succeeded.'
+				: emergencyStopCheckEnabled
+					? reconnectCheckEnabled
+						? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+						: 'Connect, capability probe and emergency-stop check succeeded.'
+					: reconnectCheckEnabled
+						? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+						: 'Connect and capability probe succeeded.',
+			detail: {
+				path: path ?? candidates[0]?.path ?? 'auto',
+				runProgramPath: runSpec?.remotePath ?? undefined,
+				runProgramMode: runSpec?.mode ?? undefined,
+				runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
+				runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
+				emergencyStopChecked: emergencyStopCheckEnabled,
+				reconnectChecked: reconnectCheckEnabled,
+				fwVersion: probe.capability.fwVersion,
+				fwBuild: probe.capability.fwBuild
+			}
+		};
+	} catch (error) {
+		const message = errorMessage(error);
+		if (isLikelyUnavailableError('usb', error)) {
+			return {
+				transport: 'usb',
+				status: 'SKIP',
+				reason: `USB transport unavailable (${message}).`
+			};
+		}
+		return {
+			transport: 'usb',
+			status: 'FAIL',
+			reason: message
+		};
+	}
+}
+
+async function runTcpCase(
+	runSpecResolution: RunProgramSpecResolution,
+	emergencyStopCheckEnabled: boolean,
+	reconnectCheckEnabled: boolean
+): Promise<HardwareCaseResult> {
+	const host = process.env.EV3_COCKPIT_HW_TCP_HOST?.trim() ?? '';
+	const timeoutMs = envNumber('EV3_COCKPIT_HW_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 50);
+	const useDiscovery = envBoolean('EV3_COCKPIT_HW_TCP_USE_DISCOVERY', host.length === 0);
+	const port = envNumber('EV3_COCKPIT_HW_TCP_PORT', 5555, 1);
+	const discoveryPort = envNumber('EV3_COCKPIT_HW_TCP_DISCOVERY_PORT', 3015, 1);
+	const discoveryTimeoutMs = envNumber(
+		'EV3_COCKPIT_HW_TCP_DISCOVERY_TIMEOUT_MS',
+		DEFAULT_TCP_DISCOVERY_TIMEOUT_MS,
+		100
+	);
+	const handshakeTimeoutMs = envNumber('EV3_COCKPIT_HW_TCP_HANDSHAKE_TIMEOUT_MS', timeoutMs, 50);
+	const serialNumber = process.env.EV3_COCKPIT_HW_TCP_SERIAL?.trim() ?? '';
+	const attempts = envNumber('EV3_COCKPIT_HW_TCP_ATTEMPTS', DEFAULT_TCP_ATTEMPTS, 1);
+	const retryDelayMs = envNumber('EV3_COCKPIT_HW_TCP_RETRY_DELAY_MS', DEFAULT_TCP_RETRY_DELAY_MS, 0);
+	const runSpec = runSpecResolution.spec;
+	if (runSpecResolution.error) {
+		return {
+			transport: 'tcp',
+			status: 'FAIL',
+			reason: runSpecResolution.error
+		};
+	}
+
+	if (host.length === 0 && !useDiscovery) {
+		return {
+			transport: 'tcp',
+			status: 'SKIP',
+			reason: 'TCP transport unavailable (missing host and discovery disabled).'
+		};
+	}
+
+	const failures: string[] = [];
+	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+		try {
+			const createAdapter = () =>
+				new TcpAdapter({
+					host,
+					port,
+					serialNumber,
+					useDiscovery,
+					discoveryPort,
+					discoveryTimeoutMs,
+					handshakeTimeoutMs
+				});
+			const probe = await runProbe(
+				createAdapter(),
+				timeoutMs
+			);
+
+			if (runSpec) {
+				const runCheck = await runProgramCheck(createAdapter, timeoutMs, probe.capability, runSpec);
+				if (!runCheck.ok) {
+					return mapPostProbeCheckFailure('tcp', 'Program run check', runCheck.message ?? 'unknown error');
+				}
+			}
+
+			if (emergencyStopCheckEnabled) {
+				const stopCheck = await runEmergencyStopCheck(createAdapter, timeoutMs);
+				if (!stopCheck.ok) {
+					return mapPostProbeCheckFailure('tcp', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+				}
+			}
+
+			if (reconnectCheckEnabled) {
+				const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+				if (!reconnectCheck.ok) {
+					return mapPostProbeCheckFailure('tcp', 'Reconnect recovery check', reconnectCheck.message ?? 'unknown error');
+				}
+			}
+
+			return {
+				transport: 'tcp',
+				status: 'PASS',
+				reason: runSpec
+					? emergencyStopCheckEnabled
+						? reconnectCheckEnabled
+							? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
+						: reconnectCheckEnabled
+							? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe and run-program check succeeded.'
+					: emergencyStopCheckEnabled
+						? reconnectCheckEnabled
+							? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe and emergency-stop check succeeded.'
+						: reconnectCheckEnabled
+							? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+							: 'Connect and capability probe succeeded.',
+				detail: {
+					host: host || 'discovery',
+					port,
+					attempt,
+					runProgramPath: runSpec?.remotePath ?? undefined,
+					runProgramMode: runSpec?.mode ?? undefined,
+					runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
+					runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
+					emergencyStopChecked: emergencyStopCheckEnabled,
+					reconnectChecked: reconnectCheckEnabled,
+					fwVersion: probe.capability.fwVersion,
+					fwBuild: probe.capability.fwBuild
+				}
+			};
+		} catch (error) {
+			failures.push(`attempt ${attempt}: ${errorMessage(error)}`);
+			if (attempt < attempts) {
+				await sleep(retryDelayMs);
+			}
+		}
+	}
+
+	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('tcp', message))) {
+		return {
+			transport: 'tcp',
+			status: 'SKIP',
+			reason: `TCP transport unavailable (${failures[0]}).`
+		};
+	}
+
+	return {
+		transport: 'tcp',
+		status: 'FAIL',
+		reason: failures.join(' | ')
+	};
+}
+
+function collectBluetoothPorts(
+	candidates: Awaited<ReturnType<typeof listSerialCandidates>>,
+	preferredSerial?: string
+): string[] {
+	const normalizedSerial = preferredSerial?.trim().toUpperCase() ?? '';
+	return candidates
+		.filter((candidate) => /^COM\d+$/i.test(candidate.path.trim()))
+		.sort((a, b) => {
+			const aPnp = (a.pnpId ?? '').toUpperCase();
+			const bPnp = (b.pnpId ?? '').toUpperCase();
+			const aSerialMatch = normalizedSerial && aPnp.includes(normalizedSerial) ? 0 : 1;
+			const bSerialMatch = normalizedSerial && bPnp.includes(normalizedSerial) ? 0 : 1;
+			if (aSerialMatch !== bSerialMatch) {
+				return aSerialMatch - bSerialMatch;
+			}
+
+			const aEv3 = /_005D/i.test(a.pnpId ?? '') ? 0 : 1;
+			const bEv3 = /_005D/i.test(b.pnpId ?? '') ? 0 : 1;
+			if (aEv3 !== bEv3) {
+				return aEv3 - bEv3;
+			}
+			return a.path.localeCompare(b.path);
+		})
+		.map((candidate) => candidate.path.trim().toUpperCase());
+}
+
+async function runBluetoothCase(
+	runSpecResolution: RunProgramSpecResolution,
+	emergencyStopCheckEnabled: boolean,
+	reconnectCheckEnabled: boolean
+): Promise<HardwareCaseResult> {
+	const timeoutMs = envNumber('EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS', DEFAULT_BT_PROBE_TIMEOUT_MS, 50);
+	const baudRate = envNumber('EV3_COCKPIT_HW_BT_BAUD_RATE', 115200, 300);
+	const dtr = envBoolean('EV3_COCKPIT_HW_BT_DTR', false);
+	const preferredPort = process.env.EV3_COCKPIT_HW_BT_PORT?.trim().toUpperCase();
+	const perPortAttempts = envNumber('EV3_COCKPIT_HW_BT_PORT_ATTEMPTS', DEFAULT_BT_PORT_ATTEMPTS, 1);
+	const retryDelayMs = envNumber('EV3_COCKPIT_HW_BT_RETRY_DELAY_MS', DEFAULT_BT_RETRY_DELAY_MS, 0);
+	const runSpec = runSpecResolution.spec;
+	if (runSpecResolution.error) {
+		return {
+			transport: 'bluetooth',
+			status: 'FAIL',
+			reason: runSpecResolution.error
+		};
+	}
+
+	const usbCandidates = await listUsbHidCandidates();
+	const preferredSerial = usbCandidates[0]?.serialNumber;
+	const autoPorts = preferredPort ? [] : collectBluetoothPorts(await listSerialCandidates(), preferredSerial);
+	const ports = preferredPort ? [preferredPort] : autoPorts;
+	if (ports.length === 0) {
+		return {
+			transport: 'bluetooth',
+			status: 'SKIP',
+			reason: 'Bluetooth transport unavailable (no COM candidates found).'
+		};
+	}
+
+	const failures: string[] = [];
+	for (const port of ports) {
+		for (let attempt = 1; attempt <= perPortAttempts; attempt += 1) {
+			try {
+				const createAdapter = () =>
+					new BluetoothSppAdapter({
+						port,
+						baudRate,
+						dtr
+					});
+				const probe = await runProbe(
+					createAdapter(),
+					timeoutMs
+				);
+
+				if (runSpec) {
+					const runCheck = await runProgramCheck(createAdapter, timeoutMs, probe.capability, runSpec);
+					if (!runCheck.ok) {
+						return mapPostProbeCheckFailure('bluetooth', 'Program run check', runCheck.message ?? 'unknown error');
+					}
+				}
+
+				if (emergencyStopCheckEnabled) {
+					const stopCheck = await runEmergencyStopCheck(createAdapter, timeoutMs);
+					if (!stopCheck.ok) {
+						return mapPostProbeCheckFailure('bluetooth', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+					}
+				}
+
+				if (reconnectCheckEnabled) {
+					const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+					if (!reconnectCheck.ok) {
+						return mapPostProbeCheckFailure(
+							'bluetooth',
+							'Reconnect recovery check',
+							reconnectCheck.message ?? 'unknown error'
+						);
+					}
+				}
+
+				return {
+					transport: 'bluetooth',
+					status: 'PASS',
+					reason: runSpec
+						? emergencyStopCheckEnabled
+							? reconnectCheckEnabled
+								? 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+								: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
+							: reconnectCheckEnabled
+								? 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+								: 'Connect, capability probe and run-program check succeeded.'
+						: emergencyStopCheckEnabled
+							? reconnectCheckEnabled
+								? 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+								: 'Connect, capability probe and emergency-stop check succeeded.'
+							: reconnectCheckEnabled
+								? 'Connect, capability probe and reconnect-recovery checks succeeded.'
+								: 'Connect and capability probe succeeded.',
+					detail: {
+						port,
+						attempt,
+						runProgramPath: runSpec?.remotePath ?? undefined,
+						runProgramMode: runSpec?.mode ?? undefined,
+						runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
+						runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
+						emergencyStopChecked: emergencyStopCheckEnabled,
+						reconnectChecked: reconnectCheckEnabled,
+						fwVersion: probe.capability.fwVersion,
+						fwBuild: probe.capability.fwBuild
+					}
+				};
+			} catch (error) {
+				failures.push(`${port} attempt ${attempt}: ${errorMessage(error)}`);
+				if (attempt < perPortAttempts) {
+					await sleep(retryDelayMs);
+				}
+			}
+		}
+	}
+
+	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('bluetooth', message))) {
+		return {
+			transport: 'bluetooth',
+			status: 'SKIP',
+			reason: `Bluetooth transport unavailable (${failures[0]}).`
+		};
+	}
+
+	return {
+		transport: 'bluetooth',
+		status: 'FAIL',
+		reason: failures.join(' | ')
+	};
+}
+
+async function runHardwareSuite(): Promise<{
+	results: HardwareCaseResult[];
+	selectedTransports: TransportKind[];
+	emergencyStopCheckEnabled: boolean;
+	reconnectCheckEnabled: boolean;
+	warning?: string;
+}> {
+	const results: HardwareCaseResult[] = [];
+	const runSpecResolution = resolveRunProgramSpecFromEnv();
+	const selection = resolveHardwareTransportsFromEnv();
+	const emergencyStopCheckEnabled = resolveEmergencyStopCheckFromEnv();
+	const reconnectCheckEnabled = resolveReconnectCheckFromEnv();
+
+	for (const transport of selection.transports) {
+		if (transport === 'usb') {
+			results.push(await runUsbCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+		} else if (transport === 'tcp') {
+			results.push(await runTcpCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+		} else {
+			results.push(await runBluetoothCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+		}
+	}
+
+	return {
+		results,
+		selectedTransports: selection.transports,
+		emergencyStopCheckEnabled,
+		reconnectCheckEnabled,
+		warning: selection.warning
+	};
+}
+
+function printSummary(
+	results: HardwareCaseResult[],
+	selectedTransports: TransportKind[],
+	emergencyStopCheckEnabled: boolean,
+	reconnectCheckEnabled: boolean,
+	warning?: string
+): void {
+	console.log(`[HW] Running hardware smoke tests in order: ${selectedTransports.join(' -> ')}`);
+	console.log(`[HW] Emergency stop check: ${emergencyStopCheckEnabled ? 'enabled' : 'disabled'}`);
+	console.log(`[HW] Reconnect recovery check: ${reconnectCheckEnabled ? 'enabled' : 'disabled'}`);
+	if (warning) {
+		console.log(`[HW] Selection warning: ${warning}`);
+	}
+	for (const result of results) {
+		console.log(formatResult(result));
+	}
+
+	const pass = results.filter((entry) => entry.status === 'PASS').length;
+	const skip = results.filter((entry) => entry.status === 'SKIP').length;
+	const fail = results.filter((entry) => entry.status === 'FAIL').length;
+	console.log(`[HW] Summary: PASS=${pass} SKIP=${skip} FAIL=${fail}`);
+}
+
+export async function main(): Promise<number> {
+	const suite = await runHardwareSuite();
+	printSummary(
+		suite.results,
+		suite.selectedTransports,
+		suite.emergencyStopCheckEnabled,
+		suite.reconnectCheckEnabled,
+		suite.warning
+	);
+	const results = suite.results;
+	return results.some((entry) => entry.status === 'FAIL') ? 1 : 0;
+}
+
+if (require.main === module) {
+	void main().then(
+		(code) => {
+			process.exitCode = code;
+		},
+		(error) => {
+			console.error(`[HW] Unhandled error: ${errorMessage(error)}`);
+			process.exitCode = 1;
+		}
+	);
+}

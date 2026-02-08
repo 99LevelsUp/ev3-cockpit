@@ -1,0 +1,732 @@
+import * as assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import * as dgram from 'node:dgram';
+import * as net from 'node:net';
+import * as path from 'node:path';
+import * as vscode from 'vscode';
+import { CAPABILITY_PROBE_GLOBAL_BYTES } from '../../protocol/capabilityProbe';
+import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../../protocol/ev3Packet';
+
+const EXTENSION_ID = 'ev3-cockpit.ev3-cockpit';
+
+async function waitForCondition(
+	label: string,
+	condition: () => boolean,
+	timeoutMs = 10_000
+): Promise<void> {
+	const start = Date.now();
+	while (!condition()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`Timeout while waiting for condition: ${label}`);
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+function writeCString(target: Uint8Array, offset: number, length: number, value: string): void {
+	const encoded = Buffer.from(value, 'utf8');
+	const end = Math.min(encoded.length, Math.max(0, length - 1));
+	target.set(encoded.subarray(0, end), offset);
+}
+
+function buildCapabilityReplyPayload(): Uint8Array {
+	const payload = new Uint8Array(CAPABILITY_PROBE_GLOBAL_BYTES);
+	writeCString(payload, 0, 16, 'Linux 2.6.33-rc');
+	writeCString(payload, 16, 8, 'V0.60');
+	writeCString(payload, 24, 8, 'V1.10E');
+	writeCString(payload, 32, 12, '1803051132');
+	writeCString(payload, 44, 12, '1803051258');
+	return payload;
+}
+
+function normalizeRemotePath(input: string): string {
+	const unified = input.replace(/\\/g, '/');
+	const prefixed = unified.startsWith('/') ? unified : `/${unified}`;
+	const normalized = path.posix.normalize(prefixed);
+	if (normalized === '.') {
+		return '/';
+	}
+	const absolute = normalized.startsWith('/') ? normalized : `/${normalized}`;
+	if (absolute.length > 1 && absolute.endsWith('/')) {
+		return absolute.slice(0, -1);
+	}
+	return absolute;
+}
+
+function parseCString(bytes: Uint8Array, offset: number): string {
+	let end = offset;
+	while (end < bytes.length && bytes[end] !== 0x00) {
+		end += 1;
+	}
+	return Buffer.from(bytes.subarray(offset, end)).toString('utf8');
+}
+
+function uint32le(value: number): Uint8Array {
+	const out = new Uint8Array(4);
+	new DataView(out.buffer).setUint32(0, value >>> 0, true);
+	return out;
+}
+
+function parseListOpenHandlesProbe(payload: Uint8Array): Uint8Array {
+	const opcode = payload[0] ?? 0x00;
+	return new Uint8Array([opcode, 0x00]);
+}
+
+type RemoteDirectoryListing = {
+	folders: string[];
+	files: Array<{ name: string; bytes: Uint8Array }>;
+};
+
+class FakeRemoteFsState {
+	private readonly directories = new Set<string>(['/']);
+	private readonly files = new Map<string, Uint8Array>();
+
+	public constructor() {
+		this.ensureDirectory('/home/root/lms2012/prjs/');
+	}
+
+	public ensureDirectory(inputPath: string): void {
+		const normalized = normalizeRemotePath(inputPath);
+		if (normalized === '/') {
+			this.directories.add('/');
+			return;
+		}
+
+		const parts = normalized.split('/').filter((part) => part.length > 0);
+		let current = '/';
+		for (const part of parts) {
+			current = current === '/' ? `/${part}` : `${current}/${part}`;
+			this.directories.add(current);
+		}
+	}
+
+	public writeFile(inputPath: string, contents: Uint8Array): void {
+		const normalized = normalizeRemotePath(inputPath);
+		this.ensureDirectory(path.posix.dirname(normalized));
+		this.files.set(normalized, contents.slice());
+	}
+
+	public readFile(inputPath: string): Uint8Array {
+		const normalized = normalizeRemotePath(inputPath);
+		const bytes = this.files.get(normalized);
+		if (!bytes) {
+			throw new Error(`File not found: ${normalized}`);
+		}
+		return bytes.slice();
+	}
+
+	public deletePath(inputPath: string): void {
+		const normalized = normalizeRemotePath(inputPath);
+		if (this.files.delete(normalized)) {
+			return;
+		}
+
+		if (!this.directories.has(normalized)) {
+			throw new Error(`Path not found: ${normalized}`);
+		}
+
+		for (const dir of this.directories) {
+			if (dir !== normalized && dir.startsWith(`${normalized}/`)) {
+				throw new Error(`Directory not empty: ${normalized}`);
+			}
+		}
+		for (const filePath of this.files.keys()) {
+			if (filePath.startsWith(`${normalized}/`)) {
+				throw new Error(`Directory not empty: ${normalized}`);
+			}
+		}
+
+		this.directories.delete(normalized);
+	}
+
+	public listDirectory(inputPath: string): RemoteDirectoryListing {
+		const normalized = normalizeRemotePath(inputPath);
+		if (!this.directories.has(normalized)) {
+			throw new Error(`Directory not found: ${normalized}`);
+		}
+
+		const folders = new Set<string>();
+		const files: Array<{ name: string; bytes: Uint8Array }> = [];
+		for (const dir of this.directories) {
+			if (dir === normalized) {
+				continue;
+			}
+			if (!dir.startsWith(`${normalized === '/' ? '' : normalized}/`)) {
+				continue;
+			}
+			const relative = dir.slice((normalized === '/' ? '' : normalized).length + 1);
+			if (relative.length > 0 && !relative.includes('/')) {
+				folders.add(relative);
+			}
+		}
+		for (const [filePath, data] of this.files.entries()) {
+			if (!filePath.startsWith(`${normalized === '/' ? '' : normalized}/`)) {
+				continue;
+			}
+			const relative = filePath.slice((normalized === '/' ? '' : normalized).length + 1);
+			if (relative.length > 0 && !relative.includes('/')) {
+				files.push({
+					name: relative,
+					bytes: data.slice()
+				});
+			}
+		}
+
+		files.sort((a, b) => a.name.localeCompare(b.name));
+		return {
+			folders: Array.from(folders).sort((a, b) => a.localeCompare(b)),
+			files
+		};
+	}
+}
+
+type UploadSession = {
+	handle: number;
+	path: string;
+	expectedBytes: number;
+	chunks: Uint8Array[];
+};
+
+type DownloadSession = {
+	handle: number;
+	remaining: Uint8Array;
+};
+
+interface FakeEv3CommandContext {
+	fs: FakeRemoteFsState;
+	uploads: Map<number, UploadSession>;
+	downloads: Map<number, DownloadSession>;
+	nextHandle: number;
+}
+
+function allocateHandle(ctx: FakeEv3CommandContext): number {
+	const handle = ctx.nextHandle & 0xff;
+	ctx.nextHandle = ((ctx.nextHandle + 1) & 0xff) || 1;
+	return handle;
+}
+
+function buildListText(listing: RemoteDirectoryListing): Uint8Array {
+	const lines: string[] = [];
+	for (const folder of listing.folders) {
+		lines.push(`${folder}/`);
+	}
+	for (const file of listing.files) {
+		const md5 = createHash('md5').update(Buffer.from(file.bytes)).digest('hex');
+		lines.push(`${md5} ${file.bytes.length.toString(16)} ${file.name}`);
+	}
+	return Buffer.from(lines.join('\n'), 'utf8');
+}
+
+function parseListPath(payload: Uint8Array): string {
+	// LIST_FILES payload: uint16 max + c-string path.
+	return parseCString(payload, 2);
+}
+
+function parseBeginUploadPath(payload: Uint8Array): string {
+	// BEGIN_UPLOAD payload: uint16 max + c-string path.
+	return parseCString(payload, 2);
+}
+
+function parseBeginDownload(payload: Uint8Array): { path: string; size: number } {
+	// BEGIN_DOWNLOAD payload: uint32 size + c-string path.
+	const size = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true);
+	const filePath = parseCString(payload, 4);
+	return {
+		path: filePath,
+		size
+	};
+}
+
+function buildSystemReply(opcode: number, status: number, data: Uint8Array = new Uint8Array()): Uint8Array {
+	const out = new Uint8Array(2 + data.length);
+	out[0] = opcode & 0xff;
+	out[1] = status & 0xff;
+	out.set(data, 2);
+	return out;
+}
+
+function executeFakeSystemCommand(ctx: FakeEv3CommandContext, opcode: number, commandPayload: Uint8Array): Uint8Array {
+	switch (opcode) {
+		case 0x9d: {
+			return parseListOpenHandlesProbe(new Uint8Array([opcode]));
+		}
+		case 0x9b: {
+			const dirPath = parseCString(commandPayload, 0);
+			ctx.fs.ensureDirectory(dirPath);
+			return buildSystemReply(opcode, 0x00);
+		}
+		case 0x9c: {
+			const targetPath = parseCString(commandPayload, 0);
+			try {
+				ctx.fs.deletePath(targetPath);
+				return buildSystemReply(opcode, 0x00);
+			} catch {
+				return buildSystemReply(opcode, 0x01);
+			}
+		}
+		case 0x99: {
+			const remotePath = parseListPath(commandPayload);
+			try {
+				const listing = ctx.fs.listDirectory(remotePath);
+				const payload = buildListText(listing);
+				const data = new Uint8Array(5 + payload.length);
+				data.set(uint32le(payload.length), 0);
+				data[4] = 0x00;
+				data.set(payload, 5);
+				return buildSystemReply(opcode, 0x08, data);
+			} catch {
+				return buildSystemReply(opcode, 0x06);
+			}
+		}
+		case 0x98: {
+			return buildSystemReply(opcode, 0x00);
+		}
+		case 0x94: {
+			const remotePath = parseBeginUploadPath(commandPayload);
+			try {
+				const bytes = ctx.fs.readFile(remotePath);
+				const requestSize = new DataView(
+					commandPayload.buffer,
+					commandPayload.byteOffset,
+					commandPayload.byteLength
+				).getUint16(0, true);
+				const firstChunkSize = Math.min(requestSize, bytes.length);
+				const firstChunk = bytes.subarray(0, firstChunkSize);
+				const remaining = bytes.subarray(firstChunkSize);
+				const handle = remaining.length > 0 ? allocateHandle(ctx) : 0x00;
+				if (remaining.length > 0) {
+					ctx.downloads.set(handle, {
+						handle,
+						remaining: remaining.slice()
+					});
+				}
+
+				const data = new Uint8Array(5 + firstChunk.length);
+				data.set(uint32le(bytes.length), 0);
+				data[4] = handle;
+				data.set(firstChunk, 5);
+				const status = remaining.length > 0 ? 0x00 : 0x08;
+				return buildSystemReply(opcode, status, data);
+			} catch {
+				return buildSystemReply(opcode, 0x06);
+			}
+		}
+		case 0x95: {
+			if (commandPayload.length < 3) {
+				return buildSystemReply(opcode, 0x01);
+			}
+			const handle = commandPayload[0];
+			const session = ctx.downloads.get(handle);
+			if (!session) {
+				return buildSystemReply(opcode, 0x01);
+			}
+
+			const requestedSize = new DataView(
+				commandPayload.buffer,
+				commandPayload.byteOffset + 1,
+				commandPayload.byteLength - 1
+			).getUint16(0, true);
+			const chunkSize = Math.min(requestedSize, session.remaining.length);
+			const chunk = session.remaining.subarray(0, chunkSize);
+			session.remaining = session.remaining.subarray(chunkSize);
+			if (session.remaining.length === 0) {
+				ctx.downloads.delete(handle);
+				return buildSystemReply(opcode, 0x08, new Uint8Array([handle, ...chunk]));
+			}
+
+			ctx.downloads.set(handle, session);
+			return buildSystemReply(opcode, 0x00, new Uint8Array([handle, ...chunk]));
+		}
+		case 0x92: {
+			const parsed = parseBeginDownload(commandPayload);
+			const handle = allocateHandle(ctx);
+			ctx.uploads.set(handle, {
+				handle,
+				path: parsed.path,
+				expectedBytes: parsed.size,
+				chunks: []
+			});
+			return buildSystemReply(opcode, 0x00, new Uint8Array([handle]));
+		}
+		case 0x93: {
+			if (commandPayload.length < 1) {
+				return buildSystemReply(opcode, 0x01);
+			}
+			const handle = commandPayload[0];
+			const session = ctx.uploads.get(handle);
+			if (!session) {
+				return buildSystemReply(opcode, 0x01);
+			}
+			session.chunks.push(commandPayload.subarray(1));
+			const uploaded = session.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+			const done = uploaded >= session.expectedBytes;
+			if (done) {
+				const data = new Uint8Array(uploaded);
+				let offset = 0;
+				for (const chunk of session.chunks) {
+					data.set(chunk, offset);
+					offset += chunk.length;
+				}
+				ctx.fs.writeFile(session.path, data.subarray(0, session.expectedBytes));
+				ctx.uploads.delete(handle);
+				return buildSystemReply(opcode, 0x08, new Uint8Array([handle]));
+			}
+
+			ctx.uploads.set(handle, session);
+			return buildSystemReply(opcode, 0x00, new Uint8Array([handle]));
+		}
+		default:
+			return buildSystemReply(opcode, 0x0a);
+	}
+}
+
+async function startFakeEv3TcpServer(): Promise<{ port: number; close: () => Promise<void> }> {
+	const sockets = new Set<net.Socket>();
+	const capabilityPayload = buildCapabilityReplyPayload();
+	const commandContext: FakeEv3CommandContext = {
+		fs: new FakeRemoteFsState(),
+		uploads: new Map<number, UploadSession>(),
+		downloads: new Map<number, DownloadSession>(),
+		nextHandle: 1
+	};
+	const server = net.createServer((socket) => {
+		sockets.add(socket);
+		let handshakeComplete = false;
+		let receiveBuffer = Buffer.alloc(0);
+
+		socket.on('close', () => {
+			sockets.delete(socket);
+		});
+
+		socket.on('data', (chunk: Buffer) => {
+			if (!handshakeComplete) {
+				const text = chunk.toString('utf8');
+				if (text.includes('GET /target?sn=')) {
+					socket.write('Accept: EV340\r\n\r\n');
+					handshakeComplete = true;
+				}
+				return;
+			}
+
+			receiveBuffer = Buffer.concat([receiveBuffer, chunk]);
+			while (receiveBuffer.length >= 2) {
+				const bodyLength = receiveBuffer.readUInt16LE(0);
+				const totalLength = bodyLength + 2;
+				if (receiveBuffer.length < totalLength) {
+					return;
+				}
+
+				const packet = new Uint8Array(receiveBuffer.subarray(0, totalLength));
+				receiveBuffer = receiveBuffer.subarray(totalLength);
+				const request = decodeEv3Packet(packet);
+				let replyType: number = EV3_REPLY.SYSTEM_REPLY;
+				let replyPayload: Uint8Array = new Uint8Array();
+				if (
+					request.type === EV3_COMMAND.SYSTEM_COMMAND_REPLY ||
+					request.type === EV3_COMMAND.SYSTEM_COMMAND_NO_REPLY
+				) {
+					const opcode = request.payload[0] ?? 0x00;
+					const commandPayload = request.payload.subarray(1);
+					replyPayload = executeFakeSystemCommand(commandContext, opcode, commandPayload);
+					replyType = replyPayload[1] === 0x00 || replyPayload[1] === 0x08
+						? EV3_REPLY.SYSTEM_REPLY
+						: EV3_REPLY.SYSTEM_REPLY_ERROR;
+				} else {
+					replyType = EV3_REPLY.DIRECT_REPLY;
+					replyPayload = Uint8Array.from(capabilityPayload);
+				}
+
+				socket.write(Buffer.from(encodeEv3Packet(request.messageCounter, replyType, replyPayload)));
+			}
+		});
+	});
+
+	await new Promise<void>((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			server.removeListener('error', reject);
+			resolve();
+		});
+	});
+
+	const address = server.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Fake EV3 TCP server failed to expose listen address.');
+	}
+
+	return {
+		port: address.port,
+		close: async () => {
+			for (const socket of sockets) {
+				socket.destroy();
+			}
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	};
+}
+
+function startFakeDiscoveryBeacon(discoveryPort: number, tcpPort: number): () => void {
+	const socket = dgram.createSocket('udp4');
+	const beacon = Buffer.from(
+		`Serial-Number: 0016535D7E2D\r\nPort: ${tcpPort}\r\nProtocol: WiFi\r\nName: EV3\r\n\r\n`
+	);
+	const timer = setInterval(() => {
+		socket.send(beacon, discoveryPort, '127.0.0.1');
+	}, 80);
+
+	return () => {
+		clearInterval(timer);
+		socket.close();
+	};
+}
+
+async function withWorkspaceSettings<T>(
+	settings: Record<string, unknown>,
+	run: () => Promise<T>
+): Promise<T> {
+	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+	const previousValues = new Map<string, unknown>();
+	const keys = Object.keys(settings);
+	const applyOrder = [...keys].sort((a, b) => {
+		if (a === 'transport.mode' && b !== 'transport.mode') {
+			return 1;
+		}
+		if (b === 'transport.mode' && a !== 'transport.mode') {
+			return -1;
+		}
+		return 0;
+	});
+	const restoreOrder = [...applyOrder].reverse();
+
+	for (const key of keys) {
+		const inspected = cfg.inspect(key);
+		previousValues.set(key, inspected?.workspaceValue);
+	}
+
+	for (const key of applyOrder) {
+		await cfg.update(key, settings[key], vscode.ConfigurationTarget.Workspace);
+	}
+	await new Promise<void>((resolve) => setTimeout(resolve, 150));
+
+	try {
+		return await run();
+	} finally {
+		for (const key of restoreOrder) {
+			await cfg.update(key, previousValues.get(key), vscode.ConfigurationTarget.Workspace);
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 150));
+	}
+}
+
+async function testActivation(): Promise<void> {
+	const extension = vscode.extensions.getExtension(EXTENSION_ID);
+	assert.ok(extension, `Extension "${EXTENSION_ID}" is not available in extension host.`);
+
+	await extension.activate();
+	assert.equal(extension.isActive, true, 'Extension should be active after activation.');
+}
+
+async function testCommandsRegistration(): Promise<void> {
+	const commands = await vscode.commands.getCommands(true);
+	assert.ok(commands.includes('ev3-cockpit.connectEV3'));
+	assert.ok(commands.includes('ev3-cockpit.deployAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.reconnectEV3'));
+	assert.ok(commands.includes('ev3-cockpit.disconnectEV3'));
+	assert.ok(commands.includes('ev3-cockpit.emergencyStop'));
+	assert.ok(commands.includes('ev3-cockpit.inspectTransports'));
+	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
+}
+
+async function testEv3FileSystemProvider(): Promise<void> {
+	const directoryUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+	const fileUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/test.txt');
+
+	let failed = false;
+	try {
+		await vscode.workspace.fs.readDirectory(directoryUri);
+	} catch (error) {
+		failed = true;
+		const message = error instanceof Error ? error.message : String(error);
+		assert.match(
+			message,
+			/no active ev3 connection|not available|filesystem access/i,
+			'Expected ev3:// access to fail with a provider-originated message when no connection is active.'
+		);
+	}
+	assert.equal(failed, true, 'ev3:// readDirectory should fail without active connection.');
+
+	let readFailed = false;
+	try {
+		await vscode.workspace.fs.readFile(fileUri);
+	} catch (error) {
+		readFailed = true;
+		const message = error instanceof Error ? error.message : String(error);
+		assert.match(
+			message,
+			/no active ev3 connection|not available|filesystem access/i,
+			'Expected ev3:// readFile to fail with offline provider message.'
+		);
+	}
+	assert.equal(readFailed, true, 'ev3:// readFile should fail without active connection.');
+
+	let writeFailed = false;
+	try {
+		await vscode.workspace.fs.writeFile(fileUri, new Uint8Array([0x61]));
+	} catch (error) {
+		writeFailed = true;
+		const message = error instanceof Error ? error.message : String(error);
+		assert.match(
+			message,
+			/read-only|no active ev3 connection|not available/i,
+			'Expected ev3:// writeFile to fail as read-only/offline.'
+		);
+	}
+	assert.equal(writeFailed, true, 'ev3:// writeFile should fail without active connection.');
+}
+
+async function testMockConnectFlowWiresActiveFsProvider(): Promise<void> {
+	await withWorkspaceSettings(
+		{
+			'transport.mode': 'mock'
+		},
+		async () => {
+			await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+			await new Promise<void>((resolve) => setTimeout(resolve, 200));
+			await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3');
+			await new Promise<void>((resolve) => setTimeout(resolve, 200));
+			await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
+			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+
+			const directoryUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+			let failed = false;
+			try {
+				await vscode.workspace.fs.readDirectory(directoryUri);
+			} catch (error) {
+				failed = true;
+				const message = error instanceof Error ? error.message : String(error);
+				assert.match(
+					message,
+					/no active ev3 connection|execution failed|payload|reply|status|unexpected|list/i,
+					'Expected provider to fail with either offline connection or protocol-layer error.'
+				);
+			}
+			assert.equal(failed, true, 'Mock transport should not fully emulate FS listing yet.');
+		}
+	);
+}
+
+async function testProviderRejectsNonActiveBrickAuthority(): Promise<void> {
+	await withWorkspaceSettings(
+		{
+			'transport.mode': 'mock'
+		},
+		async () => {
+			await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+			await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+			let failed = false;
+			try {
+				await vscode.workspace.fs.readDirectory(vscode.Uri.parse('ev3://brick-2/home/root/lms2012/prjs/'));
+			} catch (error) {
+				failed = true;
+				const message = error instanceof Error ? error.message : String(error);
+				assert.match(message, /not available|brick/i);
+			} finally {
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+			}
+			assert.equal(failed, true, 'Provider should reject non-active brick authority in current MVP.');
+		}
+	);
+}
+
+async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
+	const fakeServer = await startFakeEv3TcpServer();
+	const discoveryPort = 33000 + Math.floor(Math.random() * 1000);
+	const stopBeacon = startFakeDiscoveryBeacon(discoveryPort, fakeServer.port);
+
+	try {
+		await withWorkspaceSettings(
+			{
+				'transport.mode': 'tcp',
+				'transport.timeoutMs': 3000,
+				'transport.tcp.host': '',
+				'transport.tcp.useDiscovery': true,
+				'transport.tcp.discoveryPort': discoveryPort,
+				'transport.tcp.discoveryTimeoutMs': 3000,
+				'transport.tcp.handshakeTimeoutMs': 3000
+			},
+			async () => {
+				await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3');
+				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
+
+				const rootUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+				const sourceUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-source.txt');
+				const copyUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-copy.txt');
+				const renamedUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-renamed.txt');
+
+				await vscode.workspace.fs.writeFile(sourceUri, Buffer.from('host-suite-data', 'utf8'));
+				const readBack = await vscode.workspace.fs.readFile(sourceUri);
+				assert.equal(Buffer.from(readBack).toString('utf8'), 'host-suite-data');
+
+				await vscode.workspace.fs.copy(sourceUri, copyUri, { overwrite: false });
+				await vscode.workspace.fs.rename(copyUri, renamedUri, { overwrite: false });
+
+				const listingBeforeDelete = await vscode.workspace.fs.readDirectory(rootUri);
+				assert.ok(listingBeforeDelete.some(([name]) => name === 'host-suite-source.txt'));
+				assert.ok(listingBeforeDelete.some(([name]) => name === 'host-suite-renamed.txt'));
+
+				await vscode.workspace.fs.delete(renamedUri, { recursive: false, useTrash: false });
+				await vscode.workspace.fs.delete(sourceUri, { recursive: false, useTrash: false });
+
+				const listingAfterDelete = await vscode.workspace.fs.readDirectory(rootUri);
+				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-source.txt'), false);
+				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-renamed.txt'), false);
+
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+
+				const directoryUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+				try {
+					await vscode.workspace.fs.readDirectory(directoryUri);
+					assert.fail('ev3:// readDirectory should fail after disconnect.');
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					assert.match(
+						message,
+						/no active ev3 connection|execution failed|payload|reply|status|unexpected|list/i,
+						'Expected provider to fail with either offline connection or protocol-layer error.'
+					);
+				}
+			}
+		);
+	} finally {
+		stopBeacon();
+		await fakeServer.close();
+	}
+}
+
+async function testCommandsWithoutHardware(): Promise<void> {
+	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+	await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
+	await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
+	await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
+}
+
+export async function run(): Promise<void> {
+	await waitForCondition(
+		'extension registration',
+		() => vscode.extensions.getExtension(EXTENSION_ID) !== undefined
+	);
+	await testActivation();
+	await testCommandsRegistration();
+	await testCommandsWithoutHardware();
+	await testEv3FileSystemProvider();
+	await testMockConnectFlowWiresActiveFsProvider();
+	await testProviderRejectsNonActiveBrickAuthority();
+	await testTcpConnectFlowWithMockDiscoveryAndServer();
+}
