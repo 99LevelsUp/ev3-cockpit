@@ -202,6 +202,18 @@
           "minimum": 0,
           "description": "Stabilization delay after opening Bluetooth COM port before EV3 probe."
         },
+        "ev3-cockpit.transport.bluetooth.rediscoveryAttempts": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "How many additional COM discovery passes to run after Bluetooth auto-port failure."
+        },
+        "ev3-cockpit.transport.bluetooth.rediscoveryDelayMs": {
+          "type": "number",
+          "default": 700,
+          "minimum": 0,
+          "description": "Delay before repeating Bluetooth COM discovery after a failed auto-port pass."
+        },
         "ev3-cockpit.transport.bluetooth.probeTimeoutMs": {
           "type": "number",
           "default": 8000,

@@ -6,6 +6,10 @@ import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
 import { TcpAdapter } from './tcpAdapter';
 import { BluetoothSppAdapter } from './bluetoothSppAdapter';
 import { buildBluetoothPortSelectionPlans, BluetoothPortSelectionPlan } from './bluetoothPortSelection';
+import {
+	isLikelyDynamicBluetoothAvailabilityFailure,
+	isLikelyTransientBluetoothFailure
+} from './bluetoothFailure';
 import { UsbHidAdapter } from './usbHidAdapter';
 import { listSerialCandidates, listUsbHidCandidates } from './discovery';
 
@@ -20,6 +24,8 @@ const DEFAULT_BT_AUTO_PORT_ATTEMPTS = 3;
 const DEFAULT_BT_AUTO_RETRY_DELAY_MS = 300;
 const DEFAULT_BT_AUTO_POST_OPEN_DELAY_MS = 120;
 const DEFAULT_BT_AUTO_PROBE_TIMEOUT_MS = 5_000;
+const DEFAULT_BT_AUTO_REDISCOVERY_ATTEMPTS = 1;
+const DEFAULT_BT_AUTO_REDISCOVERY_DELAY_MS = 700;
 
 async function sleep(ms: number): Promise<void> {
 	if (ms <= 0) {
@@ -91,7 +97,9 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 		private readonly probeTimeoutMs: number,
 		private readonly portAttempts: number,
 		private readonly retryDelayMs: number,
-		private readonly postOpenDelayMs: number
+		private readonly postOpenDelayMs: number,
+		private readonly rediscoveryAttempts: number,
+		private readonly rediscoveryDelayMs: number
 	) {}
 
 	public async open(): Promise<void> {
@@ -99,63 +107,34 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 			return;
 		}
 
-		const candidatePlans = await this.resolveCandidatePlans();
-		if (candidatePlans.length === 0) {
-			throw new Error('Bluetooth transport could not resolve any serial COM candidates.');
-		}
-
 		const failures: string[] = [];
-		const attemptedPorts = new Set<string>();
-		for (const plan of candidatePlans) {
-			this.logger.info('Bluetooth auto-port trying selection strategy', {
-				strategy: plan.name,
-				candidates: plan.ports
-			});
-			for (const port of plan.ports) {
-				if (attemptedPorts.has(port)) {
-					continue;
+		for (let discoveryPass = 0; discoveryPass <= this.rediscoveryAttempts; discoveryPass += 1) {
+			const candidatePlans = await this.resolveCandidatePlans();
+			if (candidatePlans.length === 0) {
+				failures.push('discovery: Bluetooth transport could not resolve any serial COM candidates.');
+			} else {
+				const roundFailures = await this.tryOpenAgainstPlans(candidatePlans, discoveryPass + 1);
+				if (this.active) {
+					return;
 				}
-				attemptedPorts.add(port);
-
-				const attemptBudget = plan.name === 'legacy-order' ? 1 : this.portAttempts;
-				for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
-					const adapter = new BluetoothSppAdapter({
-						port,
-						baudRate: this.baudRate,
-						dtr: this.dtr
-					});
-
-					try {
-						await adapter.open();
-						await sleep(this.postOpenDelayMs);
-						await this.verifyEv3Probe(adapter);
-						this.active = adapter;
-						this.logger.info('Bluetooth auto-port selected candidate', {
-							port,
-							strategy: plan.name,
-							attempt
-						});
-						return;
-					} catch (error) {
-						const message = error instanceof Error ? error.message : String(error);
-						this.logger.info('Bluetooth auto-port candidate attempt failed', {
-							strategy: plan.name,
-							port,
-							attempt,
-							message
-						});
-						failures.push(`${plan.name}/${port}#${attempt}: ${message}`);
-						await adapter.close().catch(() => undefined);
-						const transient = this.isLikelyTransientBluetoothFailure(message, plan.name);
-						if (!transient) {
-							break;
-						}
-						if (attempt < attemptBudget) {
-							await sleep(this.retryDelayMs);
-						}
-					}
-				}
+				failures.push(...roundFailures);
 			}
+
+			if (discoveryPass >= this.rediscoveryAttempts) {
+				break;
+			}
+
+			const lastFailure = failures[failures.length - 1] ?? '';
+			if (!isLikelyDynamicBluetoothAvailabilityFailure(lastFailure)) {
+				break;
+			}
+
+			this.logger.info('Bluetooth auto-port refreshing COM discovery after failed round', {
+				pass: discoveryPass + 1,
+				nextPass: discoveryPass + 2,
+				delayMs: this.rediscoveryDelayMs
+			});
+			await sleep(this.rediscoveryDelayMs);
 		}
 
 		throw new Error(`Bluetooth auto-port failed. ${failures.join(' | ')}`);
@@ -204,17 +183,64 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 		}
 	}
 
-	private isLikelyTransientBluetoothFailure(
-		message: string,
-		strategy: BluetoothPortSelectionPlan['name']
-	): boolean {
-		return (
-			/unknown error code 121/i.test(message) ||
-			/unknown error code 1256/i.test(message) ||
-			/access is denied/i.test(message) ||
-			/the semaphore timeout period has expired/i.test(message) ||
-			(strategy === 'ev3-priority' && /send aborted/i.test(message))
-		);
+	private async tryOpenAgainstPlans(candidatePlans: BluetoothPortSelectionPlan[], pass: number): Promise<string[]> {
+		const failures: string[] = [];
+		const attemptedPorts = new Set<string>();
+		for (const plan of candidatePlans) {
+			this.logger.info('Bluetooth auto-port trying selection strategy', {
+				pass,
+				strategy: plan.name,
+				candidates: plan.ports
+			});
+			for (const port of plan.ports) {
+				if (attemptedPorts.has(port)) {
+					continue;
+				}
+				attemptedPorts.add(port);
+
+				const attemptBudget = plan.name === 'legacy-order' ? 1 : this.portAttempts;
+				for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
+					const adapter = new BluetoothSppAdapter({
+						port,
+						baudRate: this.baudRate,
+						dtr: this.dtr
+					});
+
+					try {
+						await adapter.open();
+						await sleep(this.postOpenDelayMs);
+						await this.verifyEv3Probe(adapter);
+						this.active = adapter;
+						this.logger.info('Bluetooth auto-port selected candidate', {
+							pass,
+							port,
+							strategy: plan.name,
+							attempt
+						});
+						return failures;
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						this.logger.info('Bluetooth auto-port candidate attempt failed', {
+							pass,
+							strategy: plan.name,
+							port,
+							attempt,
+							message
+						});
+						failures.push(`${plan.name}/${port}#${attempt}: ${message}`);
+						await adapter.close().catch(() => undefined);
+						const transient = isLikelyTransientBluetoothFailure(message, plan.name);
+						if (!transient) {
+							break;
+						}
+						if (attempt < attemptBudget) {
+							await sleep(this.retryDelayMs);
+						}
+					}
+				}
+			}
+		}
+		return failures;
 	}
 }
 
@@ -304,6 +330,16 @@ function createBluetoothTransport(
 		DEFAULT_BT_AUTO_POST_OPEN_DELAY_MS,
 		0
 	);
+	const rediscoveryAttempts = sanitizeNumber(
+		cfg.get('transport.bluetooth.rediscoveryAttempts'),
+		DEFAULT_BT_AUTO_REDISCOVERY_ATTEMPTS,
+		0
+	);
+	const rediscoveryDelayMs = sanitizeNumber(
+		cfg.get('transport.bluetooth.rediscoveryDelayMs'),
+		DEFAULT_BT_AUTO_REDISCOVERY_DELAY_MS,
+		0
+	);
 	const autoPortFallback = cfg.get('transport.bluetooth.autoPortFallback') !== false;
 	if (autoPortFallback) {
 		return new BluetoothAutoPortAdapter(
@@ -314,7 +350,9 @@ function createBluetoothTransport(
 			probeTimeoutMs,
 			portAttempts,
 			retryDelayMs,
-			postOpenDelayMs
+			postOpenDelayMs,
+			rediscoveryAttempts,
+			rediscoveryDelayMs
 		);
 	}
 
@@ -380,20 +418,20 @@ export function createProbeTransportForMode(
 		return createTcpTransport(cfg, timeoutMs);
 	}
 
-	// auto mode: prefer USB, then Bluetooth, then TCP (if host configured), fallback mock.
-	logger.info('Using auto transport selection for connect probe (USB -> Bluetooth -> TCP -> mock).');
+	// auto mode: prefer USB, then TCP, then Bluetooth, fallback mock.
+	logger.info('Using auto transport selection for connect probe (USB -> TCP -> Bluetooth -> mock).');
 	return new AutoTransportAdapter(logger, [
 		{
 			name: 'usb',
 			create: () => createUsbTransport(cfg)
 		},
 		{
-			name: 'bluetooth',
-			create: () => createBluetoothTransport(cfg, logger)
-		},
-		{
 			name: 'tcp',
 			create: () => createTcpTransport(cfg, timeoutMs)
+		},
+		{
+			name: 'bluetooth',
+			create: () => createBluetoothTransport(cfg, logger)
 		},
 		{
 			name: 'mock',
