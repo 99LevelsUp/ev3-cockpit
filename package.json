@@ -15,6 +15,9 @@
     "onCommand:ev3-cockpit.deployAndRunRbf",
     "onCommand:ev3-cockpit.previewProjectDeploy",
     "onCommand:ev3-cockpit.deployProject",
+    "onCommand:ev3-cockpit.previewProjectDeployToBrick",
+    "onCommand:ev3-cockpit.deployProjectToBrick",
+    "onCommand:ev3-cockpit.deployProjectAndRunRbfToBrick",
     "onCommand:ev3-cockpit.previewWorkspaceDeploy",
     "onCommand:ev3-cockpit.deployWorkspace",
     "onCommand:ev3-cockpit.previewWorkspaceDeployToBrick",
@@ -23,6 +26,7 @@
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
     "onCommand:ev3-cockpit.deployWorkspaceAndRunRbf",
     "onCommand:ev3-cockpit.applyDeployProfile",
+    "onCommand:ev3-cockpit.applyDeployProfileToBrick",
     "onCommand:ev3-cockpit.runRemoteProgram",
     "onCommand:ev3-cockpit.stopProgram",
     "onCommand:ev3-cockpit.restartProgram",
@@ -59,6 +63,18 @@
         "title": "EV3 Cockpit: Sync Project to EV3 (active)"
       },
       {
+        "command": "ev3-cockpit.previewProjectDeployToBrick",
+        "title": "EV3 Cockpit: Preview Project Deploy (selected brick)"
+      },
+      {
+        "command": "ev3-cockpit.deployProjectToBrick",
+        "title": "EV3 Cockpit: Sync Project to EV3 (selected brick)"
+      },
+      {
+        "command": "ev3-cockpit.deployProjectAndRunRbfToBrick",
+        "title": "EV3 Cockpit: Deploy Project and Run .rbf (selected brick)"
+      },
+      {
         "command": "ev3-cockpit.previewWorkspaceDeploy",
         "title": "EV3 Cockpit: Preview Workspace Deploy Changes (active)"
       },
@@ -89,6 +105,10 @@
       {
         "command": "ev3-cockpit.applyDeployProfile",
         "title": "EV3 Cockpit: Apply Deploy Profile"
+      },
+      {
+        "command": "ev3-cockpit.applyDeployProfileToBrick",
+        "title": "EV3 Cockpit: Apply Deploy Profile (selected brick)"
       },
       {
         "command": "ev3-cockpit.runRemoteProgram",
@@ -181,12 +201,32 @@
           "group": "3_deploy"
         },
         {
+          "command": "ev3-cockpit.previewProjectDeployToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
           "command": "ev3-cockpit.deployWorkspaceToBrick",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
           "group": "3_deploy"
         },
         {
+          "command": "ev3-cockpit.deployProjectToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
           "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
+          "command": "ev3-cockpit.deployProjectAndRunRbfToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
+          "command": "ev3-cockpit.applyDeployProfileToBrick",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
           "group": "3_deploy"
         },

@@ -1659,6 +1659,57 @@ export function activate(context: vscode.ExtensionContext) {
 		await executeProjectDeploy({ runAfterDeploy: false, previewOnly: false });
 	});
 
+	const previewProjectDeployToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.previewProjectDeployToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: false,
+				previewOnly: true,
+				target
+			});
+		}
+	);
+
+	const deployProjectToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployProjectToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: false,
+				previewOnly: false,
+				target
+			});
+		}
+	);
+
+	const deployProjectAndRunRbfToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployProjectAndRunRbfToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: true,
+				previewOnly: false,
+				target
+			});
+		}
+	);
+
 	const pickWorkspaceProjectFolder = async (): Promise<vscode.Uri | undefined> => {
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -1799,7 +1850,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const applyDeployProfile = vscode.commands.registerCommand('ev3-cockpit.applyDeployProfile', async () => {
+	const executeApplyDeployProfile = async (requestingBrickId?: string): Promise<void> => {
 		const picks = DEPLOY_PROFILE_PRESETS.map((profile) => ({
 			label: profile.label,
 			description: profile.description,
@@ -1825,11 +1876,29 @@ export function activate(context: vscode.ExtensionContext) {
 
 		logger.info('Deploy profile applied', {
 			profileId: selected.profile.id,
+			brickId: requestingBrickId ?? 'n/a',
 			target: configTarget === vscode.ConfigurationTarget.Workspace ? 'workspace' : 'global',
 			settings: selected.profile.settings
 		});
 		vscode.window.showInformationMessage(`Deploy profile applied: ${selected.profile.label}`);
+	};
+
+	const applyDeployProfile = vscode.commands.registerCommand('ev3-cockpit.applyDeployProfile', async () => {
+		await executeApplyDeployProfile();
 	});
+
+	const applyDeployProfileToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.applyDeployProfileToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			await executeApplyDeployProfile(target.brickId);
+		}
+	);
 
 	const runRemoteProgram = vscode.commands.registerCommand('ev3-cockpit.runRemoteProgram', async () => {
 		if (!activeFsService) {
@@ -2468,6 +2537,9 @@ export function activate(context: vscode.ExtensionContext) {
 		deployAndRunRbf,
 		previewProjectDeploy,
 		deployProject,
+		previewProjectDeployToBrick,
+		deployProjectToBrick,
+		deployProjectAndRunRbfToBrick,
 		previewWorkspaceDeploy,
 		deployWorkspace,
 		previewWorkspaceDeployToBrick,
@@ -2476,6 +2548,7 @@ export function activate(context: vscode.ExtensionContext) {
 		deployProjectAndRunRbf,
 		deployWorkspaceAndRunRbf,
 		applyDeployProfile,
+		applyDeployProfileToBrick,
 		runRemoteProgram,
 		stopProgram,
 		restartProgram,
