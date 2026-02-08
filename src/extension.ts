@@ -14,6 +14,7 @@ import {
 } from './fs/deployActions';
 import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployIncremental';
+import { verifyUploadedFile } from './fs/deployVerify';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from './fs/remoteFsOps';
@@ -613,13 +614,17 @@ export function activate(context: vscode.ExtensionContext) {
 		try {
 			const bytes = await vscode.workspace.fs.readFile(localUri);
 			await fsService.writeFile(remotePath, bytes);
+			if (featureConfig.deploy.verifyAfterUpload !== 'none') {
+				await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
+			}
 			await fsService.runProgram(remotePath);
 			lastRunProgramPath = remotePath;
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
 				remotePath,
-				size: bytes.length
+				size: bytes.length,
+				verifyAfterUpload: featureConfig.deploy.verifyAfterUpload
 			});
 			vscode.window.showInformationMessage(`Deployed and started: ev3://active${remotePath}`);
 		} catch (error) {
@@ -735,6 +740,7 @@ export function activate(context: vscode.ExtensionContext) {
 			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
 			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
 			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
+			const verifyAfterUpload = featureConfig.deploy.verifyAfterUpload;
 			if (atomicEnabled && incrementalEnabled) {
 				incrementalEnabled = false;
 				logger.info('Project deploy incremental mode disabled because atomic deploy is enabled.', {
@@ -793,6 +799,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			let uploadedFilesCount = 0;
+			let verifiedFilesCount = 0;
 			let skippedUnchangedCount = 0;
 			let uploadedBytes = 0;
 			let plannedUploadCount = 0;
@@ -911,6 +918,10 @@ export function activate(context: vscode.ExtensionContext) {
 							});
 						} else {
 							await fsService.writeFile(file.remotePath, bytes ?? new Uint8Array());
+							if (verifyAfterUpload !== 'none') {
+								await verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload);
+								verifiedFilesCount += 1;
+							}
 							uploadedFilesCount += 1;
 							uploadedBytes += (bytes ?? new Uint8Array()).length;
 							progress.report({
@@ -1037,12 +1048,14 @@ export function activate(context: vscode.ExtensionContext) {
 				remoteProjectRoot,
 				filesScanned: files.length,
 				filesUploaded: uploadedFilesCount,
+				filesVerified: verifiedFilesCount,
 				filesPlannedUpload: plannedUploadCount,
 				filesSkippedUnchanged: skippedUnchangedCount,
 				incrementalEnabled,
 				cleanupEnabled,
 				cleanupDryRun,
 				atomicEnabled,
+				verifyAfterUpload,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
@@ -1089,12 +1102,16 @@ export function activate(context: vscode.ExtensionContext) {
 					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EV3 Cockpit output for sample paths.`
 				);
 			} else {
+				const verifySummary =
+					verifyAfterUpload !== 'none'
+						? `; verified ${verifiedFilesCount} file(s) (${verifyAfterUpload})`
+						: '';
 				const targetSummary =
 					options.runAfterDeploy && runTarget
 						? ` and started: ev3://active${runTarget}`
 						: ` to ev3://active${remoteProjectRoot}`;
 				vscode.window.showInformationMessage(
-					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}`
+					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}${verifySummary}`
 				);
 			}
 		} catch (error) {

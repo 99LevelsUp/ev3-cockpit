@@ -7,6 +7,7 @@ import {
 	DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE,
 	DEFAULT_DEPLOY_CLEANUP_DRY_RUN,
 	DEFAULT_DEPLOY_ATOMIC_ENABLED,
+	DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployAtomicEnabled,
@@ -16,7 +17,8 @@ import {
 	sanitizeDeployExcludeDirectories,
 	sanitizeDeployExcludeExtensions,
 	sanitizeDeployIncrementalEnabled,
-	sanitizeDeployMaxFileBytes
+	sanitizeDeployMaxFileBytes,
+	sanitizeDeployVerifyAfterUpload
 } from '../config/deployConfig';
 
 test('deployConfig uses defaults for invalid exclude directories', () => {
@@ -81,4 +83,12 @@ test('deployConfig sanitizes atomic enabled flag', () => {
 	assert.equal(sanitizeDeployAtomicEnabled(undefined), DEFAULT_DEPLOY_ATOMIC_ENABLED);
 	assert.equal(sanitizeDeployAtomicEnabled(true), true);
 	assert.equal(sanitizeDeployAtomicEnabled(false), false);
+});
+
+test('deployConfig sanitizes verify-after-upload mode', () => {
+	assert.equal(sanitizeDeployVerifyAfterUpload(undefined), DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD);
+	assert.equal(sanitizeDeployVerifyAfterUpload('none'), 'none');
+	assert.equal(sanitizeDeployVerifyAfterUpload('size'), 'size');
+	assert.equal(sanitizeDeployVerifyAfterUpload('md5'), 'md5');
+	assert.equal(sanitizeDeployVerifyAfterUpload('invalid'), DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD);
 });

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+export type DeployVerifyMode = 'none' | 'size' | 'md5';
+
 export interface DeployConfigSnapshot {
 	excludeDirectories: string[];
 	excludeExtensions: string[];
@@ -9,6 +11,7 @@ export interface DeployConfigSnapshot {
 	cleanupConfirmBeforeDelete: boolean;
 	cleanupDryRun: boolean;
 	atomicEnabled: boolean;
+	verifyAfterUpload: DeployVerifyMode;
 }
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
@@ -19,6 +22,7 @@ export const DEFAULT_DEPLOY_CLEANUP_ENABLED = false;
 export const DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE = true;
 export const DEFAULT_DEPLOY_CLEANUP_DRY_RUN = false;
 export const DEFAULT_DEPLOY_ATOMIC_ENABLED = false;
+export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = 'none';
 
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
@@ -92,6 +96,13 @@ export function sanitizeDeployAtomicEnabled(value: unknown): boolean {
 	return value;
 }
 
+export function sanitizeDeployVerifyAfterUpload(value: unknown): DeployVerifyMode {
+	if (value === 'none' || value === 'size' || value === 'md5') {
+		return value;
+	}
+	return DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD;
+}
+
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
@@ -103,6 +114,7 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 			cfg.get('deploy.cleanup.confirmBeforeDelete')
 		),
 		cleanupDryRun: sanitizeDeployCleanupDryRun(cfg.get('deploy.cleanup.dryRun')),
-		atomicEnabled: sanitizeDeployAtomicEnabled(cfg.get('deploy.atomic.enabled'))
+		atomicEnabled: sanitizeDeployAtomicEnabled(cfg.get('deploy.atomic.enabled')),
+		verifyAfterUpload: sanitizeDeployVerifyAfterUpload(cfg.get('deploy.verifyAfterUpload'))
 	};
 }

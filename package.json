@@ -320,6 +320,16 @@
           "default": false,
           "description": "Use staged project upload with swap/rollback semantics to reduce partial deploy risk."
         },
+        "ev3-cockpit.deploy.verifyAfterUpload": {
+          "type": "string",
+          "default": "none",
+          "enum": [
+            "none",
+            "size",
+            "md5"
+          ],
+          "description": "Optional post-upload verification mode for deploy operations: none, size check, or md5 checksum."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",
