@@ -36,6 +36,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - BT auto-port fallback pouziva hybridni selection strategie (`ev3-priority` + `legacy-order`) s fallbackem mezi strategiemi,
   - BT auto-port ma per-port retry/backoff + kratky post-open stabilization delay (`ev3-cockpit.transport.bluetooth.portAttempts`, `retryDelayMs`, `postOpenDelayMs`),
   - BT auto-port umi po failu provest obnovene COM discovery passy (`ev3-cockpit.transport.bluetooth.rediscoveryAttempts`, `rediscoveryDelayMs`) pro host-stack vypadky/obnovy,
+  - BT auto-port umi i DTR profil fallback (`ev3-cockpit.transport.bluetooth.autoDtrFallback`) a loguje profil pro jednotlive pokusy,
   - `ev3-priority` selekce preferuje jen pravdepodobne EV3 COM kandidaty (serial/pnp hint), `legacy-order` je az sekundarni fallback,
   - retry na BT portu se aplikuje jen na transient otevreni chyby (napr. Win `121/1256/1167`), aby se necyklilo na zjevne spatnych COM portech.
   - pridany diagnosticky command `ev3-cockpit.inspectTransports` (USB/serial kandidati),

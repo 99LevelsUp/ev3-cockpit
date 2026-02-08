@@ -26,6 +26,7 @@ const DEFAULT_BT_AUTO_POST_OPEN_DELAY_MS = 120;
 const DEFAULT_BT_AUTO_PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_BT_AUTO_REDISCOVERY_ATTEMPTS = 1;
 const DEFAULT_BT_AUTO_REDISCOVERY_DELAY_MS = 700;
+const DEFAULT_BT_AUTO_DTR_FALLBACK = true;
 
 async function sleep(ms: number): Promise<void> {
 	if (ms <= 0) {
@@ -94,6 +95,7 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 		private readonly preferredPort: string | undefined,
 		private readonly baudRate: number,
 		private readonly dtr: boolean,
+		private readonly autoDtrFallback: boolean,
 		private readonly probeTimeoutMs: number,
 		private readonly portAttempts: number,
 		private readonly retryDelayMs: number,
@@ -108,33 +110,44 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 		}
 
 		const failures: string[] = [];
-		for (let discoveryPass = 0; discoveryPass <= this.rediscoveryAttempts; discoveryPass += 1) {
-			const candidatePlans = await this.resolveCandidatePlans();
-			if (candidatePlans.length === 0) {
-				failures.push('discovery: Bluetooth transport could not resolve any serial COM candidates.');
-			} else {
-				const roundFailures = await this.tryOpenAgainstPlans(candidatePlans, discoveryPass + 1);
-				if (this.active) {
-					return;
+		const dtrProfiles = this.autoDtrFallback ? Array.from(new Set([this.dtr, !this.dtr])) : [this.dtr];
+		for (const dtr of dtrProfiles) {
+			if (dtr !== this.dtr) {
+				this.logger.info('Bluetooth auto-port trying DTR fallback profile', {
+					dtr
+				});
+			}
+			for (let discoveryPass = 0; discoveryPass <= this.rediscoveryAttempts; discoveryPass += 1) {
+				const candidatePlans = await this.resolveCandidatePlans();
+				if (candidatePlans.length === 0) {
+					failures.push(
+						`discovery(dtr=${dtr}): Bluetooth transport could not resolve any serial COM candidates.`
+					);
+				} else {
+					const roundFailures = await this.tryOpenAgainstPlans(candidatePlans, discoveryPass + 1, dtr);
+					if (this.active) {
+						return;
+					}
+					failures.push(...roundFailures);
 				}
-				failures.push(...roundFailures);
-			}
 
-			if (discoveryPass >= this.rediscoveryAttempts) {
-				break;
-			}
+				if (discoveryPass >= this.rediscoveryAttempts) {
+					break;
+				}
 
-			const lastFailure = failures[failures.length - 1] ?? '';
-			if (!isLikelyDynamicBluetoothAvailabilityFailure(lastFailure)) {
-				break;
-			}
+				const lastFailure = failures[failures.length - 1] ?? '';
+				if (!isLikelyDynamicBluetoothAvailabilityFailure(lastFailure)) {
+					break;
+				}
 
-			this.logger.info('Bluetooth auto-port refreshing COM discovery after failed round', {
-				pass: discoveryPass + 1,
-				nextPass: discoveryPass + 2,
-				delayMs: this.rediscoveryDelayMs
-			});
-			await sleep(this.rediscoveryDelayMs);
+				this.logger.info('Bluetooth auto-port refreshing COM discovery after failed round', {
+					dtr,
+					pass: discoveryPass + 1,
+					nextPass: discoveryPass + 2,
+					delayMs: this.rediscoveryDelayMs
+				});
+				await sleep(this.rediscoveryDelayMs);
+			}
 		}
 
 		throw new Error(`Bluetooth auto-port failed. ${failures.join(' | ')}`);
@@ -183,12 +196,17 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 		}
 	}
 
-	private async tryOpenAgainstPlans(candidatePlans: BluetoothPortSelectionPlan[], pass: number): Promise<string[]> {
+	private async tryOpenAgainstPlans(
+		candidatePlans: BluetoothPortSelectionPlan[],
+		pass: number,
+		dtr: boolean
+	): Promise<string[]> {
 		const failures: string[] = [];
 		const attemptedPorts = new Set<string>();
 		for (const plan of candidatePlans) {
 			this.logger.info('Bluetooth auto-port trying selection strategy', {
 				pass,
+				dtr,
 				strategy: plan.name,
 				candidates: plan.ports
 			});
@@ -203,7 +221,7 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 					const adapter = new BluetoothSppAdapter({
 						port,
 						baudRate: this.baudRate,
-						dtr: this.dtr
+						dtr
 					});
 
 					try {
@@ -213,6 +231,7 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 						this.active = adapter;
 						this.logger.info('Bluetooth auto-port selected candidate', {
 							pass,
+							dtr,
 							port,
 							strategy: plan.name,
 							attempt
@@ -222,12 +241,13 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 						const message = error instanceof Error ? error.message : String(error);
 						this.logger.info('Bluetooth auto-port candidate attempt failed', {
 							pass,
+							dtr,
 							strategy: plan.name,
 							port,
 							attempt,
 							message
 						});
-						failures.push(`${plan.name}/${port}#${attempt}: ${message}`);
+						failures.push(`${plan.name}/${port}#${attempt}(dtr=${dtr}): ${message}`);
 						await adapter.close().catch(() => undefined);
 						const transient = isLikelyTransientBluetoothFailure(message, plan.name);
 						if (!transient) {
@@ -310,6 +330,9 @@ function createBluetoothTransport(
 	const port = typeof rawPort === 'string' ? rawPort.trim() : '';
 	const baudRate = sanitizeNumber(cfg.get('transport.bluetooth.baudRate'), 115_200, 300);
 	const dtr = cfg.get('transport.bluetooth.dtr') === true;
+	const autoDtrFallbackRaw = cfg.get('transport.bluetooth.autoDtrFallback');
+	const autoDtrFallback =
+		typeof autoDtrFallbackRaw === 'boolean' ? autoDtrFallbackRaw : DEFAULT_BT_AUTO_DTR_FALLBACK;
 	const probeTimeoutMs = sanitizeNumber(
 		cfg.get('transport.bluetooth.portProbeTimeoutMs'),
 		DEFAULT_BT_AUTO_PROBE_TIMEOUT_MS,
@@ -347,6 +370,7 @@ function createBluetoothTransport(
 			port || undefined,
 			baudRate,
 			dtr,
+			autoDtrFallback,
 			probeTimeoutMs,
 			portAttempts,
 			retryDelayMs,

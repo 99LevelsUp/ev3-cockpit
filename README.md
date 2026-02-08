@@ -146,6 +146,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.fs.defaultRoots`: safe mode allowed roots (default `/home/root/lms2012/prjs/`, `/media/card/`)
 - `ev3-cockpit.fs.fullMode.confirmationRequired`: UX guard for risky full FS access
 - `ev3-cockpit.transport.bluetooth.autoPortFallback`: enable multi-candidate COM fallback in Bluetooth mode (default `true`)
+- `ev3-cockpit.transport.bluetooth.autoDtrFallback`: in auto-port mode, retry failed candidates with alternate DTR profile (default `true`)
 - `ev3-cockpit.transport.bluetooth.portAttempts`: per-port retry attempts in `ev3-priority` strategy (default `3`)
 - `ev3-cockpit.transport.bluetooth.retryDelayMs`: delay between retries on the same COM port (default `300`)
 - `ev3-cockpit.transport.bluetooth.postOpenDelayMs`: stabilization delay after COM open before EV3 probe (default `120`)

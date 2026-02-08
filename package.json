@@ -173,6 +173,11 @@
           "default": false,
           "description": "Data Terminal Ready line state for Bluetooth SPP COM port. Some drivers work better with false."
         },
+        "ev3-cockpit.transport.bluetooth.autoDtrFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "In Bluetooth auto-port mode, retry failed candidates with alternative DTR=true profile."
+        },
         "ev3-cockpit.transport.bluetooth.autoPortFallback": {
           "type": "boolean",
           "default": true,
