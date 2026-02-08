@@ -11,6 +11,7 @@ import {
 	DEFAULT_DEPLOY_ATOMIC_ENABLED,
 	DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD,
 	DEFAULT_DEPLOY_CONFLICT_POLICY,
+	DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployAtomicEnabled,
@@ -24,7 +25,8 @@ import {
 	sanitizeDeployIncrementalEnabled,
 	sanitizeDeployMaxFileBytes,
 	sanitizeDeployVerifyAfterUpload,
-	sanitizeDeployConflictPolicy
+	sanitizeDeployConflictPolicy,
+	sanitizeDeployConflictAskFallback
 } from '../config/deployConfig';
 
 test('deployConfig uses defaults for invalid exclude directories', () => {
@@ -123,4 +125,12 @@ test('deployConfig sanitizes conflict policy', () => {
 	assert.equal(sanitizeDeployConflictPolicy('skip'), 'skip');
 	assert.equal(sanitizeDeployConflictPolicy('ask'), 'ask');
 	assert.equal(sanitizeDeployConflictPolicy('invalid'), DEFAULT_DEPLOY_CONFLICT_POLICY);
+});
+
+test('deployConfig sanitizes conflict ask fallback', () => {
+	assert.equal(sanitizeDeployConflictAskFallback(undefined), DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK);
+	assert.equal(sanitizeDeployConflictAskFallback('prompt'), 'prompt');
+	assert.equal(sanitizeDeployConflictAskFallback('skip'), 'skip');
+	assert.equal(sanitizeDeployConflictAskFallback('overwrite'), 'overwrite');
+	assert.equal(sanitizeDeployConflictAskFallback('invalid'), DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK);
 });

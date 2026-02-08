@@ -816,7 +816,13 @@ export function activate(context: vscode.ExtensionContext) {
 			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
 			const verifyAfterUpload = featureConfig.deploy.verifyAfterUpload;
 			const conflictPolicy = featureConfig.deploy.conflictPolicy;
+			const conflictAskFallback = featureConfig.deploy.conflictAskFallback;
 			const effectiveConflictPolicy = options.previewOnly ? 'overwrite' : conflictPolicy;
+			if (effectiveConflictPolicy === 'ask' && conflictAskFallback !== 'prompt') {
+				logger.info('Project deploy ask conflict fallback is active.', {
+					conflictAskFallback
+				});
+			}
 			if (atomicEnabled && incrementalEnabled) {
 				incrementalEnabled = false;
 				logger.info('Project deploy incremental mode disabled because atomic deploy is enabled.', {
@@ -892,6 +898,7 @@ export function activate(context: vscode.ExtensionContext) {
 			let skippedUnchangedCount = 0;
 			let skippedByConflictCount = 0;
 			let overwrittenConflictCount = 0;
+			let conflictFallbackAppliedCount = 0;
 			let uploadedBytes = 0;
 			let plannedUploadCount = 0;
 			let deletedStaleFilesCount = 0;
@@ -1035,18 +1042,26 @@ export function activate(context: vscode.ExtensionContext) {
 								if (exists) {
 									let promptChoice: DeployConflictPromptChoice;
 									if (effectiveConflictPolicy === 'ask' && !conflictBulkDecision) {
-										const choice = await vscode.window.showWarningMessage(
-											`Remote file already exists: ${file.remotePath}`,
-											{
-												modal: true,
-												detail: 'Choose how deploy should resolve this file conflict.'
-											},
-											'Overwrite',
-											'Skip',
-											'Overwrite All',
-											'Skip All'
-										);
-										promptChoice = choice as DeployConflictPromptChoice;
+										if (conflictAskFallback === 'overwrite') {
+											promptChoice = 'Overwrite';
+											conflictFallbackAppliedCount += 1;
+										} else if (conflictAskFallback === 'skip') {
+											promptChoice = 'Skip';
+											conflictFallbackAppliedCount += 1;
+										} else {
+											const choice = await vscode.window.showWarningMessage(
+												`Remote file already exists: ${file.remotePath}`,
+												{
+													modal: true,
+													detail: 'Choose how deploy should resolve this file conflict.'
+												},
+												'Overwrite',
+												'Skip',
+												'Overwrite All',
+												'Skip All'
+											);
+											promptChoice = choice as DeployConflictPromptChoice;
+										}
 									}
 									const resolvedConflict = resolveDeployConflictDecision({
 										policy: effectiveConflictPolicy,
@@ -1211,6 +1226,8 @@ export function activate(context: vscode.ExtensionContext) {
 				atomicEnabled,
 				verifyAfterUpload,
 				conflictPolicy: effectiveConflictPolicy,
+				conflictAskFallback,
+				conflictFallbackAppliedCount,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,

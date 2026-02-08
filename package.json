@@ -358,6 +358,16 @@
           ],
           "description": "Conflict policy when remote file already exists during deploy."
         },
+        "ev3-cockpit.deploy.conflictAskFallback": {
+          "type": "string",
+          "default": "prompt",
+          "enum": [
+            "prompt",
+            "skip",
+            "overwrite"
+          ],
+          "description": "Fallback behavior for conflictPolicy=ask when you want to avoid per-file prompt dialogs."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

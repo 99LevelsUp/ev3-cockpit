@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 export type DeployVerifyMode = 'none' | 'size' | 'md5';
 export type DeployConflictPolicy = 'overwrite' | 'skip' | 'ask';
+export type DeployConflictAskFallback = 'prompt' | 'skip' | 'overwrite';
 
 export interface DeployConfigSnapshot {
 	excludeDirectories: string[];
@@ -16,6 +17,7 @@ export interface DeployConfigSnapshot {
 	atomicEnabled: boolean;
 	verifyAfterUpload: DeployVerifyMode;
 	conflictPolicy: DeployConflictPolicy;
+	conflictAskFallback: DeployConflictAskFallback;
 }
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
@@ -30,6 +32,7 @@ export const DEFAULT_DEPLOY_CLEANUP_DRY_RUN = false;
 export const DEFAULT_DEPLOY_ATOMIC_ENABLED = false;
 export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = 'none';
 export const DEFAULT_DEPLOY_CONFLICT_POLICY: DeployConflictPolicy = 'overwrite';
+export const DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK: DeployConflictAskFallback = 'prompt';
 
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
@@ -140,6 +143,13 @@ export function sanitizeDeployConflictPolicy(value: unknown): DeployConflictPoli
 	return DEFAULT_DEPLOY_CONFLICT_POLICY;
 }
 
+export function sanitizeDeployConflictAskFallback(value: unknown): DeployConflictAskFallback {
+	if (value === 'prompt' || value === 'skip' || value === 'overwrite') {
+		return value;
+	}
+	return DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK;
+}
+
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
@@ -155,6 +165,7 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 		cleanupDryRun: sanitizeDeployCleanupDryRun(cfg.get('deploy.cleanup.dryRun')),
 		atomicEnabled: sanitizeDeployAtomicEnabled(cfg.get('deploy.atomic.enabled')),
 		verifyAfterUpload: sanitizeDeployVerifyAfterUpload(cfg.get('deploy.verifyAfterUpload')),
-		conflictPolicy: sanitizeDeployConflictPolicy(cfg.get('deploy.conflictPolicy'))
+		conflictPolicy: sanitizeDeployConflictPolicy(cfg.get('deploy.conflictPolicy')),
+		conflictAskFallback: sanitizeDeployConflictAskFallback(cfg.get('deploy.conflictAskFallback'))
 	};
 }
