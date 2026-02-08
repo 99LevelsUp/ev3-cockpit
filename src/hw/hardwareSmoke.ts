@@ -71,6 +71,7 @@ const DEFAULT_BT_PORT_ATTEMPTS = 2;
 const DEFAULT_BT_RETRY_DELAY_MS = 300;
 const DEFAULT_EMERGENCY_STOP_CHECK = true;
 const DEFAULT_RECONNECT_CHECK = false;
+const DEFAULT_RECONNECT_GLITCH_CHECK = true;
 const SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
 const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-run-fixture.rbf';
 
@@ -268,6 +269,22 @@ export function resolveReconnectCheckFromEnv(env: NodeJS.ProcessEnv = process.en
 		return false;
 	}
 	return DEFAULT_RECONNECT_CHECK;
+}
+
+export function resolveReconnectGlitchCheckFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK?.trim();
+	if (!raw) {
+		return DEFAULT_RECONNECT_GLITCH_CHECK;
+	}
+
+	const normalized = raw.toLowerCase();
+	if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+		return true;
+	}
+	if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+		return false;
+	}
+	return DEFAULT_RECONNECT_GLITCH_CHECK;
 }
 
 export function isLikelyUnavailableError(transport: TransportKind, error: unknown): boolean {
@@ -524,7 +541,8 @@ async function runEmergencyStopCheck(createAdapter: () => TransportAdapter, time
 
 async function runReconnectRecoveryCheck(
 	createAdapter: () => TransportAdapter,
-	timeoutMs: number
+	timeoutMs: number,
+	simulateInFlightDrop: boolean
 ): Promise<{ ok: boolean; message?: string }> {
 	const scheduler = new CommandScheduler({
 		defaultTimeoutMs: timeoutMs
@@ -541,6 +559,24 @@ async function runReconnectRecoveryCheck(
 		await client.close();
 		await client.open();
 		await runProbeWithClient(client, timeoutMs);
+
+		if (simulateInFlightDrop) {
+			const pending = client.send({
+				id: 'hw-reconnect-glitch-probe',
+				lane: 'high',
+				idempotent: true,
+				timeoutMs: Math.max(timeoutMs, 1000),
+				type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+				payload: new Uint8Array([0x9d])
+			});
+
+			await sleep(20);
+			await client.close().catch(() => undefined);
+			await pending.catch(() => undefined);
+			await client.open();
+			await runProbeWithClient(client, timeoutMs);
+		}
+
 		return { ok: true };
 	} catch (error) {
 		return {
@@ -576,7 +612,8 @@ function mapPostProbeCheckFailure(
 async function runUsbCase(
 	runSpecResolution: RunProgramSpecResolution,
 	emergencyStopCheckEnabled: boolean,
-	reconnectCheckEnabled: boolean
+	reconnectCheckEnabled: boolean,
+	reconnectGlitchCheckEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const vendorId = envNumber('EV3_COCKPIT_HW_USB_VENDOR_ID', 0x0694, 0);
 	const productId = envNumber('EV3_COCKPIT_HW_USB_PRODUCT_ID', 0x0005, 0);
@@ -628,7 +665,11 @@ async function runUsbCase(
 		}
 
 		if (reconnectCheckEnabled) {
-			const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+			const reconnectCheck = await runReconnectRecoveryCheck(
+				createAdapter,
+				timeoutMs,
+				reconnectGlitchCheckEnabled
+			);
 			if (!reconnectCheck.ok) {
 				return mapPostProbeCheckFailure('usb', 'Reconnect recovery check', reconnectCheck.message ?? 'unknown error');
 			}
@@ -660,6 +701,7 @@ async function runUsbCase(
 				runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
 				emergencyStopChecked: emergencyStopCheckEnabled,
 				reconnectChecked: reconnectCheckEnabled,
+				reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
 				fwVersion: probe.capability.fwVersion,
 				fwBuild: probe.capability.fwBuild
 			}
@@ -750,7 +792,7 @@ async function runTcpCase(
 			}
 
 			if (reconnectCheckEnabled) {
-				const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+				const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs, false);
 				if (!reconnectCheck.ok) {
 					return mapPostProbeCheckFailure('tcp', 'Reconnect recovery check', reconnectCheck.message ?? 'unknown error');
 				}
@@ -840,7 +882,8 @@ function collectBluetoothPorts(
 async function runBluetoothCase(
 	runSpecResolution: RunProgramSpecResolution,
 	emergencyStopCheckEnabled: boolean,
-	reconnectCheckEnabled: boolean
+	reconnectCheckEnabled: boolean,
+	reconnectGlitchCheckEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS', DEFAULT_BT_PROBE_TIMEOUT_MS, 50);
 	const baudRate = envNumber('EV3_COCKPIT_HW_BT_BAUD_RATE', 115200, 300);
@@ -899,7 +942,11 @@ async function runBluetoothCase(
 				}
 
 				if (reconnectCheckEnabled) {
-					const reconnectCheck = await runReconnectRecoveryCheck(createAdapter, timeoutMs);
+					const reconnectCheck = await runReconnectRecoveryCheck(
+						createAdapter,
+						timeoutMs,
+						reconnectGlitchCheckEnabled
+					);
 					if (!reconnectCheck.ok) {
 						return mapPostProbeCheckFailure(
 							'bluetooth',
@@ -936,6 +983,7 @@ async function runBluetoothCase(
 						runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
 						emergencyStopChecked: emergencyStopCheckEnabled,
 						reconnectChecked: reconnectCheckEnabled,
+						reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
 						fwVersion: probe.capability.fwVersion,
 						fwBuild: probe.capability.fwBuild
 					}
@@ -969,6 +1017,7 @@ async function runHardwareSuite(): Promise<{
 	selectedTransports: TransportKind[];
 	emergencyStopCheckEnabled: boolean;
 	reconnectCheckEnabled: boolean;
+	reconnectGlitchCheckEnabled: boolean;
 	warning?: string;
 }> {
 	const results: HardwareCaseResult[] = [];
@@ -976,14 +1025,29 @@ async function runHardwareSuite(): Promise<{
 	const selection = resolveHardwareTransportsFromEnv();
 	const emergencyStopCheckEnabled = resolveEmergencyStopCheckFromEnv();
 	const reconnectCheckEnabled = resolveReconnectCheckFromEnv();
+	const reconnectGlitchCheckEnabled = resolveReconnectGlitchCheckFromEnv();
 
 	for (const transport of selection.transports) {
 		if (transport === 'usb') {
-			results.push(await runUsbCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+			results.push(
+				await runUsbCase(
+					runSpecResolution,
+					emergencyStopCheckEnabled,
+					reconnectCheckEnabled,
+					reconnectGlitchCheckEnabled
+				)
+			);
 		} else if (transport === 'tcp') {
 			results.push(await runTcpCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
 		} else {
-			results.push(await runBluetoothCase(runSpecResolution, emergencyStopCheckEnabled, reconnectCheckEnabled));
+			results.push(
+				await runBluetoothCase(
+					runSpecResolution,
+					emergencyStopCheckEnabled,
+					reconnectCheckEnabled,
+					reconnectGlitchCheckEnabled
+				)
+			);
 		}
 	}
 
@@ -992,6 +1056,7 @@ async function runHardwareSuite(): Promise<{
 		selectedTransports: selection.transports,
 		emergencyStopCheckEnabled,
 		reconnectCheckEnabled,
+		reconnectGlitchCheckEnabled,
 		warning: selection.warning
 	};
 }
@@ -1001,11 +1066,15 @@ function printSummary(
 	selectedTransports: TransportKind[],
 	emergencyStopCheckEnabled: boolean,
 	reconnectCheckEnabled: boolean,
+	reconnectGlitchCheckEnabled: boolean,
 	warning?: string
 ): void {
 	console.log(`[HW] Running hardware smoke tests in order: ${selectedTransports.join(' -> ')}`);
 	console.log(`[HW] Emergency stop check: ${emergencyStopCheckEnabled ? 'enabled' : 'disabled'}`);
 	console.log(`[HW] Reconnect recovery check: ${reconnectCheckEnabled ? 'enabled' : 'disabled'}`);
+	console.log(
+		`[HW] Reconnect in-flight drop simulation: ${reconnectCheckEnabled ? (reconnectGlitchCheckEnabled ? 'enabled' : 'disabled') : 'disabled'}`
+	);
 	if (warning) {
 		console.log(`[HW] Selection warning: ${warning}`);
 	}
@@ -1026,6 +1095,7 @@ export async function main(): Promise<number> {
 		suite.selectedTransports,
 		suite.emergencyStopCheckEnabled,
 		suite.reconnectCheckEnabled,
+		suite.reconnectGlitchCheckEnabled,
 		suite.warning
 	);
 	const results = suite.results;

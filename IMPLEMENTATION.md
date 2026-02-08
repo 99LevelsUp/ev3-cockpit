@@ -77,6 +77,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - HW smoke defaultne provadi i `emergency stop` verifikaci (`EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK=true`) pro USB/TCP/BT.
   - HW smoke mapuje transientni post-probe transport chyby (napr. BT COM 121/1256 pri emergency-check) na `SKIP` misto `FAIL`.
   - HW smoke obsahuje volitelny scenar reconnect-recovery (`EV3_COCKPIT_HW_RECONNECT_CHECK=true`) pro USB/TCP/BT (`open -> probe -> close -> reopen -> probe`).
+  - HW smoke reconnect-recovery pro USB/BT umi volitelne simulovat in-flight drop (`EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK`, default `true`) scenarem `pending probe -> forced close -> reopen -> probe`.
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.
   - pridana command akce `EV3 Cockpit: Reconnect EV3 (active settings)` pro rychly reconnect pres stejny connect-probe/capability flow.
   - pridana command akce `EV3 Cockpit: Deploy and Run .rbf (active)` (`local pick -> upload -> run`) nad `RemoteFsService`.

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import test from 'node:test';
 import {
 	resolveEmergencyStopCheckFromEnv,
+	resolveReconnectGlitchCheckFromEnv,
 	resolveReconnectCheckFromEnv,
 	isLikelyUnavailableError,
 	resolveHardwareTransportsFromEnv,
@@ -107,4 +108,13 @@ test('hardware smoke reconnect check is disabled by default', () => {
 test('hardware smoke reconnect check can be enabled by env', () => {
 	assert.equal(resolveReconnectCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_CHECK: '1' }), true);
 	assert.equal(resolveReconnectCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_CHECK: 'true' }), true);
+});
+
+test('hardware smoke reconnect glitch check is enabled by default', () => {
+	assert.equal(resolveReconnectGlitchCheckFromEnv({}), true);
+});
+
+test('hardware smoke reconnect glitch check can be disabled by env', () => {
+	assert.equal(resolveReconnectGlitchCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: '0' }), false);
+	assert.equal(resolveReconnectGlitchCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false' }), false);
 });
