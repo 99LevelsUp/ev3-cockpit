@@ -346,6 +346,10 @@ Aktualni stav:
 - Git remote je `https://github.com/99LevelsUp/ev3-cockpit.git`.
 - Lokalni git identita pro tento repozitar je nastavena na `99LevelsUp`.
 - Workflow pravidlo: kazda funkcni + otestovana zmena se commituje a pushuje.
+- Workflow pravidlo (upresneni):
+  - zmeny v programu a testech lze commit/push automaticky,
+  - pokud tyto zmeny vyzaduji upravy `design.md`, `IMPLEMENTATION.md` nebo `README.md`, lze je pushnout take bez potvrzeni,
+  - pokud uzivatel explicitne vyzada zmenu `design.md`, `IMPLEMENTATION.md` nebo `README.md`, pred pushem je nutne pockat na kontrolu/potvrzeni.
 
 Hotove implementacni celky:
 - Scheduler + lane priority + retry + orphan-risk recovery.
