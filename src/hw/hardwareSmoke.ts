@@ -427,22 +427,13 @@ async function runProbe(adapter: TransportAdapter, timeoutMs: number): Promise<P
 	}
 }
 
-async function runProgramCheck(
-	createAdapter: () => TransportAdapter,
+async function runProgramCheckWithClient(
+	client: Ev3CommandClient,
 	timeoutMs: number,
 	capability: ProbeSuccess['capability'],
 	spec: RunProgramSpec
 ): Promise<RunProgramCheckResult> {
-	const scheduler = new CommandScheduler({
-		defaultTimeoutMs: timeoutMs
-	});
-	const client = new Ev3CommandClient({
-		scheduler,
-		transport: createAdapter()
-	});
-
 	try {
-		await client.open();
 		const profile = buildCapabilityProfile(capability, 'auto');
 		const service = new RemoteFsService({
 			commandClient: client,
@@ -524,9 +515,48 @@ async function runProgramCheck(
 			fixtureSource: spec.fixtureSource,
 			message: errorMessage(error)
 		};
+	}
+}
+
+async function runProgramCheck(
+	createAdapter: () => TransportAdapter,
+	timeoutMs: number,
+	capability: ProbeSuccess['capability'],
+	spec: RunProgramSpec
+): Promise<RunProgramCheckResult> {
+	const scheduler = new CommandScheduler({
+		defaultTimeoutMs: timeoutMs
+	});
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: createAdapter()
+	});
+
+	try {
+		await client.open();
+		return await runProgramCheckWithClient(client, timeoutMs, capability, spec);
 	} finally {
 		await client.close().catch(() => undefined);
 		scheduler.dispose();
+	}
+}
+
+async function runEmergencyStopCheckWithClient(
+	client: Ev3CommandClient,
+	timeoutMs: number
+): Promise<{ ok: boolean; message?: string }> {
+	try {
+		const controls = new BrickControlService({
+			commandClient: client,
+			defaultTimeoutMs: timeoutMs
+		});
+		await controls.emergencyStopAll();
+		return { ok: true };
+	} catch (error) {
+		return {
+			ok: false,
+			message: errorMessage(error)
+		};
 	}
 }
 
@@ -541,17 +571,7 @@ async function runEmergencyStopCheck(createAdapter: () => TransportAdapter, time
 
 	try {
 		await client.open();
-		const controls = new BrickControlService({
-			commandClient: client,
-			defaultTimeoutMs: timeoutMs
-		});
-		await controls.emergencyStopAll();
-		return { ok: true };
-	} catch (error) {
-		return {
-			ok: false,
-			message: errorMessage(error)
-		};
+		return await runEmergencyStopCheckWithClient(client, timeoutMs);
 	} finally {
 		await client.close().catch(() => undefined);
 		scheduler.dispose();
@@ -1069,23 +1089,35 @@ async function runBluetoothCase(
 						baudRate,
 						dtr
 					});
-				const probe = await runProbe(
-					createAdapter(),
-					timeoutMs
-				);
+				const scheduler = new CommandScheduler({
+					defaultTimeoutMs: timeoutMs
+				});
+				const client = new Ev3CommandClient({
+					scheduler,
+					transport: createAdapter()
+				});
 
-				if (runSpec) {
-					const runCheck = await runProgramCheck(createAdapter, timeoutMs, probe.capability, runSpec);
-					if (!runCheck.ok) {
-						return mapPostProbeCheckFailure('bluetooth', 'Program run check', runCheck.message ?? 'unknown error');
-					}
-				}
+				let probe: ProbeSuccess;
+				try {
+					await client.open();
+					probe = await runProbeWithClient(client, timeoutMs);
 
-				if (emergencyStopCheckEnabled) {
-					const stopCheck = await runEmergencyStopCheck(createAdapter, timeoutMs);
-					if (!stopCheck.ok) {
-						return mapPostProbeCheckFailure('bluetooth', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+					if (runSpec) {
+						const runCheck = await runProgramCheckWithClient(client, timeoutMs, probe.capability, runSpec);
+						if (!runCheck.ok) {
+							return mapPostProbeCheckFailure('bluetooth', 'Program run check', runCheck.message ?? 'unknown error');
+						}
 					}
+
+					if (emergencyStopCheckEnabled) {
+						const stopCheck = await runEmergencyStopCheckWithClient(client, timeoutMs);
+						if (!stopCheck.ok) {
+							return mapPostProbeCheckFailure('bluetooth', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+						}
+					}
+				} finally {
+					await client.close().catch(() => undefined);
+					scheduler.dispose();
 				}
 
 				if (reconnectCheckEnabled) {
