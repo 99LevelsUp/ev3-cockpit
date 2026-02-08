@@ -13,6 +13,7 @@ import {
 	choosePreferredRunCandidate,
 	isRbfFileName
 } from './fs/deployActions';
+import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployIncremental';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
@@ -65,6 +66,7 @@ interface RemoteFileIndexResult {
 	available: boolean;
 	truncated: boolean;
 	files: Map<string, RemoteFileSnapshot>;
+	directories: string[];
 	message?: string;
 }
 
@@ -82,11 +84,13 @@ async function collectRemoteFileIndexRecursive(
 	rootPath: string
 ): Promise<RemoteFileIndexResult> {
 	const files = new Map<string, RemoteFileSnapshot>();
+	const directories = new Set<string>();
 	const queue: string[] = [rootPath];
 	let truncated = false;
 
 	while (queue.length > 0) {
 		const current = queue.shift() ?? rootPath;
+		directories.add(current);
 		let listing;
 		try {
 			listing = await fsService.listDirectory(current);
@@ -96,6 +100,7 @@ async function collectRemoteFileIndexRecursive(
 				available: false,
 				truncated,
 				files,
+				directories: [...directories],
 				message
 			};
 		}
@@ -116,7 +121,8 @@ async function collectRemoteFileIndexRecursive(
 	return {
 		available: true,
 		truncated,
-		files
+		files,
+		directories: [...directories].sort((a, b) => a.localeCompare(b))
 	};
 }
 
@@ -599,25 +605,46 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			let incrementalEnabled = featureConfig.deploy.incrementalEnabled;
+			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
-			if (incrementalEnabled) {
+			let remoteDirectories: string[] = [];
+			if (incrementalEnabled || cleanupEnabled) {
 				const remoteIndexResult = await collectRemoteFileIndexRecursive(fsService, remoteProjectRoot);
 				if (!remoteIndexResult.available) {
-					incrementalEnabled = false;
-					logger.info('Project deploy incremental mode disabled; falling back to full upload.', {
-						reason: remoteIndexResult.message ?? 'remote-index-unavailable',
-						remoteProjectRoot
-					});
+					if (incrementalEnabled) {
+						incrementalEnabled = false;
+						logger.info('Project deploy incremental mode disabled; falling back to full upload.', {
+							reason: remoteIndexResult.message ?? 'remote-index-unavailable',
+							remoteProjectRoot
+						});
+					}
+					if (cleanupEnabled) {
+						cleanupEnabled = false;
+						logger.info('Project deploy cleanup mode disabled; remote index unavailable.', {
+							reason: remoteIndexResult.message ?? 'remote-index-unavailable',
+							remoteProjectRoot
+						});
+					}
 				} else if (remoteIndexResult.truncated) {
-					incrementalEnabled = false;
-					logger.info('Project deploy incremental mode disabled due to truncated remote listing.', {
-						remoteProjectRoot
-					});
+					if (incrementalEnabled) {
+						incrementalEnabled = false;
+						logger.info('Project deploy incremental mode disabled due to truncated remote listing.', {
+							remoteProjectRoot
+						});
+					}
+					if (cleanupEnabled) {
+						cleanupEnabled = false;
+						logger.info('Project deploy cleanup mode disabled due to truncated remote listing.', {
+							remoteProjectRoot
+						});
+					}
 				} else {
 					remoteIndex = remoteIndexResult.files;
+					remoteDirectories = remoteIndexResult.directories;
 					logger.info('Project deploy incremental index loaded', {
 						remoteProjectRoot,
-						remoteFiles: remoteIndex.size
+						remoteFiles: remoteIndex.size,
+						remoteDirectories: remoteDirectories.length
 					});
 				}
 			}
@@ -625,6 +652,9 @@ export function activate(context: vscode.ExtensionContext) {
 			let uploadedFilesCount = 0;
 			let skippedUnchangedCount = 0;
 			let uploadedBytes = 0;
+			let deletedStaleFilesCount = 0;
+			let deletedStaleDirectoriesCount = 0;
+			const localLayout = buildLocalProjectLayout(files.map((entry) => entry.relativePath));
 
 			await vscode.window.withProgress(
 				{
@@ -672,6 +702,35 @@ export function activate(context: vscode.ExtensionContext) {
 							message: `Uploaded ${index + 1}/${files.length}: ${file.relativePath}`
 						});
 					}
+
+					if (cleanupEnabled) {
+						const cleanupPlan = planRemoteCleanup({
+							remoteProjectRoot,
+							remoteFilePaths: [...remoteIndex.keys()],
+							remoteDirectoryPaths: remoteDirectories,
+							localLayout
+						});
+
+						for (const filePath of cleanupPlan.filesToDelete) {
+							await fsService.deleteFile(filePath);
+							deletedStaleFilesCount += 1;
+							progress.report({
+								message: `Deleted stale file: ${path.posix.basename(filePath)}`
+							});
+						}
+
+						for (const dirPath of cleanupPlan.directoriesToDelete) {
+							try {
+								await fsService.deleteFile(dirPath);
+								deletedStaleDirectoriesCount += 1;
+							} catch (error) {
+								logger.warn('Deploy cleanup directory delete skipped', {
+									path: dirPath,
+									message: error instanceof Error ? error.message : String(error)
+								});
+							}
+						}
+					}
 				}
 			);
 
@@ -683,7 +742,10 @@ export function activate(context: vscode.ExtensionContext) {
 				filesUploaded: uploadedFilesCount,
 				filesSkippedUnchanged: skippedUnchangedCount,
 				incrementalEnabled,
+				cleanupEnabled,
 				totalUploadedBytes: uploadedBytes,
+				deletedStaleFilesCount,
+				deletedStaleDirectoriesCount,
 				skippedDirectories: scan.skippedDirectories.length,
 				skippedByExtension: scan.skippedByExtension.length,
 				skippedBySize: scan.skippedBySize.length,
@@ -698,8 +760,13 @@ export function activate(context: vscode.ExtensionContext) {
 				});
 			}
 
+			const cleanupSummary =
+				cleanupEnabled || deletedStaleFilesCount > 0 || deletedStaleDirectoriesCount > 0
+					? `; cleanup deleted ${deletedStaleFilesCount} file(s), ${deletedStaleDirectoriesCount} director${deletedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
+					: '';
+
 			vscode.window.showInformationMessage(
-				`Deployed ${uploadedFilesCount}/${files.length} file(s) and started: ev3://active${runTarget}`
+				`Deployed ${uploadedFilesCount}/${files.length} file(s) and started: ev3://active${runTarget}${cleanupSummary}`
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

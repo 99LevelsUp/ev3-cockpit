@@ -270,6 +270,11 @@
           "default": false,
           "description": "When enabled, project deploy compares remote md5/size and uploads only changed files."
         },
+        "ev3-cockpit.deploy.cleanup.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, project deploy deletes remote files/directories under project root that are missing locally."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

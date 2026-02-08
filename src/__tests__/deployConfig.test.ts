@@ -3,8 +3,10 @@ import test from 'node:test';
 import {
 	DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES,
 	DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS,
+	DEFAULT_DEPLOY_CLEANUP_ENABLED,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
+	sanitizeDeployCleanupEnabled,
 	sanitizeDeployExcludeDirectories,
 	sanitizeDeployExcludeExtensions,
 	sanitizeDeployIncrementalEnabled,
@@ -46,4 +48,10 @@ test('deployConfig sanitizes incremental enabled flag', () => {
 	assert.equal(sanitizeDeployIncrementalEnabled(undefined), DEFAULT_DEPLOY_INCREMENTAL_ENABLED);
 	assert.equal(sanitizeDeployIncrementalEnabled(true), true);
 	assert.equal(sanitizeDeployIncrementalEnabled(false), false);
+});
+
+test('deployConfig sanitizes cleanup enabled flag', () => {
+	assert.equal(sanitizeDeployCleanupEnabled(undefined), DEFAULT_DEPLOY_CLEANUP_ENABLED);
+	assert.equal(sanitizeDeployCleanupEnabled(true), true);
+	assert.equal(sanitizeDeployCleanupEnabled(false), false);
 });

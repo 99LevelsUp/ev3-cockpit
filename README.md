@@ -123,6 +123,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.deploy.excludeExtensions`: file extensions skipped by project deploy (default `.map`)
 - `ev3-cockpit.deploy.maxFileBytes`: max allowed file size per uploaded file in project deploy (default `5242880`)
 - `ev3-cockpit.deploy.incremental.enabled`: upload only changed project files by remote md5/size comparison (default `false`)
+- `ev3-cockpit.deploy.cleanup.enabled`: delete stale remote files/directories missing from local project after deploy (default `false`)
 
 Remote filesystem URI scheme is `ev3://<brickId>/<abs_path>`. Current MVP uses `ev3://active/...` for the active connection.
 After connecting, you can open files via Quick Open with paths like `ev3://active/home/root/lms2012/prjs/your-file.txt`.
