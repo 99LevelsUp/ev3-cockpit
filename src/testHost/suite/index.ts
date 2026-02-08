@@ -1,9 +1,12 @@
 import * as assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import * as dgram from 'node:dgram';
+import * as fs from 'node:fs/promises';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { buildRemoteProjectRoot } from '../../fs/deployActions';
 import { CAPABILITY_PROBE_GLOBAL_BYTES } from '../../protocol/capabilityProbe';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../../protocol/ev3Packet';
 
@@ -380,9 +383,14 @@ function executeFakeSystemCommand(ctx: FakeEv3CommandContext, opcode: number, co
 	}
 }
 
-async function startFakeEv3TcpServer(): Promise<{ port: number; close: () => Promise<void> }> {
+async function startFakeEv3TcpServer(): Promise<{
+	port: number;
+	getRunProgramCommandCount: () => number;
+	close: () => Promise<void>;
+}> {
 	const sockets = new Set<net.Socket>();
 	const capabilityPayload = buildCapabilityReplyPayload();
+	let runProgramCommandCount = 0;
 	const commandContext: FakeEv3CommandContext = {
 		fs: new FakeRemoteFsState(),
 		uploads: new Map<number, UploadSession>(),
@@ -433,6 +441,10 @@ async function startFakeEv3TcpServer(): Promise<{ port: number; close: () => Pro
 						: EV3_REPLY.SYSTEM_REPLY_ERROR;
 				} else {
 					replyType = EV3_REPLY.DIRECT_REPLY;
+					const directPayloadText = Buffer.from(request.payload).toString('utf8').toLowerCase();
+					if (directPayloadText.includes('.rbf')) {
+						runProgramCommandCount += 1;
+					}
 					replyPayload = Uint8Array.from(capabilityPayload);
 				}
 
@@ -456,6 +468,7 @@ async function startFakeEv3TcpServer(): Promise<{ port: number; close: () => Pro
 
 	return {
 		port: address.port,
+		getRunProgramCommandCount: () => runProgramCommandCount,
 		close: async () => {
 			for (const socket of sockets) {
 				socket.destroy();
@@ -515,6 +528,86 @@ async function withWorkspaceSettings<T>(
 			await cfg.update(key, previousValues.get(key), vscode.ConfigurationTarget.Workspace);
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 150));
+	}
+}
+
+function sameFsPath(left: string, right: string): boolean {
+	const normalize = (value: string): string => {
+		const normalized = path.normalize(value);
+		return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+	};
+	return normalize(left) === normalize(right);
+}
+
+function sameWorkspaceFolders(
+	left: readonly vscode.WorkspaceFolder[] | undefined,
+	right: readonly vscode.WorkspaceFolder[] | undefined
+): boolean {
+	const leftFolders = left ?? [];
+	const rightFolders = right ?? [];
+	if (leftFolders.length !== rightFolders.length) {
+		return false;
+	}
+	for (let index = 0; index < leftFolders.length; index += 1) {
+		if (!sameFsPath(leftFolders[index].uri.fsPath, rightFolders[index].uri.fsPath)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+async function withTemporaryWorkspaceFolder<T>(
+	prepare: (workspaceFsPath: string) => Promise<void>,
+	run: (workspaceUri: vscode.Uri) => Promise<T>
+): Promise<T> {
+	const originalFolders = vscode.workspace.workspaceFolders ?? [];
+	const tempRootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-host-workspace-'));
+	const tempRootUri = vscode.Uri.file(tempRootPath);
+
+	await prepare(tempRootPath);
+
+	const replaced = vscode.workspace.updateWorkspaceFolders(0, originalFolders.length, {
+		uri: tempRootUri,
+		name: path.basename(tempRootPath)
+	});
+	assert.equal(replaced, true, 'Expected temporary workspace folder update to succeed.');
+	await waitForCondition(
+		'temporary workspace folder active',
+		() => {
+			const folders = vscode.workspace.workspaceFolders;
+			return !!folders && folders.length === 1 && sameFsPath(folders[0].uri.fsPath, tempRootPath);
+		},
+		5_000
+	);
+
+	try {
+		return await run(tempRootUri);
+	} finally {
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			if (sameWorkspaceFolders(vscode.workspace.workspaceFolders, originalFolders)) {
+				break;
+			}
+
+			const currentFolders = vscode.workspace.workspaceFolders ?? [];
+			vscode.workspace.updateWorkspaceFolders(
+				0,
+				currentFolders.length,
+				...originalFolders.map((folder) => ({
+					uri: folder.uri,
+					name: folder.name
+				}))
+			);
+			await new Promise<void>((resolve) => setTimeout(resolve, 100));
+		}
+		await waitForCondition(
+			'workspace folders restored',
+			() => sameWorkspaceFolders(vscode.workspace.workspaceFolders, originalFolders),
+			5_000
+		);
+		await fs.rm(tempRootPath, {
+			recursive: true,
+			force: true
+		});
 	}
 }
 
@@ -760,6 +853,93 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 	}
 }
 
+async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
+	const fakeServer = await startFakeEv3TcpServer();
+	const discoveryPort = 34000 + Math.floor(Math.random() * 1000);
+	const stopBeacon = startFakeDiscoveryBeacon(discoveryPort, fakeServer.port);
+
+	try {
+		await withWorkspaceSettings(
+			{
+				'transport.mode': 'tcp',
+				'transport.timeoutMs': 3000,
+				'transport.tcp.host': '',
+				'transport.tcp.useDiscovery': true,
+				'transport.tcp.discoveryPort': discoveryPort,
+				'transport.tcp.discoveryTimeoutMs': 3000,
+				'transport.tcp.handshakeTimeoutMs': 3000
+			},
+			async () => {
+				await withTemporaryWorkspaceFolder(
+					async (workspaceFsPath) => {
+						await fs.mkdir(path.join(workspaceFsPath, 'docs'), {
+							recursive: true
+						});
+						await fs.writeFile(path.join(workspaceFsPath, 'main.rbf'), Buffer.from([0x01, 0x02, 0x03, 0x04]));
+						await fs.writeFile(path.join(workspaceFsPath, 'docs', 'notes.txt'), 'workspace-v1\n', 'utf8');
+					},
+					async (workspaceUri) => {
+						await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+						await new Promise<void>((resolve) => setTimeout(resolve, 250));
+
+						const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
+						const remoteProjectUri = vscode.Uri.parse(`ev3://active${remoteProjectRoot}/`);
+						const remoteProgramUri = vscode.Uri.parse(`ev3://active${remoteProjectRoot}/main.rbf`);
+						const remoteNotesUri = vscode.Uri.parse(`ev3://active${remoteProjectRoot}/docs/notes.txt`);
+
+						try {
+							await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeploy');
+							await assert.rejects(
+								async () => {
+									await vscode.workspace.fs.readDirectory(remoteProjectUri);
+								},
+								(error: unknown) => {
+									const message = error instanceof Error ? error.message : String(error);
+									assert.match(message, /not found|path not found|status|directory/i);
+									return true;
+								}
+							);
+
+							await vscode.commands.executeCommand('ev3-cockpit.deployWorkspace');
+
+							const deployedProgramV1 = await vscode.workspace.fs.readFile(remoteProgramUri);
+							assert.deepEqual(Array.from(deployedProgramV1), [0x01, 0x02, 0x03, 0x04]);
+							const deployedNotesV1 = await vscode.workspace.fs.readFile(remoteNotesUri);
+							assert.equal(Buffer.from(deployedNotesV1).toString('utf8'), 'workspace-v1\n');
+
+							await fs.writeFile(path.join(workspaceUri.fsPath, 'main.rbf'), Buffer.from([0x05, 0x06, 0x07, 0x08]));
+							await fs.writeFile(path.join(workspaceUri.fsPath, 'docs', 'notes.txt'), 'workspace-v2\n', 'utf8');
+
+							const runCountBefore = fakeServer.getRunProgramCommandCount();
+							await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunRbf');
+							const runCountAfter = fakeServer.getRunProgramCommandCount();
+							assert.ok(
+								runCountAfter > runCountBefore,
+								'Expected deployWorkspaceAndRunRbf to send at least one direct run command.'
+							);
+
+							const deployedProgramV2 = await vscode.workspace.fs.readFile(remoteProgramUri);
+							assert.deepEqual(Array.from(deployedProgramV2), [0x05, 0x06, 0x07, 0x08]);
+							const deployedNotesV2 = await vscode.workspace.fs.readFile(remoteNotesUri);
+							assert.equal(Buffer.from(deployedNotesV2).toString('utf8'), 'workspace-v2\n');
+
+							await vscode.workspace.fs.delete(remoteProjectUri, {
+								recursive: true,
+								useTrash: false
+							});
+						} finally {
+							await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+						}
+					}
+				);
+			}
+		);
+	} finally {
+		stopBeacon();
+		await fakeServer.close();
+	}
+}
+
 async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunRbf');
 	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
@@ -790,4 +970,5 @@ export async function run(): Promise<void> {
 	await testMockConnectFlowWiresActiveFsProvider();
 	await testProviderRejectsNonActiveBrickAuthority();
 	await testTcpConnectFlowWithMockDiscoveryAndServer();
+	await testWorkspaceDeployCommandsWithMockTcp();
 }

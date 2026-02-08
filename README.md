@@ -74,7 +74,8 @@ Override it in workspace/user settings when you need `bluetooth` or `tcp` test r
   - non-interactive command execution without hardware (`inspectTransports`, `browseRemoteFs`),
   - `ev3://` provider offline behavior,
   - mock connect flow wiring (`ev3-cockpit.transport.mode=mock`) for active provider path,
-  - fake TCP EV3 end-to-end provider flow (`ev3://active/...` read/write/copy/rename/delete, recursive directory operations, safe-root enforcement) without physical hardware.
+  - fake TCP EV3 end-to-end provider flow (`ev3://active/...` read/write/copy/rename/delete, recursive directory operations, safe-root enforcement) without physical hardware,
+  - workspace deploy command e2e flow against fake TCP EV3 (`previewWorkspaceDeploy` no-write validation, `deployWorkspace` upload validation, `deployWorkspaceAndRunRbf` upload+run validation).
 - `npm run test:hw` - hardware smoke category (`[HW]`) in fixed order: USB -> TCP (WiFi) -> Bluetooth.
 - `npm run test:hw:matrix` - hardware matrix category (`[HW-MATRIX]`) that runs multiple hardware-smoke scenarios (`baseline`, `reconnect`, `reconnect-glitch`) and writes JSON report artifact.
 - `npm run test:hw:all` - `test:hw` followed by `test:hw:matrix`.

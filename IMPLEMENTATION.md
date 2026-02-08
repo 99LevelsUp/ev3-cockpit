@@ -106,6 +106,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - extension-host fake TCP scenar pokryva i adresarove copy/rename/delete vetve (vcetne non-recursive `NOT_EMPTY`) a safe-root guard (`ev3://active/etc` blokace v safe mode).
+  - extension-host fake TCP scenar pokryva i workspace deploy workflow commandy: `Preview Workspace Deploy Changes`, `Sync Workspace`, `Deploy Workspace and Run .rbf` (vcetne overeni, ze preview nic nezapisuje a deploy+run opravdu odesle run command).
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.
 
 Zbyva:
