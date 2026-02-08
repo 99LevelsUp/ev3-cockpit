@@ -89,6 +89,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - pridana command akce `EV3 Cockpit: Preview Workspace Deploy Changes (active)` (`workspace folder -> dry-run upload/skip/cleanup`) bez folder dialogu v single-root workspace.
   - pridana command akce `EV3 Cockpit: Sync Workspace to EV3 (active)` (`workspace folder -> recursive upload/sync`), ktera v single-root workspace neotevira folder dialog.
   - pridana command akce `EV3 Cockpit: Deploy Project and Run .rbf (active)` (`folder pick -> recursive upload -> run selected .rbf`).
+  - pridana command akce `EV3 Cockpit: Deploy Workspace and Run .rbf (active)` (`workspace folder -> recursive upload -> run selected .rbf`) bez folder dialogu v single-root workspace.
   - pridany run-control workflow commandy: `Run Remote Program (.rbf)`, `Stop Program (active)`, `Restart Program (active)` s pamatovanim posledniho run targetu.
   - runtime drzi `program session` metadata (path/time/source/transport) pro restart + diagnostiku (`Transport Health Report`).
   - pridana diagnosticka command akce `EV3 Cockpit: Transport Health Report` (USB/TCP/BT probe + capability souhrn PASS/SKIP/FAIL).

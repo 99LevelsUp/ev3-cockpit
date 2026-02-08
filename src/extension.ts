@@ -1392,6 +1392,22 @@ export function activate(context: vscode.ExtensionContext) {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
 
+	const deployWorkspaceAndRunRbf = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceAndRunRbf',
+		async () => {
+			const workspaceUri = await pickWorkspaceProjectFolder();
+			if (!workspaceUri) {
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: true,
+				previewOnly: false,
+				projectUri: workspaceUri
+			});
+		}
+	);
+
 	const runRemoteProgram = vscode.commands.registerCommand('ev3-cockpit.runRemoteProgram', async () => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
@@ -1903,6 +1919,7 @@ export function activate(context: vscode.ExtensionContext) {
 		previewWorkspaceDeploy,
 		deployWorkspace,
 		deployProjectAndRunRbf,
+		deployWorkspaceAndRunRbf,
 		runRemoteProgram,
 		stopProgram,
 		restartProgram,
