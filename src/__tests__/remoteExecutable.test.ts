@@ -22,7 +22,7 @@ test('remoteExecutable assert returns executable type id', () => {
 test('remoteExecutable run delegates to the type-specific runner', async () => {
 	let calledPath = '';
 	const fsService = {
-		runProgram: async (remotePath: string) => {
+		runBytecodeProgram: async (remotePath: string) => {
 			calledPath = remotePath;
 		}
 	};
@@ -41,7 +41,7 @@ test('remoteExecutable rejects unsupported executable types', async () => {
 		async () =>
 			runRemoteExecutable(
 				{
-					runProgram: async () => undefined
+					runBytecodeProgram: async () => undefined
 				} as unknown as RemoteFsService,
 				'/home/root/lms2012/prjs/Empty/Empty.bin'
 			),

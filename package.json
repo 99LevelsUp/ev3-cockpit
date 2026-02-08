@@ -11,36 +11,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:ev3-cockpit.connectEV3",
-    "onCommand:ev3-cockpit.deployAndRunRbf",
-    "onCommand:ev3-cockpit.previewProjectDeploy",
-    "onCommand:ev3-cockpit.deployProject",
-    "onCommand:ev3-cockpit.previewProjectDeployToBrick",
-    "onCommand:ev3-cockpit.deployProjectToBrick",
-    "onCommand:ev3-cockpit.deployProjectAndRunRbfToBrick",
-    "onCommand:ev3-cockpit.previewWorkspaceDeploy",
-    "onCommand:ev3-cockpit.deployWorkspace",
-    "onCommand:ev3-cockpit.previewWorkspaceDeployToBrick",
-    "onCommand:ev3-cockpit.deployWorkspaceToBrick",
-    "onCommand:ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
-    "onCommand:ev3-cockpit.deployProjectAndRunRbf",
-    "onCommand:ev3-cockpit.deployWorkspaceAndRunRbf",
-    "onCommand:ev3-cockpit.applyDeployProfile",
-    "onCommand:ev3-cockpit.applyDeployProfileToBrick",
-    "onCommand:ev3-cockpit.runRemoteProgram",
-    "onCommand:ev3-cockpit.stopProgram",
-    "onCommand:ev3-cockpit.restartProgram",
-    "onCommand:ev3-cockpit.reconnectEV3",
-    "onCommand:ev3-cockpit.disconnectEV3",
-    "onCommand:ev3-cockpit.emergencyStop",
-    "onCommand:ev3-cockpit.inspectTransports",
-    "onCommand:ev3-cockpit.transportHealthReport",
-    "onCommand:ev3-cockpit.browseRemoteFs",
-    "onCommand:ev3-cockpit.refreshBricksView",
-    "onCommand:ev3-cockpit.uploadToBrickFolder",
-    "onCommand:ev3-cockpit.deleteRemoteEntryFromTree",
-    "onCommand:ev3-cockpit.runRemoteRbfFromTree",
-    "onView:ev3-cockpit.bricksView",
     "onFileSystem:ev3"
   ],
   "main": "./out/extension.js",
@@ -51,8 +21,8 @@
         "title": "EV3 Cockpit: Connect to EV3 Brick"
       },
       {
-        "command": "ev3-cockpit.deployAndRunRbf",
-        "title": "EV3 Cockpit: Deploy and Run .rbf (active)"
+        "command": "ev3-cockpit.deployAndRunExecutable",
+        "title": "EV3 Cockpit: Deploy and Run Executable (active)"
       },
       {
         "command": "ev3-cockpit.previewProjectDeploy",
@@ -71,8 +41,8 @@
         "title": "EV3 Cockpit: Sync Project to EV3 (selected brick)"
       },
       {
-        "command": "ev3-cockpit.deployProjectAndRunRbfToBrick",
-        "title": "EV3 Cockpit: Deploy Project and Run .rbf (selected brick)"
+        "command": "ev3-cockpit.deployProjectAndRunExecutableToBrick",
+        "title": "EV3 Cockpit: Deploy Project and Run Executable (selected brick)"
       },
       {
         "command": "ev3-cockpit.previewWorkspaceDeploy",
@@ -91,16 +61,16 @@
         "title": "EV3 Cockpit: Sync Workspace to EV3 (selected brick)"
       },
       {
-        "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
-        "title": "EV3 Cockpit: Deploy Workspace and Run .rbf (selected brick)"
+        "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToBrick",
+        "title": "EV3 Cockpit: Deploy Workspace and Run Executable (selected brick)"
       },
       {
-        "command": "ev3-cockpit.deployProjectAndRunRbf",
-        "title": "EV3 Cockpit: Deploy Project and Run .rbf (active)"
+        "command": "ev3-cockpit.deployProjectAndRunExecutable",
+        "title": "EV3 Cockpit: Deploy Project and Run Executable (active)"
       },
       {
-        "command": "ev3-cockpit.deployWorkspaceAndRunRbf",
-        "title": "EV3 Cockpit: Deploy Workspace and Run .rbf (active)"
+        "command": "ev3-cockpit.deployWorkspaceAndRunExecutable",
+        "title": "EV3 Cockpit: Deploy Workspace and Run Executable (active)"
       },
       {
         "command": "ev3-cockpit.applyDeployProfile",
@@ -159,7 +129,7 @@
         "title": "EV3 Cockpit: Delete Remote Entry"
       },
       {
-        "command": "ev3-cockpit.runRemoteRbfFromTree",
+        "command": "ev3-cockpit.runRemoteExecutableFromTree",
         "title": "EV3 Cockpit: Run Executable from Remote FS",
         "icon": "$(play)"
       }
@@ -242,12 +212,12 @@
           "group": "3_deploy"
         },
         {
-          "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
+          "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
-          "command": "ev3-cockpit.deployProjectAndRunRbfToBrick",
+          "command": "ev3-cockpit.deployProjectAndRunExecutableToBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
@@ -262,7 +232,7 @@
           "group": "2_modification"
         },
         {
-          "command": "ev3-cockpit.runRemoteRbfFromTree",
+          "command": "ev3-cockpit.runRemoteExecutableFromTree",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileExecutable",
           "group": "inline"
         }

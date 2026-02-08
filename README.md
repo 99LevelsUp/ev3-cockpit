@@ -137,4 +137,4 @@ When release publishing is enabled, this README should link directly to the late
 
 ## License
 
-License information is currently not finalized for this repository.
+MIT. See `LICENSE`.

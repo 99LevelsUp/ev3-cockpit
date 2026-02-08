@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import { registerProgramControlCommands } from './commands/programControlCommands';
 import { buildCapabilityProfile } from './compat/capabilityProfile';
 import { DEPLOY_PROFILE_PRESETS } from './config/deployProfiles';
 import { readFeatureConfig } from './config/featureConfig';
@@ -11,8 +12,8 @@ import { buildRemoteChildPath, buildRemotePathFromLocal, isValidRemoteEntryName 
 import {
 	buildRemoteDeployPath,
 	buildRemoteProjectRoot,
-	choosePreferredRunCandidate,
-	isRbfFileName
+	choosePreferredExecutableCandidate,
+	isExecutableFileName
 } from './fs/deployActions';
 import { DeployConflictPromptChoice, resolveDeployConflictDecision } from './fs/deployConflict';
 import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
@@ -64,7 +65,7 @@ interface LocalProjectFileEntry {
 	relativePath: string;
 	remotePath: string;
 	sizeBytes: number;
-	isRbf: boolean;
+	isExecutable: boolean;
 }
 
 interface LocalScannedFile {
@@ -280,10 +281,11 @@ export function activate(context: vscode.ExtensionContext) {
 	let scheduler: CommandScheduler;
 	let commandClient: Ev3CommandClient;
 	const brickRegistry = new BrickRegistry();
-	let activeFsService: RemoteFsService | undefined;
-	let activeControlService: BrickControlService | undefined;
 	let lastRunProgramPath: string | undefined;
 	let activeProgramSession: ProgramSessionState | undefined;
+
+	const getActiveFsService = (): RemoteFsService | undefined => brickRegistry.getActiveFsService();
+	const getActiveControlService = (): BrickControlService | undefined => brickRegistry.getActiveControlService();
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
@@ -323,8 +325,6 @@ export function activate(context: vscode.ExtensionContext) {
 		logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
 		void commandClient?.close().catch(() => undefined);
 		scheduler?.dispose();
-		activeFsService = undefined;
-		activeControlService = undefined;
 		brickRegistry.markAllUnavailable('Runtime reinitialized.');
 		lastRunProgramPath = undefined;
 		activeProgramSession = undefined;
@@ -676,8 +676,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 		try {
 			clearProgramSession('connect-start');
-			activeFsService = undefined;
-			activeControlService = undefined;
 			brickRegistry.markActiveUnavailable('Connection reset before reconnect.');
 			const connectingRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 			brickRegistry.upsertConnecting(resolveConnectedBrickDescriptor(connectingRoot));
@@ -793,14 +791,14 @@ export function activate(context: vscode.ExtensionContext) {
 				});
 			}
 
-			activeFsService = new RemoteFsService({
+			const connectedFsService = new RemoteFsService({
 				commandClient: activeClient,
 				capabilityProfile: profile,
 				fsConfig: featureConfig.fs,
 				defaultTimeoutMs: Math.max(resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
 			});
-			activeControlService = new BrickControlService({
+			const connectedControlService = new BrickControlService({
 				commandClient: activeClient,
 				defaultTimeoutMs: Math.max(resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
@@ -809,8 +807,8 @@ export function activate(context: vscode.ExtensionContext) {
 			const brickDescriptor = resolveConnectedBrickDescriptor(rootPath);
 			brickRegistry.upsertReady({
 				...brickDescriptor,
-				fsService: activeFsService,
-				controlService: activeControlService
+				fsService: connectedFsService,
+				controlService: connectedControlService
 			});
 			keepConnectionOpen = true;
 			activeLogger.info('Remote FS service ready', {
@@ -826,8 +824,6 @@ export function activate(context: vscode.ExtensionContext) {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown scheduler error';
 			activeLogger.error('Connect probe failed', { message });
-			activeFsService = undefined;
-			activeControlService = undefined;
 			brickRegistry.markActiveUnavailable(message);
 			treeProvider.refreshThrottled();
 			vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
@@ -846,8 +842,6 @@ export function activate(context: vscode.ExtensionContext) {
 		try {
 			const disconnectedBrickId = brickRegistry.getActiveBrickId();
 			await commandClient.close();
-			activeFsService = undefined;
-			activeControlService = undefined;
 			if (disconnectedBrickId) {
 				brickRegistry.markUnavailable(disconnectedBrickId, 'Disconnected by user.');
 			}
@@ -867,12 +861,12 @@ export function activate(context: vscode.ExtensionContext) {
 		await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
 	});
 
-	const deployAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployAndRunRbf', async () => {
-		if (!activeFsService) {
+	const deployAndRunExecutable = vscode.commands.registerCommand('ev3-cockpit.deployAndRunExecutable', async () => {
+		const fsService = getActiveFsService();
+		if (!fsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
 			return;
 		}
-		const fsService = activeFsService;
 
 		const localSelection = await vscode.window.showOpenDialog({
 			canSelectMany: false,
@@ -1053,33 +1047,35 @@ export function activate(context: vscode.ExtensionContext) {
 					relativePath: entry.relativePath,
 					remotePath: path.posix.join(deployProjectRoot, relativePosix),
 					sizeBytes: entry.sizeBytes,
-					isRbf: isRbfFileName(path.basename(entry.localUri.fsPath))
+					isExecutable: isExecutableFileName(path.basename(entry.localUri.fsPath))
 				};
 			});
 
 			let runTarget: string | undefined;
 			if (options.runAfterDeploy) {
-				const rbfFiles = files.filter((entry) => entry.isRbf);
-				if (rbfFiles.length === 0) {
-					vscode.window.showErrorMessage(`No .rbf file found in project folder "${projectUri.fsPath}".`);
+				const executableFiles = files.filter((entry) => entry.isExecutable);
+				if (executableFiles.length === 0) {
+					vscode.window.showErrorMessage(`No executable file found in project folder "${projectUri.fsPath}".`);
 					return;
 				}
 
-				runTarget = choosePreferredRunCandidate(
-					rbfFiles.map((entry) => path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/')))
+				runTarget = choosePreferredExecutableCandidate(
+					executableFiles.map((entry) =>
+						path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/'))
+					)
 				);
 				if (!runTarget) {
-					vscode.window.showErrorMessage('Could not determine run target .rbf file.');
+					vscode.window.showErrorMessage('Could not determine executable run target.');
 					return;
 				}
 
-				if (rbfFiles.length > 1) {
-					const quickPickItems = rbfFiles.map((entry) => ({
+				if (executableFiles.length > 1) {
+					const quickPickItems = executableFiles.map((entry) => ({
 						label: entry.relativePath,
 						description: path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/'))
 					}));
 					const selected = await vscode.window.showQuickPick(quickPickItems, {
-						title: 'Select .rbf file to run after deploy',
+						title: 'Select executable file to run after deploy',
 						placeHolder: 'Choose run target'
 					});
 					if (!selected) {
@@ -1698,8 +1694,8 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const deployProjectAndRunRbfToBrick = vscode.commands.registerCommand(
-		'ev3-cockpit.deployProjectAndRunRbfToBrick',
+	const deployProjectAndRunExecutableToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployProjectAndRunExecutableToBrick',
 		async (node?: unknown) => {
 			const target = resolveDeployTargetFromArg(node);
 			if ('error' in target) {
@@ -1812,8 +1808,8 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const deployWorkspaceAndRunRbfToBrick = vscode.commands.registerCommand(
-		'ev3-cockpit.deployWorkspaceAndRunRbfToBrick',
+	const deployWorkspaceAndRunExecutableToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceAndRunExecutableToBrick',
 		async (node?: unknown) => {
 			const target = resolveDeployTargetFromArg(node);
 			if ('error' in target) {
@@ -1835,12 +1831,12 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
+	const deployProjectAndRunExecutable = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunExecutable', async () => {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
 
-	const deployWorkspaceAndRunRbf = vscode.commands.registerCommand(
-		'ev3-cockpit.deployWorkspaceAndRunRbf',
+	const deployWorkspaceAndRunExecutable = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceAndRunExecutable',
 		async () => {
 			const workspaceUri = await pickWorkspaceProjectFolder();
 			if (!workspaceUri) {
@@ -1905,123 +1901,15 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const runRemoteProgram = vscode.commands.registerCommand('ev3-cockpit.runRemoteProgram', async () => {
-		if (!activeFsService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
-			return;
-		}
-		const fsService = activeFsService;
-
-		const input = await vscode.window.showInputBox({
-			title: 'Run EV3 Executable',
-			prompt: 'Remote path or ev3://active/... URI',
-			value: lastRunProgramPath ?? '/home/root/lms2012/prjs/',
-			validateInput: (value) => {
-				try {
-					normalizeRunExecutablePath(value);
-					return undefined;
-				} catch (error) {
-					return error instanceof Error ? error.message : String(error);
-				}
-			}
-		});
-		if (!input) {
-			return;
-		}
-
-		try {
-			const runPath = normalizeRunExecutablePath(input);
-			const executable = await runRemoteExecutable(fsService, runPath);
-			markProgramStarted(runPath, 'run-command');
-			logger.info('Run program command completed', {
-				path: runPath,
-				type: executable.typeId
-			});
-			vscode.window.showInformationMessage(`Program started: ev3://active${runPath}`);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logger.warn('Run program command failed', {
-				message
-			});
-			vscode.window.showErrorMessage(`Run program failed: ${message}`);
-		}
-	});
-
-	const stopProgram = vscode.commands.registerCommand('ev3-cockpit.stopProgram', async () => {
-		if (!activeControlService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
-			return;
-		}
-
-		try {
-			await activeControlService.stopProgram();
-			clearProgramSession('stop-program-command');
-			vscode.window.showInformationMessage('Program stop command sent to EV3.');
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logger.error('Program stop failed', { message });
-			vscode.window.showErrorMessage(`Program stop failed: ${message}`);
-		}
-	});
-
-	const restartProgram = vscode.commands.registerCommand('ev3-cockpit.restartProgram', async () => {
-		if (!activeFsService || !activeControlService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
-			return;
-		}
-
-		let runPath = activeProgramSession?.remotePath ?? lastRunProgramPath;
-		if (!runPath) {
-			const input = await vscode.window.showInputBox({
-				title: 'Restart EV3 Executable',
-				prompt: 'Remote path or ev3://active/... URI',
-				value: '/home/root/lms2012/prjs/',
-				validateInput: (value) => {
-					try {
-						normalizeRunExecutablePath(value);
-						return undefined;
-					} catch (error) {
-						return error instanceof Error ? error.message : String(error);
-					}
-				}
-			});
-			if (!input) {
-				return;
-			}
-			runPath = normalizeRunExecutablePath(input);
-		}
-
-		try {
-			await activeControlService.stopProgram();
-			const executable = await runRemoteExecutable(activeFsService, runPath);
-			markProgramStarted(runPath, 'restart-command');
-			logger.info('Restart program command completed', {
-				path: runPath,
-				type: executable.typeId
-			});
-			vscode.window.showInformationMessage(`Program restarted: ev3://active${runPath}`);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logger.error('Restart program failed', { message });
-			vscode.window.showErrorMessage(`Restart program failed: ${message}`);
-		}
-	});
-
-	const emergencyStop = vscode.commands.registerCommand('ev3-cockpit.emergencyStop', async () => {
-		if (!activeControlService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
-			return;
-		}
-
-		try {
-			await activeControlService.emergencyStopAll();
-			clearProgramSession('emergency-stop-command');
-			vscode.window.showInformationMessage('Emergency stop command sent to EV3.');
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			logger.error('Emergency stop failed', { message });
-			vscode.window.showErrorMessage(`Emergency stop failed: ${message}`);
-		}
+	const { runRemoteProgram, stopProgram, restartProgram, emergencyStop } = registerProgramControlCommands({
+		getActiveFsService,
+		getActiveControlService,
+		getLastRunProgramPath: () => lastRunProgramPath,
+		getRestartCandidatePath: () => activeProgramSession?.remotePath ?? lastRunProgramPath,
+		getLogger: () => logger,
+		normalizeRunExecutablePath,
+		onProgramStarted: markProgramStarted,
+		onProgramCleared: clearProgramSession
 	});
 
 	const inspectTransports = vscode.commands.registerCommand('ev3-cockpit.inspectTransports', async () => {
@@ -2490,8 +2378,8 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
-	const runRemoteRbfFromTree = vscode.commands.registerCommand(
-		'ev3-cockpit.runRemoteRbfFromTree',
+	const runRemoteExecutableFromTree = vscode.commands.registerCommand(
+		'ev3-cockpit.runRemoteExecutableFromTree',
 		async (node?: unknown) => {
 			if (!isBrickFileNode(node) || !isRemoteExecutablePath(node.remotePath)) {
 				vscode.window.showErrorMessage('Select an executable file in EV3 Cockpit Bricks view.');
@@ -2560,19 +2448,19 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		disposable,
-		deployAndRunRbf,
+		deployAndRunExecutable,
 		previewProjectDeploy,
 		deployProject,
 		previewProjectDeployToBrick,
 		deployProjectToBrick,
-		deployProjectAndRunRbfToBrick,
+		deployProjectAndRunExecutableToBrick,
 		previewWorkspaceDeploy,
 		deployWorkspace,
 		previewWorkspaceDeployToBrick,
 		deployWorkspaceToBrick,
-		deployWorkspaceAndRunRbfToBrick,
-		deployProjectAndRunRbf,
-		deployWorkspaceAndRunRbf,
+		deployWorkspaceAndRunExecutableToBrick,
+		deployProjectAndRunExecutable,
+		deployWorkspaceAndRunExecutable,
 		applyDeployProfile,
 		applyDeployProfileToBrick,
 		runRemoteProgram,
@@ -2587,7 +2475,7 @@ export function activate(context: vscode.ExtensionContext) {
 		refreshBricksView,
 		uploadToBrickFolder,
 		deleteRemoteEntryFromTree,
-		runRemoteRbfFromTree,
+		runRemoteExecutableFromTree,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
@@ -2596,8 +2484,6 @@ export function activate(context: vscode.ExtensionContext) {
 		{
 		dispose: () => {
 			scheduler.dispose();
-			activeFsService = undefined;
-			activeControlService = undefined;
 			brickRegistry.markAllUnavailable('Extension disposed.');
 			treeProvider.dispose();
 			clearProgramSession('extension-dispose');

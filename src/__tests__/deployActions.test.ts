@@ -4,16 +4,16 @@ import {
 	buildRemoteDeployPath,
 	buildRemoteProjectFilePath,
 	buildRemoteProjectRoot,
-	choosePreferredRunCandidate,
-	isRbfFileName,
+	choosePreferredExecutableCandidate,
+	isExecutableFileName,
 	normalizeDeployRoot
 } from '../fs/deployActions';
 
-test('deployActions detects .rbf filename case-insensitively', () => {
-	assert.equal(isRbfFileName('program.rbf'), true);
-	assert.equal(isRbfFileName('PROGRAM.RBF'), true);
-	assert.equal(isRbfFileName('program.rbF'), true);
-	assert.equal(isRbfFileName('program.txt'), false);
+test('deployActions detects executable filename case-insensitively', () => {
+	assert.equal(isExecutableFileName('program.rbf'), true);
+	assert.equal(isExecutableFileName('PROGRAM.RBF'), true);
+	assert.equal(isExecutableFileName('program.rbF'), true);
+	assert.equal(isExecutableFileName('program.txt'), false);
 });
 
 test('deployActions normalizes deploy root with trailing slash', () => {
@@ -29,7 +29,7 @@ test('deployActions builds remote deploy path from local path', () => {
 test('deployActions rejects non-rbf local file', () => {
 	assert.throws(
 		() => buildRemoteDeployPath('C:\\Users\\dev\\Desktop\\notes.txt', '/home/root/lms2012/prjs/'),
-		/\.rbf/i
+		/executable files/i
 	);
 });
 
@@ -59,8 +59,8 @@ test('deployActions rejects project file outside project root', () => {
 	);
 });
 
-test('deployActions chooses preferred run candidate by depth then name', () => {
-	const chosen = choosePreferredRunCandidate([
+test('deployActions chooses preferred executable candidate by depth then name', () => {
+	const chosen = choosePreferredExecutableCandidate([
 		'/home/root/lms2012/prjs/LineFollower/bin/Main.rbf',
 		'/home/root/lms2012/prjs/LineFollower/Auto.rbf',
 		'/home/root/lms2012/prjs/LineFollower/a/Deep.rbf'

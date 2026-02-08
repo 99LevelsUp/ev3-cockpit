@@ -617,19 +617,19 @@ async function testActivation(): Promise<void> {
 async function testCommandsRegistration(): Promise<void> {
 	const commands = await vscode.commands.getCommands(true);
 	assert.ok(commands.includes('ev3-cockpit.connectEV3'));
-	assert.ok(commands.includes('ev3-cockpit.deployAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.deployAndRunExecutable'));
 	assert.ok(commands.includes('ev3-cockpit.previewProjectDeploy'));
 	assert.ok(commands.includes('ev3-cockpit.deployProject'));
 	assert.ok(commands.includes('ev3-cockpit.previewProjectDeployToBrick'));
 	assert.ok(commands.includes('ev3-cockpit.deployProjectToBrick'));
-	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbfToBrick'));
+	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunExecutableToBrick'));
 	assert.ok(commands.includes('ev3-cockpit.previewWorkspaceDeploy'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspace'));
 	assert.ok(commands.includes('ev3-cockpit.previewWorkspaceDeployToBrick'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceToBrick'));
-	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunRbfToBrick'));
-	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
-	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick'));
+	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunExecutable'));
+	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunExecutable'));
 	assert.ok(commands.includes('ev3-cockpit.applyDeployProfile'));
 	assert.ok(commands.includes('ev3-cockpit.applyDeployProfileToBrick'));
 	assert.ok(commands.includes('ev3-cockpit.runRemoteProgram'));
@@ -644,7 +644,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.refreshBricksView'));
 	assert.ok(commands.includes('ev3-cockpit.uploadToBrickFolder'));
 	assert.ok(commands.includes('ev3-cockpit.deleteRemoteEntryFromTree'));
-	assert.ok(commands.includes('ev3-cockpit.runRemoteRbfFromTree'));
+	assert.ok(commands.includes('ev3-cockpit.runRemoteExecutableFromTree'));
 }
 
 async function testEv3FileSystemProvider(): Promise<void> {
@@ -922,11 +922,11 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 							await fs.writeFile(path.join(workspaceUri.fsPath, 'docs', 'notes.txt'), 'workspace-v2\n', 'utf8');
 
 							const runCountBefore = fakeServer.getRunProgramCommandCount();
-							await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunRbf');
+							await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutable');
 							const runCountAfter = fakeServer.getRunProgramCommandCount();
 							assert.ok(
 								runCountAfter > runCountBefore,
-								'Expected deployWorkspaceAndRunRbf to send at least one direct run command.'
+								'Expected deployWorkspaceAndRunExecutable to send at least one direct run command.'
 							);
 
 							const deployedProgramV2 = await vscode.workspace.fs.readFile(remoteProgramUri);
@@ -952,19 +952,19 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 }
 
 async function testCommandsWithoutHardware(): Promise<void> {
-	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunExecutable');
 	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProject');
 	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeployToBrick');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProjectToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbfToBrick');
+	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutableToBrick');
 	await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeploy');
 	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspace');
 	await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick');
 	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunRbfToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbf');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick');
+	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutable');
+	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutable');
 	await vscode.commands.executeCommand('ev3-cockpit.applyDeployProfileToBrick');
 	await vscode.commands.executeCommand('ev3-cockpit.runRemoteProgram');
 	await vscode.commands.executeCommand('ev3-cockpit.stopProgram');
@@ -977,7 +977,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
 	await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
 	await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
-	await vscode.commands.executeCommand('ev3-cockpit.runRemoteRbfFromTree');
+	await vscode.commands.executeCommand('ev3-cockpit.runRemoteExecutableFromTree');
 }
 
 export async function run(): Promise<void> {

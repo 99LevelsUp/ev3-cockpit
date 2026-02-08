@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BrickControlService, Ev3CommandSendLike } from '../device/brickControlService';
+import { BrickControlService } from '../device/brickControlService';
 import { Ev3CommandRequest } from '../protocol/ev3CommandClient';
+import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { EV3_COMMAND, EV3_REPLY, Ev3Packet } from '../protocol/ev3Packet';
 import { CommandResult } from '../scheduler/types';
 

@@ -1,11 +1,15 @@
 import * as path from 'node:path';
 import { canonicalizeEv3Path } from './pathPolicy';
+import { isRemoteExecutablePath, supportedExecutableExtensions } from './remoteExecutable';
 
 export const DEFAULT_DEPLOY_ROOT = '/home/root/lms2012/prjs/';
 
-export function isRbfFileName(fileName: string): boolean {
+export function isExecutableFileName(fileName: string): boolean {
 	const trimmed = fileName.trim();
-	return /\.rbf$/i.test(trimmed);
+	if (trimmed.length === 0) {
+		return false;
+	}
+	return isRemoteExecutablePath(`/tmp/${trimmed}`);
 }
 
 export function normalizeDeployRoot(remoteRoot: string): string {
@@ -17,8 +21,10 @@ export function normalizeDeployRoot(remoteRoot: string): string {
 
 export function buildRemoteDeployPath(localFsPath: string, remoteRoot = DEFAULT_DEPLOY_ROOT): string {
 	const baseName = path.basename(localFsPath).trim();
-	if (!baseName || !isRbfFileName(baseName)) {
-		throw new Error(`Deploy supports only .rbf files. Got "${baseName || localFsPath}".`);
+	if (!baseName || !isExecutableFileName(baseName)) {
+		throw new Error(
+			`Deploy supports only executable files (${supportedExecutableExtensions().join(', ')}). Got "${baseName || localFsPath}".`
+		);
 	}
 
 	const normalizedRoot = normalizeDeployRoot(remoteRoot);
@@ -49,12 +55,12 @@ export function buildRemoteProjectFilePath(
 	return canonicalizeEv3Path(path.posix.join(buildRemoteProjectRoot(localProjectFsPath, remoteRoot), relativePosix));
 }
 
-export function choosePreferredRunCandidate(rbfRemotePaths: readonly string[]): string | undefined {
-	if (rbfRemotePaths.length === 0) {
+export function choosePreferredExecutableCandidate(executableRemotePaths: readonly string[]): string | undefined {
+	if (executableRemotePaths.length === 0) {
 		return undefined;
 	}
 
-	return [...rbfRemotePaths].sort((a, b) => {
+	return [...executableRemotePaths].sort((a, b) => {
 		const aDepth = a.split('/').filter((part) => part.length > 0).length;
 		const bDepth = b.split('/').filter((part) => part.length > 0).length;
 		if (aDepth !== bDepth) {

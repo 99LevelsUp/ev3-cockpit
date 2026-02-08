@@ -11,7 +11,6 @@ test('deployResilience classifies transient transport errors', () => {
 
 test('deployResilience does not classify logical deploy errors as transient transport errors', () => {
 	assert.equal(isDeployTransientTransportError('Path "/etc" is outside safe roots.'), false);
-	assert.equal(isDeployTransientTransportError('Program run is only supported for .rbf files.'), false);
+	assert.equal(isDeployTransientTransportError('Unsupported executable file type. Supported extensions: .rbf.'), false);
 	assert.equal(isDeployTransientTransportError('System command 0x95 failed with status UNKNOWN_HANDLE.'), false);
 });
-

@@ -3,12 +3,13 @@ import test from 'node:test';
 import { CapabilityProfile } from '../compat/capabilityProfile';
 import { FsConfigSnapshot } from '../config/featureConfig';
 import { Logger } from '../diagnostics/logger';
+import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { Ev3CommandClient, Ev3CommandRequest } from '../protocol/ev3CommandClient';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY, Ev3Packet } from '../protocol/ev3Packet';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { CommandResult } from '../scheduler/types';
 import { MockTransportAdapter } from '../transport/mockTransportAdapter';
-import { Ev3CommandSendLike, RemoteFsService } from '../fs/remoteFsService';
+import { RemoteFsService } from '../fs/remoteFsService';
 
 const CMD = {
 	BEGIN_DOWNLOAD: 0x92,
@@ -377,7 +378,7 @@ test('RemoteFsService readFile retries full transfer when CONTINUE_UPLOAD return
 	assert.ok(commands.filter((cmd) => cmd === CMD.BEGIN_UPLOAD).length >= 2);
 });
 
-test('RemoteFsService runProgram composes compound direct command for .rbf path', async () => {
+test('RemoteFsService runBytecodeProgram composes compound direct command for provided path', async () => {
 	const client = new FakeCommandClient((request) => {
 		assert.equal(request.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
 		assert.equal(request.lane, 'high');
@@ -391,7 +392,7 @@ test('RemoteFsService runProgram composes compound direct command for .rbf path'
 		logger: new SilentLogger()
 	});
 
-	await service.runProgram('/home/root/lms2012/prjs/demo/program.rbf');
+	await service.runBytecodeProgram('/home/root/lms2012/prjs/demo/program.rbf');
 
 	assert.equal(client.requests.length, 1);
 	const payload = client.requests[0].payload ?? new Uint8Array();
@@ -407,7 +408,7 @@ test('RemoteFsService runProgram composes compound direct command for .rbf path'
 	assert.notEqual(encodedPath.indexOf(Buffer.from('/home/root/lms2012/prjs/demo/program.rbf\u0000', 'utf8')), -1);
 });
 
-test('RemoteFsService runProgram rejects non-rbf path', async () => {
+test('RemoteFsService runBytecodeProgram allows non-rbf extension and delegates validation to launcher', async () => {
 	const client = new FakeCommandClient(() => directReply(new Uint8Array(8)));
 	const service = new RemoteFsService({
 		commandClient: client,
@@ -416,6 +417,6 @@ test('RemoteFsService runProgram rejects non-rbf path', async () => {
 		logger: new SilentLogger()
 	});
 
-	await assert.rejects(service.runProgram('/home/root/lms2012/prjs/demo/readme.txt'), /\.rbf/i);
-	assert.equal(client.requests.length, 0);
+	await service.runBytecodeProgram('/home/root/lms2012/prjs/demo/readme.txt');
+	assert.equal(client.requests.length, 1);
 });

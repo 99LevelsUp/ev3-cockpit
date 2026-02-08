@@ -533,7 +533,7 @@ async function runProgramCheckWithClient(
 			await service.writeFile(spec.remotePath, fixtureBytes);
 			let runError: unknown;
 			try {
-				await service.runProgram(spec.remotePath);
+				await service.runBytecodeProgram(spec.remotePath);
 			} catch (error) {
 				runError = error;
 			}
@@ -568,7 +568,7 @@ async function runProgramCheckWithClient(
 			};
 		}
 
-		await service.runProgram(spec.remotePath);
+		await service.runBytecodeProgram(spec.remotePath);
 		return {
 			ok: true,
 			mode: spec.mode,

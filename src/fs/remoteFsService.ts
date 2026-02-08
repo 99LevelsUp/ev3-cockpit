@@ -1,9 +1,9 @@
 import { CapabilityProfile } from '../compat/capabilityProfile';
 import { FsConfigSnapshot } from '../config/featureConfig';
 import { Logger, NoopLogger } from '../diagnostics/logger';
-import { Ev3CommandRequest } from '../protocol/ev3CommandClient';
-import { EV3_COMMAND, EV3_REPLY, Ev3Packet } from '../protocol/ev3Packet';
-import { CommandResult } from '../scheduler/types';
+import { Ev3CommandSendLike } from '../protocol/commandSendLike';
+import { concatBytes, lc0, uint16le } from '../protocol/ev3Bytecode';
+import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { evaluateFsAccess } from './pathPolicy';
 
 const SYSTEM_STATUS = {
@@ -97,10 +97,6 @@ export class Ev3SystemCommandError extends Error {
 	}
 }
 
-export interface Ev3CommandSendLike {
-	send(request: Ev3CommandRequest): Promise<CommandResult<Ev3Packet>>;
-}
-
 interface RemoteFsServiceOptions {
 	commandClient: Ev3CommandSendLike;
 	capabilityProfile: CapabilityProfile;
@@ -118,39 +114,15 @@ interface SystemCommandSendOptions {
 	idempotent: boolean;
 }
 
-function uint16le(value: number): Uint8Array {
-	const out = new Uint8Array(2);
-	new DataView(out.buffer).setUint16(0, value & 0xffff, true);
-	return out;
-}
-
 function uint32le(value: number): Uint8Array {
 	const out = new Uint8Array(4);
 	new DataView(out.buffer).setUint32(0, value >>> 0, true);
 	return out;
 }
 
-function concatBytes(...parts: Uint8Array[]): Uint8Array {
-	const total = parts.reduce((sum, p) => sum + p.length, 0);
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const part of parts) {
-		out.set(part, offset);
-		offset += part.length;
-	}
-	return out;
-}
-
 function cString(text: string): Uint8Array {
 	const encoded = Buffer.from(text, 'utf8');
 	return concatBytes(encoded, new Uint8Array([0x00]));
-}
-
-function lc0(value: number): Uint8Array {
-	if (!Number.isInteger(value) || value < -31 || value > 31) {
-		throw new Error(`LC0 value out of range: ${value}`);
-	}
-	return new Uint8Array([value & 0x3f]);
 }
 
 function lc2(value: number): Uint8Array {
@@ -381,11 +353,8 @@ export class RemoteFsService {
 		});
 	}
 
-	public async runProgram(path: string): Promise<void> {
+	public async runBytecodeProgram(path: string): Promise<void> {
 		const normalizedPath = this.guardPath(path);
-		if (!normalizedPath.toLowerCase().endsWith('.rbf')) {
-			throw new Error(`Program run is only supported for .rbf files. Got: ${normalizedPath}`);
-		}
 
 		// Compound direct command:
 		// opFILE(LOAD_IMAGE, USER_SLOT, LCS(path), GV0(0), GV0(4)),

@@ -4,6 +4,6 @@ node_modules/
 .vscode-test/
 *.vsix
 *.js.map
-hw-*.log
-hw-*.logcls
+*.log
+*.logcls
 .claude/

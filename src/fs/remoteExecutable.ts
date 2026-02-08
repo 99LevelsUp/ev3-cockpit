@@ -31,7 +31,7 @@ class RbfRemoteFileType extends ExtensionRemoteFileType implements ExecutableRem
 	public readonly extensions = ['.rbf'] as const;
 
 	public async run(fsService: RemoteFsService, remotePath: string): Promise<void> {
-		await fsService.runProgram(remotePath);
+		await fsService.runBytecodeProgram(remotePath);
 	}
 }
 
