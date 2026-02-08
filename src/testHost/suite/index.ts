@@ -673,6 +673,13 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				const sourceUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-source.txt');
 				const copyUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-copy.txt');
 				const renamedUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-renamed.txt');
+				const sourceDirUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir');
+				const sourceDirFileUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir/nested.txt');
+				const copiedDirUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-copy');
+				const copiedDirFileUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-copy/nested.txt');
+				const renamedDirUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-renamed');
+				const renamedDirFileUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-renamed/nested.txt');
+				const blockedUri = vscode.Uri.parse('ev3://active/etc/');
 
 				await vscode.workspace.fs.writeFile(sourceUri, Buffer.from('host-suite-data', 'utf8'));
 				const readBack = await vscode.workspace.fs.readFile(sourceUri);
@@ -685,12 +692,48 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				assert.ok(listingBeforeDelete.some(([name]) => name === 'host-suite-source.txt'));
 				assert.ok(listingBeforeDelete.some(([name]) => name === 'host-suite-renamed.txt'));
 
+				await vscode.workspace.fs.createDirectory(sourceDirUri);
+				await vscode.workspace.fs.writeFile(sourceDirFileUri, Buffer.from('host-suite-dir-data', 'utf8'));
+				await vscode.workspace.fs.copy(sourceDirUri, copiedDirUri, { overwrite: false });
+				const copiedDirData = await vscode.workspace.fs.readFile(copiedDirFileUri);
+				assert.equal(Buffer.from(copiedDirData).toString('utf8'), 'host-suite-dir-data');
+
+				await vscode.workspace.fs.rename(copiedDirUri, renamedDirUri, { overwrite: false });
+				const renamedDirData = await vscode.workspace.fs.readFile(renamedDirFileUri);
+				assert.equal(Buffer.from(renamedDirData).toString('utf8'), 'host-suite-dir-data');
+
+				await assert.rejects(
+					async () => {
+						await vscode.workspace.fs.delete(renamedDirUri, { recursive: false, useTrash: false });
+					},
+					(error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error);
+						assert.match(message, /not empty|permissions|not allowed|directory/i);
+						return true;
+					}
+				);
+
 				await vscode.workspace.fs.delete(renamedUri, { recursive: false, useTrash: false });
 				await vscode.workspace.fs.delete(sourceUri, { recursive: false, useTrash: false });
+				await vscode.workspace.fs.delete(renamedDirUri, { recursive: true, useTrash: false });
+				await vscode.workspace.fs.delete(sourceDirUri, { recursive: true, useTrash: false });
 
 				const listingAfterDelete = await vscode.workspace.fs.readDirectory(rootUri);
 				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-source.txt'), false);
 				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-renamed.txt'), false);
+				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-dir'), false);
+				assert.equal(listingAfterDelete.some(([name]) => name === 'host-suite-dir-renamed'), false);
+
+				await assert.rejects(
+					async () => {
+						await vscode.workspace.fs.readDirectory(blockedUri);
+					},
+					(error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error);
+						assert.match(message, /safe mode|outside safe roots|permissions|blocked/i);
+						return true;
+					}
+				);
 
 				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
 

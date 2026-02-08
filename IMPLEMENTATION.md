@@ -99,10 +99,10 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - project deploy podporuje conflict policy (`ev3-cockpit.deploy.conflictPolicy`: `overwrite|skip|ask`) pro remote file kolize.
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
+  - extension-host fake TCP scenar pokryva i adresarove copy/rename/delete vetve (vcetne non-recursive `NOT_EMPTY`) a safe-root guard (`ev3://active/etc` blokace v safe mode).
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.
 
 Zbyva:
-- rozsirit extension-host test harness o dalsi scenare nad `ev3://` (aktualne pokryva aktivaci, command registrace a provider wiring),
 - doplnit HW/integration reconnect-recovery scenare pro USB/Bluetooth pri realnem driver-level vypadku (unit testy adapteru jsou hotove, chybi end-to-end verifikace),
 - doladit BT HW smoke stabilitu (port lock/unknown 121 je stale intermitentni v nekterych behach).
 
