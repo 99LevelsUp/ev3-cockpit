@@ -27,6 +27,8 @@ test('hardware smoke classifies unavailable TCP errors', () => {
 
 test('hardware smoke classifies unavailable Bluetooth errors', () => {
 	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Opening COM4: Unknown error code 121')), true);
+	assert.equal(isLikelyUnavailableError('bluetooth', new Error('COM4 attempt 1: Opening COM4: Access denied')), true);
+	assert.equal(isLikelyUnavailableError('bluetooth', new Error('COM4 attempt 2: Opening COM4: Unknown error code 1167')), true);
 	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Request execution failed: Bluetooth transport is not open.')), true);
 	assert.equal(isLikelyUnavailableError('bluetooth', new Error('Probe reply returned status 0x2.')), false);
 });

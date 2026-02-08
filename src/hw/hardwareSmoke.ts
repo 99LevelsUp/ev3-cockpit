@@ -102,8 +102,10 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/non-empty serial port path/i,
 		/file not found/i,
 		/access is denied/i,
+		/access denied/i,
 		/unknown error code 121/i,
 		/unknown error code 1256/i,
+		/unknown error code 1167/i,
 		/timed out/i,
 		/transport is not open/i
 	]
