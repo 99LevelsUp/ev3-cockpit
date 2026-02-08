@@ -572,7 +572,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "test": "npm run test:unit",
-    "test:unit": "npm run compile && node --test \"out/__tests__/**/*.test.js\"",
+    "test:unit": "npm run compile && node scripts/run-unit-tests.cjs",
     "test:host": "npm run compile && node out/testHost/runTestHost.js",
     "test:hw": "npm run compile && node out/hw/hardwareSmoke.js",
     "test:hw:matrix": "npm run compile && node out/hw/hardwareMatrix.js",
