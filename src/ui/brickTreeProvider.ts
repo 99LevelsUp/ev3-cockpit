@@ -63,6 +63,10 @@ function normalizeRootPath(remotePath: string): string {
 	return normalized;
 }
 
+function isExecutablePath(remotePath: string): boolean {
+	return remotePath.toLowerCase().endsWith('.rbf');
+}
+
 export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode> {
 	private readonly eventEmitter = new vscode.EventEmitter<BrickTreeNode | undefined | null | void>();
 	private refreshTimer: NodeJS.Timeout | undefined;
@@ -141,9 +145,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
 				item.id = `file:${element.brickId}:${element.remotePath}`;
 				item.description = `${element.size} B`;
-				const isRbf = element.remotePath.toLowerCase().endsWith('.rbf');
-				item.contextValue = isRbf ? 'ev3RemoteFileRbf' : 'ev3RemoteFile';
-				item.iconPath = new vscode.ThemeIcon(isRbf ? 'play' : 'file');
+				const isExecutable = isExecutablePath(element.remotePath);
+				item.contextValue = isExecutable ? 'ev3RemoteFileRbf' : 'ev3RemoteFile';
+				item.iconPath = new vscode.ThemeIcon(isExecutable ? 'play' : 'file');
 				item.resourceUri = buildEv3Uri(element.brickId, element.remotePath);
 				item.command = {
 					command: 'vscode.open',
