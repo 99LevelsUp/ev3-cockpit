@@ -29,6 +29,11 @@
     "onCommand:ev3-cockpit.inspectTransports",
     "onCommand:ev3-cockpit.transportHealthReport",
     "onCommand:ev3-cockpit.browseRemoteFs",
+    "onCommand:ev3-cockpit.refreshBricksView",
+    "onCommand:ev3-cockpit.uploadToBrickFolder",
+    "onCommand:ev3-cockpit.deleteRemoteEntryFromTree",
+    "onCommand:ev3-cockpit.runRemoteRbfFromTree",
+    "onView:ev3-cockpit.bricksView",
     "onFileSystem:ev3"
   ],
   "main": "./out/extension.js",
@@ -105,8 +110,63 @@
       {
         "command": "ev3-cockpit.browseRemoteFs",
         "title": "EV3 Cockpit: Browse Remote FS (active)"
+      },
+      {
+        "command": "ev3-cockpit.refreshBricksView",
+        "title": "EV3 Cockpit: Refresh Bricks View"
+      },
+      {
+        "command": "ev3-cockpit.uploadToBrickFolder",
+        "title": "EV3 Cockpit: Upload to Folder"
+      },
+      {
+        "command": "ev3-cockpit.deleteRemoteEntryFromTree",
+        "title": "EV3 Cockpit: Delete Remote Entry"
+      },
+      {
+        "command": "ev3-cockpit.runRemoteRbfFromTree",
+        "title": "EV3 Cockpit: Run .rbf from Remote FS"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "ev3-cockpit.bricksView",
+          "name": "EV3 Cockpit Bricks"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "ev3-cockpit.refreshBricksView",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ev3-cockpit.browseRemoteFs",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "inline"
+        },
+        {
+          "command": "ev3-cockpit.uploadToBrickFolder",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3RemoteDirectory)",
+          "group": "2_modification"
+        },
+        {
+          "command": "ev3-cockpit.deleteRemoteEntryFromTree",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileRbf)",
+          "group": "2_modification"
+        },
+        {
+          "command": "ev3-cockpit.runRemoteRbfFromTree",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileRbf",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "EV3 Cockpit",
       "properties": {

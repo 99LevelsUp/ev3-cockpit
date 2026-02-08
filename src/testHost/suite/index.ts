@@ -634,6 +634,10 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.inspectTransports'));
 	assert.ok(commands.includes('ev3-cockpit.transportHealthReport'));
 	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
+	assert.ok(commands.includes('ev3-cockpit.refreshBricksView'));
+	assert.ok(commands.includes('ev3-cockpit.uploadToBrickFolder'));
+	assert.ok(commands.includes('ev3-cockpit.deleteRemoteEntryFromTree'));
+	assert.ok(commands.includes('ev3-cockpit.runRemoteRbfFromTree'));
 }
 
 async function testEv3FileSystemProvider(): Promise<void> {
@@ -762,6 +766,7 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
 
 				const rootUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+				const explicitRootUri = vscode.Uri.parse('ev3://tcp-active/home/root/lms2012/prjs/');
 				const sourceUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-source.txt');
 				const copyUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-copy.txt');
 				const renamedUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-renamed.txt');
@@ -772,6 +777,9 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				const renamedDirUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-renamed');
 				const renamedDirFileUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-dir-renamed/nested.txt');
 				const blockedUri = vscode.Uri.parse('ev3://active/etc/');
+
+				const explicitListing = await vscode.workspace.fs.readDirectory(explicitRootUri);
+				assert.ok(Array.isArray(explicitListing));
 
 				await vscode.workspace.fs.writeFile(sourceUri, Buffer.from('host-suite-data', 'utf8'));
 				const readBack = await vscode.workspace.fs.readFile(sourceUri);
@@ -952,6 +960,10 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
 	await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
 	await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
+	await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
+	await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
+	await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
+	await vscode.commands.executeCommand('ev3-cockpit.runRemoteRbfFromTree');
 }
 
 export async function run(): Promise<void> {

@@ -394,3 +394,54 @@ Nejblizsi otevrena priorita:
   1. stabilizace Bluetooth host stack chovani (bez zablokovani hlavniho USB/TCP toku),
   2. navazujici funkce nad FS/deploy workflow,
   3. postupne rozsireni UI/workflow smerem k plnemu multi-brick panelu a device telemetry.
+
+## Compact Restore Note (Explorer FS per Brick, 2026-02-08)
+
+Aktualni novy ukol:
+- Implementovat vizualni strom v levem panelu VS Code (Explorer area), kde kazda kostka bude root node (collapsible) a pod ni je jeji remote filesystem.
+- Root ma reprezentovat `master` nebo `standalone` kostku.
+
+Aktualni technicky stav pred implementaci:
+- `ev3://` FileSystemProvider existuje, ale resolver je zamereny primarne na `active` brick.
+- Existuje command `EV3 Cockpit: Browse Remote FS (active)` (quick-pick browser), ale chybi trvaly TreeView per kostka v levem panelu.
+- Runtime je postaveny kolem jedne aktivni session (`activeFsService`), multi-brick UI model jeste neni dotazeny.
+
+Cilovy UX:
+- Jeden dedicated view (napr. `EV3 Cockpit Bricks`) v levem panelu.
+- Root item = kostka (`brickId`, nazev, transport, stav), `Collapsed` by default.
+- Children itemy = slozky/soubory dane kostky.
+- Pri docasne nedostupnosti kostky zustava root viditelny a strom je read-only / disabled.
+- Potvrzene rozhodnuti: pro kazdou pripojenou kostku bude vlastni root collapsible node (ne jeden sdileny collapsible pro vsechny kostky).
+
+Implementacni plan (shrnutí):
+1. Dodelat runtime registr kostek (`brickId -> connection/service metadata`) oddelene od samotneho `active`.
+2. Implementovat `BrickTreeProvider` (`TreeDataProvider`) s root nodami kostek + lazy children loading.
+3. Rozsirit FS resolver, aby umel `ev3://<brickId>/...` vedle kompatibilniho `ev3://active/...`.
+4. Pridat view contribution do `package.json` a navazat refresh lifecycle na connect/disconnect/reconnect.
+5. Dopsat testy:
+   - unit testy provideru (root/children/states),
+   - host testy registrace view + `ev3://<brickId>/...` flow,
+   - regresni test, ze `active` workflow zustava funkcni.
+
+Priority pri implementaci:
+- Nemigrovat vse najednou; nejdriv funkcni root nodes + cteni stromu.
+- Zachovat zpetnou kompatibilitu commandu nad `active`.
+- Neoslabit emergency/scheduler safety pravidla.
+
+### Progress Update (2026-02-08, Explorer FS per Brick)
+
+Hotovo:
+- runtime registr kostek (`BrickRegistry`) s aktivni alias vrstvou (`active`) a stavy `CONNECTING/READY/UNAVAILABLE/ERROR`,
+- novy `BrickTreeProvider` + Explorer view `EV3 Cockpit Bricks` (root per brick, lazy children listing),
+- FS resolver podporuje `ev3://<brickId>/...` i kompatibilni `ev3://active/...`,
+- view lifecycle refresh na connect/disconnect/rebuild runtime,
+- context akce nad stromem: browse, upload-to-folder, delete entry, run `.rbf`.
+
+Hotove testy:
+- unit: `brickRegistry.test.ts`, `brickTreeProvider.test.ts`,
+- host: registrace novych commandu + explicitni `ev3://tcp-active/...` flow pri TCP fake serveru.
+
+Navazujici kroky:
+- rozsireni tree akcí o pohodlny deploy workflow (batch sync/cleanup nad vybranou kostkou),
+- jemnejsi UX polish (status badges, reconnect edge-cases pri rozbalenem stromu),
+- priprava na soubezne multi-session runtime (vice soucasne pripojenych kostek).

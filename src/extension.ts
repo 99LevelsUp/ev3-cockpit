@@ -5,6 +5,7 @@ import { DEPLOY_PROFILE_PRESETS } from './config/deployProfiles';
 import { readFeatureConfig } from './config/featureConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
 import { BrickControlService } from './device/brickControlService';
+import { BrickRegistry, BrickRole } from './device/brickRegistry';
 import { OutputChannelLogger } from './diagnostics/logger';
 import { buildRemoteChildPath, buildRemotePathFromLocal, isValidRemoteEntryName } from './fs/browserActions';
 import {
@@ -30,6 +31,12 @@ import { CommandScheduler } from './scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from './scheduler/orphanRecovery';
 import { listSerialCandidates, listUsbHidCandidates } from './transport/discovery';
 import { createProbeTransportForMode, createProbeTransportFromWorkspace, TransportMode } from './transport/transportFactory';
+import {
+	BrickTreeProvider,
+	isBrickDirectoryNode,
+	isBrickFileNode,
+	isBrickRootNode
+} from './ui/brickTreeProvider';
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
@@ -87,6 +94,33 @@ interface ProgramSessionState {
 		| 'remote-fs-run'
 		| 'run-command'
 		| 'restart-command';
+}
+
+interface ConnectedBrickDescriptor {
+	brickId: string;
+	displayName: string;
+	role: BrickRole;
+	transport: TransportMode | 'unknown';
+	rootPath: string;
+}
+
+function normalizeBrickRootPath(input: string): string {
+	let rootPath = input.trim();
+	if (!rootPath.startsWith('/')) {
+		rootPath = `/${rootPath}`;
+	}
+	if (!rootPath.endsWith('/')) {
+		rootPath = `${rootPath}/`;
+	}
+	return rootPath;
+}
+
+function toSafeIdentifier(input: string): string {
+	const normalized = input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return normalized.length > 0 ? normalized : 'active';
 }
 
 function isRemoteAlreadyExistsError(error: unknown): boolean {
@@ -232,19 +266,41 @@ export function activate(context: vscode.ExtensionContext) {
 	let logger: OutputChannelLogger;
 	let scheduler: CommandScheduler;
 	let commandClient: Ev3CommandClient;
+	const brickRegistry = new BrickRegistry();
 	let activeFsService: RemoteFsService | undefined;
 	let activeControlService: BrickControlService | undefined;
 	let lastRunProgramPath: string | undefined;
 	let activeProgramSession: ProgramSessionState | undefined;
 
-	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
-		if (brickId !== 'active') {
-			throw new Error(`Brick "${brickId}" is not available. Use ev3://active/... for current connection.`);
+	const treeProvider = new BrickTreeProvider({
+		dataSource: {
+			listBricks: () => brickRegistry.listSnapshots(),
+			resolveFsService: async (brickId) => {
+				const service = brickRegistry.resolveFsService(brickId);
+				if (!service) {
+					throw new Error(`Brick "${brickId}" is unavailable for filesystem access.`);
+				}
+				return service;
+			}
 		}
-		if (!activeFsService) {
+	});
+
+	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
+		const resolved = brickRegistry.resolveFsService(brickId);
+		if (resolved) {
+			return resolved;
+		}
+
+		if (brickId === 'active') {
 			throw new Error('No active EV3 connection for filesystem access. Run "EV3 Cockpit: Connect to EV3 Brick".');
 		}
-		return activeFsService;
+
+		const snapshot = brickRegistry.getSnapshot(brickId);
+		if (snapshot) {
+			throw new Error(`Brick "${brickId}" is currently ${snapshot.status.toLowerCase()}.`);
+		}
+
+		throw new Error(`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`);
 	});
 
 	const rebuildRuntime = () => {
@@ -255,8 +311,10 @@ export function activate(context: vscode.ExtensionContext) {
 		scheduler?.dispose();
 		activeFsService = undefined;
 		activeControlService = undefined;
+		brickRegistry.markAllUnavailable('Runtime reinitialized.');
 		lastRunProgramPath = undefined;
 		activeProgramSession = undefined;
+		treeProvider.refreshThrottled();
 
 		scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
@@ -367,6 +425,67 @@ export function activate(context: vscode.ExtensionContext) {
 			: 'unknown';
 	};
 
+	const resolveConnectedBrickDescriptor = (rootPath: string): ConnectedBrickDescriptor => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const transport = resolveCurrentTransportMode();
+		const normalizedRootPath = normalizeBrickRootPath(rootPath);
+		const role: BrickRole = 'standalone';
+
+		if (transport === 'tcp') {
+			const hostRaw = cfg.get('transport.tcp.host');
+			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
+			return {
+				brickId: `tcp-${toSafeIdentifier(host)}`,
+				displayName: `EV3 TCP (${host})`,
+				role,
+				transport,
+				rootPath: normalizedRootPath
+			};
+		}
+
+		if (transport === 'bluetooth') {
+			const portRaw = cfg.get('transport.bluetooth.port');
+			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
+			return {
+				brickId: `bluetooth-${toSafeIdentifier(port)}`,
+				displayName: `EV3 Bluetooth (${port})`,
+				role,
+				transport,
+				rootPath: normalizedRootPath
+			};
+		}
+
+		if (transport === 'usb') {
+			const pathRaw = cfg.get('transport.usb.path');
+			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
+			return {
+				brickId: `usb-${toSafeIdentifier(usbPath)}`,
+				displayName: `EV3 USB (${usbPath})`,
+				role,
+				transport,
+				rootPath: normalizedRootPath
+			};
+		}
+
+		if (transport === 'mock') {
+			return {
+				brickId: 'mock-active',
+				displayName: 'EV3 Mock',
+				role,
+				transport,
+				rootPath: normalizedRootPath
+			};
+		}
+
+		return {
+			brickId: 'auto-active',
+			displayName: 'EV3 (Auto)',
+			role,
+			transport,
+			rootPath: normalizedRootPath
+		};
+	};
+
 	const markProgramStarted = (
 		remotePath: string,
 		source: ProgramSessionState['source']
@@ -474,6 +593,48 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	};
 
+	const resolveBrickIdFromCommandArg = (arg: unknown): string => {
+		if (typeof arg === 'string' && arg.trim().length > 0) {
+			return arg.trim();
+		}
+		if (isBrickRootNode(arg)) {
+			return arg.brickId;
+		}
+		if (isBrickDirectoryNode(arg) || isBrickFileNode(arg)) {
+			return arg.brickId;
+		}
+		return 'active';
+	};
+
+	const resolveFsAccessContext = (
+		arg: unknown
+	): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string } => {
+		const requestedBrickId = resolveBrickIdFromCommandArg(arg);
+		const authority = requestedBrickId === 'active' ? 'active' : requestedBrickId;
+		const fsService = brickRegistry.resolveFsService(requestedBrickId);
+		if (!fsService) {
+			const snapshot = requestedBrickId === 'active' ? undefined : brickRegistry.getSnapshot(requestedBrickId);
+			if (snapshot) {
+				return {
+					error: `Brick "${requestedBrickId}" is currently ${snapshot.status.toLowerCase()}.`
+				};
+			}
+			return {
+				error:
+					requestedBrickId === 'active'
+						? 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
+						: `Brick "${requestedBrickId}" is not connected.`
+			};
+		}
+
+		const brickId = requestedBrickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : requestedBrickId;
+		return {
+			brickId,
+			authority,
+			fsService
+		};
+	};
+
 	const disposable = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async () => {
 		vscode.window.showInformationMessage('Connecting to EV3 brick...');
 		const activeClient = commandClient;
@@ -484,6 +645,10 @@ export function activate(context: vscode.ExtensionContext) {
 			clearProgramSession('connect-start');
 			activeFsService = undefined;
 			activeControlService = undefined;
+			brickRegistry.markActiveUnavailable('Connection reset before reconnect.');
+			const connectingRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
+			brickRegistry.upsertConnecting(resolveConnectedBrickDescriptor(connectingRoot));
+			treeProvider.refreshThrottled();
 			await activeClient.close().catch(() => undefined);
 			await activeClient.open();
 			const probeCommand = 0x9d; // LIST_OPEN_HANDLES
@@ -607,12 +772,20 @@ export function activate(context: vscode.ExtensionContext) {
 				defaultTimeoutMs: Math.max(resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
 			});
+			const rootPath = featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
+			const brickDescriptor = resolveConnectedBrickDescriptor(rootPath);
+			brickRegistry.upsertReady({
+				...brickDescriptor,
+				fsService: activeFsService,
+				controlService: activeControlService
+			});
 			keepConnectionOpen = true;
 			activeLogger.info('Remote FS service ready', {
 				scheme: 'ev3',
-				brickId: 'active',
+				brickId: brickDescriptor.brickId,
 				mode: featureConfig.fs.mode
 			});
+			treeProvider.refreshThrottled();
 
 			vscode.window.showInformationMessage(
 				`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
@@ -622,6 +795,8 @@ export function activate(context: vscode.ExtensionContext) {
 			activeLogger.error('Connect probe failed', { message });
 			activeFsService = undefined;
 			activeControlService = undefined;
+			brickRegistry.markActiveUnavailable(message);
+			treeProvider.refreshThrottled();
 			vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
 		} finally {
 			if (!keepConnectionOpen) {
@@ -636,9 +811,14 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const disconnect = vscode.commands.registerCommand('ev3-cockpit.disconnectEV3', async () => {
 		try {
+			const disconnectedBrickId = brickRegistry.getActiveBrickId();
 			await commandClient.close();
 			activeFsService = undefined;
 			activeControlService = undefined;
+			if (disconnectedBrickId) {
+				brickRegistry.markUnavailable(disconnectedBrickId, 'Disconnected by user.');
+			}
+			treeProvider.refreshThrottled();
 			clearProgramSession('disconnect-command');
 			logger.info('Disconnected active EV3 session.');
 			vscode.window.showInformationMessage('EV3 disconnected.');
@@ -1697,12 +1877,14 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	});
 
-	const browseRemoteFs = vscode.commands.registerCommand('ev3-cockpit.browseRemoteFs', async () => {
-		if (!activeFsService) {
-			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
+	const browseRemoteFs = vscode.commands.registerCommand('ev3-cockpit.browseRemoteFs', async (arg?: unknown) => {
+		const fsContext = resolveFsAccessContext(arg);
+		if ('error' in fsContext) {
+			vscode.window.showErrorMessage(fsContext.error);
 			return;
 		}
-		const fsService = activeFsService;
+		const { brickId, authority, fsService } = fsContext;
+		const rootSnapshot = brickRegistry.getSnapshot(brickId);
 
 		const handleBinaryFile = async (uri: vscode.Uri, remotePath: string): Promise<void> => {
 			const items: Array<
@@ -1749,7 +1931,7 @@ export function activate(context: vscode.ExtensionContext) {
 					logger.info('Remote FS run program completed', {
 						path: remotePath
 					});
-					vscode.window.showInformationMessage(`Program started: ev3://active${remotePath}`);
+					vscode.window.showInformationMessage(`Program started: ev3://${authority}${remotePath}`);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn('Remote FS run program failed', {
@@ -1780,7 +1962,7 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 
 		const featureConfig = readFeatureConfig();
-		let currentPath = featureConfig.fs.defaultRoots[0] ?? '/';
+		let currentPath = rootSnapshot?.rootPath ?? featureConfig.fs.defaultRoots[0] ?? '/';
 		if (!currentPath.startsWith('/')) {
 			currentPath = `/${currentPath}`;
 		}
@@ -1860,7 +2042,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const selected = await vscode.window.showQuickPick(picks, {
-				title: `ev3://active${currentPath}`,
+				title: `ev3://${authority}${currentPath}`,
 				placeHolder: 'Select folder to enter or file to open'
 			});
 			if (!selected) {
@@ -1901,14 +2083,14 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 
 				if (uploaded > 0) {
-					vscode.window.showInformationMessage(`Uploaded ${uploaded} file(s) to ev3://active${currentPath}`);
+					vscode.window.showInformationMessage(`Uploaded ${uploaded} file(s) to ev3://${authority}${currentPath}`);
 				}
 				continue;
 			}
 
 			if (selected.action === 'mkdir') {
 				const folderName = await vscode.window.showInputBox({
-					title: `Create folder in ev3://active${currentPath}`,
+					title: `Create folder in ev3://${authority}${currentPath}`,
 					placeHolder: 'Folder name',
 					validateInput: (value) =>
 						isValidRemoteEntryName(value) ? undefined : 'Use non-empty name without "/" or "\\".'
@@ -1920,7 +2102,7 @@ export function activate(context: vscode.ExtensionContext) {
 				const remotePath = buildRemoteChildPath(currentPath, folderName);
 				try {
 					await fsService.createDirectory(remotePath);
-					vscode.window.showInformationMessage(`Folder created: ev3://active${remotePath}`);
+					vscode.window.showInformationMessage(`Folder created: ev3://${authority}${remotePath}`);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn('Remote FS mkdir failed', {
@@ -1956,12 +2138,12 @@ export function activate(context: vscode.ExtensionContext) {
 				];
 
 				if (deleteTargets.length === 0) {
-					vscode.window.showInformationMessage(`Nothing to delete in ev3://active${currentPath}`);
+					vscode.window.showInformationMessage(`Nothing to delete in ev3://${authority}${currentPath}`);
 					continue;
 				}
 
 				const toDelete = await vscode.window.showQuickPick(deleteTargets, {
-					title: `Delete entry in ev3://active${currentPath}`,
+					title: `Delete entry in ev3://${authority}${currentPath}`,
 					placeHolder: 'Select file or folder to delete'
 				});
 				if (!toDelete) {
@@ -1969,7 +2151,7 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 
 				const confirm = await vscode.window.showWarningMessage(
-					`Delete ev3://active${toDelete.targetPath}?`,
+					`Delete ev3://${authority}${toDelete.targetPath}?`,
 					{ modal: true },
 					'Delete'
 				);
@@ -1977,10 +2159,10 @@ export function activate(context: vscode.ExtensionContext) {
 					continue;
 				}
 
-				const targetUri = vscode.Uri.parse(`ev3://active${toDelete.targetPath}`);
+				const targetUri = vscode.Uri.parse(`ev3://${authority}${toDelete.targetPath}`);
 				try {
 					await vscode.workspace.fs.delete(targetUri, { recursive: toDelete.isDirectory, useTrash: false });
-					vscode.window.showInformationMessage(`Deleted ev3://active${toDelete.targetPath}`);
+					vscode.window.showInformationMessage(`Deleted ev3://${authority}${toDelete.targetPath}`);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn('Remote FS delete failed', {
@@ -1992,7 +2174,7 @@ export function activate(context: vscode.ExtensionContext) {
 				continue;
 			}
 
-			const uri = vscode.Uri.parse(`ev3://active${selected.targetPath}`);
+			const uri = vscode.Uri.parse(`ev3://${authority}${selected.targetPath}`);
 			try {
 				if (isLikelyBinaryPath(selected.targetPath)) {
 					await handleBinaryFile(uri, selected.targetPath);
@@ -2019,6 +2201,128 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
+	const refreshBricksView = vscode.commands.registerCommand('ev3-cockpit.refreshBricksView', async () => {
+		treeProvider.refresh();
+	});
+
+	const uploadToBrickFolder = vscode.commands.registerCommand(
+		'ev3-cockpit.uploadToBrickFolder',
+		async (node?: unknown) => {
+			const brickId = resolveBrickIdFromCommandArg(node);
+			const fsContext = resolveFsAccessContext(brickId);
+			if ('error' in fsContext) {
+				vscode.window.showErrorMessage(fsContext.error);
+				return;
+			}
+
+			let targetPath = '/';
+			if (isBrickRootNode(node)) {
+				targetPath = node.rootPath;
+			} else if (isBrickDirectoryNode(node)) {
+				targetPath = node.remotePath;
+			} else {
+				const snapshot = brickRegistry.getSnapshot(fsContext.brickId);
+				targetPath = snapshot?.rootPath ?? '/home/root/lms2012/prjs/';
+			}
+
+			const localFiles = await vscode.window.showOpenDialog({
+				canSelectMany: true,
+				canSelectFolders: false,
+				canSelectFiles: true,
+				openLabel: 'Upload to EV3'
+			});
+			if (!localFiles || localFiles.length === 0) {
+				return;
+			}
+
+			let uploaded = 0;
+			for (const localUri of localFiles) {
+				const remotePath = buildRemotePathFromLocal(targetPath, localUri.fsPath);
+				try {
+					const bytes = await vscode.workspace.fs.readFile(localUri);
+					await fsContext.fsService.writeFile(remotePath, bytes);
+					uploaded += 1;
+				} catch (error) {
+					logger.warn('Tree upload failed', {
+						brickId: fsContext.brickId,
+						localPath: localUri.fsPath,
+						remotePath,
+						message: error instanceof Error ? error.message : String(error)
+					});
+				}
+			}
+
+			if (uploaded > 0) {
+				vscode.window.showInformationMessage(
+					`Uploaded ${uploaded} file(s) to ev3://${fsContext.authority}${targetPath}`
+				);
+				treeProvider.refreshThrottled();
+			}
+		}
+	);
+
+	const deleteRemoteEntryFromTree = vscode.commands.registerCommand(
+		'ev3-cockpit.deleteRemoteEntryFromTree',
+		async (node?: unknown) => {
+			if (!isBrickDirectoryNode(node) && !isBrickFileNode(node)) {
+				vscode.window.showErrorMessage('Select a remote file or folder in EV3 Cockpit Bricks view.');
+				return;
+			}
+
+			const fsContext = resolveFsAccessContext(node.brickId);
+			if ('error' in fsContext) {
+				vscode.window.showErrorMessage(fsContext.error);
+				return;
+			}
+
+			const confirm = await vscode.window.showWarningMessage(
+				`Delete ev3://${fsContext.authority}${node.remotePath}?`,
+				{ modal: true },
+				'Delete'
+			);
+			if (confirm !== 'Delete') {
+				return;
+			}
+
+			const targetUri = vscode.Uri.parse(`ev3://${fsContext.authority}${node.remotePath}`);
+			try {
+				await vscode.workspace.fs.delete(targetUri, {
+					recursive: isBrickDirectoryNode(node),
+					useTrash: false
+				});
+				treeProvider.refreshThrottled();
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				vscode.window.showErrorMessage(`Cannot delete ${targetUri.toString()}. Detail: ${message}`);
+			}
+		}
+	);
+
+	const runRemoteRbfFromTree = vscode.commands.registerCommand(
+		'ev3-cockpit.runRemoteRbfFromTree',
+		async (node?: unknown) => {
+			if (!isBrickFileNode(node) || !node.remotePath.toLowerCase().endsWith('.rbf')) {
+				vscode.window.showErrorMessage('Select an .rbf file in EV3 Cockpit Bricks view.');
+				return;
+			}
+
+			const fsContext = resolveFsAccessContext(node.brickId);
+			if ('error' in fsContext) {
+				vscode.window.showErrorMessage(fsContext.error);
+				return;
+			}
+
+			try {
+				await fsContext.fsService.runProgram(node.remotePath);
+				markProgramStarted(node.remotePath, 'remote-fs-run');
+				vscode.window.showInformationMessage(`Program started: ev3://${fsContext.authority}${node.remotePath}`);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				vscode.window.showErrorMessage(`Run failed: ${message}`);
+			}
+		}
+	);
+
 	const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
 		void (async () => {
 			if (event.affectsConfiguration('ev3-cockpit.fs.mode') || event.affectsConfiguration('ev3-cockpit.fs.fullMode.confirmationRequired')) {
@@ -2038,6 +2342,11 @@ export function activate(context: vscode.ExtensionContext) {
 		isCaseSensitive: true,
 		isReadonly: false
 	});
+	const brickTreeView = vscode.window.createTreeView('ev3-cockpit.bricksView', {
+		treeDataProvider: treeProvider,
+		showCollapseAll: true
+	});
+	treeProvider.refresh();
 
 	context.subscriptions.push(
 		disposable,
@@ -2058,14 +2367,22 @@ export function activate(context: vscode.ExtensionContext) {
 		inspectTransports,
 		transportHealthReport,
 		browseRemoteFs,
+		refreshBricksView,
+		uploadToBrickFolder,
+		deleteRemoteEntryFromTree,
+		runRemoteRbfFromTree,
 		configWatcher,
 		fsDisposable,
+		brickTreeView,
+		treeProvider,
 		output,
 		{
 		dispose: () => {
 			scheduler.dispose();
 			activeFsService = undefined;
 			activeControlService = undefined;
+			brickRegistry.markAllUnavailable('Extension disposed.');
+			treeProvider.dispose();
 			clearProgramSession('extension-dispose');
 			void commandClient.close();
 		}
