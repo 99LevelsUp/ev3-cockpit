@@ -80,6 +80,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.
   - pridana command akce `EV3 Cockpit: Reconnect EV3 (active settings)` pro rychly reconnect pres stejny connect-probe/capability flow.
   - pridana command akce `EV3 Cockpit: Deploy and Run .rbf (active)` (`local pick -> upload -> run`) nad `RemoteFsService`.
+  - pridana command akce `EV3 Cockpit: Preview Deploy Changes (active)` pro dry planning upload/skip/cleanup bez zmen na EV3.
   - pridana command akce `EV3 Cockpit: Sync Project to EV3 (active)` (`folder pick -> recursive upload/sync`) bez automatickeho spusteni programu.
   - pridana command akce `EV3 Cockpit: Deploy Project and Run .rbf (active)` (`folder pick -> recursive upload -> run selected .rbf`).
   - project deploy podporuje filtry/limity (`ev3-cockpit.deploy.excludeDirectories`, `ev3-cockpit.deploy.excludeExtensions`, `ev3-cockpit.deploy.maxFileBytes`) a loguje skipped entries.

@@ -529,7 +529,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	const executeProjectDeploy = async (options: { runAfterDeploy: boolean }): Promise<void> => {
+	const executeProjectDeploy = async (options: { runAfterDeploy: boolean; previewOnly: boolean }): Promise<void> => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
 			return;
@@ -540,7 +540,11 @@ export function activate(context: vscode.ExtensionContext) {
 			canSelectMany: false,
 			canSelectFiles: false,
 			canSelectFolders: true,
-			openLabel: options.runAfterDeploy ? 'Deploy Project to EV3' : 'Sync Project to EV3'
+			openLabel: options.previewOnly
+				? 'Preview Project Deploy Changes'
+				: options.runAfterDeploy
+				? 'Deploy Project to EV3'
+				: 'Sync Project to EV3'
 		});
 		if (!selection || selection.length === 0) {
 			return;
@@ -657,10 +661,12 @@ export function activate(context: vscode.ExtensionContext) {
 			let uploadedFilesCount = 0;
 			let skippedUnchangedCount = 0;
 			let uploadedBytes = 0;
+			let plannedUploadCount = 0;
 			let deletedStaleFilesCount = 0;
 			let deletedStaleDirectoriesCount = 0;
 			let plannedStaleFilesCount = 0;
 			let plannedStaleDirectoriesCount = 0;
+			const previewUploadSamples: string[] = [];
 			const localLayout = buildLocalProjectLayout(files.map((entry) => entry.relativePath));
 			let cleanupPlan = {
 				filesToDelete: [] as string[],
@@ -719,31 +725,36 @@ export function activate(context: vscode.ExtensionContext) {
 			await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
-					title: `Deploying EV3 project: ${path.basename(projectUri.fsPath)}`,
+					title: options.previewOnly
+						? `Previewing EV3 deploy: ${path.basename(projectUri.fsPath)}`
+						: `Deploying EV3 project: ${path.basename(projectUri.fsPath)}`,
 					cancellable: false
 				},
 				async (progress) => {
-					const directories = new Set<string>();
-					directories.add(remoteProjectRoot);
-					for (const file of files) {
-						directories.add(path.posix.dirname(file.remotePath));
-					}
-					const orderedDirectories = [...directories].sort((a, b) => pathDepth(a) - pathDepth(b));
-					for (const dirPath of orderedDirectories) {
-						try {
-							await fsService.createDirectory(dirPath);
-						} catch (error) {
-							if (!isRemoteAlreadyExistsError(error)) {
-								throw error;
+					if (!options.previewOnly) {
+						const directories = new Set<string>();
+						directories.add(remoteProjectRoot);
+						for (const file of files) {
+							directories.add(path.posix.dirname(file.remotePath));
+						}
+						const orderedDirectories = [...directories].sort((a, b) => pathDepth(a) - pathDepth(b));
+						for (const dirPath of orderedDirectories) {
+							try {
+								await fsService.createDirectory(dirPath);
+							} catch (error) {
+								if (!isRemoteAlreadyExistsError(error)) {
+									throw error;
+								}
 							}
 						}
 					}
 
 					for (let index = 0; index < files.length; index += 1) {
 						const file = files[index];
-						const bytes = await vscode.workspace.fs.readFile(file.localUri);
+						const bytes =
+							options.previewOnly && !incrementalEnabled ? undefined : await vscode.workspace.fs.readFile(file.localUri);
 						if (incrementalEnabled) {
-							const decision = shouldUploadByRemoteSnapshot(bytes, remoteIndex.get(file.remotePath));
+							const decision = shouldUploadByRemoteSnapshot(bytes ?? new Uint8Array(), remoteIndex.get(file.remotePath));
 							if (!decision.upload) {
 								skippedUnchangedCount += 1;
 								progress.report({
@@ -754,19 +765,31 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 						}
 
-						await fsService.writeFile(file.remotePath, bytes);
-						uploadedFilesCount += 1;
-						uploadedBytes += bytes.length;
-						progress.report({
-							increment: 100 / files.length,
-							message: `Uploaded ${index + 1}/${files.length}: ${file.relativePath}`
-						});
+						if (options.previewOnly) {
+							plannedUploadCount += 1;
+							uploadedBytes += bytes?.length ?? file.sizeBytes;
+							if (previewUploadSamples.length < 8) {
+								previewUploadSamples.push(file.relativePath);
+							}
+							progress.report({
+								increment: 100 / files.length,
+								message: `Would upload ${index + 1}/${files.length}: ${file.relativePath}`
+							});
+						} else {
+							await fsService.writeFile(file.remotePath, bytes ?? new Uint8Array());
+							uploadedFilesCount += 1;
+							uploadedBytes += (bytes ?? new Uint8Array()).length;
+							progress.report({
+								increment: 100 / files.length,
+								message: `Uploaded ${index + 1}/${files.length}: ${file.relativePath}`
+							});
+						}
 					}
 
 					if (cleanupEnabled) {
-						if (cleanupDryRun) {
+						if (cleanupDryRun || options.previewOnly) {
 							progress.report({
-								message: `Cleanup dry-run: ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'} planned`
+								message: `${options.previewOnly ? 'Cleanup preview' : 'Cleanup dry-run'}: ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'} planned`
 							});
 						} else {
 							for (const filePath of cleanupPlan.filesToDelete) {
@@ -793,15 +816,22 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			);
 
-			if (options.runAfterDeploy && runTarget) {
+			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
 				await fsService.runProgram(runTarget);
 			}
 
-			logger.info(options.runAfterDeploy ? 'Deploy project and run completed' : 'Deploy project sync completed', {
+			logger.info(
+				options.previewOnly
+					? 'Deploy project preview completed'
+					: options.runAfterDeploy
+					? 'Deploy project and run completed'
+					: 'Deploy project sync completed',
+				{
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
 				filesScanned: files.length,
 				filesUploaded: uploadedFilesCount,
+				filesPlannedUpload: plannedUploadCount,
 				filesSkippedUnchanged: skippedUnchangedCount,
 				incrementalEnabled,
 				cleanupEnabled,
@@ -815,8 +845,22 @@ export function activate(context: vscode.ExtensionContext) {
 				skippedByExtension: scan.skippedByExtension.length,
 				skippedBySize: scan.skippedBySize.length,
 				runAfterDeploy: options.runAfterDeploy,
+				previewOnly: options.previewOnly,
 				runTarget: runTarget ?? null
 			});
+			if (options.previewOnly && previewUploadSamples.length > 0) {
+				logger.info('Deploy preview upload sample', {
+					remoteProjectRoot,
+					files: previewUploadSamples
+				});
+			}
+			if (options.previewOnly && (plannedStaleFilesCount > 0 || plannedStaleDirectoriesCount > 0)) {
+				logger.info('Deploy preview cleanup sample', {
+					remoteProjectRoot,
+					files: cleanupPlan.filesToDelete.slice(0, 8),
+					directories: cleanupPlan.directoriesToDelete.slice(0, 8)
+				});
+			}
 
 			if (scan.skippedDirectories.length > 0 || scan.skippedByExtension.length > 0 || scan.skippedBySize.length > 0) {
 				logger.info('Deploy project scan skipped entries', {
@@ -827,36 +871,58 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const cleanupSummary =
-				cleanupEnabled && cleanupDryRun
-					? `; cleanup dry-run planned ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
+				cleanupEnabled && (cleanupDryRun || options.previewOnly)
+					? `; cleanup planned ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
 					: cleanupEnabled || deletedStaleFilesCount > 0 || deletedStaleDirectoriesCount > 0
 					? `; cleanup deleted ${deletedStaleFilesCount} file(s), ${deletedStaleDirectoriesCount} director${deletedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
 					: '';
 
-			const targetSummary =
-				options.runAfterDeploy && runTarget
-					? ` and started: ev3://active${runTarget}`
-					: ` to ev3://active${remoteProjectRoot}`;
-			vscode.window.showInformationMessage(`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}`);
+			if (options.previewOnly) {
+				vscode.window.showInformationMessage(
+					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EV3 Cockpit output for sample paths.`
+				);
+			} else {
+				const targetSummary =
+					options.runAfterDeploy && runTarget
+						? ` and started: ev3://active${runTarget}`
+						: ` to ev3://active${remoteProjectRoot}`;
+				vscode.window.showInformationMessage(
+					`Deployed ${uploadedFilesCount}/${files.length} file(s)${targetSummary}${cleanupSummary}`
+				);
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			logger.warn(options.runAfterDeploy ? 'Deploy project and run failed' : 'Deploy project sync failed', {
+			logger.warn(
+				options.previewOnly
+					? 'Deploy project preview failed'
+					: options.runAfterDeploy
+					? 'Deploy project and run failed'
+					: 'Deploy project sync failed',
+				{
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
 				message
 			});
 			vscode.window.showErrorMessage(
-				options.runAfterDeploy ? `Deploy project and run failed: ${message}` : `Deploy project sync failed: ${message}`
+				options.previewOnly
+					? `Deploy project preview failed: ${message}`
+					: options.runAfterDeploy
+					? `Deploy project and run failed: ${message}`
+					: `Deploy project sync failed: ${message}`
 			);
 		}
 	};
 
+	const previewProjectDeploy = vscode.commands.registerCommand('ev3-cockpit.previewProjectDeploy', async () => {
+		await executeProjectDeploy({ runAfterDeploy: false, previewOnly: true });
+	});
+
 	const deployProject = vscode.commands.registerCommand('ev3-cockpit.deployProject', async () => {
-		await executeProjectDeploy({ runAfterDeploy: false });
+		await executeProjectDeploy({ runAfterDeploy: false, previewOnly: false });
 	});
 
 	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
-		await executeProjectDeploy({ runAfterDeploy: true });
+		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
 
 	const emergencyStop = vscode.commands.registerCommand('ev3-cockpit.emergencyStop', async () => {
@@ -1235,6 +1301,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		disposable,
 		deployAndRunRbf,
+		previewProjectDeploy,
 		deployProject,
 		deployProjectAndRunRbf,
 		reconnect,

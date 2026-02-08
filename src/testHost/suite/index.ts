@@ -530,6 +530,7 @@ async function testCommandsRegistration(): Promise<void> {
 	const commands = await vscode.commands.getCommands(true);
 	assert.ok(commands.includes('ev3-cockpit.connectEV3'));
 	assert.ok(commands.includes('ev3-cockpit.deployAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.previewProjectDeploy'));
 	assert.ok(commands.includes('ev3-cockpit.deployProject'));
 	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectEV3'));
@@ -711,6 +712,7 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 
 async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProject');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbf');
 	await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');

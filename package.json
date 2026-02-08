@@ -13,6 +13,7 @@
   "activationEvents": [
     "onCommand:ev3-cockpit.connectEV3",
     "onCommand:ev3-cockpit.deployAndRunRbf",
+    "onCommand:ev3-cockpit.previewProjectDeploy",
     "onCommand:ev3-cockpit.deployProject",
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
     "onCommand:ev3-cockpit.reconnectEV3",
@@ -32,6 +33,10 @@
       {
         "command": "ev3-cockpit.deployAndRunRbf",
         "title": "EV3 Cockpit: Deploy and Run .rbf (active)"
+      },
+      {
+        "command": "ev3-cockpit.previewProjectDeploy",
+        "title": "EV3 Cockpit: Preview Deploy Changes (active)"
       },
       {
         "command": "ev3-cockpit.deployProject",

@@ -101,6 +101,7 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 
 - `EV3 Cockpit: Connect to EV3 Brick` — connect to EV3 brick
 - `EV3 Cockpit: Deploy and Run .rbf (active)` — pick a local `.rbf`, upload to active EV3 default root and start it
+- `EV3 Cockpit: Preview Deploy Changes (active)` — pick a local folder and preview upload/skip/cleanup result without modifying EV3
 - `EV3 Cockpit: Sync Project to EV3 (active)` — pick a local folder and upload/sync project tree to active EV3 (without starting program)
 - `EV3 Cockpit: Deploy Project and Run .rbf (active)` — pick a local folder, upload project tree to EV3 and run selected `.rbf`
 - `EV3 Cockpit: Reconnect EV3 (active settings)` — re-run full connect probe/capability flow using current transport settings
