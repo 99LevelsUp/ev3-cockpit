@@ -607,6 +607,7 @@ export function activate(context: vscode.ExtensionContext) {
 			let incrementalEnabled = featureConfig.deploy.incrementalEnabled;
 			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
 			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
+			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
 			if (incrementalEnabled || cleanupEnabled) {
@@ -655,6 +656,8 @@ export function activate(context: vscode.ExtensionContext) {
 			let uploadedBytes = 0;
 			let deletedStaleFilesCount = 0;
 			let deletedStaleDirectoriesCount = 0;
+			let plannedStaleFilesCount = 0;
+			let plannedStaleDirectoriesCount = 0;
 			const localLayout = buildLocalProjectLayout(files.map((entry) => entry.relativePath));
 			let cleanupPlan = {
 				filesToDelete: [] as string[],
@@ -668,9 +671,19 @@ export function activate(context: vscode.ExtensionContext) {
 					remoteDirectoryPaths: remoteDirectories,
 					localLayout
 				});
+				plannedStaleFilesCount = cleanupPlan.filesToDelete.length;
+				plannedStaleDirectoriesCount = cleanupPlan.directoriesToDelete.length;
 
 				const totalCleanupTargets = cleanupPlan.filesToDelete.length + cleanupPlan.directoriesToDelete.length;
-				if (totalCleanupTargets > 0 && cleanupConfirmBeforeDelete) {
+				if (totalCleanupTargets > 0 && cleanupDryRun) {
+					logger.info('Project deploy cleanup dry-run planned stale entries.', {
+						remoteProjectRoot,
+						staleFiles: plannedStaleFilesCount,
+						staleDirectories: plannedStaleDirectoriesCount
+					});
+				}
+
+				if (totalCleanupTargets > 0 && !cleanupDryRun && cleanupConfirmBeforeDelete) {
 					const previewItems = [
 						...cleanupPlan.filesToDelete.slice(0, 4),
 						...cleanupPlan.directoriesToDelete.slice(0, 4).map((entry) => `${entry}/`)
@@ -689,6 +702,8 @@ export function activate(context: vscode.ExtensionContext) {
 					);
 					if (decision !== 'Delete Stale Entries') {
 						cleanupEnabled = false;
+						plannedStaleFilesCount = 0;
+						plannedStaleDirectoriesCount = 0;
 						logger.info('Project deploy cleanup cancelled by user confirmation prompt.', {
 							remoteProjectRoot,
 							staleFiles: cleanupPlan.filesToDelete.length,
@@ -746,23 +761,29 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 
 					if (cleanupEnabled) {
-						for (const filePath of cleanupPlan.filesToDelete) {
-							await fsService.deleteFile(filePath);
-							deletedStaleFilesCount += 1;
+						if (cleanupDryRun) {
 							progress.report({
-								message: `Deleted stale file: ${path.posix.basename(filePath)}`
+								message: `Cleanup dry-run: ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'} planned`
 							});
-						}
-
-						for (const dirPath of cleanupPlan.directoriesToDelete) {
-							try {
-								await fsService.deleteFile(dirPath);
-								deletedStaleDirectoriesCount += 1;
-							} catch (error) {
-								logger.warn('Deploy cleanup directory delete skipped', {
-									path: dirPath,
-									message: error instanceof Error ? error.message : String(error)
+						} else {
+							for (const filePath of cleanupPlan.filesToDelete) {
+								await fsService.deleteFile(filePath);
+								deletedStaleFilesCount += 1;
+								progress.report({
+									message: `Deleted stale file: ${path.posix.basename(filePath)}`
 								});
+							}
+
+							for (const dirPath of cleanupPlan.directoriesToDelete) {
+								try {
+									await fsService.deleteFile(dirPath);
+									deletedStaleDirectoriesCount += 1;
+								} catch (error) {
+									logger.warn('Deploy cleanup directory delete skipped', {
+										path: dirPath,
+										message: error instanceof Error ? error.message : String(error)
+									});
+								}
 							}
 						}
 					}
@@ -778,9 +799,12 @@ export function activate(context: vscode.ExtensionContext) {
 				filesSkippedUnchanged: skippedUnchangedCount,
 				incrementalEnabled,
 				cleanupEnabled,
+				cleanupDryRun,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
+				plannedStaleFilesCount,
+				plannedStaleDirectoriesCount,
 				skippedDirectories: scan.skippedDirectories.length,
 				skippedByExtension: scan.skippedByExtension.length,
 				skippedBySize: scan.skippedBySize.length,
@@ -796,7 +820,9 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const cleanupSummary =
-				cleanupEnabled || deletedStaleFilesCount > 0 || deletedStaleDirectoriesCount > 0
+				cleanupEnabled && cleanupDryRun
+					? `; cleanup dry-run planned ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
+					: cleanupEnabled || deletedStaleFilesCount > 0 || deletedStaleDirectoriesCount > 0
 					? `; cleanup deleted ${deletedStaleFilesCount} file(s), ${deletedStaleDirectoriesCount} director${deletedStaleDirectoriesCount === 1 ? 'y' : 'ies'}`
 					: '';
 

@@ -280,6 +280,11 @@
           "default": true,
           "description": "Require confirmation before deploy cleanup deletes stale remote files/directories."
         },
+        "ev3-cockpit.deploy.cleanup.dryRun": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, deploy cleanup reports stale remote files/directories but does not delete them."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

@@ -5,10 +5,12 @@ import {
 	DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS,
 	DEFAULT_DEPLOY_CLEANUP_ENABLED,
 	DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE,
+	DEFAULT_DEPLOY_CLEANUP_DRY_RUN,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployCleanupEnabled,
 	sanitizeDeployCleanupConfirmBeforeDelete,
+	sanitizeDeployCleanupDryRun,
 	sanitizeDeployExcludeDirectories,
 	sanitizeDeployExcludeExtensions,
 	sanitizeDeployIncrementalEnabled,
@@ -65,4 +67,10 @@ test('deployConfig sanitizes cleanup confirm-before-delete flag', () => {
 	);
 	assert.equal(sanitizeDeployCleanupConfirmBeforeDelete(true), true);
 	assert.equal(sanitizeDeployCleanupConfirmBeforeDelete(false), false);
+});
+
+test('deployConfig sanitizes cleanup dry-run flag', () => {
+	assert.equal(sanitizeDeployCleanupDryRun(undefined), DEFAULT_DEPLOY_CLEANUP_DRY_RUN);
+	assert.equal(sanitizeDeployCleanupDryRun(true), true);
+	assert.equal(sanitizeDeployCleanupDryRun(false), false);
 });

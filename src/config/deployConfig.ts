@@ -7,6 +7,7 @@ export interface DeployConfigSnapshot {
 	incrementalEnabled: boolean;
 	cleanupEnabled: boolean;
 	cleanupConfirmBeforeDelete: boolean;
+	cleanupDryRun: boolean;
 }
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
@@ -15,6 +16,7 @@ export const DEFAULT_DEPLOY_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_DEPLOY_INCREMENTAL_ENABLED = false;
 export const DEFAULT_DEPLOY_CLEANUP_ENABLED = false;
 export const DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE = true;
+export const DEFAULT_DEPLOY_CLEANUP_DRY_RUN = false;
 
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
@@ -74,6 +76,13 @@ export function sanitizeDeployCleanupConfirmBeforeDelete(value: unknown): boolea
 	return value;
 }
 
+export function sanitizeDeployCleanupDryRun(value: unknown): boolean {
+	if (typeof value !== 'boolean') {
+		return DEFAULT_DEPLOY_CLEANUP_DRY_RUN;
+	}
+	return value;
+}
+
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
@@ -83,6 +92,7 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 		cleanupEnabled: sanitizeDeployCleanupEnabled(cfg.get('deploy.cleanup.enabled')),
 		cleanupConfirmBeforeDelete: sanitizeDeployCleanupConfirmBeforeDelete(
 			cfg.get('deploy.cleanup.confirmBeforeDelete')
-		)
+		),
+		cleanupDryRun: sanitizeDeployCleanupDryRun(cfg.get('deploy.cleanup.dryRun'))
 	};
 }
