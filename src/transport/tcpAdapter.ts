@@ -102,9 +102,30 @@ export class TcpAdapter implements TransportAdapter {
 			return;
 		}
 
+		if (socket.destroyed) {
+			this.closing = false;
+			return;
+		}
+
 		await new Promise<void>((resolve) => {
-			socket.once('close', () => resolve());
+			let settled = false;
+			let timeoutHandle: NodeJS.Timeout | undefined;
+			const finish = () => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				if (timeoutHandle) {
+					clearTimeout(timeoutHandle);
+					timeoutHandle = undefined;
+				}
+				resolve();
+			};
+			socket.once('close', () => finish());
+			socket.once('error', () => finish());
 			socket.destroy();
+			timeoutHandle = setTimeout(finish, 250);
+			timeoutHandle.unref();
 		});
 
 		this.closing = false;

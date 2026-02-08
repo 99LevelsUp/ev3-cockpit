@@ -343,6 +343,42 @@ test('TcpAdapter can reopen after remote close and continue sending', async () =
 	}
 });
 
+test('TcpAdapter close resolves when socket is already destroyed', async () => {
+	const server = await startFakeEv3Server({
+		handshakeResponse: 'HTTP/1.1 200 OK\r\nAccept: EV340\r\n\r\n',
+		onPacket: (socket, packet) => {
+			const decoded = decodeEv3Packet(packet);
+			const reply = encodeEv3Packet(decoded.messageCounter, EV3_REPLY.DIRECT_REPLY, new Uint8Array([0x55]));
+			socket.write(Buffer.from(reply));
+			setTimeout(() => socket.destroy(), 5);
+		}
+	});
+
+	const adapter = new TcpAdapter({
+		host: '127.0.0.1',
+		port: server.port,
+		handshakeTimeoutMs: 500
+	});
+
+	try {
+		await adapter.open();
+		await adapter.send(encodeEv3Packet(11, EV3_COMMAND.DIRECT_COMMAND_REPLY), {
+			timeoutMs: 100,
+			signal: new AbortController().signal
+		});
+		await sleep(40);
+
+		const closeState = await Promise.race([
+			adapter.close().then(() => 'closed'),
+			sleep(300).then(() => 'timeout')
+		]);
+		assert.equal(closeState, 'closed');
+	} finally {
+		await adapter.close();
+		await server.close();
+	}
+});
+
 test('TcpAdapter allows empty host when discovery is enabled', async () => {
 	const adapter = new TcpAdapter({
 		host: '',
