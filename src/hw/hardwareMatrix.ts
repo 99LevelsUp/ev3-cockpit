@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 
 type TransportKind = 'usb' | 'tcp' | 'bluetooth';
 type HardwareStatus = 'PASS' | 'SKIP' | 'FAIL';
-type MatrixScenarioId = 'baseline' | 'reconnect' | 'reconnect-glitch';
+type MatrixScenarioId = 'baseline' | 'reconnect' | 'reconnect-glitch' | 'driver-drop';
 
 interface HardwareCaseResult {
 	transport: TransportKind;
@@ -48,6 +48,7 @@ interface MatrixReport {
 }
 
 const DEFAULT_SCENARIO_IDS: MatrixScenarioId[] = ['baseline', 'reconnect', 'reconnect-glitch'];
+const ALL_SCENARIO_IDS: MatrixScenarioId[] = ['baseline', 'reconnect', 'reconnect-glitch', 'driver-drop'];
 
 export function parseScenarioIds(raw: string | undefined): MatrixScenarioId[] {
 	const normalized = raw?.trim().toLowerCase();
@@ -58,15 +59,33 @@ export function parseScenarioIds(raw: string | undefined): MatrixScenarioId[] {
 	const valid = new Set<MatrixScenarioId>();
 	for (const token of normalized.split(',')) {
 		const candidate = token.trim();
-		if (candidate === 'baseline' || candidate === 'reconnect' || candidate === 'reconnect-glitch') {
+		if (
+			candidate === 'baseline' ||
+			candidate === 'reconnect' ||
+			candidate === 'reconnect-glitch' ||
+			candidate === 'driver-drop'
+		) {
 			valid.add(candidate);
 		}
 	}
 
-	return valid.size > 0 ? [...DEFAULT_SCENARIO_IDS].filter((id) => valid.has(id)) : [...DEFAULT_SCENARIO_IDS];
+	return valid.size > 0 ? [...ALL_SCENARIO_IDS].filter((id) => valid.has(id)) : [...DEFAULT_SCENARIO_IDS];
 }
 
 function buildScenario(id: MatrixScenarioId, baseEnv: NodeJS.ProcessEnv): MatrixScenario {
+	if (id === 'driver-drop') {
+		return {
+			id,
+			description: 'Reconnect recovery (manual driver-drop simulation)',
+			env: {
+				...baseEnv,
+				EV3_COCKPIT_HW_RECONNECT_CHECK: 'true',
+				EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false',
+				EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'true'
+			}
+		};
+	}
+
 	if (id === 'reconnect') {
 		return {
 			id,
@@ -74,7 +93,8 @@ function buildScenario(id: MatrixScenarioId, baseEnv: NodeJS.ProcessEnv): Matrix
 			env: {
 				...baseEnv,
 				EV3_COCKPIT_HW_RECONNECT_CHECK: 'true',
-				EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false'
+				EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false',
+				EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'false'
 			}
 		};
 	}
@@ -86,7 +106,8 @@ function buildScenario(id: MatrixScenarioId, baseEnv: NodeJS.ProcessEnv): Matrix
 			env: {
 				...baseEnv,
 				EV3_COCKPIT_HW_RECONNECT_CHECK: 'true',
-				EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'true'
+				EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'true',
+				EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'false'
 			}
 		};
 	}
@@ -97,7 +118,8 @@ function buildScenario(id: MatrixScenarioId, baseEnv: NodeJS.ProcessEnv): Matrix
 		env: {
 			...baseEnv,
 			EV3_COCKPIT_HW_RECONNECT_CHECK: 'false',
-			EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false'
+			EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK: 'false',
+			EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'false'
 		}
 	};
 }

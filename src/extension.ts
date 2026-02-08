@@ -12,6 +12,7 @@ import {
 	choosePreferredRunCandidate,
 	isRbfFileName
 } from './fs/deployActions';
+import { DeployConflictPromptChoice, resolveDeployConflictDecision } from './fs/deployConflict';
 import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployIncremental';
 import { verifyUploadedFile } from './fs/deployVerify';
@@ -1032,12 +1033,8 @@ export function activate(context: vscode.ExtensionContext) {
 							if (effectiveConflictPolicy !== 'overwrite') {
 								const exists = await remoteFileExists(file.remotePath);
 								if (exists) {
-									let decision: 'overwrite' | 'skip';
-									if (effectiveConflictPolicy === 'skip') {
-										decision = 'skip';
-									} else if (conflictBulkDecision) {
-										decision = conflictBulkDecision;
-									} else {
+									let promptChoice: DeployConflictPromptChoice;
+									if (effectiveConflictPolicy === 'ask' && !conflictBulkDecision) {
 										const choice = await vscode.window.showWarningMessage(
 											`Remote file already exists: ${file.remotePath}`,
 											{
@@ -1049,18 +1046,15 @@ export function activate(context: vscode.ExtensionContext) {
 											'Overwrite All',
 											'Skip All'
 										);
-										if (choice === 'Overwrite All') {
-											conflictBulkDecision = 'overwrite';
-											decision = 'overwrite';
-										} else if (choice === 'Skip All') {
-											conflictBulkDecision = 'skip';
-											decision = 'skip';
-										} else if (choice === 'Overwrite') {
-											decision = 'overwrite';
-										} else {
-											decision = 'skip';
-										}
+										promptChoice = choice as DeployConflictPromptChoice;
 									}
+									const resolvedConflict = resolveDeployConflictDecision({
+										policy: effectiveConflictPolicy,
+										bulkDecision: conflictBulkDecision,
+										promptChoice
+									});
+									const decision = resolvedConflict.decision;
+									conflictBulkDecision = resolvedConflict.nextBulkDecision ?? conflictBulkDecision;
 
 									if (decision === 'skip') {
 										skippedByConflictCount += 1;

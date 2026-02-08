@@ -39,5 +39,6 @@ test('hardware matrix parser derives summary when summary line is missing', () =
 test('hardware matrix scenario parser keeps default order and ignores unknown values', () => {
 	assert.deepEqual(parseScenarioIds(undefined), ['baseline', 'reconnect', 'reconnect-glitch']);
 	assert.deepEqual(parseScenarioIds('reconnect,foo,baseline'), ['baseline', 'reconnect']);
+	assert.deepEqual(parseScenarioIds('driver-drop,reconnect'), ['reconnect', 'driver-drop']);
 	assert.deepEqual(parseScenarioIds('foo,bar'), ['baseline', 'reconnect', 'reconnect-glitch']);
 });

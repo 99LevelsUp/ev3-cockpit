@@ -88,13 +88,15 @@ Hardware smoke returns explicit status per transport:
 Optional hardware env vars:
 - `EV3_COCKPIT_HW_TIMEOUT_MS`, `EV3_COCKPIT_HW_USB_PATH`
 - `EV3_COCKPIT_HW_TRANSPORTS` (optional): comma-separated transport subset for hardware smoke, for example `usb,tcp` to skip Bluetooth.
-- `EV3_COCKPIT_HW_MATRIX_SCENARIOS` (optional): comma-separated hardware matrix scenarios (`baseline,reconnect,reconnect-glitch`).
+- `EV3_COCKPIT_HW_MATRIX_SCENARIOS` (optional): comma-separated hardware matrix scenarios (`baseline,reconnect,reconnect-glitch,driver-drop`).
 - `EV3_COCKPIT_HW_MATRIX_REPORT` (optional): output path for matrix JSON report (default `artifacts/hw/hardware-matrix.json`).
 - `EV3_COCKPIT_HW_EMERGENCY_STOP_CHECK` (optional, default `true`): include emergency-stop validation (`PROGRAM_STOP` + `OUTPUT_STOP`) in hardware smoke.
 - `EV3_COCKPIT_HW_RECONNECT_CHECK` (optional, default `false`): include disconnect/reconnect recovery scenario (open -> probe -> close -> reopen -> probe) for selected transports (`usb|tcp|bluetooth`).
 - `EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK` (optional, default `true`): when reconnect check is enabled, include simulated in-flight disconnect recovery (close during pending probe -> reopen -> probe) for `usb|bluetooth`.
 - `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK` (optional, default `false`): when reconnect check is enabled, run manual real driver-drop scenario for `usb|tcp|bluetooth` (physical disconnect/reconnect within time window).
 - `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS`, `EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_POLL_MS`: timing controls for driver-drop reconnect scenario.
+
+For matrix runs, `driver-drop` is opt-in (not in default scenario list) because it requires manual physical interaction.
 - `EV3_COCKPIT_HW_TCP_HOST`, `EV3_COCKPIT_HW_TCP_USE_DISCOVERY`, `EV3_COCKPIT_HW_TCP_DISCOVERY_TIMEOUT_MS`, `EV3_COCKPIT_HW_TCP_ATTEMPTS`, `EV3_COCKPIT_HW_TCP_RETRY_DELAY_MS`
 - `EV3_COCKPIT_HW_BT_PORT`, `EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS`, `EV3_COCKPIT_HW_BT_PORT_ATTEMPTS`, `EV3_COCKPIT_HW_BT_RETRY_DELAY_MS`, `EV3_COCKPIT_HW_BT_DTR`
 - `EV3_COCKPIT_HW_RUN_RBF_PATH` (optional): run an already existing remote `.rbf` path (supports `ev3://active/...` too).

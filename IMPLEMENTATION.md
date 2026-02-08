@@ -80,7 +80,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - HW smoke reconnect-recovery pro USB/BT umi volitelne simulovat in-flight drop (`EV3_COCKPIT_HW_RECONNECT_GLITCH_CHECK`, default `true`) scenarem `pending probe -> forced close -> reopen -> probe`.
   - HW smoke obsahuje volitelny manualni driver-drop reconnect check (`EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK`) pro USB/TCP/BT, ktery pri fyzickem odpojeni/pripojeni overuje obnovu spojeni; bez detekovaneho dropu vraci `SKIP`.
   - BT HW smoke probe/run/emergency flow sdili jednu otevrenou session (bez mezikrokoveho reopen), coz snizuje intermitentni COM reopen chyby mezi navazujicimi kontrolami.
-  - pridany HW matrix runner (`npm run test:hw:matrix`) pro scenare `baseline/reconnect/reconnect-glitch` s JSON report artefaktem (`artifacts/hw/hardware-matrix.json`).
+  - pridany HW matrix runner (`npm run test:hw:matrix`) pro scenare `baseline/reconnect/reconnect-glitch` + volitelny `driver-drop` (opt-in) s JSON report artefaktem (`artifacts/hw/hardware-matrix.json`).
   - pridana command akce `EV3 Cockpit: Disconnect EV3 (active)` pro explicitni uzavreni aktivni session a cleanup runtime sluzeb.
   - pridana command akce `EV3 Cockpit: Reconnect EV3 (active settings)` pro rychly reconnect pres stejny connect-probe/capability flow.
   - pridana command akce `EV3 Cockpit: Deploy and Run .rbf (active)` (`local pick -> upload -> run`) nad `RemoteFsService`.
@@ -105,8 +105,13 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.
 
 Zbyva:
-- provozne overit manualni HW driver-drop reconnect check na realnem USB/Bluetooth vypadku (v kodu je pripraveny, chybi stabilni serie e2e behu),
+- provozne overit manualni HW driver-drop reconnect check na realnem Bluetooth vypadku (USB/TCP overeni je provedene),
 - doladit BT HW smoke stabilitu (port lock/unknown 121 je stale intermitentni v nekterych behach).
+
+HW verifikace snapshot (2026-02-08):
+- USB manualni driver-drop reconnect: `PASS`.
+- TCP manualni driver-drop reconnect: `PASS` (po obnove Wi-Fi v delsim okne).
+- Bluetooth manualni driver-drop reconnect: aktualne `SKIP` podle dostupnosti hostitelskeho BT stacku (bez falesneho `FAIL`).
 
 ## Checkpoint pred prerusenim (2026-02-07)
 
