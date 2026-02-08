@@ -624,6 +624,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspace'));
 	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.applyDeployProfile'));
 	assert.ok(commands.includes('ev3-cockpit.runRemoteProgram'));
 	assert.ok(commands.includes('ev3-cockpit.stopProgram'));
 	assert.ok(commands.includes('ev3-cockpit.restartProgram'));

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { buildCapabilityProfile } from './compat/capabilityProfile';
+import { DEPLOY_PROFILE_PRESETS } from './config/deployProfiles';
 import { readFeatureConfig } from './config/featureConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
 import { BrickControlService } from './device/brickControlService';
@@ -1503,6 +1504,38 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
+	const applyDeployProfile = vscode.commands.registerCommand('ev3-cockpit.applyDeployProfile', async () => {
+		const picks = DEPLOY_PROFILE_PRESETS.map((profile) => ({
+			label: profile.label,
+			description: profile.description,
+			detail: profile.detail,
+			profile
+		}));
+		const selected = await vscode.window.showQuickPick(picks, {
+			title: 'Apply EV3 Deploy Profile',
+			placeHolder: 'Choose deploy profile preset'
+		});
+		if (!selected) {
+			return;
+		}
+
+		const configTarget =
+			vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
+				? vscode.ConfigurationTarget.Workspace
+				: vscode.ConfigurationTarget.Global;
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		for (const [key, value] of Object.entries(selected.profile.settings)) {
+			await cfg.update(key, value, configTarget);
+		}
+
+		logger.info('Deploy profile applied', {
+			profileId: selected.profile.id,
+			target: configTarget === vscode.ConfigurationTarget.Workspace ? 'workspace' : 'global',
+			settings: selected.profile.settings
+		});
+		vscode.window.showInformationMessage(`Deploy profile applied: ${selected.profile.label}`);
+	});
+
 	const runRemoteProgram = vscode.commands.registerCommand('ev3-cockpit.runRemoteProgram', async () => {
 		if (!activeFsService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
@@ -2015,6 +2048,7 @@ export function activate(context: vscode.ExtensionContext) {
 		deployWorkspace,
 		deployProjectAndRunRbf,
 		deployWorkspaceAndRunRbf,
+		applyDeployProfile,
 		runRemoteProgram,
 		stopProgram,
 		restartProgram,
