@@ -1,56 +1,66 @@
 # EV3 Cockpit
 
-EV3 Cockpit is a Visual Studio Code extension for working with LEGO Mindstorms EV3 bricks.
+EV3 Cockpit is a Visual Studio Code extension for LEGO Mindstorms EV3.
 
-It is designed for users who want one place to connect to an EV3, manage files on the brick, deploy projects, and run programs.
+Its purpose is to let you connect to EV3 bricks, manage files on the brick, deploy projects, and control program execution directly from VS Code.
 
 ## Goals
 
-- Make EV3 connection and project deployment simple from inside VS Code.
-- Support the most common EV3 connection methods (USB, Wi-Fi, Bluetooth).
-- Provide safe defaults for remote file operations.
-- Offer reliable run control, including emergency stop.
+- Make EV3 development practical inside VS Code.
+- Focus first on stock LEGO EV3 firmware compatibility.
+- Keep file operations safe by default.
+- Provide reliable run control with emergency-first behavior.
+- Evolve toward multi-brick workflows over time.
 
-## What You Can Do With EV3 Cockpit
+## What This Software Is
 
-- Connect to an EV3 brick.
-- Probe connection and firmware capabilities.
-- Browse remote files and folders on the brick.
-- Upload, download, create folders, and delete files.
+EV3 Cockpit is not a standalone desktop app.  
+It is an extension that runs inside Visual Studio Code and adds EV3-specific commands and workflows.
+
+## Main Features
+
+- Connect to EV3 over USB, Wi-Fi (TCP), or Bluetooth.
+- Detect EV3 capabilities after connection.
+- Browse and manage remote files via `ev3://active/...`.
+- Upload, download, create folders, delete entries.
 - Deploy project/workspace files to EV3.
 - Preview deploy changes before applying them.
-- Run, stop, and restart `.rbf` programs.
-- Use Emergency Stop when needed.
+- Run, stop, restart `.rbf` programs.
+- Trigger Emergency Stop.
 
 ## Implementation Status
 
 ### Implemented
 
+- [x] Core command scheduler runtime
 - [x] USB connection workflow
 - [x] Wi-Fi (TCP) connection workflow
-- [x] Bluetooth connection workflow (basic support)
-- [x] Remote file browser (`ev3://active/...`)
-- [x] Deploy + preview + sync workflows
-- [x] Run / Stop / Restart for `.rbf` programs
-- [x] Emergency Stop command
-- [x] Deploy profiles (`Safe Sync`, `Atomic Sync`, `Full Sync`)
-- [x] Test suites (unit, host, hardware smoke)
+- [x] Bluetooth connection workflow (runtime support)
+- [x] Capability probe and profile selection
+- [x] Remote filesystem provider (`ev3://active/...`)
+- [x] Deploy workflows (preview/sync/deploy+run)
+- [x] Run/Stop/Restart `.rbf`
+- [x] Emergency Stop
+- [x] Test infrastructure (unit, host, hardware smoke/matrix)
 
 ### In Progress
 
-- [ ] Bluetooth runtime stability across different Windows driver/COM setups
-- [ ] Hard Bluetooth hardware verification without fallback `SKIP` in unstable host environments
+- [ ] Bluetooth stability across different Windows COM/driver setups
+- [ ] Hard Bluetooth hardware verification without `SKIP` fallback
 
 ### Planned
 
-- [ ] Prebuilt downloadable release artifacts for non-developer users (ready-to-install package)
-- [ ] Expanded end-user documentation and troubleshooting guides
+- [ ] Full multi-brick UX flow (tabs/panel model)
+- [ ] Real-time sensor/motor monitoring UI
+- [ ] Advanced topology workflows (master/slave, daisy-chain optimizations)
+- [ ] Prebuilt installable release artifacts (`.vsix`)
+- [ ] Expanded troubleshooting and user docs
 
 ## Download and Build
 
 ### Option A: Download a Prebuilt Release
 
-If a GitHub Release is available, you can download the extension package (`.vsix`) and install it in VS Code.
+If GitHub Releases are published, download the `.vsix` package from the Releases page and install it in VS Code.
 
 If no release is published yet, use Option B.
 
@@ -86,11 +96,30 @@ Then install the generated `.vsix` in VS Code via:
 
 - `Extensions` -> `...` -> `Install from VSIX...`
 
+## Quick Start
+
+1. Open the Command Palette in VS Code.
+2. Run `EV3 Cockpit: Connect to EV3 Brick`.
+3. Run `EV3 Cockpit: Browse Remote FS (active)` to verify remote access.
+4. Use deploy commands to upload and run your `.rbf`.
+
 ## Connection Support (Current)
 
 - USB: stable
 - Wi-Fi (TCP): stable
-- Bluetooth: functional, but may be unstable on some host driver stacks
+- Bluetooth: functional, but currently less stable on some host driver stacks
+
+## Notes for Users
+
+- Default filesystem mode is safe (`safe`) and intentionally restricted to common project roots.
+- Emergency actions are prioritized by design.
+- The project targets stock EV3 firmware first.
+
+## Releases
+
+Prebuilt releases are planned, but not yet regularly published.
+
+When release publishing is enabled, this README should link directly to the latest `.vsix` download.
 
 ## License
 

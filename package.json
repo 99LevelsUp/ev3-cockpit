@@ -120,7 +120,7 @@
             "tcp",
             "mock"
           ],
-          "description": "Transport mode for connect probe. Auto tries USB, then Bluetooth, then TCP, then mock fallback."
+          "description": "Transport mode for connect probe. Auto tries USB, then TCP, then Bluetooth, then mock fallback."
         },
         "ev3-cockpit.transport.timeoutMs": {
           "type": "number",

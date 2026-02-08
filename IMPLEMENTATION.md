@@ -375,3 +375,18 @@ HW realita (operacni):
 
 Nejblizsi otevrena priorita:
 - provozni stabilizace realneho BT prostredi (driver/COM stack) a nasledne tvrde HW verifikace BT bez SKIP fallbacku.
+
+## Aktualni produktovy smer (zarovnani na `design.md`, 2026-02-08)
+
+- `EV3 Cockpit` je primarne VS Code extension (ne samostatna desktop aplikace).
+- Primarni cilovy firmware je stock LEGO EV3; kompatibilita s jinymi variantami je bonus pres capability profile.
+- Klicovy uzivatelsky use-case je: pripojit EV3 -> pracovat se soubory -> deploynout projekt -> spustit/stopnout program.
+- Bezpecnost a robustnost maji prednost:
+  - `emergency` lane ma absolutni prioritu,
+  - scheduler je autoritativni vrstva pro command serialization/retry/recovery,
+  - filesystem ma `safe` vychozi rezim a `full` rezim jen po explicitnim rozhodnuti.
+- Multi-brick zustava architektonicky cil; aktualni implementacni priorita je dotazeni single-active brick workflow do vysoke provozni stability.
+- Nejblizsi produktovy fokus:
+  1. stabilizace Bluetooth host stack chovani (bez zablokovani hlavniho USB/TCP toku),
+  2. navazujici funkce nad FS/deploy workflow,
+  3. postupne rozsireni UI/workflow smerem k plnemu multi-brick panelu a device telemetry.
