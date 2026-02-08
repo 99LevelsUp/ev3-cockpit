@@ -4,6 +4,13 @@ export type DeployVerifyMode = 'none' | 'size' | 'md5';
 export type DeployConflictPolicy = 'overwrite' | 'skip' | 'ask';
 export type DeployConflictAskFallback = 'prompt' | 'skip' | 'overwrite';
 
+export interface DeployResilienceConfigSnapshot {
+	enabled: boolean;
+	maxRetries: number;
+	retryDelayMs: number;
+	reopenConnection: boolean;
+}
+
 export interface DeployConfigSnapshot {
 	excludeDirectories: string[];
 	excludeExtensions: string[];
@@ -18,6 +25,7 @@ export interface DeployConfigSnapshot {
 	verifyAfterUpload: DeployVerifyMode;
 	conflictPolicy: DeployConflictPolicy;
 	conflictAskFallback: DeployConflictAskFallback;
+	resilience: DeployResilienceConfigSnapshot;
 }
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
@@ -33,6 +41,10 @@ export const DEFAULT_DEPLOY_ATOMIC_ENABLED = false;
 export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = 'none';
 export const DEFAULT_DEPLOY_CONFLICT_POLICY: DeployConflictPolicy = 'overwrite';
 export const DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK: DeployConflictAskFallback = 'prompt';
+export const DEFAULT_DEPLOY_RESILIENCE_ENABLED = true;
+export const DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES = 1;
+export const DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS = 300;
+export const DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION = true;
 
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
@@ -150,6 +162,34 @@ export function sanitizeDeployConflictAskFallback(value: unknown): DeployConflic
 	return DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK;
 }
 
+export function sanitizeDeployResilienceEnabled(value: unknown): boolean {
+	if (typeof value !== 'boolean') {
+		return DEFAULT_DEPLOY_RESILIENCE_ENABLED;
+	}
+	return value;
+}
+
+export function sanitizeDeployResilienceMaxRetries(value: unknown): number {
+	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
+		return DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES;
+	}
+	return Math.max(0, Math.floor(value));
+}
+
+export function sanitizeDeployResilienceRetryDelayMs(value: unknown): number {
+	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
+		return DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS;
+	}
+	return Math.max(0, Math.floor(value));
+}
+
+export function sanitizeDeployResilienceReopenConnection(value: unknown): boolean {
+	if (typeof value !== 'boolean') {
+		return DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION;
+	}
+	return value;
+}
+
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
@@ -166,6 +206,12 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 		atomicEnabled: sanitizeDeployAtomicEnabled(cfg.get('deploy.atomic.enabled')),
 		verifyAfterUpload: sanitizeDeployVerifyAfterUpload(cfg.get('deploy.verifyAfterUpload')),
 		conflictPolicy: sanitizeDeployConflictPolicy(cfg.get('deploy.conflictPolicy')),
-		conflictAskFallback: sanitizeDeployConflictAskFallback(cfg.get('deploy.conflictAskFallback'))
+		conflictAskFallback: sanitizeDeployConflictAskFallback(cfg.get('deploy.conflictAskFallback')),
+		resilience: {
+			enabled: sanitizeDeployResilienceEnabled(cfg.get('deploy.resilience.enabled')),
+			maxRetries: sanitizeDeployResilienceMaxRetries(cfg.get('deploy.resilience.maxRetries')),
+			retryDelayMs: sanitizeDeployResilienceRetryDelayMs(cfg.get('deploy.resilience.retryDelayMs')),
+			reopenConnection: sanitizeDeployResilienceReopenConnection(cfg.get('deploy.resilience.reopenConnection'))
+		}
 	};
 }

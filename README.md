@@ -151,6 +151,10 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.deploy.verifyAfterUpload`: post-upload integrity verification mode (`none`/`size`/`md5`, default `none`)
 - `ev3-cockpit.deploy.conflictPolicy`: behavior when remote file already exists (`overwrite`/`skip`/`ask`, default `overwrite`)
 - `ev3-cockpit.deploy.conflictAskFallback`: fallback behavior for `conflictPolicy=ask` (`prompt`/`skip`/`overwrite`, default `prompt`)
+- `ev3-cockpit.deploy.resilience.enabled`: enable retry/reconnect handling for transient transport deploy failures (default `true`)
+- `ev3-cockpit.deploy.resilience.maxRetries`: max additional retries per deploy step when resilience is enabled (default `1`)
+- `ev3-cockpit.deploy.resilience.retryDelayMs`: delay between deploy resilience retries in milliseconds (default `300`)
+- `ev3-cockpit.deploy.resilience.reopenConnection`: perform `close/open` reconnect before retrying failed deploy step (default `true`)
 
 Runtime keeps in-memory program session metadata (last path, start timestamp, source command, transport mode) and uses it for restart and diagnostics output.
 

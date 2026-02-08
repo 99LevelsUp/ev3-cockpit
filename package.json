@@ -383,6 +383,28 @@
           ],
           "description": "Fallback behavior for conflictPolicy=ask when you want to avoid per-file prompt dialogs."
         },
+        "ev3-cockpit.deploy.resilience.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable deploy-level retry/reconnect handling for transient transport failures."
+        },
+        "ev3-cockpit.deploy.resilience.maxRetries": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "Maximum additional retries per deploy operation step when resilience mode is enabled."
+        },
+        "ev3-cockpit.deploy.resilience.retryDelayMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Delay between deploy resilience retry attempts in milliseconds."
+        },
+        "ev3-cockpit.deploy.resilience.reopenConnection": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, deploy resilience attempts command-client close/open before retrying failed operations."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",

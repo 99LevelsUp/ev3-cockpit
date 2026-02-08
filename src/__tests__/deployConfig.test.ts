@@ -12,6 +12,10 @@ import {
 	DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD,
 	DEFAULT_DEPLOY_CONFLICT_POLICY,
 	DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK,
+	DEFAULT_DEPLOY_RESILIENCE_ENABLED,
+	DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES,
+	DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS,
+	DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployAtomicEnabled,
@@ -26,7 +30,11 @@ import {
 	sanitizeDeployMaxFileBytes,
 	sanitizeDeployVerifyAfterUpload,
 	sanitizeDeployConflictPolicy,
-	sanitizeDeployConflictAskFallback
+	sanitizeDeployConflictAskFallback,
+	sanitizeDeployResilienceEnabled,
+	sanitizeDeployResilienceMaxRetries,
+	sanitizeDeployResilienceRetryDelayMs,
+	sanitizeDeployResilienceReopenConnection
 } from '../config/deployConfig';
 
 test('deployConfig uses defaults for invalid exclude directories', () => {
@@ -133,4 +141,30 @@ test('deployConfig sanitizes conflict ask fallback', () => {
 	assert.equal(sanitizeDeployConflictAskFallback('skip'), 'skip');
 	assert.equal(sanitizeDeployConflictAskFallback('overwrite'), 'overwrite');
 	assert.equal(sanitizeDeployConflictAskFallback('invalid'), DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK);
+});
+
+test('deployConfig sanitizes resilience enabled flag', () => {
+	assert.equal(sanitizeDeployResilienceEnabled(undefined), DEFAULT_DEPLOY_RESILIENCE_ENABLED);
+	assert.equal(sanitizeDeployResilienceEnabled(true), true);
+	assert.equal(sanitizeDeployResilienceEnabled(false), false);
+});
+
+test('deployConfig sanitizes resilience max retries', () => {
+	assert.equal(sanitizeDeployResilienceMaxRetries(undefined), DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES);
+	assert.equal(sanitizeDeployResilienceMaxRetries(NaN), DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES);
+	assert.equal(sanitizeDeployResilienceMaxRetries(-3), 0);
+	assert.equal(sanitizeDeployResilienceMaxRetries(2.9), 2);
+});
+
+test('deployConfig sanitizes resilience retry delay', () => {
+	assert.equal(sanitizeDeployResilienceRetryDelayMs(undefined), DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS);
+	assert.equal(sanitizeDeployResilienceRetryDelayMs(NaN), DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS);
+	assert.equal(sanitizeDeployResilienceRetryDelayMs(-100), 0);
+	assert.equal(sanitizeDeployResilienceRetryDelayMs(123.7), 123);
+});
+
+test('deployConfig sanitizes resilience reopen connection flag', () => {
+	assert.equal(sanitizeDeployResilienceReopenConnection(undefined), DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION);
+	assert.equal(sanitizeDeployResilienceReopenConnection(true), true);
+	assert.equal(sanitizeDeployResilienceReopenConnection(false), false);
 });

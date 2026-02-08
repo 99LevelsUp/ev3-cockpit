@@ -103,6 +103,9 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - project deploy podporuje selective sync pravidla pres glob filtry (`ev3-cockpit.deploy.includeGlobs`, `ev3-cockpit.deploy.excludeGlobs`).
   - project deploy podporuje conflict policy (`ev3-cockpit.deploy.conflictPolicy`: `overwrite|skip|ask`) pro remote file kolize.
   - `conflictPolicy=ask` podporuje konfigurovatelny fallback bez modalu (`ev3-cockpit.deploy.conflictAskFallback`: `prompt|skip|overwrite`) pro neinteraktivni/workflow behy.
+  - project deploy progress je cancellable; pri zruseni se vraci `Deploy cancelled.` bez error dialogu.
+  - project deploy ma resilience vrstvu (`ev3-cockpit.deploy.resilience.*`) pro transient transport chyby (retry + volitelny `close/open` reconnect pred opakovanim kroku).
+  - pri deploy fail/cancel je doplnen finalizer cleanup pro eventualni stale atomic staging root.
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - extension-host fake TCP scenar pokryva i adresarove copy/rename/delete vetve (vcetne non-recursive `NOT_EMPTY`) a safe-root guard (`ev3://active/etc` blokace v safe mode).

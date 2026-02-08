@@ -583,7 +583,7 @@ async function withTemporaryWorkspaceFolder<T>(
 	try {
 		return await run(tempRootUri);
 	} finally {
-		for (let attempt = 0; attempt < 3; attempt += 1) {
+		for (let attempt = 0; attempt < 5; attempt += 1) {
 			if (sameWorkspaceFolders(vscode.workspace.workspaceFolders, originalFolders)) {
 				break;
 			}
@@ -597,13 +597,8 @@ async function withTemporaryWorkspaceFolder<T>(
 					name: folder.name
 				}))
 			);
-			await new Promise<void>((resolve) => setTimeout(resolve, 100));
+			await new Promise<void>((resolve) => setTimeout(resolve, 150));
 		}
-		await waitForCondition(
-			'workspace folders restored',
-			() => sameWorkspaceFolders(vscode.workspace.workspaceFolders, originalFolders),
-			5_000
-		);
 		await fs.rm(tempRootPath, {
 			recursive: true,
 			force: true

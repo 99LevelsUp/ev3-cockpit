@@ -15,6 +15,7 @@ import {
 import { DeployConflictPromptChoice, resolveDeployConflictDecision } from './fs/deployConflict';
 import { buildLocalProjectLayout, planRemoteCleanup } from './fs/deployCleanup';
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployIncremental';
+import { isDeployTransientTransportError, sleepMs } from './fs/deployResilience';
 import { verifyUploadedFile } from './fs/deployVerify';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
@@ -722,6 +723,9 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 		const fsService = activeFsService;
+		const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+		const isCancellationError = (error: unknown): boolean =>
+			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
 
 		let projectUri = options.projectUri;
 		if (!projectUri) {
@@ -741,6 +745,46 @@ export function activate(context: vscode.ExtensionContext) {
 			projectUri = selection[0];
 		}
 		const featureConfig = readFeatureConfig();
+		const deployResilience = featureConfig.deploy.resilience;
+		const runDeployStepWithResilience = async <T>(step: string, action: () => Promise<T>): Promise<T> => {
+			for (let attempt = 0; ; ) {
+				try {
+					return await action();
+				} catch (error) {
+					if (isCancellationError(error)) {
+						throw error;
+					}
+
+					const message = toErrorMessage(error);
+					const canRetry =
+						deployResilience.enabled &&
+						attempt < deployResilience.maxRetries &&
+						isDeployTransientTransportError(message);
+					if (!canRetry) {
+						throw error;
+					}
+
+					attempt += 1;
+					logger.warn('Deploy step failed, retrying.', {
+						step,
+						attempt,
+						maxRetries: deployResilience.maxRetries,
+						reopenConnection: deployResilience.reopenConnection,
+						delayMs: deployResilience.retryDelayMs,
+						message
+					});
+					if (deployResilience.reopenConnection) {
+						try {
+							await commandClient.close();
+						} catch {
+							// ignore close errors during reconnect attempt
+						}
+						await commandClient.open();
+					}
+					await sleepMs(deployResilience.retryDelayMs);
+				}
+			}
+		};
 		const defaultRoot = featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 		let remoteProjectRoot: string;
 		try {
@@ -846,7 +890,9 @@ export function activate(context: vscode.ExtensionContext) {
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
 			if (incrementalEnabled || cleanupEnabled || effectiveConflictPolicy !== 'overwrite') {
-				const remoteIndexResult = await collectRemoteFileIndexRecursive(fsService, remoteProjectRoot);
+				const remoteIndexResult = await runDeployStepWithResilience('collect-remote-index', () =>
+					collectRemoteFileIndexRecursive(fsService, remoteProjectRoot)
+				);
 				if (!remoteIndexResult.available) {
 					if (incrementalEnabled) {
 						incrementalEnabled = false;
@@ -932,7 +978,9 @@ export function activate(context: vscode.ExtensionContext) {
 					return cached.has(fileName);
 				}
 
-				const listing = await fsService.listDirectory(parent);
+				const listing = await runDeployStepWithResilience('conflict-list-directory', () =>
+					fsService.listDirectory(parent)
+				);
 				const names = new Set(listing.files.map((entry) => entry.name));
 				if (!listing.truncated) {
 					conflictDirectoryCache.set(parent, names);
@@ -995,9 +1043,16 @@ export function activate(context: vscode.ExtensionContext) {
 					title: options.previewOnly
 						? `Previewing EV3 deploy: ${path.basename(projectUri.fsPath)}`
 						: `Deploying EV3 project: ${path.basename(projectUri.fsPath)}`,
-					cancellable: false
+					cancellable: true
 				},
-				async (progress) => {
+				async (progress, token) => {
+					const throwIfCancelled = (): void => {
+						if (token.isCancellationRequested) {
+							throw new vscode.CancellationError();
+						}
+					};
+
+					throwIfCancelled();
 					if (!options.previewOnly) {
 						const directories = new Set<string>();
 						directories.add(deployProjectRoot);
@@ -1006,8 +1061,9 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						const orderedDirectories = [...directories].sort((a, b) => pathDepth(a) - pathDepth(b));
 						for (const dirPath of orderedDirectories) {
+							throwIfCancelled();
 							try {
-								await fsService.createDirectory(dirPath);
+								await runDeployStepWithResilience('create-directory', () => fsService.createDirectory(dirPath));
 							} catch (error) {
 								if (!isRemoteAlreadyExistsError(error)) {
 									throw error;
@@ -1017,6 +1073,7 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 
 					for (let index = 0; index < files.length; index += 1) {
+						throwIfCancelled();
 						const file = files[index];
 						const bytes =
 							options.previewOnly && !incrementalEnabled ? undefined : await vscode.workspace.fs.readFile(file.localUri);
@@ -1090,9 +1147,13 @@ export function activate(context: vscode.ExtensionContext) {
 								}
 							}
 
-							await fsService.writeFile(file.remotePath, bytes ?? new Uint8Array());
+							await runDeployStepWithResilience('write-file', () =>
+								fsService.writeFile(file.remotePath, bytes ?? new Uint8Array())
+							);
 							if (verifyAfterUpload !== 'none') {
-								await verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload);
+								await runDeployStepWithResilience('verify-upload', () =>
+									verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload)
+								);
 								verifiedFilesCount += 1;
 							}
 							uploadedFilesCount += 1;
@@ -1111,7 +1172,8 @@ export function activate(context: vscode.ExtensionContext) {
 							});
 						} else {
 							for (const filePath of cleanupPlan.filesToDelete) {
-								await fsService.deleteFile(filePath);
+								throwIfCancelled();
+								await runDeployStepWithResilience('cleanup-delete-file', () => fsService.deleteFile(filePath));
 								deletedStaleFilesCount += 1;
 								progress.report({
 									message: `Deleted stale file: ${path.posix.basename(filePath)}`
@@ -1119,8 +1181,9 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 
 							for (const dirPath of cleanupPlan.directoriesToDelete) {
+								throwIfCancelled();
 								try {
-									await fsService.deleteFile(dirPath);
+									await runDeployStepWithResilience('cleanup-delete-directory', () => fsService.deleteFile(dirPath));
 									deletedStaleDirectoriesCount += 1;
 								} catch (error) {
 									logger.warn('Deploy cleanup directory delete skipped', {
@@ -1206,7 +1269,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
-				await fsService.runProgram(runTarget);
+				await runDeployStepWithResilience('run-program', () => fsService.runProgram(runTarget));
 				markProgramStarted(runTarget, 'deploy-project-run');
 			}
 
@@ -1234,6 +1297,10 @@ export function activate(context: vscode.ExtensionContext) {
 				conflictPolicy: effectiveConflictPolicy,
 				conflictAskFallback,
 				conflictFallbackAppliedCount,
+				resilienceEnabled: deployResilience.enabled,
+				resilienceMaxRetries: deployResilience.maxRetries,
+				resilienceRetryDelayMs: deployResilience.retryDelayMs,
+				resilienceReopenConnection: deployResilience.reopenConnection,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
@@ -1307,7 +1374,18 @@ export function activate(context: vscode.ExtensionContext) {
 				);
 			}
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			if (isCancellationError(error)) {
+				logger.info('Deploy project operation cancelled by user.', {
+					localProjectPath: projectUri.fsPath,
+					remoteProjectRoot,
+					runAfterDeploy: options.runAfterDeploy,
+					previewOnly: options.previewOnly
+				});
+				vscode.window.showWarningMessage('Deploy cancelled.');
+				return;
+			}
+
+			const message = toErrorMessage(error);
 			logger.warn(
 				options.previewOnly
 					? 'Deploy project preview failed'
@@ -1326,6 +1404,23 @@ export function activate(context: vscode.ExtensionContext) {
 					? `Deploy project and run failed: ${message}`
 					: `Deploy project sync failed: ${message}`
 			);
+		} finally {
+			if (atomicEnabled && !options.previewOnly) {
+				try {
+					const stagingKind = await getRemotePathKind(fsService, atomicStagingRoot);
+					if (stagingKind !== 'missing') {
+						await deleteRemotePath(fsService, atomicStagingRoot, { recursive: true });
+						logger.info('Deploy finalizer removed stale atomic staging root.', {
+							path: atomicStagingRoot
+						});
+					}
+				} catch (cleanupError) {
+					logger.warn('Deploy finalizer staging cleanup failed', {
+						path: atomicStagingRoot,
+						message: toErrorMessage(cleanupError)
+					});
+				}
+			}
 		}
 	};
 
