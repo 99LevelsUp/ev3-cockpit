@@ -128,6 +128,8 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.fs.fullMode.confirmationRequired`: UX guard for risky full FS access
 - `ev3-cockpit.deploy.excludeDirectories`: directories skipped by project deploy recursion (default `.git`, `node_modules`, `.vscode-test`, `out`)
 - `ev3-cockpit.deploy.excludeExtensions`: file extensions skipped by project deploy (default `.map`)
+- `ev3-cockpit.deploy.includeGlobs`: file globs included in deploy scan (default `["**/*"]`)
+- `ev3-cockpit.deploy.excludeGlobs`: file globs excluded after include matching (default `[]`)
 - `ev3-cockpit.deploy.maxFileBytes`: max allowed file size per uploaded file in project deploy (default `5242880`)
 - `ev3-cockpit.deploy.incremental.enabled`: upload only changed project files by remote md5/size comparison (default `false`)
 - `ev3-cockpit.deploy.cleanup.enabled`: delete stale remote files/directories missing from local project after deploy (default `false`)

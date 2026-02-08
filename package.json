@@ -289,6 +289,24 @@
           },
           "description": "File extensions to skip during project deploy (for example .map)."
         },
+        "ev3-cockpit.deploy.includeGlobs": {
+          "type": "array",
+          "default": [
+            "**/*"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Glob patterns for files included in project deploy scan."
+        },
+        "ev3-cockpit.deploy.excludeGlobs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Glob patterns for files excluded from project deploy scan after include matching."
+        },
         "ev3-cockpit.deploy.maxFileBytes": {
           "type": "number",
           "default": 5242880,

@@ -5,6 +5,8 @@ export type DeployVerifyMode = 'none' | 'size' | 'md5';
 export interface DeployConfigSnapshot {
 	excludeDirectories: string[];
 	excludeExtensions: string[];
+	includeGlobs: string[];
+	excludeGlobs: string[];
 	maxFileBytes: number;
 	incrementalEnabled: boolean;
 	cleanupEnabled: boolean;
@@ -16,6 +18,8 @@ export interface DeployConfigSnapshot {
 
 export const DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES = ['.git', 'node_modules', '.vscode-test', 'out'];
 export const DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS = ['.map'];
+export const DEFAULT_DEPLOY_INCLUDE_GLOBS = ['**/*'];
+export const DEFAULT_DEPLOY_EXCLUDE_GLOBS: string[] = [];
 export const DEFAULT_DEPLOY_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_DEPLOY_INCREMENTAL_ENABLED = false;
 export const DEFAULT_DEPLOY_CLEANUP_ENABLED = false;
@@ -52,6 +56,29 @@ export function sanitizeDeployExcludeExtensions(value: unknown): string[] {
 		return [...DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS];
 	}
 	return [...new Set(cleaned)];
+}
+
+function sanitizeGlobList(value: unknown): string[] {
+	const cleaned = sanitizeStringList(value)
+		.map((entry) => entry.replace(/\\/g, '/'))
+		.map((entry) => entry.replace(/^\.\//, ''));
+	return [...new Set(cleaned)];
+}
+
+export function sanitizeDeployIncludeGlobs(value: unknown): string[] {
+	const cleaned = sanitizeGlobList(value);
+	if (cleaned.length === 0) {
+		return [...DEFAULT_DEPLOY_INCLUDE_GLOBS];
+	}
+	return cleaned;
+}
+
+export function sanitizeDeployExcludeGlobs(value: unknown): string[] {
+	const cleaned = sanitizeGlobList(value);
+	if (cleaned.length === 0) {
+		return [...DEFAULT_DEPLOY_EXCLUDE_GLOBS];
+	}
+	return cleaned;
 }
 
 export function sanitizeDeployMaxFileBytes(value: unknown): number {
@@ -107,6 +134,8 @@ export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConf
 	return {
 		excludeDirectories: sanitizeDeployExcludeDirectories(cfg.get('deploy.excludeDirectories')),
 		excludeExtensions: sanitizeDeployExcludeExtensions(cfg.get('deploy.excludeExtensions')),
+		includeGlobs: sanitizeDeployIncludeGlobs(cfg.get('deploy.includeGlobs')),
+		excludeGlobs: sanitizeDeployExcludeGlobs(cfg.get('deploy.excludeGlobs')),
 		maxFileBytes: sanitizeDeployMaxFileBytes(cfg.get('deploy.maxFileBytes')),
 		incrementalEnabled: sanitizeDeployIncrementalEnabled(cfg.get('deploy.incremental.enabled')),
 		cleanupEnabled: sanitizeDeployCleanupEnabled(cfg.get('deploy.cleanup.enabled')),

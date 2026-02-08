@@ -17,6 +17,7 @@ import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from './fs/deployInc
 import { verifyUploadedFile } from './fs/deployVerify';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
+import { createGlobMatcher } from './fs/globMatch';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from './fs/remoteFsOps';
 import { RemoteFsService } from './fs/remoteFsService';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from './protocol/capabilityProbe';
@@ -60,6 +61,8 @@ interface ProjectScanResult {
 	files: LocalScannedFile[];
 	skippedDirectories: string[];
 	skippedByExtension: string[];
+	skippedByIncludeGlob: string[];
+	skippedByExcludeGlob: string[];
 	skippedBySize: Array<{ relativePath: string; sizeBytes: number }>;
 }
 
@@ -132,15 +135,21 @@ async function collectLocalFilesRecursive(
 	options: {
 		excludeDirectories: string[];
 		excludeExtensions: string[];
+		includeGlobs: string[];
+		excludeGlobs: string[];
 		maxFileBytes: number;
 	}
 ): Promise<ProjectScanResult> {
 	const files: LocalScannedFile[] = [];
 	const skippedDirectories: string[] = [];
 	const skippedByExtension: string[] = [];
+	const skippedByIncludeGlob: string[] = [];
+	const skippedByExcludeGlob: string[] = [];
 	const skippedBySize: Array<{ relativePath: string; sizeBytes: number }> = [];
 	const excludedDirNames = new Set(options.excludeDirectories.map((entry) => entry.toLowerCase()));
 	const excludedExtensions = new Set(options.excludeExtensions.map((entry) => entry.toLowerCase()));
+	const includeMatcher = createGlobMatcher(options.includeGlobs);
+	const excludeMatcher = createGlobMatcher(options.excludeGlobs);
 
 	const walk = async (dir: vscode.Uri, relativeDir: string): Promise<void> => {
 		const entries = await vscode.workspace.fs.readDirectory(dir);
@@ -157,6 +166,14 @@ async function collectLocalFilesRecursive(
 				const extension = path.extname(name).toLowerCase();
 				if (excludedExtensions.has(extension)) {
 					skippedByExtension.push(relativePath);
+					continue;
+				}
+				if (!includeMatcher(relativePath)) {
+					skippedByIncludeGlob.push(relativePath);
+					continue;
+				}
+				if (excludeMatcher(relativePath)) {
+					skippedByExcludeGlob.push(relativePath);
 					continue;
 				}
 
@@ -182,11 +199,15 @@ async function collectLocalFilesRecursive(
 	files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 	skippedDirectories.sort((a, b) => a.localeCompare(b));
 	skippedByExtension.sort((a, b) => a.localeCompare(b));
+	skippedByIncludeGlob.sort((a, b) => a.localeCompare(b));
+	skippedByExcludeGlob.sort((a, b) => a.localeCompare(b));
 	skippedBySize.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 	return {
 		files,
 		skippedDirectories,
 		skippedByExtension,
+		skippedByIncludeGlob,
+		skippedByExcludeGlob,
 		skippedBySize
 	};
 }
@@ -1063,6 +1084,8 @@ export function activate(context: vscode.ExtensionContext) {
 				plannedStaleDirectoriesCount,
 				skippedDirectories: scan.skippedDirectories.length,
 				skippedByExtension: scan.skippedByExtension.length,
+				skippedByIncludeGlob: scan.skippedByIncludeGlob.length,
+				skippedByExcludeGlob: scan.skippedByExcludeGlob.length,
 				skippedBySize: scan.skippedBySize.length,
 				runAfterDeploy: options.runAfterDeploy,
 				previewOnly: options.previewOnly,
@@ -1082,10 +1105,18 @@ export function activate(context: vscode.ExtensionContext) {
 				});
 			}
 
-			if (scan.skippedDirectories.length > 0 || scan.skippedByExtension.length > 0 || scan.skippedBySize.length > 0) {
+			if (
+				scan.skippedDirectories.length > 0 ||
+				scan.skippedByExtension.length > 0 ||
+				scan.skippedByIncludeGlob.length > 0 ||
+				scan.skippedByExcludeGlob.length > 0 ||
+				scan.skippedBySize.length > 0
+			) {
 				logger.info('Deploy project scan skipped entries', {
 					skippedDirectories: scan.skippedDirectories,
 					skippedByExtension: scan.skippedByExtension,
+					skippedByIncludeGlob: scan.skippedByIncludeGlob,
+					skippedByExcludeGlob: scan.skippedByExcludeGlob,
 					skippedBySize: scan.skippedBySize
 				});
 			}

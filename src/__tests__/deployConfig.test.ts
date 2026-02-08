@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
 	DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES,
 	DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS,
+	DEFAULT_DEPLOY_INCLUDE_GLOBS,
+	DEFAULT_DEPLOY_EXCLUDE_GLOBS,
 	DEFAULT_DEPLOY_CLEANUP_ENABLED,
 	DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE,
 	DEFAULT_DEPLOY_CLEANUP_DRY_RUN,
@@ -16,6 +18,8 @@ import {
 	sanitizeDeployCleanupDryRun,
 	sanitizeDeployExcludeDirectories,
 	sanitizeDeployExcludeExtensions,
+	sanitizeDeployIncludeGlobs,
+	sanitizeDeployExcludeGlobs,
 	sanitizeDeployIncrementalEnabled,
 	sanitizeDeployMaxFileBytes,
 	sanitizeDeployVerifyAfterUpload
@@ -43,6 +47,24 @@ test('deployConfig sanitizes and deduplicates exclude extensions', () => {
 		sanitizeDeployExcludeExtensions(['map', '.tmp', '.MAP', '', 123]),
 		['.map', '.tmp']
 	);
+});
+
+test('deployConfig uses defaults for invalid include globs', () => {
+	assert.deepEqual(sanitizeDeployIncludeGlobs(undefined), DEFAULT_DEPLOY_INCLUDE_GLOBS);
+	assert.deepEqual(sanitizeDeployIncludeGlobs([]), DEFAULT_DEPLOY_INCLUDE_GLOBS);
+});
+
+test('deployConfig sanitizes and deduplicates include globs', () => {
+	assert.deepEqual(sanitizeDeployIncludeGlobs(['**/*.rbf', './src/**/*.ts', '**/*.rbf']), ['**/*.rbf', 'src/**/*.ts']);
+});
+
+test('deployConfig uses defaults for invalid exclude globs', () => {
+	assert.deepEqual(sanitizeDeployExcludeGlobs(undefined), DEFAULT_DEPLOY_EXCLUDE_GLOBS);
+	assert.deepEqual(sanitizeDeployExcludeGlobs([]), DEFAULT_DEPLOY_EXCLUDE_GLOBS);
+});
+
+test('deployConfig sanitizes and deduplicates exclude globs', () => {
+	assert.deepEqual(sanitizeDeployExcludeGlobs(['**/*.tmp', '.\\dist\\**', '**/*.tmp']), ['**/*.tmp', 'dist/**']);
 });
 
 test('deployConfig sanitizes max file bytes', () => {
