@@ -135,6 +135,17 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 
 	const transportHealthReport = vscode.commands.registerCommand('ev3-cockpit.transportHealthReport', async () => {
 		const logger = options.getLogger();
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const configuredMode = cfg.get('transport.mode');
+
+		if (configuredMode === 'mock') {
+			logger.info('Transport health report skipped: transport.mode is mock.');
+			vscode.window.showInformationMessage(
+				'Transport health report: skipped (transport.mode=mock). Set a real transport mode to run probes.'
+			);
+			return;
+		}
+
 		const [usbCandidates, serialCandidates] = await Promise.all([
 			listUsbHidCandidates(),
 			listSerialCandidates()
@@ -145,9 +156,13 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 			serialCandidates
 		});
 
-		const modes: Array<'usb' | 'tcp' | 'bluetooth'> = ['usb', 'tcp', 'bluetooth'];
+		const probeModes: Array<'usb' | 'tcp' | 'bluetooth'> =
+			configuredMode === 'usb' || configuredMode === 'tcp' || configuredMode === 'bluetooth'
+				? [configuredMode]
+				: ['usb', 'tcp', 'bluetooth'];
+
 		const results: Array<{ mode: 'usb' | 'tcp' | 'bluetooth'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> = [];
-		for (const mode of modes) {
+		for (const mode of probeModes) {
 			const result = await runTransportProbe(mode, logger, options.resolveProbeTimeoutMs);
 			results.push(result);
 			logger.info('Transport health probe result', result);

@@ -952,32 +952,55 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 }
 
 async function testCommandsWithoutHardware(): Promise<void> {
-	await vscode.commands.executeCommand('ev3-cockpit.deployAndRunExecutable');
-	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProject');
-	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeployToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProjectToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutableToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeploy');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspace');
-	await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutable');
-	await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutable');
-	await vscode.commands.executeCommand('ev3-cockpit.applyDeployProfileToBrick');
-	await vscode.commands.executeCommand('ev3-cockpit.runRemoteProgram');
-	await vscode.commands.executeCommand('ev3-cockpit.stopProgram');
-	await vscode.commands.executeCommand('ev3-cockpit.restartProgram');
-	await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
-	await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
-	await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
-	await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
-	await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
-	await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
-	await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
-	await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
-	await vscode.commands.executeCommand('ev3-cockpit.runRemoteExecutableFromTree');
+	await withWorkspaceSettings(
+		{
+			'transport.mode': 'mock',
+			'transport.timeoutMs': 200
+		},
+		async () => {
+			await vscode.commands.executeCommand('ev3-cockpit.deployAndRunExecutable');
+			await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
+			await vscode.commands.executeCommand('ev3-cockpit.deployProject');
+			await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeployToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.deployProjectToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutableToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeploy');
+			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspace');
+			await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunExecutable');
+			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutable');
+			await vscode.commands.executeCommand('ev3-cockpit.applyDeployProfileToBrick');
+			await vscode.commands.executeCommand('ev3-cockpit.runRemoteProgram');
+			await vscode.commands.executeCommand('ev3-cockpit.stopProgram');
+			await vscode.commands.executeCommand('ev3-cockpit.restartProgram');
+			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+			await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
+			await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
+			await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
+			await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
+			await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
+			await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
+			await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
+			await vscode.commands.executeCommand('ev3-cockpit.runRemoteExecutableFromTree');
+		}
+	);
+}
+
+async function runCase(name: string, fn: () => Promise<void>): Promise<boolean> {
+	const start = Date.now();
+	try {
+		await fn();
+		const elapsed = (Date.now() - start).toFixed(1);
+		console.log(`✔ ${name} (${elapsed}ms)`);
+		return true;
+	} catch (error) {
+		const elapsed = (Date.now() - start).toFixed(1);
+		const message = error instanceof Error ? error.stack ?? error.message : String(error);
+		console.error(`✗ ${name} (${elapsed}ms)\n  ${message}`);
+		return false;
+	}
 }
 
 export async function run(): Promise<void> {
@@ -985,12 +1008,34 @@ export async function run(): Promise<void> {
 		'extension registration',
 		() => vscode.extensions.getExtension(EXTENSION_ID) !== undefined
 	);
-	await testActivation();
-	await testCommandsRegistration();
-	await testCommandsWithoutHardware();
-	await testEv3FileSystemProvider();
-	await testMockConnectFlowWiresActiveFsProvider();
-	await testProviderRejectsNonActiveBrickAuthority();
-	await testTcpConnectFlowWithMockDiscoveryAndServer();
-	await testWorkspaceDeployCommandsWithMockTcp();
+
+	const cases: Array<[string, () => Promise<void>]> = [
+		['activation', testActivation],
+		['commands registration', testCommandsRegistration],
+		['commands without hardware', testCommandsWithoutHardware],
+		['ev3 filesystem provider offline', testEv3FileSystemProvider],
+		['mock connect flow wires active fs provider', testMockConnectFlowWiresActiveFsProvider],
+		['provider rejects non-active brick authority', testProviderRejectsNonActiveBrickAuthority],
+		['tcp connect flow with mock discovery and server', testTcpConnectFlowWithMockDiscoveryAndServer],
+		['workspace deploy commands with mock tcp', testWorkspaceDeployCommandsWithMockTcp],
+	];
+
+	let passed = 0;
+	let failed = 0;
+	for (const [name, fn] of cases) {
+		const ok = await runCase(name, fn);
+		if (ok) {
+			passed += 1;
+		} else {
+			failed += 1;
+		}
+	}
+
+	console.log(`\nℹ host tests ${cases.length}`);
+	console.log(`ℹ pass ${passed}`);
+	console.log(`ℹ fail ${failed}`);
+
+	if (failed > 0) {
+		throw new Error(`${failed} host test(s) failed.`);
+	}
 }
