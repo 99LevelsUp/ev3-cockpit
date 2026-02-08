@@ -84,6 +84,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - project deploy podporuje filtry/limity (`ev3-cockpit.deploy.excludeDirectories`, `ev3-cockpit.deploy.excludeExtensions`, `ev3-cockpit.deploy.maxFileBytes`) a loguje skipped entries.
   - project deploy podporuje volitelny incremental rezim (`ev3-cockpit.deploy.incremental.enabled`) s md5/size porovnanim proti remote indexu.
   - project deploy podporuje volitelny cleanup/sync rezim (`ev3-cockpit.deploy.cleanup.enabled`) pro mazani stale remote souboru/adresaru mimo lokalni projektovy snapshot.
+  - cleanup rezim ma potvrzovaci UX guard (`ev3-cockpit.deploy.cleanup.confirmBeforeDelete`, default `true`) s preview stale entry seznamu pred mazanim.
   - transport adaptery (USB/TCP/BT) filtruji stale reply packety podle `expectedMessageCounter` a ignoruji out-of-order odpovedi.
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.

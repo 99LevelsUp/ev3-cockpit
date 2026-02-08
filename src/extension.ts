@@ -606,6 +606,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			let incrementalEnabled = featureConfig.deploy.incrementalEnabled;
 			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
+			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
 			if (incrementalEnabled || cleanupEnabled) {
@@ -655,6 +656,47 @@ export function activate(context: vscode.ExtensionContext) {
 			let deletedStaleFilesCount = 0;
 			let deletedStaleDirectoriesCount = 0;
 			const localLayout = buildLocalProjectLayout(files.map((entry) => entry.relativePath));
+			let cleanupPlan = {
+				filesToDelete: [] as string[],
+				directoriesToDelete: [] as string[]
+			};
+
+			if (cleanupEnabled) {
+				cleanupPlan = planRemoteCleanup({
+					remoteProjectRoot,
+					remoteFilePaths: [...remoteIndex.keys()],
+					remoteDirectoryPaths: remoteDirectories,
+					localLayout
+				});
+
+				const totalCleanupTargets = cleanupPlan.filesToDelete.length + cleanupPlan.directoriesToDelete.length;
+				if (totalCleanupTargets > 0 && cleanupConfirmBeforeDelete) {
+					const previewItems = [
+						...cleanupPlan.filesToDelete.slice(0, 4),
+						...cleanupPlan.directoriesToDelete.slice(0, 4).map((entry) => `${entry}/`)
+					];
+					const previewText = previewItems.join('\n');
+					const decision = await vscode.window.showWarningMessage(
+						`Deploy cleanup will delete ${cleanupPlan.filesToDelete.length} file(s) and ${cleanupPlan.directoriesToDelete.length} director${cleanupPlan.directoriesToDelete.length === 1 ? 'y' : 'ies'} on EV3. Continue?`,
+						{
+							modal: true,
+							detail:
+								previewItems.length > 0
+									? `${previewText}${totalCleanupTargets > previewItems.length ? '\n...' : ''}`
+									: undefined
+						},
+						'Delete Stale Entries'
+					);
+					if (decision !== 'Delete Stale Entries') {
+						cleanupEnabled = false;
+						logger.info('Project deploy cleanup cancelled by user confirmation prompt.', {
+							remoteProjectRoot,
+							staleFiles: cleanupPlan.filesToDelete.length,
+							staleDirectories: cleanupPlan.directoriesToDelete.length
+						});
+					}
+				}
+			}
 
 			await vscode.window.withProgress(
 				{
@@ -704,13 +746,6 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 
 					if (cleanupEnabled) {
-						const cleanupPlan = planRemoteCleanup({
-							remoteProjectRoot,
-							remoteFilePaths: [...remoteIndex.keys()],
-							remoteDirectoryPaths: remoteDirectories,
-							localLayout
-						});
-
 						for (const filePath of cleanupPlan.filesToDelete) {
 							await fsService.deleteFile(filePath);
 							deletedStaleFilesCount += 1;

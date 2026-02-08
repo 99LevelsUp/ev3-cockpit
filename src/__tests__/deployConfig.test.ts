@@ -4,9 +4,11 @@ import {
 	DEFAULT_DEPLOY_EXCLUDE_DIRECTORIES,
 	DEFAULT_DEPLOY_EXCLUDE_EXTENSIONS,
 	DEFAULT_DEPLOY_CLEANUP_ENABLED,
+	DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE,
 	DEFAULT_DEPLOY_INCREMENTAL_ENABLED,
 	DEFAULT_DEPLOY_MAX_FILE_BYTES,
 	sanitizeDeployCleanupEnabled,
+	sanitizeDeployCleanupConfirmBeforeDelete,
 	sanitizeDeployExcludeDirectories,
 	sanitizeDeployExcludeExtensions,
 	sanitizeDeployIncrementalEnabled,
@@ -54,4 +56,13 @@ test('deployConfig sanitizes cleanup enabled flag', () => {
 	assert.equal(sanitizeDeployCleanupEnabled(undefined), DEFAULT_DEPLOY_CLEANUP_ENABLED);
 	assert.equal(sanitizeDeployCleanupEnabled(true), true);
 	assert.equal(sanitizeDeployCleanupEnabled(false), false);
+});
+
+test('deployConfig sanitizes cleanup confirm-before-delete flag', () => {
+	assert.equal(
+		sanitizeDeployCleanupConfirmBeforeDelete(undefined),
+		DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE
+	);
+	assert.equal(sanitizeDeployCleanupConfirmBeforeDelete(true), true);
+	assert.equal(sanitizeDeployCleanupConfirmBeforeDelete(false), false);
 });

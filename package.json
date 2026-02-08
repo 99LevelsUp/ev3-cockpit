@@ -275,6 +275,11 @@
           "default": false,
           "description": "When enabled, project deploy deletes remote files/directories under project root that are missing locally."
         },
+        "ev3-cockpit.deploy.cleanup.confirmBeforeDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require confirmation before deploy cleanup deletes stale remote files/directories."
+        },
         "ev3-cockpit.compat.profile": {
           "type": "string",
           "default": "auto",
