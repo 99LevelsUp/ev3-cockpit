@@ -197,6 +197,7 @@ export function activate(context: vscode.ExtensionContext) {
 	let commandClient: Ev3CommandClient;
 	let activeFsService: RemoteFsService | undefined;
 	let activeControlService: BrickControlService | undefined;
+	let lastRunProgramPath: string | undefined;
 
 	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
 		if (brickId !== 'active') {
@@ -216,6 +217,7 @@ export function activate(context: vscode.ExtensionContext) {
 		scheduler?.dispose();
 		activeFsService = undefined;
 		activeControlService = undefined;
+		lastRunProgramPath = undefined;
 
 		scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
@@ -294,6 +296,28 @@ export function activate(context: vscode.ExtensionContext) {
 		await cfg.update('fs.mode', 'safe', resolveFsModeTarget());
 		logger.warn('Full filesystem mode rejected by user; reverted to safe mode.');
 		return false;
+	};
+
+	const normalizeRunProgramPath = (input: string): string => {
+		const trimmed = input.trim();
+		if (!trimmed) {
+			throw new Error('Program path must not be empty.');
+		}
+
+		let candidate = trimmed;
+		if (candidate.toLowerCase().startsWith('ev3://')) {
+			const parsed = vscode.Uri.parse(candidate);
+			if (parsed.authority && parsed.authority !== 'active') {
+				throw new Error(`Unsupported EV3 authority "${parsed.authority}". Use ev3://active/...`);
+			}
+			candidate = parsed.path;
+		}
+
+		const normalized = path.posix.normalize(candidate.startsWith('/') ? candidate : `/${candidate}`);
+		if (!normalized.toLowerCase().endsWith('.rbf')) {
+			throw new Error('Only .rbf program paths are supported.');
+		}
+		return normalized;
 	};
 
 	const disposable = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async () => {
@@ -511,6 +535,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const bytes = await vscode.workspace.fs.readFile(localUri);
 			await fsService.writeFile(remotePath, bytes);
 			await fsService.runProgram(remotePath);
+			lastRunProgramPath = remotePath;
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
@@ -919,6 +944,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
 				await fsService.runProgram(runTarget);
+				lastRunProgramPath = runTarget;
 			}
 
 			logger.info(
@@ -1027,6 +1053,105 @@ export function activate(context: vscode.ExtensionContext) {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
 
+	const runRemoteProgram = vscode.commands.registerCommand('ev3-cockpit.runRemoteProgram', async () => {
+		if (!activeFsService) {
+			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
+			return;
+		}
+		const fsService = activeFsService;
+
+		const input = await vscode.window.showInputBox({
+			title: 'Run EV3 Program (.rbf)',
+			prompt: 'Remote path or ev3://active/... URI',
+			value: lastRunProgramPath ?? '/home/root/lms2012/prjs/',
+			validateInput: (value) => {
+				try {
+					normalizeRunProgramPath(value);
+					return undefined;
+				} catch (error) {
+					return error instanceof Error ? error.message : String(error);
+				}
+			}
+		});
+		if (!input) {
+			return;
+		}
+
+		try {
+			const runPath = normalizeRunProgramPath(input);
+			await fsService.runProgram(runPath);
+			lastRunProgramPath = runPath;
+			logger.info('Run program command completed', {
+				path: runPath
+			});
+			vscode.window.showInformationMessage(`Program started: ev3://active${runPath}`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn('Run program command failed', {
+				message
+			});
+			vscode.window.showErrorMessage(`Run program failed: ${message}`);
+		}
+	});
+
+	const stopProgram = vscode.commands.registerCommand('ev3-cockpit.stopProgram', async () => {
+		if (!activeControlService) {
+			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
+			return;
+		}
+
+		try {
+			await activeControlService.stopProgram();
+			vscode.window.showInformationMessage('Program stop command sent to EV3.');
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.error('Program stop failed', { message });
+			vscode.window.showErrorMessage(`Program stop failed: ${message}`);
+		}
+	});
+
+	const restartProgram = vscode.commands.registerCommand('ev3-cockpit.restartProgram', async () => {
+		if (!activeFsService || !activeControlService) {
+			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
+			return;
+		}
+
+		let runPath = lastRunProgramPath;
+		if (!runPath) {
+			const input = await vscode.window.showInputBox({
+				title: 'Restart EV3 Program (.rbf)',
+				prompt: 'Remote path or ev3://active/... URI',
+				value: '/home/root/lms2012/prjs/',
+				validateInput: (value) => {
+					try {
+						normalizeRunProgramPath(value);
+						return undefined;
+					} catch (error) {
+						return error instanceof Error ? error.message : String(error);
+					}
+				}
+			});
+			if (!input) {
+				return;
+			}
+			runPath = normalizeRunProgramPath(input);
+		}
+
+		try {
+			await activeControlService.stopProgram();
+			await activeFsService.runProgram(runPath);
+			lastRunProgramPath = runPath;
+			logger.info('Restart program command completed', {
+				path: runPath
+			});
+			vscode.window.showInformationMessage(`Program restarted: ev3://active${runPath}`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.error('Restart program failed', { message });
+			vscode.window.showErrorMessage(`Restart program failed: ${message}`);
+		}
+	});
+
 	const emergencyStop = vscode.commands.registerCommand('ev3-cockpit.emergencyStop', async () => {
 		if (!activeControlService) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
@@ -1107,6 +1232,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (action.action === 'run') {
 				try {
 					await fsService.runProgram(remotePath);
+					lastRunProgramPath = remotePath;
 					logger.info('Remote FS run program completed', {
 						path: remotePath
 					});
@@ -1406,6 +1532,9 @@ export function activate(context: vscode.ExtensionContext) {
 		previewProjectDeploy,
 		deployProject,
 		deployProjectAndRunRbf,
+		runRemoteProgram,
+		stopProgram,
+		restartProgram,
 		reconnect,
 		disconnect,
 		emergencyStop,

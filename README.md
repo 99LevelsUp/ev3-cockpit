@@ -104,6 +104,9 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `EV3 Cockpit: Preview Deploy Changes (active)` — pick a local folder and preview upload/skip/cleanup result without modifying EV3
 - `EV3 Cockpit: Sync Project to EV3 (active)` — pick a local folder and upload/sync project tree to active EV3 (without starting program)
 - `EV3 Cockpit: Deploy Project and Run .rbf (active)` — pick a local folder, upload project tree to EV3 and run selected `.rbf`
+- `EV3 Cockpit: Run Remote Program (.rbf)` — run a chosen remote `.rbf` path (`/path/file.rbf` or `ev3://active/...`)
+- `EV3 Cockpit: Stop Program (active)` — send `PROGRAM_STOP` for active VM slot
+- `EV3 Cockpit: Restart Program (active)` — stop current program and run last/selected `.rbf` again
 - `EV3 Cockpit: Reconnect EV3 (active settings)` — re-run full connect probe/capability flow using current transport settings
 - `EV3 Cockpit: Disconnect EV3 (active)` — close active session and clear in-memory EV3 services
 - `EV3 Cockpit: Emergency Stop (active)` — sends emergency lane stop command (`PROGRAM_STOP` + `OUTPUT_STOP`) to active connection

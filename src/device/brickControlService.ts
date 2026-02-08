@@ -105,6 +105,39 @@ export class BrickControlService {
 		});
 	}
 
+	public async stopProgram(): Promise<void> {
+		const payload = concatBytes(
+			uint16le(0),
+			new Uint8Array([DIRECT_OP.PROGRAM_STOP]),
+			lc0(VM_SLOT.USER)
+		);
+
+		const requestId = `control-program-stop-${this.nextRequestSeq()}`;
+		const result = await this.commandClient.send({
+			id: requestId,
+			lane: 'high',
+			idempotent: true,
+			timeoutMs: this.defaultTimeoutMs,
+			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+			payload
+		});
+
+		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
+			throw new Error('Program stop failed with DIRECT_REPLY_ERROR.');
+		}
+
+		if (result.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+			throw new Error(`Program stop failed with unexpected reply type 0x${result.reply.type.toString(16)}.`);
+		}
+
+		this.logger.info('Program stop completed', {
+			requestId: result.requestId,
+			lane: 'high',
+			messageCounter: result.messageCounter,
+			durationMs: result.durationMs
+		});
+	}
+
 	private nextRequestSeq(): number {
 		this.requestSeq += 1;
 		return this.requestSeq;

@@ -64,3 +64,36 @@ test('BrickControlService emergencyStopAll fails on DIRECT_REPLY_ERROR', async (
 
 	await assert.rejects(service.emergencyStopAll(), /DIRECT_REPLY_ERROR/i);
 });
+
+test('BrickControlService stopProgram sends high-lane program-stop payload', async () => {
+	const client = new FakeCommandClient(EV3_REPLY.DIRECT_REPLY);
+	const service = new BrickControlService({
+		commandClient: client
+	});
+
+	await service.stopProgram();
+
+	assert.equal(client.requests.length, 1);
+	const request = client.requests[0];
+	assert.equal(request.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
+	assert.equal(request.lane, 'high');
+	assert.equal(request.idempotent, true);
+
+	const payload = request.payload ?? new Uint8Array();
+	assert.deepEqual(
+		Array.from(payload),
+		[
+			0x00, 0x00, // globals/local alloc
+			0x02, 0x01 // opPROGRAM_STOP USER_SLOT
+		]
+	);
+});
+
+test('BrickControlService stopProgram fails on DIRECT_REPLY_ERROR', async () => {
+	const client = new FakeCommandClient(EV3_REPLY.DIRECT_REPLY_ERROR);
+	const service = new BrickControlService({
+		commandClient: client
+	});
+
+	await assert.rejects(service.stopProgram(), /DIRECT_REPLY_ERROR/i);
+});

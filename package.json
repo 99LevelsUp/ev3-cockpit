@@ -16,6 +16,9 @@
     "onCommand:ev3-cockpit.previewProjectDeploy",
     "onCommand:ev3-cockpit.deployProject",
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
+    "onCommand:ev3-cockpit.runRemoteProgram",
+    "onCommand:ev3-cockpit.stopProgram",
+    "onCommand:ev3-cockpit.restartProgram",
     "onCommand:ev3-cockpit.reconnectEV3",
     "onCommand:ev3-cockpit.disconnectEV3",
     "onCommand:ev3-cockpit.emergencyStop",
@@ -45,6 +48,18 @@
       {
         "command": "ev3-cockpit.deployProjectAndRunRbf",
         "title": "EV3 Cockpit: Deploy Project and Run .rbf (active)"
+      },
+      {
+        "command": "ev3-cockpit.runRemoteProgram",
+        "title": "EV3 Cockpit: Run Remote Program (.rbf)"
+      },
+      {
+        "command": "ev3-cockpit.stopProgram",
+        "title": "EV3 Cockpit: Stop Program (active)"
+      },
+      {
+        "command": "ev3-cockpit.restartProgram",
+        "title": "EV3 Cockpit: Restart Program (active)"
       },
       {
         "command": "ev3-cockpit.reconnectEV3",

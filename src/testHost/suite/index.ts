@@ -533,6 +533,9 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.previewProjectDeploy'));
 	assert.ok(commands.includes('ev3-cockpit.deployProject'));
 	assert.ok(commands.includes('ev3-cockpit.deployProjectAndRunRbf'));
+	assert.ok(commands.includes('ev3-cockpit.runRemoteProgram'));
+	assert.ok(commands.includes('ev3-cockpit.stopProgram'));
+	assert.ok(commands.includes('ev3-cockpit.restartProgram'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectEV3'));
 	assert.ok(commands.includes('ev3-cockpit.disconnectEV3'));
 	assert.ok(commands.includes('ev3-cockpit.emergencyStop'));
@@ -715,6 +718,9 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	await vscode.commands.executeCommand('ev3-cockpit.previewProjectDeploy');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProject');
 	await vscode.commands.executeCommand('ev3-cockpit.deployProjectAndRunRbf');
+	await vscode.commands.executeCommand('ev3-cockpit.runRemoteProgram');
+	await vscode.commands.executeCommand('ev3-cockpit.stopProgram');
+	await vscode.commands.executeCommand('ev3-cockpit.restartProgram');
 	await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
 	await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
 	await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
