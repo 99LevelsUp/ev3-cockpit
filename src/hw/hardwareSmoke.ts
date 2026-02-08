@@ -98,7 +98,8 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/ehostunreach/i,
 		/enetunreach/i,
 		/tcp connect timeout/i,
-		/transport is not open/i
+		/transport is not open/i,
+		/adapter is not open/i
 	],
 	bluetooth: [
 		/requires package "serialport"/i,
