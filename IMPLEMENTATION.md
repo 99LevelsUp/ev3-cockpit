@@ -85,6 +85,7 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - pridana command akce `EV3 Cockpit: Sync Project to EV3 (active)` (`folder pick -> recursive upload/sync`) bez automatickeho spusteni programu.
   - pridana command akce `EV3 Cockpit: Deploy Project and Run .rbf (active)` (`folder pick -> recursive upload -> run selected .rbf`).
   - pridany run-control workflow commandy: `Run Remote Program (.rbf)`, `Stop Program (active)`, `Restart Program (active)` s pamatovanim posledniho run targetu.
+  - runtime drzi `program session` metadata (path/time/source/transport) pro restart + diagnostiku (`Transport Health Report`).
   - pridana diagnosticka command akce `EV3 Cockpit: Transport Health Report` (USB/TCP/BT probe + capability souhrn PASS/SKIP/FAIL).
   - project deploy podporuje filtry/limity (`ev3-cockpit.deploy.excludeDirectories`, `ev3-cockpit.deploy.excludeExtensions`, `ev3-cockpit.deploy.maxFileBytes`) a loguje skipped entries.
   - project deploy podporuje volitelny incremental rezim (`ev3-cockpit.deploy.incremental.enabled`) s md5/size porovnanim proti remote indexu.

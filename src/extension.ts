@@ -74,6 +74,18 @@ interface RemoteFileIndexResult {
 	message?: string;
 }
 
+interface ProgramSessionState {
+	remotePath: string;
+	startedAtIso: string;
+	transportMode: TransportMode | 'unknown';
+	source:
+		| 'deploy-and-run-single'
+		| 'deploy-project-run'
+		| 'remote-fs-run'
+		| 'run-command'
+		| 'restart-command';
+}
+
 function isRemoteAlreadyExistsError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /FILE_EXISTS/i.test(message);
@@ -220,6 +232,7 @@ export function activate(context: vscode.ExtensionContext) {
 	let activeFsService: RemoteFsService | undefined;
 	let activeControlService: BrickControlService | undefined;
 	let lastRunProgramPath: string | undefined;
+	let activeProgramSession: ProgramSessionState | undefined;
 
 	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
 		if (brickId !== 'active') {
@@ -240,6 +253,7 @@ export function activate(context: vscode.ExtensionContext) {
 		activeFsService = undefined;
 		activeControlService = undefined;
 		lastRunProgramPath = undefined;
+		activeProgramSession = undefined;
 
 		scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
@@ -342,6 +356,42 @@ export function activate(context: vscode.ExtensionContext) {
 		return normalized;
 	};
 
+	const resolveCurrentTransportMode = (): TransportMode | 'unknown' => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const mode = cfg.get('transport.mode');
+		return mode === 'auto' || mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock'
+			? mode
+			: 'unknown';
+	};
+
+	const markProgramStarted = (
+		remotePath: string,
+		source: ProgramSessionState['source']
+	): void => {
+		lastRunProgramPath = remotePath;
+		activeProgramSession = {
+			remotePath,
+			startedAtIso: new Date().toISOString(),
+			transportMode: resolveCurrentTransportMode(),
+			source
+		};
+		logger.info('Program session updated', {
+			...activeProgramSession
+		});
+	};
+
+	const clearProgramSession = (reason: string): void => {
+		if (!activeProgramSession && !lastRunProgramPath) {
+			return;
+		}
+		logger.info('Program session cleared', {
+			reason,
+			lastRunProgramPath,
+			activeProgramSession
+		});
+		activeProgramSession = undefined;
+	};
+
 	const isTransportLikelyUnavailable = (message: string): boolean =>
 		/not found|requires setting|timeout|unknown error code 121|unknown error code 1256|access is denied|send aborted/i.test(
 			message
@@ -428,6 +478,7 @@ export function activate(context: vscode.ExtensionContext) {
 		let keepConnectionOpen = false;
 
 		try {
+			clearProgramSession('connect-start');
 			activeFsService = undefined;
 			activeControlService = undefined;
 			await activeClient.close().catch(() => undefined);
@@ -585,6 +636,7 @@ export function activate(context: vscode.ExtensionContext) {
 			await commandClient.close();
 			activeFsService = undefined;
 			activeControlService = undefined;
+			clearProgramSession('disconnect-command');
 			logger.info('Disconnected active EV3 session.');
 			vscode.window.showInformationMessage('EV3 disconnected.');
 		} catch (error) {
@@ -639,7 +691,7 @@ export function activate(context: vscode.ExtensionContext) {
 				await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
 			}
 			await fsService.runProgram(remotePath);
-			lastRunProgramPath = remotePath;
+			markProgramStarted(remotePath, 'deploy-and-run-single');
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
@@ -1055,7 +1107,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
 				await fsService.runProgram(runTarget);
-				lastRunProgramPath = runTarget;
+				markProgramStarted(runTarget, 'deploy-project-run');
 			}
 
 			logger.info(
@@ -1207,7 +1259,7 @@ export function activate(context: vscode.ExtensionContext) {
 		try {
 			const runPath = normalizeRunProgramPath(input);
 			await fsService.runProgram(runPath);
-			lastRunProgramPath = runPath;
+			markProgramStarted(runPath, 'run-command');
 			logger.info('Run program command completed', {
 				path: runPath
 			});
@@ -1229,6 +1281,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		try {
 			await activeControlService.stopProgram();
+			clearProgramSession('stop-program-command');
 			vscode.window.showInformationMessage('Program stop command sent to EV3.');
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -1243,7 +1296,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		let runPath = lastRunProgramPath;
+		let runPath = activeProgramSession?.remotePath ?? lastRunProgramPath;
 		if (!runPath) {
 			const input = await vscode.window.showInputBox({
 				title: 'Restart EV3 Program (.rbf)',
@@ -1267,7 +1320,7 @@ export function activate(context: vscode.ExtensionContext) {
 		try {
 			await activeControlService.stopProgram();
 			await activeFsService.runProgram(runPath);
-			lastRunProgramPath = runPath;
+			markProgramStarted(runPath, 'restart-command');
 			logger.info('Restart program command completed', {
 				path: runPath
 			});
@@ -1287,6 +1340,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		try {
 			await activeControlService.emergencyStopAll();
+			clearProgramSession('emergency-stop-command');
 			vscode.window.showInformationMessage('Emergency stop command sent to EV3.');
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -1319,7 +1373,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 		logger.info('Transport health report discovery snapshot', {
 			usbCandidates,
-			serialCandidates
+			serialCandidates,
+			activeProgramSession
 		});
 
 		const modes: Array<'usb' | 'tcp' | 'bluetooth'> = ['usb', 'tcp', 'bluetooth'];
@@ -1386,7 +1441,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (action.action === 'run') {
 				try {
 					await fsService.runProgram(remotePath);
-					lastRunProgramPath = remotePath;
+					markProgramStarted(remotePath, 'remote-fs-run');
 					logger.info('Remote FS run program completed', {
 						path: remotePath
 					});
@@ -1703,6 +1758,7 @@ export function activate(context: vscode.ExtensionContext) {
 			scheduler.dispose();
 			activeFsService = undefined;
 			activeControlService = undefined;
+			clearProgramSession('extension-dispose');
 			void commandClient.close();
 		}
 		}

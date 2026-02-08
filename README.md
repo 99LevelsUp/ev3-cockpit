@@ -138,6 +138,8 @@ When `EV3_COCKPIT_HW_RUN_RBF_FIXTURE` is set, hardware smoke performs a real lif
 - `ev3-cockpit.deploy.atomic.enabled`: stage project to temporary remote root and swap with rollback semantics (default `false`)
 - `ev3-cockpit.deploy.verifyAfterUpload`: post-upload integrity verification mode (`none`/`size`/`md5`, default `none`)
 
+Runtime keeps in-memory program session metadata (last path, start timestamp, source command, transport mode) and uses it for restart and diagnostics output.
+
 Remote filesystem URI scheme is `ev3://<brickId>/<abs_path>`. Current MVP uses `ev3://active/...` for the active connection.
 After connecting, you can open files via Quick Open with paths like `ev3://active/home/root/lms2012/prjs/your-file.txt`.
 For directory navigation use command `EV3 Cockpit: Browse Remote FS (active)`.
