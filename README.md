@@ -81,6 +81,11 @@ Override it in workspace/user settings when you need `bluetooth` or `tcp` test r
 - `npm run test:hw:all` - `test:hw` followed by `test:hw:matrix`.
 - `npm run test:all` - unit + extension-host + hardware categories.
 
+## CI
+
+- `.github/workflows/ci.yml` runs required pipeline on push/PR: `lint`, `test` (unit), `test:host`.
+- `.github/workflows/hardware.yml` is manual (`workflow_dispatch`) optional hardware pipeline that runs `test:hw` and `test:hw:matrix` and uploads logs/reports as artifacts.
+
 Hardware smoke returns explicit status per transport:
 - `PASS` transport tested successfully.
 - `SKIP` transport not available in current environment (for example no USB EV3 detected).

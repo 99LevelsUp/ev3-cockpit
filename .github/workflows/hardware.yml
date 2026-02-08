@@ -1,0 +1,60 @@
+name: Hardware (Optional)
+
+on:
+  workflow_dispatch:
+    inputs:
+      transports:
+        description: "Transport subset for hardware smoke (usb,tcp,bluetooth)"
+        required: false
+        default: "usb,tcp,bluetooth"
+      matrix_scenarios:
+        description: "Hardware matrix scenarios"
+        required: false
+        default: "baseline,reconnect,reconnect-glitch"
+
+jobs:
+  hardware:
+    name: Hardware Smoke + Matrix
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare artifacts folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/hw -Force | Out-Null
+
+      - name: Run hardware smoke (optional)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          EV3_COCKPIT_HW_TRANSPORTS: ${{ inputs.transports }}
+        run: |
+          npm run test:hw 2>&1 | Tee-Object artifacts/hw/hardware-smoke.log
+
+      - name: Run hardware matrix (optional)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          EV3_COCKPIT_HW_MATRIX_SCENARIOS: ${{ inputs.matrix_scenarios }}
+          EV3_COCKPIT_HW_MATRIX_REPORT: artifacts/hw/hardware-matrix.json
+        run: |
+          npm run test:hw:matrix 2>&1 | Tee-Object artifacts/hw/hardware-matrix.log
+
+      - name: Upload hardware artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-artifacts
+          path: artifacts/hw
+

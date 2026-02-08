@@ -110,6 +110,8 @@ Tento dokument popisuje implementacni plan pro `CommandScheduler` v projektu `ev
   - extension-host testy (`test:host`) rozsireny o fake TCP EV3 FS scenar s CRUD flow pres `ev3://active/...` (`write/read/copy/rename/delete`) + overeni odmítnuti ne-`active` authority.
   - extension-host fake TCP scenar pokryva i adresarove copy/rename/delete vetve (vcetne non-recursive `NOT_EMPTY`) a safe-root guard (`ev3://active/etc` blokace v safe mode).
   - extension-host fake TCP scenar pokryva i workspace deploy workflow commandy: `Preview Workspace Deploy Changes`, `Sync Workspace`, `Deploy Workspace and Run .rbf` (vcetne overeni, ze preview nic nezapisuje a deploy+run opravdu odesle run command).
+  - pridany CI workflow `.github/workflows/ci.yml` (`lint + test:unit + test:host`) pro push/PR.
+  - pridany manualni optional HW workflow `.github/workflows/hardware.yml` (workflow_dispatch + artifact upload pro `test:hw` a `test:hw:matrix`).
   - opraven edge-case v `remoteFsOps.getRemotePathKind`: safe-root adresar je detekovan primym `listDirectory(path)` bez nutnosti listovat zakazany parent mimo safe roots.
 
 Zbyva:
