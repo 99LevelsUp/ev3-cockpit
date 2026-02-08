@@ -81,7 +81,10 @@ const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-
 const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 	usb: [
 		/no ev3 usb hid device found/i,
-		/requires package "node-hid"/i
+		/requires package "node-hid"/i,
+		/could not read from hid device/i,
+		/could not write to hid device/i,
+		/device has been disconnected/i
 	],
 	tcp: [
 		/requires non-empty host/i,

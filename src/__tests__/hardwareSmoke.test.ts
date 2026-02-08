@@ -15,6 +15,7 @@ import {
 
 test('hardware smoke classifies unavailable USB errors', () => {
 	assert.equal(isLikelyUnavailableError('usb', new Error('No EV3 USB HID device found.')), true);
+	assert.equal(isLikelyUnavailableError('usb', new Error('Request execution failed: could not read from HID device.')), true);
 	assert.equal(isLikelyUnavailableError('usb', new Error('Probe reply command mismatch.')), false);
 });
 
