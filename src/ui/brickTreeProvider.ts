@@ -42,6 +42,7 @@ export interface BrickMessageNode {
 
 export interface BrickTreeDataSource {
 	listBricks(): BrickSnapshot[];
+	getBrickSnapshot(brickId: string): BrickSnapshot | undefined;
 	resolveFsService(brickId: string): Promise<RemoteFsService>;
 }
 
@@ -101,7 +102,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 					vscode.TreeItemCollapsibleState.Collapsed
 				);
 				item.id = `brick:${element.brickId}`;
-				item.description = `${element.role} | ${element.transport} | ${element.status}`;
+				const statusBadge = this.renderStatusBadge(element.status, element.isActive);
+				item.description = `${statusBadge} | ${element.transport} | ${element.role}`;
 				item.tooltip = element.lastError
 					? `${element.displayName}\n${element.rootPath}\n${element.lastError}`
 					: `${element.displayName}\n${element.rootPath}`;
@@ -110,11 +112,17 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 					element.status === 'READY' ? (element.isActive ? 'plug' : 'device-camera-video') : 'warning'
 				);
 				item.resourceUri = buildEv3Uri(element.brickId, element.rootPath);
-				item.command = {
-					command: 'ev3-cockpit.browseRemoteFs',
-					title: 'Browse Remote FS',
-					arguments: [element]
-				};
+				item.command =
+					element.status === 'READY'
+						? {
+								command: 'ev3-cockpit.browseRemoteFs',
+								title: 'Browse Remote FS',
+								arguments: [element]
+							}
+						: {
+								command: 'ev3-cockpit.connectEV3',
+								title: 'Connect EV3'
+							};
 				return item;
 			}
 			case 'directory': {
@@ -183,6 +191,18 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			return this.loadDirectoryChildren(element.brickId, element.rootPath);
 		}
 
+		const snapshot = this.options.dataSource.getBrickSnapshot(element.brickId);
+		if (snapshot && snapshot.status !== 'READY') {
+			return [
+				{
+					kind: 'message',
+					brickId: element.brickId,
+					label: 'Brick unavailable',
+					detail: snapshot.lastError ?? 'Connection was interrupted. Expand root after reconnect.'
+				}
+			];
+		}
+
 		return this.loadDirectoryChildren(element.brickId, element.remotePath);
 	}
 
@@ -213,7 +233,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			return [...folders, ...files];
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			logger.warn('Brick tree directory listing failed', {
+			const logFn = /offline|not connected|not open|timeout|unavailable/i.test(message) ? logger.info.bind(logger) : logger.warn.bind(logger);
+			logFn('Brick tree directory listing failed', {
 				brickId,
 				remotePath,
 				message
@@ -227,6 +248,13 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				}
 			];
 		}
+	}
+
+	private renderStatusBadge(status: BrickSnapshot['status'], isActive: boolean): string {
+		if (status === 'READY' && isActive) {
+			return 'ACTIVE';
+		}
+		return status;
 	}
 }
 

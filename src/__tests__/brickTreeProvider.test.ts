@@ -60,6 +60,7 @@ async function withMockedProvider<T>(
 				contextValue?: string;
 				collapsibleState?: number;
 				description?: string;
+				command?: { command: string };
 			};
 		};
 	}) => Promise<T>
@@ -86,6 +87,7 @@ async function withMockedProvider<T>(
 					contextValue?: string;
 					collapsibleState?: number;
 					description?: string;
+					command?: { command: string };
 				};
 			};
 		};
@@ -120,6 +122,27 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 						lastError: 'offline'
 					}
 				],
+				getBrickSnapshot: (brickId: string) =>
+					brickId === 'usb-auto'
+						? {
+								brickId: 'usb-auto',
+								displayName: 'EV3 USB',
+								role: 'standalone',
+								transport: 'usb',
+								status: 'READY',
+								isActive: true,
+								rootPath: '/home/root/lms2012/prjs/'
+							}
+						: {
+								brickId: 'tcp-active',
+								displayName: 'EV3 TCP',
+								role: 'standalone',
+								transport: 'tcp',
+								status: 'UNAVAILABLE',
+								isActive: false,
+								rootPath: '/home/root/lms2012/prjs/',
+								lastError: 'offline'
+							},
 				resolveFsService: async () => ({
 					listDirectory: async () => ({
 						folders: ['Demo'],
@@ -137,6 +160,8 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 
 		const readyItem = provider.getTreeItem(readyRoot);
 		assert.equal(readyItem.contextValue, 'ev3BrickRootReady');
+		assert.equal(readyItem.command?.command, 'ev3-cockpit.browseRemoteFs');
+		assert.match(readyItem.description ?? '', /ACTIVE/);
 
 		const readyChildren = await provider.getChildren(readyRoot);
 		assert.equal(readyChildren.length, 2);
@@ -144,8 +169,59 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 		assert.equal((readyChildren[1] as { kind: string }).kind, 'file');
 
 		const unavailableRoot = roots[1];
+		const unavailableItem = provider.getTreeItem(unavailableRoot);
+		assert.equal(unavailableItem.command?.command, 'ev3-cockpit.connectEV3');
 		const unavailableChildren = await provider.getChildren(unavailableRoot);
 		assert.equal(unavailableChildren.length, 1);
 		assert.equal((unavailableChildren[0] as { kind: string }).kind, 'message');
+	});
+});
+
+test('BrickTreeProvider returns unavailable message for expanded directory after disconnect', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		let unavailable = false;
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'usb-auto',
+						displayName: 'EV3 USB',
+						role: 'standalone',
+						transport: 'usb',
+						status: unavailable ? 'UNAVAILABLE' : 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/',
+						lastError: unavailable ? 'Disconnected' : undefined
+					}
+				],
+				getBrickSnapshot: () => ({
+					brickId: 'usb-auto',
+					displayName: 'EV3 USB',
+					role: 'standalone',
+					transport: 'usb',
+					status: unavailable ? 'UNAVAILABLE' : 'READY',
+					isActive: true,
+					rootPath: '/home/root/lms2012/prjs/',
+					lastError: unavailable ? 'Disconnected' : undefined
+				}),
+				resolveFsService: async () => ({
+					listDirectory: async () => ({
+						folders: ['Demo'],
+						files: []
+					})
+				})
+			}
+		});
+
+		const roots = await provider.getChildren();
+		const root = roots[0];
+		const children = await provider.getChildren(root);
+		assert.equal((children[0] as { kind: string }).kind, 'directory');
+
+		unavailable = true;
+		const afterDisconnect = await provider.getChildren(children[0]);
+		assert.equal(afterDisconnect.length, 1);
+		assert.equal((afterDisconnect[0] as { kind: string }).kind, 'message');
+		assert.match((afterDisconnect[0] as { label: string }).label, /Brick unavailable/);
 	});
 });

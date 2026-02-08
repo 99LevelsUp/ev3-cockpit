@@ -151,6 +151,11 @@
           "group": "inline"
         },
         {
+          "command": "ev3-cockpit.connectEV3",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootUnavailable",
+          "group": "inline"
+        },
+        {
           "command": "ev3-cockpit.uploadToBrickFolder",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3RemoteDirectory)",
           "group": "2_modification"
