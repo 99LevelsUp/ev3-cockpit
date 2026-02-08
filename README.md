@@ -26,7 +26,7 @@ It is an extension that runs inside Visual Studio Code and adds EV3-specific com
 - Upload, download, create folders, delete entries.
 - Deploy project/workspace files to EV3.
 - Preview deploy changes before applying them.
-- Run, stop, restart `.rbf` programs.
+- Run, stop, restart remote executables (currently `.rbf`).
 - Trigger Emergency Stop.
 
 ## Explorer Tree Workflow (User UI)
@@ -36,10 +36,11 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - Each connected brick is shown as its own collapsible root.
 - Expanding a brick shows its remote folders and files.
 - Clicking a file opens it in the editor.
-- `.rbf` files are shown with a run-oriented icon and have a direct **Run .rbf** action.
+- Executable files are shown with a run-oriented icon and have a direct **Run** action.
 - You can drag-and-drop remote files/folders in the tree to move them within the same brick.
 - You can drag local files/folders from your OS/Explorer into a remote EV3 folder to upload.
 - Active-brick root context now includes quick actions like reconnect/disconnect/emergency stop and deploy variants.
+- Executable launch is type-based under the hood, so more executable file types can be added without changing the UI workflow.
 
 ## Implementation Status
 

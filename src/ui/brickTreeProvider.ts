@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import { Logger, NoopLogger } from '../diagnostics/logger';
+import { isRemoteExecutablePath } from '../fs/remoteExecutable';
 import type { RemoteFsService } from '../fs/remoteFsService';
 
 export type BrickTreeNode = BrickRootNode | BrickDirectoryNode | BrickFileNode | BrickMessageNode;
@@ -61,10 +62,6 @@ function normalizeRootPath(remotePath: string): string {
 		return `/${normalized}`;
 	}
 	return normalized;
-}
-
-function isExecutablePath(remotePath: string): boolean {
-	return remotePath.toLowerCase().endsWith('.rbf');
 }
 
 export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode> {
@@ -145,8 +142,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
 				item.id = `file:${element.brickId}:${element.remotePath}`;
 				item.description = `${element.size} B`;
-				const isExecutable = isExecutablePath(element.remotePath);
-				item.contextValue = isExecutable ? 'ev3RemoteFileRbf' : 'ev3RemoteFile';
+				const isExecutable = isRemoteExecutablePath(element.remotePath);
+				item.contextValue = isExecutable ? 'ev3RemoteFileExecutable' : 'ev3RemoteFile';
 				item.iconPath = new vscode.ThemeIcon(isExecutable ? 'play' : 'file');
 				item.resourceUri = buildEv3Uri(element.brickId, element.remotePath);
 				item.command = {

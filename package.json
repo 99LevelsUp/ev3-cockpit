@@ -112,7 +112,7 @@
       },
       {
         "command": "ev3-cockpit.runRemoteProgram",
-        "title": "EV3 Cockpit: Run Remote Program (.rbf)"
+        "title": "EV3 Cockpit: Run Remote Program"
       },
       {
         "command": "ev3-cockpit.stopProgram",
@@ -160,7 +160,7 @@
       },
       {
         "command": "ev3-cockpit.runRemoteRbfFromTree",
-        "title": "EV3 Cockpit: Run .rbf from Remote FS",
+        "title": "EV3 Cockpit: Run Executable from Remote FS",
         "icon": "$(play)"
       }
     ],
@@ -258,12 +258,12 @@
         },
         {
           "command": "ev3-cockpit.deleteRemoteEntryFromTree",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileRbf)",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
           "group": "2_modification"
         },
         {
           "command": "ev3-cockpit.runRemoteRbfFromTree",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileRbf",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileExecutable",
           "group": "inline"
         }
       ]

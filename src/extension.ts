@@ -22,6 +22,11 @@ import { verifyUploadedFile } from './fs/deployVerify';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { isLikelyBinaryPath } from './fs/fileKind';
 import { createGlobMatcher } from './fs/globMatch';
+import {
+	assertRemoteExecutablePath,
+	isRemoteExecutablePath,
+	runRemoteExecutable
+} from './fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from './fs/remoteFsOps';
 import { RemoteFsService } from './fs/remoteFsService';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from './protocol/capabilityProbe';
@@ -404,10 +409,10 @@ export function activate(context: vscode.ExtensionContext) {
 		return false;
 	};
 
-	const normalizeRunProgramPath = (input: string): string => {
+	const normalizeRunExecutablePath = (input: string): string => {
 		const trimmed = input.trim();
 		if (!trimmed) {
-			throw new Error('Program path must not be empty.');
+			throw new Error('Executable path must not be empty.');
 		}
 
 		let candidate = trimmed;
@@ -420,9 +425,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		const normalized = path.posix.normalize(candidate.startsWith('/') ? candidate : `/${candidate}`);
-		if (!normalized.toLowerCase().endsWith('.rbf')) {
-			throw new Error('Only .rbf program paths are supported.');
-		}
+		assertRemoteExecutablePath(normalized);
 		return normalized;
 	};
 
@@ -903,13 +906,14 @@ export function activate(context: vscode.ExtensionContext) {
 			if (featureConfig.deploy.verifyAfterUpload !== 'none') {
 				await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
 			}
-			await fsService.runProgram(remotePath);
+			const executable = await runRemoteExecutable(fsService, remotePath);
 			markProgramStarted(remotePath, 'deploy-and-run-single');
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
 				remotePath,
 				size: bytes.length,
+				type: executable.typeId,
 				verifyAfterUpload: featureConfig.deploy.verifyAfterUpload
 			});
 			vscode.window.showInformationMessage(`Deployed and started: ev3://active${remotePath}`);
@@ -1494,7 +1498,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			if (!options.previewOnly && options.runAfterDeploy && runTarget) {
-				await runDeployStepWithResilience('run-program', () => fsService.runProgram(runTarget));
+				await runDeployStepWithResilience('run-program', () => runRemoteExecutable(fsService, runTarget));
 				markProgramStarted(runTarget, 'deploy-project-run');
 			}
 
@@ -1909,12 +1913,12 @@ export function activate(context: vscode.ExtensionContext) {
 		const fsService = activeFsService;
 
 		const input = await vscode.window.showInputBox({
-			title: 'Run EV3 Program (.rbf)',
+			title: 'Run EV3 Executable',
 			prompt: 'Remote path or ev3://active/... URI',
 			value: lastRunProgramPath ?? '/home/root/lms2012/prjs/',
 			validateInput: (value) => {
 				try {
-					normalizeRunProgramPath(value);
+					normalizeRunExecutablePath(value);
 					return undefined;
 				} catch (error) {
 					return error instanceof Error ? error.message : String(error);
@@ -1926,11 +1930,12 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		try {
-			const runPath = normalizeRunProgramPath(input);
-			await fsService.runProgram(runPath);
+			const runPath = normalizeRunExecutablePath(input);
+			const executable = await runRemoteExecutable(fsService, runPath);
 			markProgramStarted(runPath, 'run-command');
 			logger.info('Run program command completed', {
-				path: runPath
+				path: runPath,
+				type: executable.typeId
 			});
 			vscode.window.showInformationMessage(`Program started: ev3://active${runPath}`);
 		} catch (error) {
@@ -1968,12 +1973,12 @@ export function activate(context: vscode.ExtensionContext) {
 		let runPath = activeProgramSession?.remotePath ?? lastRunProgramPath;
 		if (!runPath) {
 			const input = await vscode.window.showInputBox({
-				title: 'Restart EV3 Program (.rbf)',
+				title: 'Restart EV3 Executable',
 				prompt: 'Remote path or ev3://active/... URI',
 				value: '/home/root/lms2012/prjs/',
 				validateInput: (value) => {
 					try {
-						normalizeRunProgramPath(value);
+						normalizeRunExecutablePath(value);
 						return undefined;
 					} catch (error) {
 						return error instanceof Error ? error.message : String(error);
@@ -1983,15 +1988,16 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!input) {
 				return;
 			}
-			runPath = normalizeRunProgramPath(input);
+			runPath = normalizeRunExecutablePath(input);
 		}
 
 		try {
 			await activeControlService.stopProgram();
-			await activeFsService.runProgram(runPath);
+			const executable = await runRemoteExecutable(activeFsService, runPath);
 			markProgramStarted(runPath, 'restart-command');
 			logger.info('Restart program command completed', {
-				path: runPath
+				path: runPath,
+				type: executable.typeId
 			});
 			vscode.window.showInformationMessage(`Program restarted: ev3://active${runPath}`);
 		} catch (error) {
@@ -2088,10 +2094,10 @@ export function activate(context: vscode.ExtensionContext) {
 					action: 'download'
 				}
 			];
-			if (remotePath.toLowerCase().endsWith('.rbf')) {
+			if (isRemoteExecutablePath(remotePath)) {
 				items.push({
 					label: 'Run on EV3',
-					description: 'Load and start this bytecode program in USER slot.',
+					description: 'Run this file on EV3 using the registered executable handler.',
 					action: 'run'
 				});
 			}
@@ -2111,10 +2117,11 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (action.action === 'run') {
 				try {
-					await fsService.runProgram(remotePath);
+					const executable = await runRemoteExecutable(fsService, remotePath);
 					markProgramStarted(remotePath, 'remote-fs-run');
 					logger.info('Remote FS run program completed', {
-						path: remotePath
+						path: remotePath,
+						type: executable.typeId
 					});
 					vscode.window.showInformationMessage(`Program started: ev3://${authority}${remotePath}`);
 				} catch (error) {
@@ -2486,8 +2493,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const runRemoteRbfFromTree = vscode.commands.registerCommand(
 		'ev3-cockpit.runRemoteRbfFromTree',
 		async (node?: unknown) => {
-			if (!isBrickFileNode(node) || !node.remotePath.toLowerCase().endsWith('.rbf')) {
-				vscode.window.showErrorMessage('Select an .rbf file in EV3 Cockpit Bricks view.');
+			if (!isBrickFileNode(node) || !isRemoteExecutablePath(node.remotePath)) {
+				vscode.window.showErrorMessage('Select an executable file in EV3 Cockpit Bricks view.');
 				return;
 			}
 
@@ -2498,8 +2505,13 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			try {
-				await fsContext.fsService.runProgram(node.remotePath);
+				const executable = await runRemoteExecutable(fsContext.fsService, node.remotePath);
 				markProgramStarted(node.remotePath, 'remote-fs-run');
+				logger.info('Tree run executable completed', {
+					path: node.remotePath,
+					type: executable.typeId,
+					brickId: fsContext.brickId
+				});
 				vscode.window.showInformationMessage(`Program started: ev3://${fsContext.authority}${node.remotePath}`);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
