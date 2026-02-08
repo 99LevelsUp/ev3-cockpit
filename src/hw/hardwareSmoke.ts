@@ -646,6 +646,14 @@ async function runDriverDropRecoveryCheck(
 	windowMs: number,
 	pollMs: number
 ): Promise<{ ok: boolean; skipped?: boolean; message?: string }> {
+	const logPrefix = `[HW][${transport.toUpperCase()}][driver-drop]`;
+	const startedAt = Date.now();
+	const logStep = (message: string): void => {
+		const elapsedMs = Date.now() - startedAt;
+		const remainingMs = Math.max(0, windowMs - elapsedMs);
+		console.log(`${logPrefix} +${elapsedMs}ms (remaining ${remainingMs}ms) ${message}`);
+	};
+
 	const scheduler = new CommandScheduler({
 		defaultTimeoutMs: timeoutMs
 	});
@@ -655,56 +663,84 @@ async function runDriverDropRecoveryCheck(
 	});
 
 	try {
+		logStep(`Opening transport (timeout=${timeoutMs}ms).`);
 		await client.open();
+		logStep('Initial probe before driver-drop window.');
 		await runProbeWithClient(client, timeoutMs);
 		console.log(
 			`[HW][${transport.toUpperCase()}] Driver-drop reconnect check active: disconnect and reconnect the transport within ${windowMs}ms.`
 		);
 
-		const startedAt = Date.now();
+		const deadlineAt = startedAt + windowMs;
 		let dropObserved = false;
 		let connectionOpen = true;
-		while (Date.now() - startedAt < windowMs) {
+		let loopCounter = 0;
+		let reconnectAttempts = 0;
+		let reconnectFailures = 0;
+		let probeFailures = 0;
+		while (Date.now() < deadlineAt) {
+			loopCounter += 1;
 			await sleep(pollMs);
 
 			if (!connectionOpen) {
+				reconnectAttempts += 1;
+				logStep(`Reconnect attempt #${reconnectAttempts}: opening transport.`);
 				try {
 					await client.open();
 					connectionOpen = true;
+					logStep(`Reconnect attempt #${reconnectAttempts} succeeded.`);
 				} catch (error) {
+					reconnectFailures += 1;
+					const message = errorMessage(error);
+					logStep(`Reconnect attempt #${reconnectAttempts} failed (${message}).`);
 					if (isLikelyUnavailableError(transport, error)) {
 						continue;
 					}
 					return {
 						ok: false,
-						message: errorMessage(error)
+						message
 					};
 				}
 			}
 
 			try {
+				logStep(`Probe tick #${loopCounter}.`);
 				await runProbeWithClient(client, timeoutMs);
+				logStep(`Probe tick #${loopCounter} succeeded.`);
 				if (dropObserved) {
+					logStep(
+						`Recovery confirmed after drop (loops=${loopCounter}, reconnectAttempts=${reconnectAttempts}, reconnectFailures=${reconnectFailures}, probeFailures=${probeFailures}).`
+					);
 					return { ok: true };
 				}
 			} catch (error) {
+				probeFailures += 1;
+				const message = errorMessage(error);
+				logStep(`Probe tick #${loopCounter} failed (${message}).`);
 				if (!isLikelyUnavailableError(transport, error)) {
 					return {
 						ok: false,
-						message: errorMessage(error)
+						message
 					};
 				}
 
-				dropObserved = true;
+				if (!dropObserved) {
+					dropObserved = true;
+					logStep('Driver-level drop observed; entering reconnect phase.');
+				}
 				if (connectionOpen) {
 					await client.close().catch(() => undefined);
 					connectionOpen = false;
+					logStep('Transport closed after detected drop; waiting before next reconnect attempt.');
 				}
 				await sleep(Math.min(Math.max(50, pollMs), 500));
 			}
 		}
 
 		if (!dropObserved) {
+			logStep(
+				`Window expired without observed drop (loops=${loopCounter}, reconnectAttempts=${reconnectAttempts}, reconnectFailures=${reconnectFailures}, probeFailures=${probeFailures}).`
+			);
 			return {
 				ok: false,
 				skipped: true,
@@ -712,6 +748,9 @@ async function runDriverDropRecoveryCheck(
 			};
 		}
 
+		logStep(
+			`Window expired after observed drop without full recovery (loops=${loopCounter}, reconnectAttempts=${reconnectAttempts}, reconnectFailures=${reconnectFailures}, probeFailures=${probeFailures}).`
+		);
 		return {
 			ok: false,
 			message: `Driver-level disconnect observed, but reconnect did not recover within ${windowMs}ms window.`
