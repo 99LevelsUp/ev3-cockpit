@@ -1756,6 +1756,29 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	);
 
+	const deployWorkspaceAndRunRbfToBrick = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceAndRunRbfToBrick',
+		async (node?: unknown) => {
+			const target = resolveDeployTargetFromArg(node);
+			if ('error' in target) {
+				vscode.window.showErrorMessage(target.error);
+				return;
+			}
+
+			const workspaceUri = await pickWorkspaceProjectFolder();
+			if (!workspaceUri) {
+				return;
+			}
+
+			await executeProjectDeploy({
+				runAfterDeploy: true,
+				previewOnly: false,
+				projectUri: workspaceUri,
+				target
+			});
+		}
+	);
+
 	const deployProjectAndRunRbf = vscode.commands.registerCommand('ev3-cockpit.deployProjectAndRunRbf', async () => {
 		await executeProjectDeploy({ runAfterDeploy: true, previewOnly: false });
 	});
@@ -2449,6 +2472,7 @@ export function activate(context: vscode.ExtensionContext) {
 		deployWorkspace,
 		previewWorkspaceDeployToBrick,
 		deployWorkspaceToBrick,
+		deployWorkspaceAndRunRbfToBrick,
 		deployProjectAndRunRbf,
 		deployWorkspaceAndRunRbf,
 		applyDeployProfile,

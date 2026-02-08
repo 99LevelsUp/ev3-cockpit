@@ -19,6 +19,7 @@
     "onCommand:ev3-cockpit.deployWorkspace",
     "onCommand:ev3-cockpit.previewWorkspaceDeployToBrick",
     "onCommand:ev3-cockpit.deployWorkspaceToBrick",
+    "onCommand:ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
     "onCommand:ev3-cockpit.deployProjectAndRunRbf",
     "onCommand:ev3-cockpit.deployWorkspaceAndRunRbf",
     "onCommand:ev3-cockpit.applyDeployProfile",
@@ -72,6 +73,10 @@
       {
         "command": "ev3-cockpit.deployWorkspaceToBrick",
         "title": "EV3 Cockpit: Sync Workspace to EV3 (selected brick)"
+      },
+      {
+        "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
+        "title": "EV3 Cockpit: Deploy Workspace and Run .rbf (selected brick)"
       },
       {
         "command": "ev3-cockpit.deployProjectAndRunRbf",
@@ -177,6 +182,11 @@
         },
         {
           "command": "ev3-cockpit.deployWorkspaceToBrick",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
+          "group": "3_deploy"
+        },
+        {
+          "command": "ev3-cockpit.deployWorkspaceAndRunRbfToBrick",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReady",
           "group": "3_deploy"
         },
