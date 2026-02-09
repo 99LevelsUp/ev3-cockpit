@@ -7,3 +7,6 @@ node_modules/
 *.log
 *.logcls
 .claude/
+ARCHITECTURE.md
+DESIGN.md
+IMPLEMENTATION.md

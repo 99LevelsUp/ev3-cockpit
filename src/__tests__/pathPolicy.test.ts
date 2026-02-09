@@ -51,6 +51,6 @@ test('evaluateFsAccess allows broad path in full mode outside safe roots', () =>
 });
 
 test('isAsciiSafePath returns false for non-ASCII path', () => {
-	assert.equal(isAsciiSafePath('/home/root/lms2012/prjs/česky.rbf'), false);
+	assert.equal(isAsciiSafePath('/home/root/lms2012/prjs/non-ascii-µ.rbf'), false);
 	assert.equal(isAsciiSafePath('/home/root/lms2012/prjs/ascii.rbf'), true);
 });
