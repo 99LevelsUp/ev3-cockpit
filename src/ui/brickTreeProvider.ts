@@ -272,7 +272,6 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				item.contextValue = this.getRootContextValue(element);
 				item.iconPath = this.getRootIcon(element);
 				item.resourceUri = buildEv3Uri(element.brickId, element.rootPath);
-				item.command = this.getRootCommand(element);
 				return item;
 			}
 			case 'directory': {
@@ -581,24 +580,6 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		return new vscode.ThemeIcon('debug-disconnect');
 	}
 
-	private getRootCommand(node: BrickRootNode): vscode.Command | undefined {
-		if (node.status === 'READY') {
-			return {
-				command: 'ev3-cockpit.browseRemoteFs',
-				title: 'Browse Remote FS',
-				arguments: [node]
-			};
-		}
-		if (node.status === 'UNAVAILABLE' || node.status === 'ERROR') {
-			return {
-				command: 'ev3-cockpit.connectEV3',
-				title: 'Connect EV3',
-				arguments: [node]
-			};
-		}
-		return undefined;
-	}
-
 	private buildUnavailableMessageNode(
 		brickId: string,
 		status: BrickSnapshot['status'],
@@ -610,7 +591,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				kind: 'message',
 				brickId,
 				label: 'Connecting...',
-				detail: 'Connection is being established.'
+				detail: 'Connection is being established.',
+				contextValue: 'ev3BrickMessageConnecting'
 			};
 		}
 		if (status === 'ERROR') {
@@ -618,14 +600,26 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				kind: 'message',
 				brickId,
 				label: 'Brick error',
-				detail: lastError ?? 'Connection failed. Reconnect to retry.'
+				detail: lastError ?? 'Connection failed. Reconnect to retry.',
+				contextValue: 'ev3BrickMessageConnect',
+				command: {
+					command: 'ev3-cockpit.connectEV3',
+					title: 'Connect EV3',
+					arguments: [brickId]
+				}
 			};
 		}
 		return {
 			kind: 'message',
 			brickId,
 			label: 'Brick unavailable',
-			detail: lastError ?? fallbackDetail
+			detail: lastError ?? fallbackDetail,
+			contextValue: 'ev3BrickMessageConnect',
+			command: {
+				command: 'ev3-cockpit.connectEV3',
+				title: 'Connect EV3',
+				arguments: [brickId]
+			}
 		};
 	}
 
