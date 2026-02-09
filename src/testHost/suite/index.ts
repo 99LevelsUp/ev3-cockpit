@@ -1241,6 +1241,23 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
 			await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
 			await vscode.commands.executeCommand('ev3-cockpit.inspectBrickSessions');
+			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+			assert.ok(workspaceFolder, 'Expected workspace folder for diagnostics report verification.');
+			const diagnosticsReportPath = path.join(
+				workspaceFolder.uri.fsPath,
+				'artifacts',
+				'diagnostics',
+				'brick-sessions-report.json'
+			);
+			const diagnosticsReportRaw = await fs.readFile(diagnosticsReportPath, 'utf8');
+			const diagnosticsReport = JSON.parse(diagnosticsReportRaw) as {
+				generatedAtIso?: string;
+				bricks?: unknown[];
+				runtimeSessions?: unknown[];
+			};
+			assert.equal(typeof diagnosticsReport.generatedAtIso, 'string');
+			assert.ok(Array.isArray(diagnosticsReport.bricks));
+			assert.ok(Array.isArray(diagnosticsReport.runtimeSessions));
 			await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
 			await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
 			await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks');

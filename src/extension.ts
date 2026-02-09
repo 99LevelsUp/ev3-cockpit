@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { registerBatchCommands } from './commands/batchCommands';
 import { registerBrowseCommands } from './commands/browseCommands';
@@ -612,15 +613,31 @@ export function activate(context: vscode.ExtensionContext) {
 		const runtimeSnapshots = sessionManager.listRuntimeSnapshots();
 		const programSnapshots = sessionManager.listProgramSnapshots();
 		const busySessions = runtimeSnapshots.filter((entry) => entry.busyCommandCount > 0).length;
-
-		logger.info('Brick session diagnostics report', {
+		const report = {
+			generatedAtIso: new Date().toISOString(),
 			activeBrickId: brickRegistry.getActiveBrickId(),
 			bricks: brickSnapshots,
 			runtimeSessions: runtimeSnapshots,
 			programSessions: programSnapshots
+		};
+
+		logger.info('Brick session diagnostics report', {
+			...report
 		});
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+		const reportDirectory = path.join(workspaceRoot, 'artifacts', 'diagnostics');
+		const reportPath = path.join(reportDirectory, 'brick-sessions-report.json');
+		try {
+			await fs.mkdir(reportDirectory, { recursive: true });
+			await fs.writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+		} catch (error) {
+			logger.warn('Failed to export brick session diagnostics report to JSON.', {
+				reportPath,
+				error: error instanceof Error ? error.message : String(error)
+			});
+		}
 		vscode.window.showInformationMessage(
-			`Brick session diagnostics: bricks=${brickSnapshots.length}, runtime=${runtimeSnapshots.length}, busy=${busySessions}. See EV3 Cockpit output.`
+			`Brick session diagnostics: bricks=${brickSnapshots.length}, runtime=${runtimeSnapshots.length}, busy=${busySessions}. JSON: ${reportPath}`
 		);
 	});
 
