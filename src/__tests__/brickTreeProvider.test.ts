@@ -356,6 +356,49 @@ test('BrickTreeProvider exposes retry action for directory listing errors', asyn
 	});
 });
 
+test('BrickTreeProvider renders empty-folder message for empty listing', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'usb-auto',
+						displayName: 'EV3 USB',
+						role: 'standalone',
+						transport: 'usb',
+						status: 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/'
+					}
+				],
+				getBrickSnapshot: () => ({
+					brickId: 'usb-auto',
+					displayName: 'EV3 USB',
+					role: 'standalone',
+					transport: 'usb',
+					status: 'READY',
+					isActive: true,
+					rootPath: '/home/root/lms2012/prjs/'
+				}),
+				resolveFsService: async () => ({
+					listDirectory: async () => ({
+						folders: [],
+						files: []
+					})
+				})
+			}
+		});
+
+		const roots = await provider.getChildren();
+		const children = await provider.getChildren(roots[0]);
+		assert.equal(children.length, 1);
+		assert.equal((children[0] as { kind: string }).kind, 'message');
+		const emptyMessageItem = provider.getTreeItem(children[0]);
+		assert.equal(emptyMessageItem.contextValue, 'ev3RemoteDirectoryEmpty');
+		assert.equal(emptyMessageItem.command, undefined);
+	});
+});
+
 test('BrickTreeProvider maps root status to context and action', async () => {
 	await withMockedProvider(async ({ BrickTreeProvider }) => {
 		const provider = new BrickTreeProvider({

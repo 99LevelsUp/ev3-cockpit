@@ -498,7 +498,18 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				.map((entry) =>
 					this.upsertFileNode(brickId, entry.name, path.posix.join(normalizedPath, entry.name), entry.size)
 				);
-			const children = [...folders, ...files];
+			const children: BrickTreeNode[] =
+				folders.length > 0 || files.length > 0
+					? [...folders, ...files]
+					: [
+						{
+							kind: 'message',
+							brickId,
+							label: 'Empty folder',
+							detail: normalizedPath,
+							contextValue: 'ev3RemoteDirectoryEmpty'
+						}
+					];
 			this.setCachedDirectoryChildren(key, normalizedPath, children);
 			return children;
 		} catch (error) {
