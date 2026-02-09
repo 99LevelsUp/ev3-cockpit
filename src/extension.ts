@@ -132,6 +132,20 @@ export function activate(context: vscode.ExtensionContext) {
 				return left.displayName.localeCompare(right.displayName);
 			});
 	};
+	let bricksTreeFilterQuery = '';
+	const updateBricksTreeFilterQuery = async (nextQuery: string): Promise<void> => {
+		const normalized = nextQuery.trim();
+		if (bricksTreeFilterQuery === normalized) {
+			return;
+		}
+		bricksTreeFilterQuery = normalized;
+		await vscode.commands.executeCommand(
+			'setContext',
+			'ev3-cockpit.bricksFilterActive',
+			bricksTreeFilterQuery.length > 0
+		);
+		treeProvider.refresh();
+	};
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
@@ -145,7 +159,8 @@ export function activate(context: vscode.ExtensionContext) {
 				return service;
 			}
 		},
-		isFavoriteBrick: (brickId) => brickUiStateStore.isFavorite(brickId)
+		isFavoriteBrick: (brickId) => brickUiStateStore.isFavorite(brickId),
+		getFilterQuery: () => bricksTreeFilterQuery
 	});
 
 	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
@@ -680,6 +695,29 @@ export function activate(context: vscode.ExtensionContext) {
 				: `Brick unpinned: ${snapshot.displayName}`
 		);
 	});
+	const setBricksTreeFilter = vscode.commands.registerCommand('ev3-cockpit.setBricksTreeFilter', async (arg?: unknown) => {
+		const query =
+			typeof arg === 'string'
+				? arg
+				: await vscode.window.showInputBox({
+					prompt: 'Filter bricks tree by brick name or remote path',
+					value: bricksTreeFilterQuery,
+					placeHolder: 'Example: EV3 TCP, /docs/, main.rbf'
+				});
+		if (query === undefined) {
+			return;
+		}
+		await updateBricksTreeFilterQuery(query);
+		if (query.trim().length === 0) {
+			vscode.window.showInformationMessage('Bricks tree filter cleared.');
+		} else {
+			vscode.window.showInformationMessage(`Bricks tree filter: "${query.trim()}"`);
+		}
+	});
+	const clearBricksTreeFilter = vscode.commands.registerCommand('ev3-cockpit.clearBricksTreeFilter', async () => {
+		await updateBricksTreeFilterQuery('');
+		vscode.window.showInformationMessage('Bricks tree filter cleared.');
+	});
 
 	// --- Config watcher, FS provider, tree view ---
 
@@ -910,6 +948,7 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showWarningMessage(`Reveal in Bricks Tree failed: ${message}`);
 		}
 	});
+	void vscode.commands.executeCommand('setContext', 'ev3-cockpit.bricksFilterActive', false);
 	const busyStateByBrickId = new Map<string, string>();
 	const refreshBusyIndicators = (): void => {
 		const snapshots = brickRegistry.listSnapshots();
@@ -1107,6 +1146,8 @@ export function activate(context: vscode.ExtensionContext) {
 		batchRegistrations.reconnectReadyBricks,
 		batchRegistrations.deployWorkspaceToReadyBricks,
 		toggleFavoriteBrick,
+		setBricksTreeFilter,
+		clearBricksTreeFilter,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,

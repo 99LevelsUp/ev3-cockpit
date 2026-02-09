@@ -723,6 +723,8 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.revealInBricksTree'));
 	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
 	assert.ok(commands.includes('ev3-cockpit.refreshBricksView'));
+	assert.ok(commands.includes('ev3-cockpit.setBricksTreeFilter'));
+	assert.ok(commands.includes('ev3-cockpit.clearBricksTreeFilter'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectReadyBricks'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceToReadyBricks'));
 	assert.ok(commands.includes('ev3-cockpit.toggleFavoriteBrick'));
@@ -1387,6 +1389,8 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			assert.ok(Array.isArray(diagnosticsReport.runtimeSessions));
 			await vscode.commands.executeCommand('ev3-cockpit.browseRemoteFs');
 			await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
+			await vscode.commands.executeCommand('ev3-cockpit.setBricksTreeFilter', 'host-batch');
+			await vscode.commands.executeCommand('ev3-cockpit.clearBricksTreeFilter');
 			await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks');
 			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks');
 			await vscode.commands.executeCommand('ev3-cockpit.toggleFavoriteBrick');

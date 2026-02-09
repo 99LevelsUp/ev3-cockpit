@@ -129,6 +129,14 @@
         "title": "EV3 Cockpit: Refresh Bricks View"
       },
       {
+        "command": "ev3-cockpit.setBricksTreeFilter",
+        "title": "EV3 Cockpit: Set Bricks Tree Filter"
+      },
+      {
+        "command": "ev3-cockpit.clearBricksTreeFilter",
+        "title": "EV3 Cockpit: Clear Bricks Tree Filter"
+      },
+      {
         "command": "ev3-cockpit.reconnectReadyBricks",
         "title": "EV3 Cockpit: Reconnect Ready Bricks"
       },
@@ -168,6 +176,16 @@
           "command": "ev3-cockpit.refreshBricksView",
           "when": "view == ev3-cockpit.bricksView",
           "group": "navigation"
+        },
+        {
+          "command": "ev3-cockpit.setBricksTreeFilter",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ev3-cockpit.clearBricksTreeFilter",
+          "when": "view == ev3-cockpit.bricksView && ev3-cockpit.bricksFilterActive",
+          "group": "navigation@1"
         },
         {
           "command": "ev3-cockpit.reconnectReadyBricks",

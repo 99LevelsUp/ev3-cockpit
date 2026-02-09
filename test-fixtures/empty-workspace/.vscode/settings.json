@@ -1,2 +1,4 @@
 {
+    "ev3-cockpit.transport.timeoutMs": 200,
+    "ev3-cockpit.transport.mode": "mock"
 }

@@ -181,6 +181,87 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 	});
 });
 
+test('BrickTreeProvider filters roots and descendants by query', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		let query = '';
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'usb-auto',
+						displayName: 'EV3 USB',
+						role: 'standalone',
+						transport: 'usb',
+						status: 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/'
+					}
+				],
+				getBrickSnapshot: () => ({
+					brickId: 'usb-auto',
+					displayName: 'EV3 USB',
+					role: 'standalone',
+					transport: 'usb',
+					status: 'READY',
+					isActive: true,
+					rootPath: '/home/root/lms2012/prjs/'
+				}),
+				resolveFsService: async () => ({
+					listDirectory: async (remotePath: string) => {
+						if (remotePath === '/home/root/lms2012/prjs' || remotePath === '/home/root/lms2012/prjs/') {
+							return {
+								folders: ['docs', 'bin'],
+								files: [{ name: 'main.rbf', size: 42 }]
+							};
+						}
+						if (remotePath === '/home/root/lms2012/prjs/docs') {
+							return {
+								folders: ['examples'],
+								files: [{ name: 'readme.txt', size: 12 }]
+							};
+						}
+						if (remotePath === '/home/root/lms2012/prjs/docs/examples') {
+							return {
+								folders: [],
+								files: [{ name: 'lesson.txt', size: 8 }]
+							};
+						}
+						if (remotePath === '/home/root/lms2012/prjs/bin') {
+							return {
+								folders: [],
+								files: [{ name: 'tool.bin', size: 6 }]
+							};
+						}
+						return {
+							folders: [],
+							files: []
+						};
+					}
+				})
+			},
+			getFilterQuery: () => query
+		});
+
+		query = 'lesson';
+		const roots = await provider.getChildren();
+		assert.equal(roots.length, 1);
+		const rootChildren = await provider.getChildren(roots[0]);
+		assert.equal(rootChildren.length, 1);
+		assert.equal((rootChildren[0] as { kind: string; name: string }).kind, 'directory');
+		assert.equal((rootChildren[0] as { kind: string; name: string }).name, 'docs');
+
+		const docsChildren = await provider.getChildren(rootChildren[0]);
+		assert.equal(docsChildren.length, 1);
+		assert.equal((docsChildren[0] as { kind: string; name: string }).name, 'examples');
+
+		query = 'ev3 usb';
+		assert.equal((await provider.getChildren()).length, 1);
+
+		query = 'missing-entry';
+		assert.equal((await provider.getChildren()).length, 0);
+	});
+});
+
 test('BrickTreeProvider returns unavailable message for expanded directory after disconnect', async () => {
 	await withMockedProvider(async ({ BrickTreeProvider }) => {
 		let unavailable = false;
