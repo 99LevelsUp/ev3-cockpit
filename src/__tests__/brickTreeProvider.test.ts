@@ -359,3 +359,35 @@ test('BrickTreeProvider renders busy counter in root description when runtime is
 		assert.match(item.tooltip?.toString() ?? '', /Runtime: running, busy=3/);
 	});
 });
+
+test('BrickTreeProvider renders PIN badge when brick is marked as favorite', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'usb-fav',
+						displayName: 'EV3 Favorite',
+						role: 'standalone',
+						transport: 'usb',
+						status: 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/'
+					}
+				],
+				getBrickSnapshot: () => undefined,
+				resolveFsService: async () => ({
+					listDirectory: async () => ({
+						folders: [],
+						files: []
+					})
+				})
+			},
+			isFavoriteBrick: (brickId: string) => brickId === 'usb-fav'
+		});
+
+		const roots = await provider.getChildren();
+		const item = provider.getTreeItem(roots[0]);
+		assert.match(item.description ?? '', /PIN/);
+	});
+});

@@ -133,6 +133,10 @@
         "title": "EV3 Cockpit: Deploy Workspace to Ready Bricks"
       },
       {
+        "command": "ev3-cockpit.toggleFavoriteBrick",
+        "title": "EV3 Cockpit: Toggle Favorite Brick"
+      },
+      {
         "command": "ev3-cockpit.uploadToBrickFolder",
         "title": "EV3 Cockpit: Upload to Folder"
       },
@@ -170,6 +174,11 @@
           "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
           "when": "view == ev3-cockpit.bricksView",
           "group": "navigation@3"
+        },
+        {
+          "command": "ev3-cockpit.toggleFavoriteBrick",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -222,6 +231,11 @@
           "command": "ev3-cockpit.reconnectEV3",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
           "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.toggleFavoriteBrick",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
+          "group": "0_navigation"
         },
         {
           "command": "ev3-cockpit.previewWorkspaceDeployToBrick",

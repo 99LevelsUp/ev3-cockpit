@@ -54,6 +54,7 @@ export interface BrickTreeDataSource {
 interface BrickTreeProviderOptions {
 	dataSource: BrickTreeDataSource;
 	logger?: Logger;
+	isFavoriteBrick?: (brickId: string) => boolean;
 }
 
 interface DirectoryCacheEntry {
@@ -256,6 +257,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				item.id = buildRootNodeId(element.brickId);
 				const statusBadge = this.renderStatusBadge(element.status, element.isActive);
 				const descriptionParts = [statusBadge];
+				if (this.options.isFavoriteBrick?.(element.brickId)) {
+					descriptionParts.push('PIN');
+				}
 				if ((element.busyCommandCount ?? 0) > 0) {
 					descriptionParts.push(`busy:${element.busyCommandCount}`);
 				}

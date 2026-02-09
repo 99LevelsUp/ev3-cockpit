@@ -661,6 +661,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.refreshBricksView'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectReadyBricks'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceToReadyBricks'));
+	assert.ok(commands.includes('ev3-cockpit.toggleFavoriteBrick'));
 	assert.ok(commands.includes('ev3-cockpit.uploadToBrickFolder'));
 	assert.ok(commands.includes('ev3-cockpit.deleteRemoteEntryFromTree'));
 	assert.ok(commands.includes('ev3-cockpit.runRemoteExecutableFromTree'));
@@ -1244,6 +1245,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.refreshBricksView');
 			await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks');
 			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks');
+			await vscode.commands.executeCommand('ev3-cockpit.toggleFavoriteBrick');
 			await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
 			await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
 			await vscode.commands.executeCommand('ev3-cockpit.runRemoteExecutableFromTree');

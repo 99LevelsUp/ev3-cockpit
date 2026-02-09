@@ -14,7 +14,7 @@ import {
 	captureConnectionProfileFromWorkspace
 } from './device/brickConnectionProfiles';
 import { BrickControlService } from './device/brickControlService';
-import { BrickRegistry, BrickRole } from './device/brickRegistry';
+import { BrickRegistry, BrickRole, BrickSnapshot } from './device/brickRegistry';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { OutputChannelLogger } from './diagnostics/logger';
 import { parseEv3UriParts } from './fs/ev3Uri';
@@ -38,6 +38,7 @@ import {
 	isBrickRootNode
 } from './ui/brickTreeProvider';
 import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
+import { BrickUiStateStore } from './ui/brickUiStateStore';
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
@@ -95,10 +96,35 @@ export function activate(context: vscode.ExtensionContext) {
 	let logger: OutputChannelLogger;
 	const brickRegistry = new BrickRegistry();
 	const profileStore = new BrickConnectionProfileStore(context.workspaceState);
+	const brickUiStateStore = new BrickUiStateStore(context.workspaceState);
+
+	const sortSnapshotsForTree = (snapshots: BrickSnapshot[]): BrickSnapshot[] => {
+		const favoriteOrder = brickUiStateStore.getFavoriteOrder();
+		const favoriteIndex = new Map<string, number>();
+		for (let i = 0; i < favoriteOrder.length; i += 1) {
+			favoriteIndex.set(favoriteOrder[i], i);
+		}
+		return snapshots
+			.slice()
+			.sort((left, right) => {
+				const leftPinned = favoriteIndex.has(left.brickId);
+				const rightPinned = favoriteIndex.has(right.brickId);
+				if (leftPinned !== rightPinned) {
+					return leftPinned ? -1 : 1;
+				}
+				if (leftPinned && rightPinned) {
+					return (favoriteIndex.get(left.brickId) ?? 0) - (favoriteIndex.get(right.brickId) ?? 0);
+				}
+				if (left.isActive !== right.isActive) {
+					return left.isActive ? -1 : 1;
+				}
+				return left.displayName.localeCompare(right.displayName);
+			});
+	};
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
-			listBricks: () => brickRegistry.listSnapshots(),
+			listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
 			getBrickSnapshot: (brickId) => brickRegistry.getSnapshot(brickId),
 			resolveFsService: async (brickId) => {
 				const service = brickRegistry.resolveFsService(brickId);
@@ -107,7 +133,8 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 				return service;
 			}
-		}
+		},
+		isFavoriteBrick: (brickId) => brickUiStateStore.isFavorite(brickId)
 	});
 
 	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
@@ -610,6 +637,22 @@ export function activate(context: vscode.ExtensionContext) {
 		getLogger: () => logger,
 		getBrickRegistry: () => brickRegistry
 	});
+	const toggleFavoriteBrick = vscode.commands.registerCommand('ev3-cockpit.toggleFavoriteBrick', async (arg?: unknown) => {
+		const requestedBrickId = resolveBrickIdFromCommandArg(arg);
+		const brickId = resolveConcreteBrickId(requestedBrickId);
+		const snapshot = brickRegistry.getSnapshot(brickId);
+		if (!snapshot) {
+			vscode.window.showErrorMessage(`Brick "${requestedBrickId}" is not available in tree.`);
+			return;
+		}
+		const pinned = await brickUiStateStore.toggleFavorite(snapshot.brickId);
+		treeProvider.refresh();
+		vscode.window.showInformationMessage(
+			pinned
+				? `Brick pinned: ${snapshot.displayName}`
+				: `Brick unpinned: ${snapshot.displayName}`
+		);
+	});
 
 	// --- Config watcher, FS provider, tree view ---
 
@@ -727,6 +770,7 @@ export function activate(context: vscode.ExtensionContext) {
 				busyStateByBrickId.delete(brickId);
 			}
 		}
+		void brickUiStateStore.pruneMissing(knownBrickIds);
 	};
 	const busyIndicatorInterval = setInterval(() => {
 		refreshBusyIndicators();
@@ -841,6 +885,7 @@ export function activate(context: vscode.ExtensionContext) {
 		browseRegistrations.runRemoteExecutableFromTree,
 		batchRegistrations.reconnectReadyBricks,
 		batchRegistrations.deployWorkspaceToReadyBricks,
+		toggleFavoriteBrick,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
