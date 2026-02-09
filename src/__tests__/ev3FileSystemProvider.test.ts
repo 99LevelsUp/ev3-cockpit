@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import Module from 'node:module';
 import * as path from 'node:path';
 import test from 'node:test';
+import { FakeDisposable, FakeEventEmitter } from './testHelpers';
 
 type UriLike = {
 	authority: string;
@@ -113,18 +114,6 @@ function makeUri(remotePath: string): UriLike {
 }
 
 function createVscodeMock() {
-	class Disposable {
-		public constructor(private readonly disposer: () => void) {}
-		public dispose(): void {
-			this.disposer();
-		}
-	}
-
-	class EventEmitter<T> {
-		public readonly event = (_listener: (e: T) => unknown) => new Disposable(() => undefined);
-		public fire(_event: T): void {}
-	}
-
 	class FileSystemError extends Error {
 		public readonly code: string;
 		public constructor(code: string, message: string) {
@@ -151,8 +140,8 @@ function createVscodeMock() {
 	}
 
 	return {
-		Disposable,
-		EventEmitter,
+		Disposable: FakeDisposable,
+		EventEmitter: FakeEventEmitter,
 		FileSystemError,
 		FileType: {
 			File: 0,

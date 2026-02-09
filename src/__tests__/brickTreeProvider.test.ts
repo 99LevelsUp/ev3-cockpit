@@ -1,56 +1,7 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
-
-function createVscodeMock() {
-	class Disposable {
-		public constructor(private readonly disposer: () => void) {}
-		public dispose(): void {
-			this.disposer();
-		}
-	}
-
-	class EventEmitter<T> {
-		public readonly event = (_listener: (event: T) => unknown) => new Disposable(() => undefined);
-		public fire(_event: T): void {}
-	}
-
-	class TreeItem {
-		public id?: string;
-		public description?: string;
-		public tooltip?: string;
-		public contextValue?: string;
-		public iconPath?: unknown;
-		public resourceUri?: { toString: () => string };
-		public command?: { command: string; title: string; arguments?: unknown[] };
-		public constructor(public label: string, public collapsibleState: number) {}
-	}
-
-	class ThemeIcon {
-		public constructor(public readonly id: string) {}
-	}
-
-	const TreeItemCollapsibleState = {
-		None: 0,
-		Collapsed: 1,
-		Expanded: 2
-	};
-
-	const Uri = {
-		parse: (value: string) => ({
-			toString: () => value
-		})
-	};
-
-	return {
-		Disposable,
-		EventEmitter,
-		TreeItem,
-		ThemeIcon,
-		TreeItemCollapsibleState,
-		Uri
-	};
-}
+import { createVscodeMock } from './testHelpers';
 
 async function withMockedProvider<T>(
 	run: (mod: {

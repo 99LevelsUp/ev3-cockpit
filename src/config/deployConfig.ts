@@ -46,6 +46,23 @@ export const DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES = 1;
 export const DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS = 300;
 export const DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION = true;
 
+// --- Generic sanitizer helpers ---
+
+function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
+	return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeNumber(value: unknown, fallback: number, min: number): number {
+	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
+		return fallback;
+	}
+	return Math.max(min, Math.floor(value));
+}
+
+function sanitizeEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+	return (allowed as readonly string[]).includes(value as string) ? (value as T) : fallback;
+}
+
 function sanitizeStringList(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		return [];
@@ -56,6 +73,15 @@ function sanitizeStringList(value: unknown): string[] {
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0);
 }
+
+function sanitizeGlobList(value: unknown): string[] {
+	const cleaned = sanitizeStringList(value)
+		.map((entry) => entry.replace(/\\/g, '/'))
+		.map((entry) => entry.replace(/^\.\//, ''));
+	return [...new Set(cleaned)];
+}
+
+// --- Exported sanitizers ---
 
 export function sanitizeDeployExcludeDirectories(value: unknown): string[] {
 	const cleaned = sanitizeStringList(value).map((entry) => entry.toLowerCase());
@@ -76,118 +102,66 @@ export function sanitizeDeployExcludeExtensions(value: unknown): string[] {
 	return [...new Set(cleaned)];
 }
 
-function sanitizeGlobList(value: unknown): string[] {
-	const cleaned = sanitizeStringList(value)
-		.map((entry) => entry.replace(/\\/g, '/'))
-		.map((entry) => entry.replace(/^\.\//, ''));
-	return [...new Set(cleaned)];
-}
-
 export function sanitizeDeployIncludeGlobs(value: unknown): string[] {
 	const cleaned = sanitizeGlobList(value);
-	if (cleaned.length === 0) {
-		return [...DEFAULT_DEPLOY_INCLUDE_GLOBS];
-	}
-	return cleaned;
+	return cleaned.length === 0 ? [...DEFAULT_DEPLOY_INCLUDE_GLOBS] : cleaned;
 }
 
 export function sanitizeDeployExcludeGlobs(value: unknown): string[] {
 	const cleaned = sanitizeGlobList(value);
-	if (cleaned.length === 0) {
-		return [...DEFAULT_DEPLOY_EXCLUDE_GLOBS];
-	}
-	return cleaned;
+	return cleaned.length === 0 ? [...DEFAULT_DEPLOY_EXCLUDE_GLOBS] : cleaned;
 }
 
 export function sanitizeDeployMaxFileBytes(value: unknown): number {
-	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
-		return DEFAULT_DEPLOY_MAX_FILE_BYTES;
-	}
-	return Math.max(1, Math.floor(value));
+	return sanitizeNumber(value, DEFAULT_DEPLOY_MAX_FILE_BYTES, 1);
 }
 
 export function sanitizeDeployIncrementalEnabled(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_INCREMENTAL_ENABLED;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_INCREMENTAL_ENABLED);
 }
 
 export function sanitizeDeployCleanupEnabled(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_CLEANUP_ENABLED;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_CLEANUP_ENABLED);
 }
 
 export function sanitizeDeployCleanupConfirmBeforeDelete(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE);
 }
 
 export function sanitizeDeployCleanupDryRun(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_CLEANUP_DRY_RUN;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_CLEANUP_DRY_RUN);
 }
 
 export function sanitizeDeployAtomicEnabled(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_ATOMIC_ENABLED;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_ATOMIC_ENABLED);
 }
 
 export function sanitizeDeployVerifyAfterUpload(value: unknown): DeployVerifyMode {
-	if (value === 'none' || value === 'size' || value === 'md5') {
-		return value;
-	}
-	return DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD;
+	return sanitizeEnum(value, ['none', 'size', 'md5'] as const, DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD);
 }
 
 export function sanitizeDeployConflictPolicy(value: unknown): DeployConflictPolicy {
-	if (value === 'overwrite' || value === 'skip' || value === 'ask') {
-		return value;
-	}
-	return DEFAULT_DEPLOY_CONFLICT_POLICY;
+	return sanitizeEnum(value, ['overwrite', 'skip', 'ask'] as const, DEFAULT_DEPLOY_CONFLICT_POLICY);
 }
 
 export function sanitizeDeployConflictAskFallback(value: unknown): DeployConflictAskFallback {
-	if (value === 'prompt' || value === 'skip' || value === 'overwrite') {
-		return value;
-	}
-	return DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK;
+	return sanitizeEnum(value, ['prompt', 'skip', 'overwrite'] as const, DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK);
 }
 
 export function sanitizeDeployResilienceEnabled(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_RESILIENCE_ENABLED;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_RESILIENCE_ENABLED);
 }
 
 export function sanitizeDeployResilienceMaxRetries(value: unknown): number {
-	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
-		return DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES;
-	}
-	return Math.max(0, Math.floor(value));
+	return sanitizeNumber(value, DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES, 0);
 }
 
 export function sanitizeDeployResilienceRetryDelayMs(value: unknown): number {
-	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
-		return DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS;
-	}
-	return Math.max(0, Math.floor(value));
+	return sanitizeNumber(value, DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS, 0);
 }
 
 export function sanitizeDeployResilienceReopenConnection(value: unknown): boolean {
-	if (typeof value !== 'boolean') {
-		return DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION;
-	}
-	return value;
+	return sanitizeBoolean(value, DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION);
 }
 
 export function readDeployConfig(cfg: vscode.WorkspaceConfiguration): DeployConfigSnapshot {

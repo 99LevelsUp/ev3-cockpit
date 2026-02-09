@@ -3,10 +3,7 @@ import * as net from 'node:net';
 import test from 'node:test';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { TcpAdapter } from '../transport/tcpAdapter';
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { sleep } from './testHelpers';
 
 interface FakeServerOptions {
 	handshakeResponse: string;

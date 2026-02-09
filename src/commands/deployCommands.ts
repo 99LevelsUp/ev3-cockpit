@@ -19,6 +19,7 @@ import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { Ev3CommandClient } from '../protocol/ev3CommandClient';
+import { toErrorMessage, withBrickOperation } from './commandUtils';
 
 interface LocalProjectFileEntry {
 	localUri: vscode.Uri;
@@ -86,7 +87,7 @@ interface DeployCommandRegistrations {
 }
 
 function isRemoteAlreadyExistsError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
+	const message = toErrorMessage(error);
 	return /FILE_EXISTS/i.test(message);
 }
 
@@ -110,7 +111,7 @@ async function collectRemoteFileIndexRecursive(
 		try {
 			listing = await fsService.listDirectory(current);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			return {
 				available: false,
 				truncated,
@@ -287,7 +288,6 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				? 'Deploy and run started'
 				: 'Deploy sync started'
 		);
-		const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 		const isCancellationError = (error: unknown): boolean =>
 			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
 
@@ -354,7 +354,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		try {
 			remoteProjectRoot = buildRemoteProjectRoot(projectUri.fsPath, defaultRoot);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
 			return;
 		}
@@ -754,7 +754,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 								} catch (error) {
 									logger.warn('Deploy cleanup directory delete skipped', {
 										path: dirPath,
-										message: error instanceof Error ? error.message : String(error)
+										message: toErrorMessage(error)
 									});
 								}
 							}
@@ -1072,33 +1072,33 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		try {
 			remotePath = buildRemoteDeployPath(localUri.fsPath, defaultRoot);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
 			return;
 		}
 
 		try {
-			options.onBrickOperation(target.brickId, 'Deploy and run executable started');
-			const bytes = await vscode.workspace.fs.readFile(localUri);
-			await fsService.writeFile(remotePath, bytes);
-			if (featureConfig.deploy.verifyAfterUpload !== 'none') {
-				await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
-			}
-			const executable = await runRemoteExecutable(fsService, remotePath);
-			options.markProgramStarted(remotePath, 'deploy-and-run-single', target.brickId);
-			options.onBrickOperation(target.brickId, 'Deploy and run executable completed');
+			const executable = await withBrickOperation(target.brickId, 'Deploy and run executable', options.onBrickOperation, async () => {
+				const bytes = await vscode.workspace.fs.readFile(localUri);
+				await fsService.writeFile(remotePath, bytes);
+				if (featureConfig.deploy.verifyAfterUpload !== 'none') {
+					await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
+				}
+				const exec = await runRemoteExecutable(fsService, remotePath);
+				options.markProgramStarted(remotePath, 'deploy-and-run-single', target.brickId);
+				return { exec, bytes };
+			});
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
 				remotePath,
-				size: bytes.length,
-				type: executable.typeId,
+				size: executable.bytes.length,
+				type: executable.exec.typeId,
 				verifyAfterUpload: featureConfig.deploy.verifyAfterUpload
 			});
 			vscode.window.showInformationMessage(`Deployed and started: ev3://${target.authority}${remotePath}`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			options.onBrickOperation(target.brickId, 'Deploy and run executable failed');
+			const message = toErrorMessage(error);
 			logger.warn('Deploy and run failed', {
 				localPath: localUri.fsPath,
 				remotePath,

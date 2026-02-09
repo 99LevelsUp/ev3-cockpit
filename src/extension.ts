@@ -3,8 +3,9 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { registerBatchCommands } from './commands/batchCommands';
 import { registerBrowseCommands } from './commands/browseCommands';
+import { toErrorMessage } from './commands/commandUtils';
 import { registerConnectCommands } from './commands/connectCommands';
-import { registerDeployCommands, DeployTargetContext } from './commands/deployCommands';
+import { registerDeployCommands } from './commands/deployCommands';
 import { registerProgramControlCommands } from './commands/programControlCommands';
 import { registerTransportCommands } from './commands/transportCommands';
 import { readFeatureConfig } from './config/featureConfig';
@@ -14,92 +15,30 @@ import {
 	BrickConnectionProfileStore,
 	captureConnectionProfileFromWorkspace
 } from './device/brickConnectionProfiles';
-import { BrickControlService } from './device/brickControlService';
-import { BrickRegistry, BrickRole, BrickSnapshot } from './device/brickRegistry';
+import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { OutputChannelLogger } from './diagnostics/logger';
 import { parseEv3UriParts } from './fs/ev3Uri';
-import { assertRemoteExecutablePath } from './fs/remoteExecutable';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
-import { RemoteFsService } from './fs/remoteFsService';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
 import { CommandScheduler } from './scheduler/commandScheduler';
-import { OrphanRecoveryContext, OrphanRecoveryStrategy } from './scheduler/orphanRecovery';
 import {
 	createProbeTransportFromWorkspace,
-	TransportConfigOverrides,
-	TransportMode
+	TransportConfigOverrides
 } from './transport/transportFactory';
 import {
 	BrickTreeNode,
 	BrickTreeProvider,
 	getBrickTreeNodeId,
 	isBrickDirectoryNode,
-	isBrickFileNode,
 	isBrickRootNode
 } from './ui/brickTreeProvider';
 import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
 import { BrickUiStateStore } from './ui/brickUiStateStore';
 import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
-
-class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
-	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
-
-	public async recover(context: OrphanRecoveryContext): Promise<void> {
-		this.log('Running orphan-risk recovery', {
-			requestId: context.requestId,
-			lane: context.lane,
-			reason: context.reason
-		});
-
-		// Placeholder recovery for current MVP.
-		await new Promise<void>((resolve) => setTimeout(resolve, 10));
-	}
-}
-
-interface ConnectedBrickDescriptor {
-	brickId: string;
-	displayName: string;
-	role: BrickRole;
-	transport: TransportMode | 'unknown';
-	rootPath: string;
-}
-
-function normalizeBrickRootPath(input: string): string {
-	let rootPath = input.trim();
-	if (!rootPath.startsWith('/')) {
-		rootPath = `/${rootPath}`;
-	}
-	if (!rootPath.endsWith('/')) {
-		rootPath = `${rootPath}/`;
-	}
-	return rootPath;
-}
-
-function normalizeRemotePathForReveal(input: string): string {
-	const normalized = path.posix.normalize(input.replace(/\\/g, '/'));
-	if (normalized === '.') {
-		return '/';
-	}
-	return normalized.startsWith('/') ? normalized : `/${normalized}`;
-}
-
-function toSafeIdentifier(input: string): string {
-	const normalized = input
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return normalized.length > 0 ? normalized : 'active';
-}
-
-const RUNTIME_RECONNECT_CONFIG_KEYS = [
-	'ev3-cockpit.transport.mode',
-	'ev3-cockpit.transport.usb.path',
-	'ev3-cockpit.transport.bluetooth.port',
-	'ev3-cockpit.transport.tcp.host',
-	'ev3-cockpit.transport.tcp.port',
-	'ev3-cockpit.compat.profile'
-] as const;
+import { LoggingOrphanRecoveryStrategy, normalizeRemotePathForReveal } from './activation/helpers';
+import { createConfigWatcher } from './activation/configWatcher';
+import { createBrickResolvers } from './activation/brickResolvers';
 
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
@@ -271,152 +210,20 @@ export function activate(context: vscode.ExtensionContext) {
 
 	rebuildRuntime();
 
-	const resolveProbeTimeoutMs = (): number => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const modeRaw = cfg.get('transport.mode');
-		const mode: TransportMode =
-			modeRaw === 'usb' || modeRaw === 'bluetooth' || modeRaw === 'tcp' || modeRaw === 'mock' || modeRaw === 'auto'
-				? modeRaw
-				: 'auto';
-
-		const base = readSchedulerConfig().timeoutMs;
-		const btProbeRaw = cfg.get('transport.bluetooth.probeTimeoutMs');
-		const btProbe =
-			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : 8_000;
-
-		if (mode === 'bluetooth') {
-			return Math.max(base, btProbe);
-		}
-
-		return base;
-	};
-
-	const resolveFsModeTarget = (): vscode.ConfigurationTarget => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const inspected = cfg.inspect('fs.mode');
-		if (inspected?.workspaceFolderValue !== undefined) {
-			return vscode.ConfigurationTarget.WorkspaceFolder;
-		}
-		if (inspected?.workspaceValue !== undefined) {
-			return vscode.ConfigurationTarget.Workspace;
-		}
-		return vscode.ConfigurationTarget.Global;
-	};
-
-	const ensureFullFsModeConfirmation = async (): Promise<boolean> => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const mode = cfg.get('fs.mode');
-		const confirmationRequired = cfg.get('fs.fullMode.confirmationRequired', true);
-		if (mode !== 'full' || !confirmationRequired) {
-			return true;
-		}
-
-		const choice = await vscode.window.showWarningMessage(
-			'Full EV3 filesystem mode allows risky operations outside safe roots. Continue?',
-			{ modal: true },
-			'Enable Full Mode'
-		);
-		if (choice === 'Enable Full Mode') {
-			logger.info('Full filesystem mode explicitly confirmed by user.');
-			return true;
-		}
-
-		await cfg.update('fs.mode', 'safe', resolveFsModeTarget());
-		logger.warn('Full filesystem mode rejected by user; reverted to safe mode.');
-		return false;
-	};
-
-	const normalizeRunExecutablePath = (input: string): string => {
-		const trimmed = input.trim();
-		if (!trimmed) {
-			throw new Error('Executable path must not be empty.');
-		}
-
-		let candidate = trimmed;
-		if (candidate.toLowerCase().startsWith('ev3://')) {
-			const parsed = vscode.Uri.parse(candidate);
-			candidate = parsed.path;
-		}
-
-		const normalized = path.posix.normalize(candidate.startsWith('/') ? candidate : `/${candidate}`);
-		assertRemoteExecutablePath(normalized);
-		return normalized;
-	};
-
-	const resolveCurrentTransportMode = (): TransportMode | 'unknown' => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const mode = cfg.get('transport.mode');
-		return mode === 'auto' || mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock'
-			? mode
-			: 'unknown';
-	};
-
-	const resolveConnectedBrickDescriptor = (rootPath: string, profile?: BrickConnectionProfile): ConnectedBrickDescriptor => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const transport = profile?.transport.mode ?? resolveCurrentTransportMode();
-		const normalizedRootPath = normalizeBrickRootPath(profile?.rootPath ?? rootPath);
-		const role: BrickRole = 'standalone';
-
-		if (transport === 'tcp') {
-			const hostRaw = profile?.transport.tcpHost ?? cfg.get('transport.tcp.host');
-			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
-			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
-			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : 5555;
-			const endpoint = `${host}:${port}`;
-			return {
-				brickId: `tcp-${toSafeIdentifier(endpoint)}`,
-				displayName: `EV3 TCP (${endpoint})`,
-				role,
-				transport,
-				rootPath: normalizedRootPath
-			};
-		}
-
-		if (transport === 'bluetooth') {
-			const portRaw = profile?.transport.bluetoothPort ?? cfg.get('transport.bluetooth.port');
-			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
-			return {
-				brickId: `bluetooth-${toSafeIdentifier(port)}`,
-				displayName: `EV3 Bluetooth (${port})`,
-				role,
-				transport,
-				rootPath: normalizedRootPath
-			};
-		}
-
-		if (transport === 'usb') {
-			const pathRaw = profile?.transport.usbPath ?? cfg.get('transport.usb.path');
-			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
-			return {
-				brickId: `usb-${toSafeIdentifier(usbPath)}`,
-				displayName: `EV3 USB (${usbPath})`,
-				role,
-				transport,
-				rootPath: normalizedRootPath
-			};
-		}
-
-		if (transport === 'mock') {
-			return {
-				brickId: 'mock-active',
-				displayName: 'EV3 Mock',
-				role,
-				transport,
-				rootPath: normalizedRootPath
-			};
-		}
-
-		return {
-			brickId: 'auto-active',
-			displayName: 'EV3 (Auto)',
-			role,
-			transport,
-			rootPath: normalizedRootPath
-		};
-	};
-
-	const resolveConcreteBrickId = (brickId: string): string =>
-		brickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : brickId;
+	const resolvers = createBrickResolvers({ brickRegistry, getLogger: () => logger });
+	const {
+		resolveProbeTimeoutMs,
+		resolveCurrentTransportMode,
+		resolveConnectedBrickDescriptor,
+		resolveConcreteBrickId,
+		resolveBrickIdFromCommandArg,
+		resolveFsAccessContext,
+		resolveControlAccessContext,
+		resolveDeployTargetFromArg,
+		normalizeRunExecutablePath,
+		resolveDefaultRunDirectory,
+		ensureFullFsModeConfirmation
+	} = resolvers;
 
 	const noteBrickOperation = (brickId: string, operation: string): void => {
 		const concreteBrickId = resolveConcreteBrickId(brickId);
@@ -470,108 +277,6 @@ export function activate(context: vscode.ExtensionContext) {
 	const getRestartCandidatePathForBrick = (brickId: string): string | undefined => {
 		const concreteBrickId = resolveConcreteBrickId(brickId);
 		return sessionManager.getRestartCandidatePath(concreteBrickId);
-	};
-
-	const resolveDefaultRunDirectory = (brickId: string): string => {
-		const concreteBrickId = resolveConcreteBrickId(brickId);
-		const snapshot = brickRegistry.getSnapshot(concreteBrickId);
-		if (snapshot?.rootPath) {
-			return snapshot.rootPath;
-		}
-		const defaultRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
-		return normalizeBrickRootPath(defaultRoot);
-	};
-
-	const resolveBrickIdFromCommandArg = (arg: unknown): string => {
-		if (typeof arg === 'string' && arg.trim().length > 0) {
-			return arg.trim();
-		}
-		if (isBrickRootNode(arg)) {
-			return arg.brickId;
-		}
-		if (isBrickDirectoryNode(arg) || isBrickFileNode(arg)) {
-			return arg.brickId;
-		}
-		return 'active';
-	};
-
-	const resolveFsAccessContext = (
-		arg: unknown
-	): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string } => {
-		const requestedBrickId = resolveBrickIdFromCommandArg(arg);
-		const authority = requestedBrickId === 'active' ? 'active' : requestedBrickId;
-		const fsService = brickRegistry.resolveFsService(requestedBrickId);
-		if (!fsService) {
-			const snapshot = requestedBrickId === 'active' ? undefined : brickRegistry.getSnapshot(requestedBrickId);
-			if (snapshot) {
-				return {
-					error: `Brick "${requestedBrickId}" is currently ${snapshot.status.toLowerCase()}.`
-				};
-			}
-			return {
-				error:
-					requestedBrickId === 'active'
-						? 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
-						: `Brick "${requestedBrickId}" is not connected.`
-			};
-		}
-
-		const brickId = requestedBrickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : requestedBrickId;
-		return {
-			brickId,
-			authority,
-			fsService
-		};
-	};
-
-	const resolveControlAccessContext = (
-		arg: unknown
-	): { brickId: string; authority: string; controlService: BrickControlService } | { error: string } => {
-		const requestedBrickId = resolveBrickIdFromCommandArg(arg);
-		const authority = requestedBrickId === 'active' ? 'active' : requestedBrickId;
-		const controlService = brickRegistry.resolveControlService(requestedBrickId);
-		if (!controlService) {
-			const snapshot = requestedBrickId === 'active' ? undefined : brickRegistry.getSnapshot(requestedBrickId);
-			if (snapshot) {
-				return {
-					error: `Brick "${requestedBrickId}" is currently ${snapshot.status.toLowerCase()}.`
-				};
-			}
-			return {
-				error:
-					requestedBrickId === 'active'
-						? 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
-						: `Brick "${requestedBrickId}" is not connected.`
-			};
-		}
-
-		const brickId = requestedBrickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : requestedBrickId;
-		return {
-			brickId,
-			authority,
-			controlService
-		};
-	};
-
-	const resolveDeployTargetFromArg = (arg: unknown): DeployTargetContext | { error: string } => {
-		const fsContext = resolveFsAccessContext(arg);
-		if ('error' in fsContext) {
-			return fsContext;
-		}
-
-		const rootPath =
-			isBrickRootNode(arg)
-				? arg.rootPath
-				: isBrickDirectoryNode(arg)
-				? arg.remotePath
-				: brickRegistry.getSnapshot(fsContext.brickId)?.rootPath;
-
-		return {
-			brickId: fsContext.brickId,
-			authority: fsContext.authority,
-			rootPath,
-			fsService: fsContext.fsService
-		};
 	};
 
 	// --- Register command modules ---
@@ -658,7 +363,7 @@ export function activate(context: vscode.ExtensionContext) {
 		} catch (error) {
 			logger.warn('Failed to export brick session diagnostics report to JSON.', {
 				reportPath,
-				error: error instanceof Error ? error.message : String(error)
+				error: toErrorMessage(error)
 			});
 		}
 		vscode.window.showInformationMessage(
@@ -757,80 +462,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// --- Config watcher, FS provider, tree view ---
 
-	let reconnectPromptInFlight = false;
-	const affectsRuntimeReconnectConfig = (event: vscode.ConfigurationChangeEvent): boolean => {
-		return RUNTIME_RECONNECT_CONFIG_KEYS.some((section) => event.affectsConfiguration(section));
-	};
-	const offerReconnectAfterConfigChange = async (): Promise<void> => {
-		if (reconnectPromptInFlight) {
-			return;
-		}
-
-		const connectedBrickIds = brickRegistry
-			.listSnapshots()
-			.filter((snapshot) => snapshot.status === 'READY' && sessionManager.isSessionAvailable(snapshot.brickId))
-			.map((snapshot) => snapshot.brickId);
-		if (connectedBrickIds.length === 0) {
-			return;
-		}
-
-		reconnectPromptInFlight = true;
-		try {
-			const choice = await vscode.window.showInformationMessage(
-				`Connection settings changed. Reconnect ${connectedBrickIds.length} brick(s) now to apply them?`,
-				'Reconnect all',
-				'Later'
-			);
-			if (choice !== 'Reconnect all') {
-				logger.info('Reconnect prompt after configuration change was deferred by user.', {
-					brickIds: connectedBrickIds
-				});
-				return;
-			}
-
-			logger.info('Reconnect all requested after configuration change.', {
-				brickIds: connectedBrickIds
-			});
-			for (const brickId of connectedBrickIds) {
-				try {
-					const snapshot = brickRegistry.getSnapshot(brickId);
-					if (snapshot) {
-						const updatedProfile = captureConnectionProfileFromWorkspace(
-							brickId,
-							snapshot.displayName,
-							snapshot.rootPath
-						);
-						await profileStore.upsert(updatedProfile);
-					}
-					await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
-				} catch (error) {
-					logger.warn('Reconnect after configuration change failed.', {
-						brickId,
-						error: error instanceof Error ? error.message : String(error)
-					});
-				}
-			}
-		} finally {
-			reconnectPromptInFlight = false;
-		}
-	};
-
-	const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
-		void (async () => {
-			if (event.affectsConfiguration('ev3-cockpit.fs.mode') || event.affectsConfiguration('ev3-cockpit.fs.fullMode.confirmationRequired')) {
-				const confirmed = await ensureFullFsModeConfirmation();
-				if (!confirmed) {
-					return;
-				}
-			}
-
-			if (event.affectsConfiguration('ev3-cockpit')) {
-				logger.info('EV3 Cockpit configuration changed. Existing brick sessions stay online; new connections use updated settings.');
-				if (affectsRuntimeReconnectConfig(event)) {
-					await offerReconnectAfterConfigChange();
-				}
-			}
-		})();
+	const configWatcher = createConfigWatcher({
+		getLogger: () => logger,
+		brickRegistry,
+		sessionManager,
+		profileStore,
+		ensureFullFsModeConfirmation
 	});
 
 	const fsDisposable = vscode.workspace.registerFileSystemProvider('ev3', fsProvider, {
@@ -892,7 +529,7 @@ export function activate(context: vscode.ExtensionContext) {
 		try {
 			parsed = parseEv3UriParts(targetUri.authority, targetUri.path);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			vscode.window.showErrorMessage(`Cannot parse EV3 URI: ${message}`);
 			return;
 		}
@@ -980,7 +617,7 @@ export function activate(context: vscode.ExtensionContext) {
 				select: true
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			vscode.window.showWarningMessage(`Reveal in Bricks Tree failed: ${message}`);
 		}
 	});

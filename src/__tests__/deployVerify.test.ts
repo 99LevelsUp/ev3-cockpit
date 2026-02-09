@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { computeMd5Hex, verifyUploadedFile, DeployVerifyRemoteFsLike } from '../fs/deployVerify';
+import { computeMd5Hex } from '../fs/hashUtils';
+import { verifyUploadedFile, DeployVerifyRemoteFsLike } from '../fs/deployVerify';
 
 class FakeVerifyFs implements DeployVerifyRemoteFsLike {
 	public constructor(

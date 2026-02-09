@@ -3,6 +3,7 @@ import { BrickControlService } from '../device/brickControlService';
 import { Logger } from '../diagnostics/logger';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { RemoteFsService } from '../fs/remoteFsService';
+import { toErrorMessage, withBrickOperation } from './commandUtils';
 
 type ProgramStartSource = 'run-command' | 'restart-command';
 type ProgramClearReason = 'stop-program-command' | 'emergency-stop-command';
@@ -55,11 +56,12 @@ export function registerProgramControlCommands(
 		}
 
 		try {
-			options.onBrickOperation(fsContext.brickId, 'Run program started');
 			const runPath = options.normalizeRunExecutablePath(input);
-			const executable = await runRemoteExecutable(fsContext.fsService, runPath);
-			options.onProgramStarted(runPath, 'run-command', fsContext.brickId);
-			options.onBrickOperation(fsContext.brickId, 'Run program completed');
+			const executable = await withBrickOperation(fsContext.brickId, 'Run program', options.onBrickOperation, async () => {
+				const exec = await runRemoteExecutable(fsContext.fsService, runPath);
+				options.onProgramStarted(runPath, 'run-command', fsContext.brickId);
+				return exec;
+			});
 			options.getLogger().info('Run program command completed', {
 				brickId: fsContext.brickId,
 				path: runPath,
@@ -67,8 +69,7 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Program started: ev3://${fsContext.authority}${runPath}`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			options.onBrickOperation(fsContext.brickId, 'Run program failed');
+			const message = toErrorMessage(error);
 			options.getLogger().warn('Run program command failed', {
 				brickId: fsContext.brickId,
 				message
@@ -85,14 +86,13 @@ export function registerProgramControlCommands(
 		}
 
 		try {
-			options.onBrickOperation(controlContext.brickId, 'Stop program started');
-			await controlContext.controlService.stopProgram();
-			options.onProgramCleared('stop-program-command', controlContext.brickId);
-			options.onBrickOperation(controlContext.brickId, 'Stop program completed');
+			await withBrickOperation(controlContext.brickId, 'Stop program', options.onBrickOperation, async () => {
+				await controlContext.controlService.stopProgram();
+				options.onProgramCleared('stop-program-command', controlContext.brickId);
+			});
 			vscode.window.showInformationMessage(`Program stop command sent: ev3://${controlContext.authority}`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			options.onBrickOperation(controlContext.brickId, 'Stop program failed');
+			const message = toErrorMessage(error);
 			options.getLogger().error('Program stop failed', {
 				brickId: controlContext.brickId,
 				message
@@ -135,11 +135,12 @@ export function registerProgramControlCommands(
 		}
 
 		try {
-			options.onBrickOperation(fsContext.brickId, 'Restart program started');
-			await controlContext.controlService.stopProgram();
-			const executable = await runRemoteExecutable(fsContext.fsService, runPath);
-			options.onProgramStarted(runPath, 'restart-command', fsContext.brickId);
-			options.onBrickOperation(fsContext.brickId, 'Restart program completed');
+			const executable = await withBrickOperation(fsContext.brickId, 'Restart program', options.onBrickOperation, async () => {
+				await controlContext.controlService.stopProgram();
+				const exec = await runRemoteExecutable(fsContext.fsService, runPath);
+				options.onProgramStarted(runPath, 'restart-command', fsContext.brickId);
+				return exec;
+			});
 			options.getLogger().info('Restart program command completed', {
 				brickId: fsContext.brickId,
 				path: runPath,
@@ -147,8 +148,7 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Program restarted: ev3://${fsContext.authority}${runPath}`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			options.onBrickOperation(fsContext.brickId, 'Restart program failed');
+			const message = toErrorMessage(error);
 			options.getLogger().error('Restart program failed', {
 				brickId: fsContext.brickId,
 				message
@@ -165,14 +165,13 @@ export function registerProgramControlCommands(
 		}
 
 		try {
-			options.onBrickOperation(controlContext.brickId, 'Emergency stop started');
-			await controlContext.controlService.emergencyStopAll();
-			options.onProgramCleared('emergency-stop-command', controlContext.brickId);
-			options.onBrickOperation(controlContext.brickId, 'Emergency stop completed');
+			await withBrickOperation(controlContext.brickId, 'Emergency stop', options.onBrickOperation, async () => {
+				await controlContext.controlService.emergencyStopAll();
+				options.onProgramCleared('emergency-stop-command', controlContext.brickId);
+			});
 			vscode.window.showInformationMessage(`Emergency stop sent: ev3://${controlContext.authority}`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			options.onBrickOperation(controlContext.brickId, 'Emergency stop failed');
+			const message = toErrorMessage(error);
 			options.getLogger().error('Emergency stop failed', {
 				brickId: controlContext.brickId,
 				message

@@ -1,25 +1,7 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
-
-interface FakeMemento {
-	values: Record<string, unknown>;
-	get<T>(key: string): T | undefined;
-	update(key: string, value: unknown): Promise<void>;
-}
-
-function createFakeMemento(initial: Record<string, unknown> = {}): FakeMemento {
-	return {
-		values: { ...initial },
-		get<T>(key: string): T | undefined {
-			return this.values[key] as T | undefined;
-		},
-		update(key: string, value: unknown): Promise<void> {
-			this.values[key] = value;
-			return Promise.resolve();
-		}
-	};
-}
+import { createFakeMemento } from './testHelpers';
 
 async function withProfileModule<T>(
 	run: (mod: {

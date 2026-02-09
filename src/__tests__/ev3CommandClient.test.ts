@@ -5,10 +5,7 @@ import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../pro
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { SchedulerError } from '../scheduler/types';
 import { MockTransportAdapter } from '../transport/mockTransportAdapter';
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { sleep } from './testHelpers';
 
 test('Ev3CommandClient sends request packet and decodes matching reply', async () => {
 	const scheduler = new CommandScheduler();

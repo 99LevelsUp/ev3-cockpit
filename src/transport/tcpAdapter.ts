@@ -1,18 +1,17 @@
 import * as dgram from 'node:dgram';
 import * as net from 'node:net';
+import {
+	PendingReply,
+	drainPendingReply,
+	rejectPendingReply,
+	extractLengthPrefixedPacket
+} from './pendingReply';
 import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
 
 const DEFAULT_TCP_PORT = 5555;
 const DEFAULT_DISCOVERY_PORT = 3015;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 7_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 2_000;
-
-interface PendingReply {
-	resolve: (packet: Uint8Array) => void;
-	reject: (error: unknown) => void;
-	cleanup: () => void;
-	expectedMessageCounter?: number;
-}
 
 interface PendingHandshake {
 	resolve: (response: string) => void;
@@ -340,38 +339,16 @@ export class TcpAdapter implements TransportAdapter {
 	}
 
 	private drainPendingReply(): void {
-		if (!this.pendingReply) {
-			return;
-		}
-
-		let packet = this.extractNextPacket();
-		while (packet) {
-			const expected = this.pendingReply?.expectedMessageCounter;
-			if (expected === undefined || this.getMessageCounter(packet) === expected) {
-				const pending = this.pendingReply;
-				this.pendingReply = undefined;
-				pending.cleanup();
-				pending.resolve(packet);
-				return;
-			}
-			packet = this.extractNextPacket();
-		}
+		this.pendingReply = drainPendingReply(this.pendingReply, () => this.extractNextPacket());
 	}
 
 	private extractNextPacket(): Uint8Array | undefined {
-		if (this.receiveBuffer.length < 2) {
+		const result = extractLengthPrefixedPacket(this.receiveBuffer);
+		if (!result) {
 			return undefined;
 		}
-
-		const bodyLength = this.receiveBuffer.readUInt16LE(0);
-		const totalLength = 2 + bodyLength;
-		if (this.receiveBuffer.length < totalLength) {
-			return undefined;
-		}
-
-		const packet = Buffer.from(this.receiveBuffer.subarray(0, totalLength));
-		this.receiveBuffer = this.receiveBuffer.subarray(totalLength);
-		return new Uint8Array(packet);
+		this.receiveBuffer = result.remaining;
+		return result.packet;
 	}
 
 	private requireReadySocket(): net.Socket {
@@ -381,21 +358,8 @@ export class TcpAdapter implements TransportAdapter {
 		return this.socket;
 	}
 
-	private getMessageCounter(packet: Uint8Array): number {
-		if (packet.length < 4) {
-			return -1;
-		}
-		return new DataView(packet.buffer, packet.byteOffset, packet.byteLength).getUint16(2, true);
-	}
-
 	private rejectPendingReply(error: unknown): void {
-		if (!this.pendingReply) {
-			return;
-		}
-		const pending = this.pendingReply;
-		this.pendingReply = undefined;
-		pending.cleanup();
-		pending.reject(error);
+		this.pendingReply = rejectPendingReply(this.pendingReply, error);
 	}
 
 	private rejectPendingHandshake(error: unknown): void {

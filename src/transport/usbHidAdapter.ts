@@ -1,3 +1,8 @@
+import {
+	PendingReply,
+	drainPendingReply,
+	rejectPendingReply
+} from './pendingReply';
 import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
 
 interface HidDeviceInfo {
@@ -17,13 +22,6 @@ interface HidDeviceLike {
 interface NodeHidModuleLike {
 	devices(vendorId?: number, productId?: number): HidDeviceInfo[];
 	HID: new (path: string) => HidDeviceLike;
-}
-
-interface PendingReply {
-	resolve: (packet: Uint8Array) => void;
-	reject: (error: unknown) => void;
-	cleanup: () => void;
-	expectedMessageCounter?: number;
 }
 
 export interface UsbHidAdapterOptions {
@@ -234,33 +232,11 @@ export class UsbHidAdapter implements TransportAdapter {
 	}
 
 	private drainPendingReply(): void {
-		if (!this.pendingReply) {
-			return;
-		}
-
-		let packet = this.extractNextPacket();
-		while (packet) {
-			const expected = this.pendingReply?.expectedMessageCounter;
-			if (expected === undefined || this.getMessageCounter(packet) === expected) {
-				const pending = this.pendingReply;
-				this.pendingReply = undefined;
-				pending.cleanup();
-				pending.resolve(packet);
-				return;
-			}
-			packet = this.extractNextPacket();
-		}
+		this.pendingReply = drainPendingReply(this.pendingReply, () => this.extractNextPacket());
 	}
 
 	private rejectPendingReply(error: unknown): void {
-		if (!this.pendingReply) {
-			return;
-		}
-
-		const pending = this.pendingReply;
-		this.pendingReply = undefined;
-		pending.cleanup();
-		pending.reject(error);
+		this.pendingReply = rejectPendingReply(this.pendingReply, error);
 	}
 
 	private handleFailure(error: unknown): void {
@@ -278,12 +254,5 @@ export class UsbHidAdapter implements TransportAdapter {
 		}
 
 		return this.device;
-	}
-
-	private getMessageCounter(packet: Uint8Array): number {
-		if (packet.length < 4) {
-			return -1;
-		}
-		return new DataView(packet.buffer, packet.byteOffset, packet.byteLength).getUint16(2, true);
 	}
 }

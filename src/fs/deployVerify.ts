@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { DeployVerifyMode } from '../config/deployConfig';
+import { computeMd5Hex } from './hashUtils';
 
 export interface DeployVerifyRemoteFsLike {
 	listDirectory(remotePath: string): Promise<{
@@ -8,10 +8,6 @@ export interface DeployVerifyRemoteFsLike {
 		truncated: boolean;
 	}>;
 	readFile(remotePath: string): Promise<Uint8Array>;
-}
-
-export function computeMd5Hex(bytes: Uint8Array): string {
-	return createHash('md5').update(Buffer.from(bytes)).digest('hex');
 }
 
 async function loadRemoteSnapshot(

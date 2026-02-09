@@ -1,12 +1,8 @@
-import { createHash } from 'node:crypto';
+import { computeMd5Hex } from './hashUtils';
 
 export interface RemoteFileSnapshot {
 	sizeBytes: number;
 	md5: string;
-}
-
-export function computeMd5Hex(bytes: Uint8Array): string {
-	return createHash('md5').update(bytes).digest('hex').toUpperCase();
 }
 
 export function shouldUploadByRemoteSnapshot(
@@ -28,7 +24,7 @@ export function shouldUploadByRemoteSnapshot(
 		};
 	}
 
-	const remoteMd5 = remote.md5.trim().toUpperCase();
+	const remoteMd5 = remote.md5.trim().toLowerCase();
 	if (!remoteMd5 || remoteMd5 !== localMd5) {
 		return {
 			upload: true,

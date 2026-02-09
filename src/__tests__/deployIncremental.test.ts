@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { computeMd5Hex, shouldUploadByRemoteSnapshot } from '../fs/deployIncremental';
+import { computeMd5Hex } from '../fs/hashUtils';
+import { shouldUploadByRemoteSnapshot } from '../fs/deployIncremental';
 
 test('deployIncremental computes deterministic MD5 hex', () => {
 	const md5 = computeMd5Hex(new Uint8Array([0x61, 0x62, 0x63]));
-	assert.equal(md5, '900150983CD24FB0D6963F7D28E17F72');
+	assert.equal(md5, '900150983cd24fb0d6963f7d28e17f72');
 });
 
 test('deployIncremental uploads when remote snapshot is missing', () => {

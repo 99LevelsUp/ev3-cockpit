@@ -8,6 +8,7 @@ import { CommandScheduler } from '../scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
 import { listSerialCandidates, listUsbHidCandidates } from '../transport/discovery';
 import { createProbeTransportForMode } from '../transport/transportFactory';
+import { toErrorMessage } from './commandUtils';
 
 interface TransportCommandOptions {
 	getLogger(): OutputChannelLogger;
@@ -96,7 +97,7 @@ async function runTransportProbe(
 			message: `probe+capability ok (fw=${capability.fwVersion || '?'}, build=${capability.fwBuild || '?'})`
 		};
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = toErrorMessage(error);
 		if (isTransportLikelyUnavailable(message)) {
 			return {
 				mode,

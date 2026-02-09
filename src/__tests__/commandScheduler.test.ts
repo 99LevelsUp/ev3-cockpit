@@ -3,10 +3,7 @@ import test from 'node:test';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { SchedulerError } from '../scheduler/types';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { sleep } from './testHelpers';
 
 test('CommandScheduler executes by lane priority', async () => {
 	const scheduler = new CommandScheduler();

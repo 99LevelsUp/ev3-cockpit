@@ -12,6 +12,7 @@ import { BrickTreeProvider } from '../ui/brickTreeProvider';
 import { TransportMode } from '../transport/transportFactory';
 import { BrickRole } from '../device/brickRegistry';
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
+import { toErrorMessage } from './commandUtils';
 
 interface ConnectedBrickDescriptor {
 	brickId: string;
@@ -272,7 +273,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			});
 			vscode.window.showInformationMessage('EV3 disconnected.');
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = toErrorMessage(error);
 			logger.warn('Disconnect failed', { message });
 			vscode.window.showErrorMessage(`Disconnect failed: ${message}`);
 		}

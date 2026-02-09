@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';
+import { toErrorMessage } from './commandUtils';
 
 interface BatchCommandOptions {
 	getLogger(): Logger;
@@ -93,7 +94,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 						failed += 1;
 						failedEntries.push({
 							brickId,
-							error: error instanceof Error ? error.message : String(error)
+							error: toErrorMessage(error)
 						});
 					}
 					const done = index + 1;
@@ -172,7 +173,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 			} catch (error) {
 				logger.warn('Batch reconnect failed for brick', {
 					brickId,
-					error: error instanceof Error ? error.message : String(error)
+					error: toErrorMessage(error)
 				});
 				throw error;
 			}
@@ -207,7 +208,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					} catch (error) {
 						logger.warn('Batch workspace deploy failed for brick', {
 							brickId,
-							error: error instanceof Error ? error.message : String(error)
+							error: toErrorMessage(error)
 						});
 						throw error;
 					}
