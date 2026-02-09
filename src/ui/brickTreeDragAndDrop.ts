@@ -24,9 +24,14 @@ interface UploadSummary {
 	directories: number;
 }
 
+interface RemoteMoveSummary {
+	moved: number;
+	affectedDirectories: string[];
+}
+
 export interface BrickTreeDragAndDropControllerOptions {
 	resolveFsService: (brickId: string) => Promise<RemoteFsService>;
-	refreshTree: () => void;
+	refreshTree: (brickId: string, remotePath: string) => void;
 	logger?: Logger;
 }
 
@@ -162,15 +167,24 @@ export class BrickTreeDragAndDropController implements vscode.TreeDragAndDropCon
 		const moved = await this.handleRemoteMoveDrop(destination, dataTransfer);
 		const uploaded = await this.handleLocalUploadDrop(destination, dataTransfer);
 
-		if (moved > 0 || uploaded.files > 0 || uploaded.directories > 0) {
-			this.options.refreshTree();
+		if (moved.moved > 0 || uploaded.files > 0 || uploaded.directories > 0) {
+			const refreshPaths = new Set<string>([...moved.affectedDirectories, destination.remoteDirectoryPath]);
+			for (const refreshPath of refreshPaths) {
+				this.options.refreshTree(destination.brickId, refreshPath);
+			}
 		}
 	}
 
-	private async handleRemoteMoveDrop(destination: DropDestination, dataTransfer: vscode.DataTransfer): Promise<number> {
+	private async handleRemoteMoveDrop(
+		destination: DropDestination,
+		dataTransfer: vscode.DataTransfer
+	): Promise<RemoteMoveSummary> {
 		const dragItem = dataTransfer.get(TREE_DRAG_MIME);
 		if (!dragItem) {
-			return 0;
+			return {
+				moved: 0,
+				affectedDirectories: []
+			};
 		}
 
 		const payload = await dragItem.asString();
@@ -181,10 +195,14 @@ export class BrickTreeDragAndDropController implements vscode.TreeDragAndDropCon
 			this.logger.warn('Failed to parse tree drag payload', {
 				message: error instanceof Error ? error.message : String(error)
 			});
-			return 0;
+			return {
+				moved: 0,
+				affectedDirectories: []
+			};
 		}
 
 		let moved = 0;
+		const affectedDirectories = new Set<string>();
 		const errors: string[] = [];
 		for (const entry of entries) {
 			if (entry.brickId !== destination.brickId) {
@@ -208,6 +226,8 @@ export class BrickTreeDragAndDropController implements vscode.TreeDragAndDropCon
 					{ overwrite: false }
 				);
 				moved += 1;
+				affectedDirectories.add(path.posix.dirname(entry.remotePath));
+				affectedDirectories.add(destination.remoteDirectoryPath);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				errors.push(message);
@@ -223,7 +243,10 @@ export class BrickTreeDragAndDropController implements vscode.TreeDragAndDropCon
 		if (errors.length > 0) {
 			void vscode.window.showWarningMessage(`Remote move completed with ${errors.length} warning(s).`);
 		}
-		return moved;
+		return {
+			moved,
+			affectedDirectories: [...affectedDirectories]
+		};
 	}
 
 	private async handleLocalUploadDrop(destination: DropDestination, dataTransfer: vscode.DataTransfer): Promise<UploadSummary> {

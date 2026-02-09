@@ -158,7 +158,7 @@
         },
         {
           "command": "ev3-cockpit.connectEV3",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootUnavailable",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
           "group": "inline"
         },
         {
@@ -168,27 +168,37 @@
         },
         {
           "command": "ev3-cockpit.reconnectEV3",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.disconnectEV3",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.emergencyStop",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.stopProgram",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.runRemoteProgram",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.restartProgram",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickRootReadyActive",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "group": "1_connection"
+        },
+        {
+          "command": "ev3-cockpit.reconnectEV3",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
           "group": "1_connection"
         },
         {

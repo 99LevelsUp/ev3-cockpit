@@ -60,10 +60,10 @@ export interface DeployTargetContext {
 
 interface DeployCommandOptions {
 	getLogger(): Logger;
-	getCommandClient(): Ev3CommandClient;
+	resolveCommandClient(brickId: string): Ev3CommandClient | undefined;
 	resolveDeployTargetFromArg(arg: unknown): DeployTargetContext | { error: string };
 	resolveFsAccessContext(arg: unknown): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string };
-	markProgramStarted(path: string, source: 'deploy-and-run-single' | 'deploy-project-run'): void;
+	markProgramStarted(path: string, source: 'deploy-and-run-single' | 'deploy-project-run', brickId: string): void;
 }
 
 interface DeployCommandRegistrations {
@@ -255,7 +255,6 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		target?: DeployTargetContext;
 	}): Promise<void> => {
 		const logger = options.getLogger();
-		const commandClient = options.getCommandClient();
 		const fsTarget: DeployTargetContext | undefined = deployOptions.target ?? (() => {
 			const resolved = options.resolveFsAccessContext('active');
 			if ('error' in resolved) {
@@ -269,6 +268,11 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		})();
 		if (!fsTarget) {
 			vscode.window.showErrorMessage('No EV3 connection available for deploy. Connect to a brick first.');
+			return;
+		}
+		const commandClient = options.resolveCommandClient(fsTarget.brickId);
+		if (!commandClient) {
+			vscode.window.showErrorMessage(`Brick "${fsTarget.brickId}" is not connected for deploy runtime.`);
 			return;
 		}
 		const fsService = fsTarget.fsService;
@@ -823,7 +827,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 
 			if (!deployOptions.previewOnly && deployOptions.runAfterDeploy && runTarget) {
 				await runDeployStepWithResilience('run-program', () => runRemoteExecutable(fsService, runTarget));
-				options.markProgramStarted(runTarget, 'deploy-project-run');
+				options.markProgramStarted(runTarget, 'deploy-project-run', targetBrickId);
 			}
 
 			logger.info(
@@ -1014,21 +1018,22 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		vscode.window.showInformationMessage(`Deploy profile applied: ${selected.profile.label}`);
 	};
 
-	const getActiveFsService = (): RemoteFsService | undefined => {
+	const getActiveFsTarget = (): { brickId: string; authority: string; fsService: RemoteFsService } | undefined => {
 		const resolved = options.resolveFsAccessContext('active');
 		if ('error' in resolved) {
 			return undefined;
 		}
-		return resolved.fsService;
+		return resolved;
 	};
 
 	const deployAndRunExecutable = vscode.commands.registerCommand('ev3-cockpit.deployAndRunExecutable', async () => {
 		const logger = options.getLogger();
-		const fsService = getActiveFsService();
-		if (!fsService) {
+		const target = getActiveFsTarget();
+		if (!target) {
 			vscode.window.showErrorMessage('No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.');
 			return;
 		}
+		const fsService = target.fsService;
 
 		const localSelection = await vscode.window.showOpenDialog({
 			canSelectMany: false,
@@ -1063,7 +1068,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
 			}
 			const executable = await runRemoteExecutable(fsService, remotePath);
-			options.markProgramStarted(remotePath, 'deploy-and-run-single');
+			options.markProgramStarted(remotePath, 'deploy-and-run-single', target.brickId);
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
@@ -1072,7 +1077,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				type: executable.typeId,
 				verifyAfterUpload: featureConfig.deploy.verifyAfterUpload
 			});
-			vscode.window.showInformationMessage(`Deployed and started: ev3://active${remotePath}`);
+			vscode.window.showInformationMessage(`Deployed and started: ev3://${target.authority}${remotePath}`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn('Deploy and run failed', {

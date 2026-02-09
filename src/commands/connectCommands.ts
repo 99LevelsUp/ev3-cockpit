@@ -21,13 +21,16 @@ interface ConnectedBrickDescriptor {
 }
 
 interface ConnectCommandOptions {
-	getCommandClient(): Ev3CommandClient;
 	getLogger(): Logger;
 	getBrickRegistry(): BrickRegistry;
 	getTreeProvider(): BrickTreeProvider;
-	clearProgramSession(reason: string): void;
+	clearProgramSession(reason: string, brickId?: string): void;
+	resolveBrickIdFromCommandArg(arg: unknown): string;
 	resolveProbeTimeoutMs(): number;
 	resolveConnectedBrickDescriptor(rootPath: string): ConnectedBrickDescriptor;
+	prepareBrickSession(brickId: string): Promise<Ev3CommandClient>;
+	closeBrickSession(brickId: string): Promise<void>;
+	isBrickSessionAvailable(brickId: string): boolean;
 }
 
 interface ConnectCommandRegistrations {
@@ -37,24 +40,31 @@ interface ConnectCommandRegistrations {
 }
 
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
-	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async () => {
+	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
 		vscode.window.showInformationMessage('Connecting to EV3 brick...');
-		const activeClient = options.getCommandClient();
 		const activeLogger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
+		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
 		let keepConnectionOpen = false;
+		let connectingDescriptor: ConnectedBrickDescriptor | undefined;
+		let commandClient: Ev3CommandClient | undefined;
 
 		try {
-			options.clearProgramSession('connect-start');
-			brickRegistry.markActiveUnavailable('Connection reset before reconnect.');
 			const connectingRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
-			brickRegistry.upsertConnecting(options.resolveConnectedBrickDescriptor(connectingRoot));
-			treeProvider.refreshThrottled();
-			await activeClient.close().catch(() => undefined);
-			await activeClient.open();
+			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot);
+			options.clearProgramSession('connect-start', connectingDescriptor.brickId);
+			if (requestedBrickId !== 'active') {
+				activeLogger.info('Connect requested from selected brick root; current workspace transport settings will be used.', {
+					requestedBrickId
+				});
+			}
+			brickRegistry.upsertConnecting(connectingDescriptor);
+			treeProvider.refreshBrick(connectingDescriptor.brickId);
+			commandClient = await options.prepareBrickSession(connectingDescriptor.brickId);
+			await commandClient.open();
 			const probeCommand = 0x9d; // LIST_OPEN_HANDLES
-			const result = await activeClient.send({
+			const result = await commandClient.send({
 				id: 'connect-probe',
 				lane: 'high',
 				idempotent: true,
@@ -108,7 +118,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				featureConfig.compatProfileMode
 			);
 			try {
-				const capabilityResult = await activeClient.send({
+				const capabilityResult = await commandClient.send({
 					id: 'connect-capability',
 					lane: 'high',
 					idempotent: true,
@@ -163,14 +173,14 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			}
 
 			const connectedFsService = new RemoteFsService({
-				commandClient: activeClient,
+				commandClient,
 				capabilityProfile: profile,
 				fsConfig: featureConfig.fs,
 				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
 			});
 			const connectedControlService = new BrickControlService({
-				commandClient: activeClient,
+				commandClient,
 				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
 			});
@@ -187,7 +197,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				brickId: brickDescriptor.brickId,
 				mode: featureConfig.fs.mode
 			});
-			treeProvider.refreshThrottled();
+			treeProvider.refreshBrick(brickDescriptor.brickId);
 
 			vscode.window.showInformationMessage(
 				`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
@@ -195,13 +205,19 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown scheduler error';
 			activeLogger.error('Connect probe failed', { message });
-			brickRegistry.markActiveUnavailable(message);
-			treeProvider.refreshThrottled();
+			if (connectingDescriptor) {
+				brickRegistry.markError(connectingDescriptor.brickId, message);
+				treeProvider.refreshBrick(connectingDescriptor.brickId);
+			} else {
+				brickRegistry.markActiveUnavailable(message);
+				treeProvider.refreshThrottled();
+			}
 			vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
 		} finally {
-			if (!keepConnectionOpen) {
-				await activeClient.close().catch((closeError: unknown) => {
+			if (!keepConnectionOpen && connectingDescriptor) {
+				await options.closeBrickSession(connectingDescriptor.brickId).catch((closeError: unknown) => {
 					activeLogger.warn('Connect probe transport close failed', {
+						brickId: connectingDescriptor?.brickId,
 						error: closeError instanceof Error ? closeError.message : String(closeError)
 					});
 				});
@@ -209,21 +225,29 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		}
 	});
 
-	const disconnect = vscode.commands.registerCommand('ev3-cockpit.disconnectEV3', async () => {
+	const disconnect = vscode.commands.registerCommand('ev3-cockpit.disconnectEV3', async (arg?: unknown) => {
 		const logger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
-		const commandClient = options.getCommandClient();
+		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
 
 		try {
-			const disconnectedBrickId = brickRegistry.getActiveBrickId();
-			await commandClient.close();
+			const activeBrickId = brickRegistry.getActiveBrickId();
+			const disconnectedBrickId = requestedBrickId === 'active' ? activeBrickId : requestedBrickId;
+			if (disconnectedBrickId && options.isBrickSessionAvailable(disconnectedBrickId)) {
+				await options.closeBrickSession(disconnectedBrickId);
+			}
 			if (disconnectedBrickId) {
 				brickRegistry.markUnavailable(disconnectedBrickId, 'Disconnected by user.');
+				treeProvider.refreshBrick(disconnectedBrickId);
+			} else {
+				treeProvider.refreshThrottled();
 			}
-			treeProvider.refreshThrottled();
-			options.clearProgramSession('disconnect-command');
-			logger.info('Disconnected active EV3 session.');
+			options.clearProgramSession('disconnect-command', disconnectedBrickId ?? requestedBrickId);
+			logger.info('Disconnected EV3 session.', {
+				requestedBrickId,
+				disconnectedBrickId
+			});
 			vscode.window.showInformationMessage('EV3 disconnected.');
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -232,9 +256,10 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		}
 	});
 
-	const reconnect = vscode.commands.registerCommand('ev3-cockpit.reconnectEV3', async () => {
-		options.getLogger().info('Reconnect requested via command palette; delegating to connect flow.');
-		await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+	const reconnect = vscode.commands.registerCommand('ev3-cockpit.reconnectEV3', async (arg?: unknown) => {
+		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		options.getLogger().info('Reconnect requested; delegating to connect flow.', { requestedBrickId });
+		await vscode.commands.executeCommand('ev3-cockpit.connectEV3', arg);
 	});
 
 	return { connect, disconnect, reconnect };

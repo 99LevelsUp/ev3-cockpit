@@ -112,6 +112,7 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 			}
 
 			await copyRemotePath(service, sourcePath, destinationPath, { overwrite: options.overwrite });
+			this.emitChanged(source, vscode.FileChangeType.Changed);
 			this.emitChanged(destination, vscode.FileChangeType.Created);
 		});
 	}

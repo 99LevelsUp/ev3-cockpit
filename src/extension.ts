@@ -10,6 +10,7 @@ import { readSchedulerConfig } from './config/schedulerConfig';
 import { BrickControlService } from './device/brickControlService';
 import { BrickRegistry, BrickRole } from './device/brickRegistry';
 import { OutputChannelLogger } from './diagnostics/logger';
+import { parseEv3UriParts } from './fs/ev3Uri';
 import { assertRemoteExecutablePath } from './fs/remoteExecutable';
 import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
 import { RemoteFsService } from './fs/remoteFsService';
@@ -18,7 +19,9 @@ import { CommandScheduler } from './scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from './scheduler/orphanRecovery';
 import { createProbeTransportFromWorkspace, TransportMode } from './transport/transportFactory';
 import {
+	BrickTreeNode,
 	BrickTreeProvider,
+	getBrickTreeNodeId,
 	isBrickDirectoryNode,
 	isBrickFileNode,
 	isBrickRootNode
@@ -60,6 +63,12 @@ interface ConnectedBrickDescriptor {
 	rootPath: string;
 }
 
+interface BrickRuntimeSession {
+	brickId: string;
+	scheduler: CommandScheduler;
+	commandClient: Ev3CommandClient;
+}
+
 function normalizeBrickRootPath(input: string): string {
 	let rootPath = input.trim();
 	if (!rootPath.startsWith('/')) {
@@ -82,14 +91,10 @@ function toSafeIdentifier(input: string): string {
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
-	let scheduler: CommandScheduler;
-	let commandClient: Ev3CommandClient;
 	const brickRegistry = new BrickRegistry();
-	let lastRunProgramPath: string | undefined;
-	let activeProgramSession: ProgramSessionState | undefined;
-
-	const getActiveFsService = (): RemoteFsService | undefined => brickRegistry.getActiveFsService();
-	const getActiveControlService = (): BrickControlService | undefined => brickRegistry.getActiveControlService();
+	const brickSessions = new Map<string, BrickRuntimeSession>();
+	const lastRunProgramPathByBrick = new Map<string, string>();
+	const programSessionByBrick = new Map<string, ProgramSessionState>();
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
@@ -123,29 +128,72 @@ export function activate(context: vscode.ExtensionContext) {
 		throw new Error(`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`);
 	});
 
-	const rebuildRuntime = () => {
+	const createBrickSession = (brickId: string): BrickRuntimeSession => {
 		const config = readSchedulerConfig();
-		const featureConfig = readFeatureConfig();
-		logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
-		void commandClient?.close().catch(() => undefined);
-		scheduler?.dispose();
-		brickRegistry.markAllUnavailable('Runtime reinitialized.');
-		lastRunProgramPath = undefined;
-		activeProgramSession = undefined;
-		treeProvider.refreshThrottled();
-
-		scheduler = new CommandScheduler({
+		const scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
 			logger,
 			defaultRetryPolicy: config.defaultRetryPolicy,
 			orphanRecoveryStrategy: new LoggingOrphanRecoveryStrategy((msg, meta) => logger.info(msg, meta))
 		});
-
-		commandClient = new Ev3CommandClient({
+		const commandClient = new Ev3CommandClient({
 			scheduler,
 			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs),
 			logger
 		});
+		return {
+			brickId,
+			scheduler,
+			commandClient
+		};
+	};
+
+	const closeBrickSession = async (brickId: string): Promise<void> => {
+		const session = brickSessions.get(brickId);
+		if (!session) {
+			return;
+		}
+
+		brickSessions.delete(brickId);
+		session.scheduler.dispose();
+		await session.commandClient.close().catch(() => undefined);
+	};
+
+	const closeAllBrickSessions = async (): Promise<void> => {
+		const brickIds = [...brickSessions.keys()];
+		for (const brickId of brickIds) {
+			await closeBrickSession(brickId);
+		}
+	};
+
+	const getBrickSession = (brickId: string): BrickRuntimeSession | undefined => {
+		const concreteBrickId = brickId === 'active' ? brickRegistry.getActiveBrickId() : brickId;
+		if (!concreteBrickId) {
+			return undefined;
+		}
+		return brickSessions.get(concreteBrickId);
+	};
+
+	const prepareBrickSession = async (brickId: string): Promise<Ev3CommandClient> => {
+		await closeBrickSession(brickId);
+		const session = createBrickSession(brickId);
+		brickSessions.set(brickId, session);
+		return session.commandClient;
+	};
+
+	const isBrickSessionAvailable = (brickId: string): boolean => {
+		return getBrickSession(brickId) !== undefined;
+	};
+
+	const rebuildRuntime = () => {
+		const config = readSchedulerConfig();
+		const featureConfig = readFeatureConfig();
+		logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
+		void closeAllBrickSessions();
+		brickRegistry.markAllUnavailable('Runtime reinitialized.');
+		lastRunProgramPathByBrick.clear();
+		programSessionByBrick.clear();
+		treeProvider.refreshThrottled();
 
 		logger.info('Scheduler runtime (re)initialized', {
 			timeoutMs: config.timeoutMs,
@@ -222,9 +270,6 @@ export function activate(context: vscode.ExtensionContext) {
 		let candidate = trimmed;
 		if (candidate.toLowerCase().startsWith('ev3://')) {
 			const parsed = vscode.Uri.parse(candidate);
-			if (parsed.authority && parsed.authority !== 'active') {
-				throw new Error(`Unsupported EV3 authority "${parsed.authority}". Use ev3://active/...`);
-			}
 			candidate = parsed.path;
 		}
 
@@ -250,9 +295,12 @@ export function activate(context: vscode.ExtensionContext) {
 		if (transport === 'tcp') {
 			const hostRaw = cfg.get('transport.tcp.host');
 			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
+			const portRaw = cfg.get('transport.tcp.port');
+			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : 5555;
+			const endpoint = `${host}:${port}`;
 			return {
-				brickId: `tcp-${toSafeIdentifier(host)}`,
-				displayName: `EV3 TCP (${host})`,
+				brickId: `tcp-${toSafeIdentifier(endpoint)}`,
+				displayName: `EV3 TCP (${endpoint})`,
 				role,
 				transport,
 				rootPath: normalizedRootPath
@@ -302,32 +350,75 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 	};
 
+	const resolveConcreteBrickId = (brickId: string): string =>
+		brickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : brickId;
+
 	const markProgramStarted = (
 		remotePath: string,
-		source: ProgramSessionState['source']
+		source: ProgramSessionState['source'],
+		brickId: string
 	): void => {
-		lastRunProgramPath = remotePath;
-		activeProgramSession = {
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		lastRunProgramPathByBrick.set(concreteBrickId, remotePath);
+		const session: ProgramSessionState = {
 			remotePath,
 			startedAtIso: new Date().toISOString(),
 			transportMode: resolveCurrentTransportMode(),
 			source
 		};
+		programSessionByBrick.set(concreteBrickId, session);
 		logger.info('Program session updated', {
-			...activeProgramSession
+			brickId: concreteBrickId,
+			...session
 		});
 	};
 
-	const clearProgramSession = (reason: string): void => {
-		if (!activeProgramSession && !lastRunProgramPath) {
+	const clearProgramSession = (reason: string, brickId?: string): void => {
+		if (!brickId) {
+			if (programSessionByBrick.size === 0 && lastRunProgramPathByBrick.size === 0) {
+				return;
+			}
+			programSessionByBrick.clear();
+			lastRunProgramPathByBrick.clear();
+			logger.info('Program sessions cleared', { reason, scope: 'all' });
+			return;
+		}
+
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		const removedSession = programSessionByBrick.get(concreteBrickId);
+		const removedPath = lastRunProgramPathByBrick.get(concreteBrickId);
+		programSessionByBrick.delete(concreteBrickId);
+		lastRunProgramPathByBrick.delete(concreteBrickId);
+
+		if (!removedSession && !removedPath) {
 			return;
 		}
 		logger.info('Program session cleared', {
 			reason,
-			lastRunProgramPath,
-			activeProgramSession
+			brickId: concreteBrickId,
+			lastRunProgramPath: removedPath,
+			activeProgramSession: removedSession
 		});
-		activeProgramSession = undefined;
+	};
+
+	const getLastRunProgramPathForBrick = (brickId: string): string | undefined => {
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		return lastRunProgramPathByBrick.get(concreteBrickId);
+	};
+
+	const getRestartCandidatePathForBrick = (brickId: string): string | undefined => {
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		return programSessionByBrick.get(concreteBrickId)?.remotePath ?? lastRunProgramPathByBrick.get(concreteBrickId);
+	};
+
+	const resolveDefaultRunDirectory = (brickId: string): string => {
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		const snapshot = brickRegistry.getSnapshot(concreteBrickId);
+		if (snapshot?.rootPath) {
+			return snapshot.rootPath;
+		}
+		const defaultRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
+		return normalizeBrickRootPath(defaultRoot);
 	};
 
 	const resolveBrickIdFromCommandArg = (arg: unknown): string => {
@@ -372,6 +463,35 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 	};
 
+	const resolveControlAccessContext = (
+		arg: unknown
+	): { brickId: string; authority: string; controlService: BrickControlService } | { error: string } => {
+		const requestedBrickId = resolveBrickIdFromCommandArg(arg);
+		const authority = requestedBrickId === 'active' ? 'active' : requestedBrickId;
+		const controlService = brickRegistry.resolveControlService(requestedBrickId);
+		if (!controlService) {
+			const snapshot = requestedBrickId === 'active' ? undefined : brickRegistry.getSnapshot(requestedBrickId);
+			if (snapshot) {
+				return {
+					error: `Brick "${requestedBrickId}" is currently ${snapshot.status.toLowerCase()}.`
+				};
+			}
+			return {
+				error:
+					requestedBrickId === 'active'
+						? 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
+						: `Brick "${requestedBrickId}" is not connected.`
+			};
+		}
+
+		const brickId = requestedBrickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : requestedBrickId;
+		return {
+			brickId,
+			authority,
+			controlService
+		};
+	};
+
 	const resolveDeployTargetFromArg = (arg: unknown): DeployTargetContext | { error: string } => {
 		const fsContext = resolveFsAccessContext(arg);
 		if ('error' in fsContext) {
@@ -396,28 +516,32 @@ export function activate(context: vscode.ExtensionContext) {
 	// --- Register command modules ---
 
 	const { connect, disconnect, reconnect } = registerConnectCommands({
-		getCommandClient: () => commandClient,
 		getLogger: () => logger,
 		getBrickRegistry: () => brickRegistry,
 		getTreeProvider: () => treeProvider,
 		clearProgramSession,
+		resolveBrickIdFromCommandArg,
 		resolveProbeTimeoutMs,
-		resolveConnectedBrickDescriptor
+		resolveConnectedBrickDescriptor,
+		prepareBrickSession,
+		closeBrickSession,
+		isBrickSessionAvailable
 	});
 
 	const deployRegistrations = registerDeployCommands({
 		getLogger: () => logger,
-		getCommandClient: () => commandClient,
+		resolveCommandClient: (brickId) => getBrickSession(brickId)?.commandClient,
 		resolveDeployTargetFromArg,
 		resolveFsAccessContext,
 		markProgramStarted
 	});
 
 	const { runRemoteProgram, stopProgram, restartProgram, emergencyStop } = registerProgramControlCommands({
-		getActiveFsService,
-		getActiveControlService,
-		getLastRunProgramPath: () => lastRunProgramPath,
-		getRestartCandidatePath: () => activeProgramSession?.remotePath ?? lastRunProgramPath,
+		resolveFsAccessContext,
+		resolveControlAccessContext,
+		getLastRunProgramPath: getLastRunProgramPathForBrick,
+		getRestartCandidatePath: getRestartCandidatePathForBrick,
+		resolveDefaultRunDirectory,
 		getLogger: () => logger,
 		normalizeRunExecutablePath,
 		onProgramStarted: markProgramStarted,
@@ -450,7 +574,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			if (event.affectsConfiguration('ev3-cockpit')) {
-				rebuildRuntime();
+				logger.info('EV3 Cockpit configuration changed. Existing brick sessions stay online; new connections use updated settings.');
 			}
 		})();
 	});
@@ -467,7 +591,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			return service;
 		},
-		refreshTree: () => treeProvider.refreshThrottled(),
+		refreshTree: (brickId, remotePath) => treeProvider.refreshDirectory(brickId, remotePath),
 		logger: logger!
 	});
 
@@ -475,6 +599,76 @@ export function activate(context: vscode.ExtensionContext) {
 		treeDataProvider: treeProvider,
 		showCollapseAll: true,
 		dragAndDropController: brickTreeDragAndDrop
+	});
+	const expandedNodeIds = new Set<string>();
+	const rememberExpandedState = (element: BrickTreeNode, expanded: boolean): void => {
+		if (element.kind !== 'brick' && element.kind !== 'directory') {
+			return;
+		}
+		const nodeId = getBrickTreeNodeId(element);
+		if (expanded) {
+			expandedNodeIds.add(nodeId);
+		} else {
+			expandedNodeIds.delete(nodeId);
+		}
+	};
+	const restoreExpandedNodes = async (): Promise<void> => {
+		if (expandedNodeIds.size === 0) {
+			return;
+		}
+		const sortedNodeIds = [...expandedNodeIds].sort((left, right) => left.localeCompare(right));
+		for (let pass = 0; pass < 3; pass += 1) {
+			let revealedAny = false;
+			for (const nodeId of sortedNodeIds) {
+				const node = treeProvider.getNodeById(nodeId);
+				if (!node) {
+					continue;
+				}
+				try {
+					await brickTreeView.reveal(node, {
+						expand: true,
+						focus: false,
+						select: false
+					});
+					revealedAny = true;
+				} catch {
+					// ignore reveal failures for stale node ids
+				}
+			}
+			if (!revealedAny) {
+				return;
+			}
+			await new Promise<void>((resolve) => setTimeout(resolve, 25));
+		}
+	};
+	const treeExpandSubscription = brickTreeView.onDidExpandElement((event) => {
+		rememberExpandedState(event.element, true);
+	});
+	const treeCollapseSubscription = brickTreeView.onDidCollapseElement((event) => {
+		rememberExpandedState(event.element, false);
+	});
+	const treeChangeSubscription = treeProvider.onDidChangeTreeData(() => {
+		void restoreExpandedNodes();
+	});
+	const fsChangeSubscription = fsProvider.onDidChangeFile((events) => {
+		const refreshTargets = new Set<string>();
+		for (const event of events) {
+			if (event.uri.scheme !== 'ev3') {
+				continue;
+			}
+			try {
+				const parsed = parseEv3UriParts(event.uri.authority, event.uri.path);
+				const targetBrickId = parsed.brickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : parsed.brickId;
+				const parentPath = path.posix.dirname(parsed.remotePath);
+				refreshTargets.add(`${targetBrickId}|${parentPath}`);
+			} catch {
+				// ignore malformed URI events
+			}
+		}
+		for (const target of refreshTargets) {
+			const [brickId, remotePath] = target.split('|', 2);
+			treeProvider.refreshDirectory(brickId, remotePath);
+		}
 	});
 	treeProvider.refresh();
 
@@ -511,15 +705,18 @@ export function activate(context: vscode.ExtensionContext) {
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
+		treeExpandSubscription,
+		treeCollapseSubscription,
+		treeChangeSubscription,
+		fsChangeSubscription,
 		treeProvider,
 		output,
 		{
 		dispose: () => {
-			scheduler.dispose();
 			brickRegistry.markAllUnavailable('Extension disposed.');
 			treeProvider.dispose();
 			clearProgramSession('extension-dispose');
-			void commandClient.close();
+			void closeAllBrickSessions();
 		}
 		}
 	);

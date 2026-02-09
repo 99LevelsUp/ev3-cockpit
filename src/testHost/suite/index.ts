@@ -56,6 +56,14 @@ function normalizeRemotePath(input: string): string {
 	return absolute;
 }
 
+function toSafeIdentifierForTest(input: string): string {
+	const normalized = input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return normalized.length > 0 ? normalized : 'active';
+}
+
 function parseCString(bytes: Uint8Array, offset: number): string {
 	let end = offset;
 	while (end < bytes.length && bytes[end] !== 0x00) {
@@ -566,10 +574,18 @@ async function withTemporaryWorkspaceFolder<T>(
 
 	await prepare(tempRootPath);
 
-	const replaced = vscode.workspace.updateWorkspaceFolders(0, originalFolders.length, {
-		uri: tempRootUri,
-		name: path.basename(tempRootPath)
-	});
+	let replaced = false;
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		replaced =
+			vscode.workspace.updateWorkspaceFolders(0, originalFolders.length, {
+				uri: tempRootUri,
+				name: path.basename(tempRootPath)
+			}) ?? false;
+		if (replaced) {
+			break;
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 120));
+	}
 	assert.equal(replaced, true, 'Expected temporary workspace folder update to succeed.');
 	await waitForCondition(
 		'temporary workspace folder active',
@@ -766,14 +782,27 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				'transport.tcp.handshakeTimeoutMs': 3000
 			},
 			async () => {
+				const tcpBrickId = `tcp-${toSafeIdentifierForTest('active:5555')}`;
 				await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
 				await new Promise<void>((resolve) => setTimeout(resolve, 250));
-				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3');
+				const selectedBrickRoot = {
+					kind: 'brick',
+					brickId: tcpBrickId,
+					displayName: 'EV3 TCP (active)',
+					role: 'standalone',
+					transport: 'tcp',
+					status: 'READY',
+					isActive: true,
+					rootPath: '/home/root/lms2012/prjs/'
+				};
+				await vscode.commands.executeCommand('ev3-cockpit.stopProgram', selectedBrickRoot);
+				await vscode.commands.executeCommand('ev3-cockpit.emergencyStop', selectedBrickRoot);
+				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', selectedBrickRoot);
 				await new Promise<void>((resolve) => setTimeout(resolve, 250));
-				await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
+				await vscode.commands.executeCommand('ev3-cockpit.emergencyStop', selectedBrickRoot);
 
 				const rootUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
-				const explicitRootUri = vscode.Uri.parse('ev3://tcp-active/home/root/lms2012/prjs/');
+				const explicitRootUri = vscode.Uri.parse(`ev3://${tcpBrickId}/home/root/lms2012/prjs/`);
 				const sourceUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-source.txt');
 				const copyUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-copy.txt');
 				const renamedUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/host-suite-renamed.txt');
@@ -842,7 +871,7 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 					}
 				);
 
-				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', selectedBrickRoot);
 
 				const directoryUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
 				try {
@@ -951,6 +980,141 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 	}
 }
 
+async function testMultiBrickSelectedDeployCommandsWithMockTcp(): Promise<void> {
+	const fakeServerA = await startFakeEv3TcpServer();
+	const fakeServerB = await startFakeEv3TcpServer();
+
+	const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+	assert.ok(workspaceFolder, 'Expected at least one workspace folder for multi-brick host test.');
+	const workspaceUri = workspaceFolder.uri;
+	const workspaceFsPath = workspaceUri.fsPath;
+	const localProgramPath = path.join(workspaceFsPath, 'host-multi-brick-main.rbf');
+	const localNotesPath = path.join(workspaceFsPath, 'host-multi-brick-notes.txt');
+
+	await fs.mkdir(workspaceFsPath, { recursive: true });
+	await fs.writeFile(localProgramPath, Buffer.from([0x10, 0x11, 0x12, 0x13]));
+	await fs.writeFile(localNotesPath, 'multi-brick-v1\n', 'utf8');
+
+	try {
+		await withWorkspaceSettings(
+			{
+				'transport.mode': 'tcp',
+				'transport.timeoutMs': 3000,
+				'transport.tcp.host': '127.0.0.1',
+				'transport.tcp.useDiscovery': false,
+				'transport.tcp.handshakeTimeoutMs': 3000,
+				'transport.tcp.port': fakeServerA.port,
+				'deploy.includeGlobs': ['host-multi-brick-*']
+			},
+			async () => {
+				const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+				const connectWithPort = async (port: number): Promise<void> => {
+					await cfg.update('transport.tcp.port', port, vscode.ConfigurationTarget.Workspace);
+					await new Promise<void>((resolve) => setTimeout(resolve, 150));
+					await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+					await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				};
+
+				const makeBrickRootNode = (brickId: string) => ({
+					kind: 'brick',
+					brickId,
+					displayName: `EV3 TCP (${brickId})`,
+					role: 'standalone',
+					transport: 'tcp',
+					status: 'READY',
+					isActive: false,
+					rootPath: '/home/root/lms2012/prjs/'
+				});
+
+				const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
+				const brickAId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerA.port}`)}`;
+				const brickBId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerB.port}`)}`;
+				const brickANode = makeBrickRootNode(brickAId);
+				const brickBNode = makeBrickRootNode(brickBId);
+
+				const brickAProjectUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/`);
+				const brickARootUri = vscode.Uri.parse(`ev3://${brickAId}/home/root/lms2012/prjs/`);
+				const brickBRootUri = vscode.Uri.parse(`ev3://${brickBId}/home/root/lms2012/prjs/`);
+				const brickAProgramUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/host-multi-brick-main.rbf`);
+				const brickBProgramUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-multi-brick-main.rbf`);
+				const brickAUniqueUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/host-multi-brick-only-a.txt`);
+				const brickBUniqueUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-multi-brick-only-a.txt`);
+
+				await connectWithPort(fakeServerA.port);
+				await connectWithPort(fakeServerB.port);
+				await vscode.workspace.fs.readDirectory(brickARootUri);
+				await vscode.workspace.fs.readDirectory(brickBRootUri);
+
+				await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick', brickANode);
+
+				await assert.rejects(
+					async () => {
+						await vscode.workspace.fs.readDirectory(brickAProjectUri);
+					},
+					(error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error);
+						assert.match(message, /not found|path not found|status|directory/i);
+						return true;
+					}
+				);
+				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick', brickANode);
+
+				const brickAProgramV1 = await vscode.workspace.fs.readFile(brickAProgramUri);
+				assert.deepEqual(Array.from(brickAProgramV1), [0x10, 0x11, 0x12, 0x13]);
+				await assert.rejects(
+					async () => {
+						await vscode.workspace.fs.readFile(brickBProgramUri);
+					},
+					(error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error);
+						assert.match(message, /not found|path not found|status|file/i);
+						return true;
+					}
+				);
+
+				const runCountABefore = fakeServerA.getRunProgramCommandCount();
+				const runCountBBefore = fakeServerB.getRunProgramCommandCount();
+				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick', brickANode);
+				assert.ok(
+					fakeServerA.getRunProgramCommandCount() > runCountABefore,
+					'Expected selected-brick deploy+run to target brick A.'
+				);
+				assert.equal(
+					fakeServerB.getRunProgramCommandCount(),
+					runCountBBefore,
+					'Expected selected-brick deploy+run to not affect brick B.'
+				);
+
+				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick', brickBNode);
+				const brickBProgramV1 = await vscode.workspace.fs.readFile(brickBProgramUri);
+				assert.deepEqual(Array.from(brickBProgramV1), [0x10, 0x11, 0x12, 0x13]);
+
+				await vscode.workspace.fs.writeFile(brickAUniqueUri, Buffer.from('only-on-a', 'utf8'));
+				const uniqueOnA = await vscode.workspace.fs.readFile(brickAUniqueUri);
+				assert.equal(Buffer.from(uniqueOnA).toString('utf8'), 'only-on-a');
+				await assert.rejects(
+					async () => {
+						await vscode.workspace.fs.readFile(brickBUniqueUri);
+					},
+					(error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error);
+						assert.match(message, /not found|path not found|status|file/i);
+						return true;
+					}
+				);
+
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickANode);
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickBNode);
+			}
+		);
+	} finally {
+		await fs.rm(localProgramPath, { force: true });
+		await fs.rm(localNotesPath, { force: true });
+		await fakeServerA.close();
+		await fakeServerB.close();
+	}
+}
+
 async function testCommandsWithoutHardware(): Promise<void> {
 	await withWorkspaceSettings(
 		{
@@ -1018,6 +1182,7 @@ export async function run(): Promise<void> {
 		['provider rejects non-active brick authority', testProviderRejectsNonActiveBrickAuthority],
 		['tcp connect flow with mock discovery and server', testTcpConnectFlowWithMockDiscoveryAndServer],
 		['workspace deploy commands with mock tcp', testWorkspaceDeployCommandsWithMockTcp],
+		['multi-brick selected deploy commands with mock tcp', testMultiBrickSelectedDeployCommandsWithMockTcp],
 	];
 
 	let passed = 0;

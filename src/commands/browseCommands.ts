@@ -22,7 +22,7 @@ interface BrowseCommandOptions {
 	getTreeProvider(): BrickTreeProvider;
 	resolveFsAccessContext(arg: unknown): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string };
 	resolveBrickIdFromCommandArg(arg: unknown): string;
-	markProgramStarted(path: string, source: ProgramStartSource): void;
+	markProgramStarted(path: string, source: ProgramStartSource, brickId: string): void;
 }
 
 interface BrowseCommandRegistrations {
@@ -86,7 +86,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 			if (action.action === 'run') {
 				try {
 					const executable = await runRemoteExecutable(fsService, remotePath);
-					options.markProgramStarted(remotePath, 'remote-fs-run');
+					options.markProgramStarted(remotePath, 'remote-fs-run', brickId);
 					logger.info('Remote FS run program completed', {
 						path: remotePath,
 						type: executable.typeId
@@ -244,6 +244,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 
 				if (uploaded > 0) {
 					vscode.window.showInformationMessage(`Uploaded ${uploaded} file(s) to ev3://${authority}${currentPath}`);
+					options.getTreeProvider().refreshDirectory(brickId, currentPath);
 				}
 				continue;
 			}
@@ -263,6 +264,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				try {
 					await fsService.createDirectory(remotePath);
 					vscode.window.showInformationMessage(`Folder created: ev3://${authority}${remotePath}`);
+					options.getTreeProvider().refreshDirectory(brickId, currentPath);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn('Remote FS mkdir failed', {
@@ -323,6 +325,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				try {
 					await vscode.workspace.fs.delete(targetUri, { recursive: toDelete.isDirectory, useTrash: false });
 					vscode.window.showInformationMessage(`Deleted ev3://${authority}${toDelete.targetPath}`);
+					options.getTreeProvider().refreshDirectory(brickId, currentPath);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					logger.warn('Remote FS delete failed', {
@@ -419,7 +422,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				vscode.window.showInformationMessage(
 					`Uploaded ${uploaded} file(s) to ev3://${fsContext.authority}${targetPath}`
 				);
-				treeProvider.refreshThrottled();
+				treeProvider.refreshDirectory(fsContext.brickId, targetPath);
 			}
 		}
 	);
@@ -454,7 +457,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 					recursive: isBrickDirectoryNode(node),
 					useTrash: false
 				});
-				treeProvider.refreshThrottled();
+				treeProvider.refreshDirectory(node.brickId, path.posix.dirname(node.remotePath));
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				vscode.window.showErrorMessage(`Cannot delete ${targetUri.toString()}. Detail: ${message}`);
@@ -479,7 +482,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 
 			try {
 				const executable = await runRemoteExecutable(fsContext.fsService, node.remotePath);
-				options.markProgramStarted(node.remotePath, 'remote-fs-run');
+				options.markProgramStarted(node.remotePath, 'remote-fs-run', fsContext.brickId);
 				logger.info('Tree run executable completed', {
 					path: node.remotePath,
 					type: executable.typeId,
