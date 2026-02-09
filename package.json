@@ -200,12 +200,12 @@
         {
           "command": "ev3-cockpit.reconnectEV3",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
-          "group": "1_connection"
+          "group": "inline@2"
         },
         {
           "command": "ev3-cockpit.disconnectEV3",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
-          "group": "1_connection"
+          "group": "inline@3"
         },
         {
           "command": "ev3-cockpit.emergencyStop",
@@ -220,7 +220,7 @@
         {
           "command": "ev3-cockpit.runRemoteProgram",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
-          "group": "1_connection"
+          "group": "inline@4"
         },
         {
           "command": "ev3-cockpit.restartProgram",
@@ -250,7 +250,7 @@
         {
           "command": "ev3-cockpit.deployWorkspaceToBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
-          "group": "3_deploy"
+          "group": "inline@5"
         },
         {
           "command": "ev3-cockpit.deployProjectToBrick",

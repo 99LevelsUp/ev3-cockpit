@@ -174,7 +174,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 
 		const unavailableRoot = roots[1];
 		const unavailableItem = provider.getTreeItem(unavailableRoot);
-		assert.equal(unavailableItem.command?.command, 'ev3-cockpit.reconnectEV3');
+		assert.equal(unavailableItem.command?.command, 'ev3-cockpit.connectEV3');
 		const unavailableChildren = await provider.getChildren(unavailableRoot);
 		assert.equal(unavailableChildren.length, 1);
 		assert.equal((unavailableChildren[0] as { kind: string }).kind, 'message');
@@ -272,7 +272,7 @@ test('BrickTreeProvider maps root status to context and action', async () => {
 
 		const errorItem = provider.getTreeItem(roots[1]);
 		assert.equal(errorItem.contextValue, 'ev3BrickRootError');
-		assert.equal(errorItem.command?.command, 'ev3-cockpit.reconnectEV3');
+		assert.equal(errorItem.command?.command, 'ev3-cockpit.connectEV3');
 	});
 });
 

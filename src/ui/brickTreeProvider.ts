@@ -464,8 +464,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		}
 		if (node.status === 'UNAVAILABLE' || node.status === 'ERROR') {
 			return {
-				command: 'ev3-cockpit.reconnectEV3',
-				title: 'Reconnect EV3',
+				command: 'ev3-cockpit.connectEV3',
+				title: 'Connect EV3',
 				arguments: [node]
 			};
 		}
