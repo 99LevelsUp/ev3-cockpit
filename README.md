@@ -21,13 +21,15 @@ It is an extension that runs inside Visual Studio Code and adds EV3-specific com
 
 - Connect to EV3 over USB, Wi-Fi (TCP), or Bluetooth.
 - Detect EV3 capabilities after connection.
-- Browse and manage remote files via `ev3://active/...`.
+- Browse and manage remote files via `ev3://active/...` and `ev3://<brickId>/...`.
 - Browse and manage files from the **EV3 Cockpit Bricks** tree in the Explorer sidebar.
 - Upload, download, create folders, delete entries.
 - Deploy project/workspace files to EV3.
 - Preview deploy changes before applying them.
 - Run, stop, restart remote executables (currently `.rbf`).
 - Trigger Emergency Stop.
+- Store per-brick connection profiles for targeted reconnect.
+- Run batch actions for ready bricks (batch reconnect, batch workspace deploy).
 
 ## Explorer Tree Workflow (User UI)
 
@@ -40,6 +42,7 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - You can drag-and-drop remote files/folders in the tree to move them within the same brick.
 - You can drag local files/folders from your OS/Explorer into a remote EV3 folder to upload.
 - Active-brick root context now includes quick actions like reconnect/disconnect/emergency stop and deploy variants.
+- Brick roots show runtime busy counters and keep per-brick last-operation metadata in tooltips.
 - Executable launch is type-based under the hood, so more executable file types can be added without changing the UI workflow.
 
 ## Implementation Status
@@ -51,10 +54,12 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - [x] Wi-Fi (TCP) connection workflow
 - [x] Bluetooth connection workflow (runtime support)
 - [x] Capability probe and profile selection
-- [x] Remote filesystem provider (`ev3://active/...`)
+- [x] Remote filesystem provider (`ev3://active/...` + `ev3://<brickId>/...`)
 - [x] Deploy workflows (preview/sync/deploy+run)
 - [x] Run/Stop/Restart `.rbf`
 - [x] Emergency Stop
+- [x] Multi-brick tree runtime sessions + per-brick reconnect profiles
+- [x] Batch multi-brick commands (reconnect/deploy workspace)
 - [x] Test infrastructure (unit, host, hardware smoke/matrix)
 
 ### In Progress
