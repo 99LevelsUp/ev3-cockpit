@@ -260,6 +260,16 @@ test('BrickTreeProvider filters roots and descendants by query', async () => {
 		query = 'ev3 usb';
 		assert.equal((await provider.getChildren()).length, 1);
 
+		query = 'usb ev3';
+		assert.equal((await provider.getChildren()).length, 1);
+
+		query = 'docs lesson';
+		const docsLessonRoots = await provider.getChildren();
+		assert.equal(docsLessonRoots.length, 1);
+		const docsLessonChildren = await provider.getChildren(docsLessonRoots[0]);
+		assert.equal(docsLessonChildren.length, 1);
+		assert.equal((docsLessonChildren[0] as { kind: string; name: string }).name, 'docs');
+
 		query = 'missing-entry';
 		assert.equal((await provider.getChildren()).length, 0);
 	});

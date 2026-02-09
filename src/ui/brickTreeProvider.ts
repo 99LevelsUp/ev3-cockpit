@@ -327,11 +327,11 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 					this.invalidateBrickCache(brickId);
 				}
 			}
-			const query = this.resolveFilterQuery();
-			if (!query) {
+			const queryTokens = this.resolveFilterTokens();
+			if (!queryTokens) {
 				return roots;
 			}
-			return this.filterRootNodesByQuery(roots, query);
+			return this.filterRootNodesByQuery(roots, queryTokens);
 		}
 
 		if (element.kind === 'message' || element.kind === 'file') {
@@ -351,11 +351,11 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				];
 			}
 			const children = await this.loadDirectoryChildren(element.brickId, element.rootPath);
-			const query = this.resolveFilterQuery();
-			if (!query) {
+			const queryTokens = this.resolveFilterTokens();
+			if (!queryTokens) {
 				return children;
 			}
-			return this.filterChildrenByQuery(children, query);
+			return this.filterChildrenByQuery(children, queryTokens);
 		}
 
 		const snapshot = this.options.dataSource.getBrickSnapshot(element.brickId);
@@ -372,62 +372,72 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		}
 
 		const children = await this.loadDirectoryChildren(element.brickId, element.remotePath);
-		const query = this.resolveFilterQuery();
-		if (!query) {
+		const queryTokens = this.resolveFilterTokens();
+		if (!queryTokens) {
 			return children;
 		}
-		return this.filterChildrenByQuery(children, query);
+		return this.filterChildrenByQuery(children, queryTokens);
 	}
 
-	private resolveFilterQuery(): string | undefined {
+	private resolveFilterTokens(): string[] | undefined {
 		const raw = this.options.getFilterQuery?.();
 		if (typeof raw !== 'string') {
 			return undefined;
 		}
-		const normalized = raw.trim().toLowerCase();
-		return normalized.length > 0 ? normalized : undefined;
+		const tokens = raw
+			.trim()
+			.toLowerCase()
+			.split(/\s+/g)
+			.filter((token) => token.length > 0);
+		return tokens.length > 0 ? tokens : undefined;
 	}
 
-	private matchesFilterQuery(query: string, ...candidates: Array<string | undefined>): boolean {
-		for (const candidate of candidates) {
-			if (typeof candidate !== 'string') {
-				continue;
-			}
-			if (candidate.toLowerCase().includes(query)) {
-				return true;
+	private matchesFilterTokens(tokens: string[], ...candidates: Array<string | undefined>): boolean {
+		if (tokens.length === 0) {
+			return false;
+		}
+		const normalizedCandidates = candidates
+			.filter((candidate): candidate is string => typeof candidate === 'string')
+			.map((candidate) => candidate.toLowerCase());
+		if (normalizedCandidates.length === 0) {
+			return false;
+		}
+		for (const token of tokens) {
+			if (!normalizedCandidates.some((candidate) => candidate.includes(token))) {
+				return false;
 			}
 		}
-		return false;
+		return true;
 	}
 
-	private async filterRootNodesByQuery(roots: BrickTreeNode[], query: string): Promise<BrickTreeNode[]> {
+	private async filterRootNodesByQuery(roots: BrickTreeNode[], queryTokens: string[]): Promise<BrickTreeNode[]> {
 		const filtered: BrickTreeNode[] = [];
 		for (const node of roots) {
 			if (node.kind !== 'brick') {
 				continue;
 			}
-			if (this.matchesFilterQuery(query, node.displayName, node.brickId, node.rootPath)) {
+			if (this.matchesFilterTokens(queryTokens, node.displayName, node.brickId, node.rootPath)) {
 				filtered.push(node);
 				continue;
 			}
 			if (node.status !== 'READY') {
 				continue;
 			}
-			if (await this.directoryHasMatchingDescendant(node.brickId, node.rootPath, query, new Set<string>())) {
+			if (await this.directoryHasMatchingDescendant(node.brickId, node.rootPath, queryTokens, new Set<string>())) {
 				filtered.push(node);
 			}
 		}
 		return filtered;
 	}
 
-	private async filterChildrenByQuery(children: BrickTreeNode[], query: string): Promise<BrickTreeNode[]> {
+	private async filterChildrenByQuery(children: BrickTreeNode[], queryTokens: string[]): Promise<BrickTreeNode[]> {
 		const filtered: BrickTreeNode[] = [];
 		for (const node of children) {
 			if (node.kind === 'message') {
 				continue;
 			}
 			if (node.kind === 'file') {
-				if (this.matchesFilterQuery(query, node.name, node.remotePath)) {
+				if (this.matchesFilterTokens(queryTokens, node.name, node.remotePath)) {
 					filtered.push(node);
 				}
 				continue;
@@ -435,11 +445,11 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			if (node.kind !== 'directory') {
 				continue;
 			}
-			if (this.matchesFilterQuery(query, node.name, node.remotePath)) {
+			if (this.matchesFilterTokens(queryTokens, node.name, node.remotePath)) {
 				filtered.push(node);
 				continue;
 			}
-			if (await this.directoryHasMatchingDescendant(node.brickId, node.remotePath, query, new Set<string>())) {
+			if (await this.directoryHasMatchingDescendant(node.brickId, node.remotePath, queryTokens, new Set<string>())) {
 				filtered.push(node);
 			}
 		}
@@ -449,7 +459,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 	private async directoryHasMatchingDescendant(
 		brickId: string,
 		remotePath: string,
-		query: string,
+		queryTokens: string[],
 		visitedPaths: Set<string>
 	): Promise<boolean> {
 		const normalizedPath = normalizeRemotePath(remotePath);
@@ -460,16 +470,16 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		visitedPaths.add(key);
 		const children = await this.loadDirectoryChildren(brickId, normalizedPath);
 		for (const node of children) {
-			if (node.kind === 'file' && this.matchesFilterQuery(query, node.name, node.remotePath)) {
+			if (node.kind === 'file' && this.matchesFilterTokens(queryTokens, node.name, node.remotePath)) {
 				return true;
 			}
 			if (node.kind !== 'directory') {
 				continue;
 			}
-			if (this.matchesFilterQuery(query, node.name, node.remotePath)) {
+			if (this.matchesFilterTokens(queryTokens, node.name, node.remotePath)) {
 				return true;
 			}
-			if (await this.directoryHasMatchingDescendant(node.brickId, node.remotePath, query, visitedPaths)) {
+			if (await this.directoryHasMatchingDescendant(node.brickId, node.remotePath, queryTokens, visitedPaths)) {
 				return true;
 			}
 		}
