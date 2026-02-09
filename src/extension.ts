@@ -71,6 +71,15 @@ function toSafeIdentifier(input: string): string {
 	return normalized.length > 0 ? normalized : 'active';
 }
 
+const RUNTIME_RECONNECT_CONFIG_KEYS = [
+	'ev3-cockpit.transport.mode',
+	'ev3-cockpit.transport.usb.path',
+	'ev3-cockpit.transport.bluetooth.port',
+	'ev3-cockpit.transport.tcp.host',
+	'ev3-cockpit.transport.tcp.port',
+	'ev3-cockpit.compat.profile'
+] as const;
+
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
@@ -513,6 +522,23 @@ export function activate(context: vscode.ExtensionContext) {
 		resolveProbeTimeoutMs
 	});
 
+	const inspectBrickSessions = vscode.commands.registerCommand('ev3-cockpit.inspectBrickSessions', async () => {
+		const brickSnapshots = brickRegistry.listSnapshots();
+		const runtimeSnapshots = sessionManager.listRuntimeSnapshots();
+		const programSnapshots = sessionManager.listProgramSnapshots();
+		const busySessions = runtimeSnapshots.filter((entry) => entry.busyCommandCount > 0).length;
+
+		logger.info('Brick session diagnostics report', {
+			activeBrickId: brickRegistry.getActiveBrickId(),
+			bricks: brickSnapshots,
+			runtimeSessions: runtimeSnapshots,
+			programSessions: programSnapshots
+		});
+		vscode.window.showInformationMessage(
+			`Brick session diagnostics: bricks=${brickSnapshots.length}, runtime=${runtimeSnapshots.length}, busy=${busySessions}. See EV3 Cockpit output.`
+		);
+	});
+
 	const browseRegistrations = registerBrowseCommands({
 		getLogger: () => logger,
 		getBrickRegistry: () => brickRegistry,
@@ -523,6 +549,55 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// --- Config watcher, FS provider, tree view ---
+
+	let reconnectPromptInFlight = false;
+	const affectsRuntimeReconnectConfig = (event: vscode.ConfigurationChangeEvent): boolean => {
+		return RUNTIME_RECONNECT_CONFIG_KEYS.some((section) => event.affectsConfiguration(section));
+	};
+	const offerReconnectAfterConfigChange = async (): Promise<void> => {
+		if (reconnectPromptInFlight) {
+			return;
+		}
+
+		const connectedBrickIds = brickRegistry
+			.listSnapshots()
+			.filter((snapshot) => snapshot.status === 'READY' && sessionManager.isSessionAvailable(snapshot.brickId))
+			.map((snapshot) => snapshot.brickId);
+		if (connectedBrickIds.length === 0) {
+			return;
+		}
+
+		reconnectPromptInFlight = true;
+		try {
+			const choice = await vscode.window.showInformationMessage(
+				`Connection settings changed. Reconnect ${connectedBrickIds.length} brick(s) now to apply them?`,
+				'Reconnect all',
+				'Later'
+			);
+			if (choice !== 'Reconnect all') {
+				logger.info('Reconnect prompt after configuration change was deferred by user.', {
+					brickIds: connectedBrickIds
+				});
+				return;
+			}
+
+			logger.info('Reconnect all requested after configuration change.', {
+				brickIds: connectedBrickIds
+			});
+			for (const brickId of connectedBrickIds) {
+				try {
+					await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
+				} catch (error) {
+					logger.warn('Reconnect after configuration change failed.', {
+						brickId,
+						error: error instanceof Error ? error.message : String(error)
+					});
+				}
+			}
+		} finally {
+			reconnectPromptInFlight = false;
+		}
+	};
 
 	const configWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
 		void (async () => {
@@ -535,6 +610,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (event.affectsConfiguration('ev3-cockpit')) {
 				logger.info('EV3 Cockpit configuration changed. Existing brick sessions stay online; new connections use updated settings.');
+				if (affectsRuntimeReconnectConfig(event)) {
+					await offerReconnectAfterConfigChange();
+				}
 			}
 		})();
 	});
@@ -657,6 +735,7 @@ export function activate(context: vscode.ExtensionContext) {
 		emergencyStop,
 		inspectTransports,
 		transportHealthReport,
+		inspectBrickSessions,
 		browseRegistrations.browseRemoteFs,
 		browseRegistrations.refreshBricksView,
 		browseRegistrations.uploadToBrickFolder,

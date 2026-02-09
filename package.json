@@ -113,6 +113,10 @@
         "title": "EV3 Cockpit: Transport Health Report"
       },
       {
+        "command": "ev3-cockpit.inspectBrickSessions",
+        "title": "EV3 Cockpit: Inspect Brick Sessions"
+      },
+      {
         "command": "ev3-cockpit.browseRemoteFs",
         "title": "EV3 Cockpit: Browse Remote FS (active)"
       },
