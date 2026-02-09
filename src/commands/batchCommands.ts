@@ -57,6 +57,51 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		return selected.map((entry) => entry.brickId);
 	};
 
+	const runBatchWithProgress = async (
+		brickIds: string[],
+		title: string,
+		task: (brickId: string) => Promise<void>
+	): Promise<{ completed: number; failed: number; cancelled: boolean }> => {
+		let completed = 0;
+		let failed = 0;
+		let cancelled = false;
+
+		await vscode.window.withProgress(
+			{
+				location: vscode.ProgressLocation.Notification,
+				title,
+				cancellable: true
+			},
+			async (progress, token) => {
+				progress.report({ message: `0/${brickIds.length}` });
+				for (let index = 0; index < brickIds.length; index += 1) {
+					const brickId = brickIds[index];
+					if (token.isCancellationRequested) {
+						cancelled = true;
+						break;
+					}
+					try {
+						await task(brickId);
+						completed += 1;
+					} catch {
+						failed += 1;
+					}
+					const done = index + 1;
+					progress.report({
+						increment: 100 / brickIds.length,
+						message: `${done}/${brickIds.length}`
+					});
+				}
+			}
+		);
+
+		return {
+			completed,
+			failed,
+			cancelled
+		};
+	};
+
 	const reconnectReadyBricks = vscode.commands.registerCommand('ev3-cockpit.reconnectReadyBricks', async (arg?: unknown) => {
 		const logger = options.getLogger();
 		const selectedBrickIds = await selectReadyBrickIds(arg, 'Reconnect Ready Bricks');
@@ -65,7 +110,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 			return;
 		}
 
-		for (const brickId of selectedBrickIds) {
+		const result = await runBatchWithProgress(selectedBrickIds, 'Batch reconnect bricks', async (brickId) => {
 			try {
 				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
 			} catch (error) {
@@ -73,10 +118,14 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					brickId,
 					error: error instanceof Error ? error.message : String(error)
 				});
+				throw error;
 			}
-		}
+		});
 
-		vscode.window.showInformationMessage(`Batch reconnect finished for ${selectedBrickIds.length} brick(s).`);
+		const suffix = result.cancelled ? ' (cancelled)' : '';
+		vscode.window.showInformationMessage(
+			`Batch reconnect finished: ok=${result.completed}, failed=${result.failed}${suffix}.`
+		);
 	});
 
 	const deployWorkspaceToReadyBricks = vscode.commands.registerCommand(
@@ -89,18 +138,26 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 				return;
 			}
 
-			for (const brickId of selectedBrickIds) {
-				try {
-					await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick', brickId);
-				} catch (error) {
-					logger.warn('Batch workspace deploy failed for brick', {
-						brickId,
-						error: error instanceof Error ? error.message : String(error)
-					});
+			const result = await runBatchWithProgress(
+				selectedBrickIds,
+				'Batch deploy workspace to bricks',
+				async (brickId) => {
+					try {
+						await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick', brickId);
+					} catch (error) {
+						logger.warn('Batch workspace deploy failed for brick', {
+							brickId,
+							error: error instanceof Error ? error.message : String(error)
+						});
+						throw error;
+					}
 				}
-			}
+			);
 
-			vscode.window.showInformationMessage(`Batch workspace deploy finished for ${selectedBrickIds.length} brick(s).`);
+			const suffix = result.cancelled ? ' (cancelled)' : '';
+			vscode.window.showInformationMessage(
+				`Batch workspace deploy finished: ok=${result.completed}, failed=${result.failed}${suffix}.`
+			);
 		}
 	);
 
