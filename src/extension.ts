@@ -9,6 +9,7 @@ import { readFeatureConfig } from './config/featureConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
 import { BrickControlService } from './device/brickControlService';
 import { BrickRegistry, BrickRole } from './device/brickRegistry';
+import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { OutputChannelLogger } from './diagnostics/logger';
 import { parseEv3UriParts } from './fs/ev3Uri';
 import { assertRemoteExecutablePath } from './fs/remoteExecutable';
@@ -43,30 +44,12 @@ class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	}
 }
 
-interface ProgramSessionState {
-	remotePath: string;
-	startedAtIso: string;
-	transportMode: TransportMode | 'unknown';
-	source:
-		| 'deploy-and-run-single'
-		| 'deploy-project-run'
-		| 'remote-fs-run'
-		| 'run-command'
-		| 'restart-command';
-}
-
 interface ConnectedBrickDescriptor {
 	brickId: string;
 	displayName: string;
 	role: BrickRole;
 	transport: TransportMode | 'unknown';
 	rootPath: string;
-}
-
-interface BrickRuntimeSession {
-	brickId: string;
-	scheduler: CommandScheduler;
-	commandClient: Ev3CommandClient;
 }
 
 function normalizeBrickRootPath(input: string): string {
@@ -92,9 +75,6 @@ export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
 	const brickRegistry = new BrickRegistry();
-	const brickSessions = new Map<string, BrickRuntimeSession>();
-	const lastRunProgramPathByBrick = new Map<string, string>();
-	const programSessionByBrick = new Map<string, ProgramSessionState>();
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
@@ -128,7 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
 		throw new Error(`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`);
 	});
 
-	const createBrickSession = (brickId: string): BrickRuntimeSession => {
+	const createBrickSession = (brickId: string): BrickRuntimeSession<CommandScheduler, Ev3CommandClient> => {
 		const config = readSchedulerConfig();
 		const scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
@@ -148,41 +128,34 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 	};
 
-	const closeBrickSession = async (brickId: string): Promise<void> => {
-		const session = brickSessions.get(brickId);
-		if (!session) {
-			return;
-		}
+	const sessionManager = new BrickSessionManager<CommandScheduler, Ev3CommandClient>(createBrickSession);
 
-		brickSessions.delete(brickId);
-		session.scheduler.dispose();
-		await session.commandClient.close().catch(() => undefined);
+	const closeBrickSession = async (brickId: string): Promise<void> => {
+		await sessionManager.closeSession(brickId);
 	};
 
 	const closeAllBrickSessions = async (): Promise<void> => {
-		const brickIds = [...brickSessions.keys()];
-		for (const brickId of brickIds) {
-			await closeBrickSession(brickId);
-		}
+		await sessionManager.closeAllSessions();
 	};
 
-	const getBrickSession = (brickId: string): BrickRuntimeSession | undefined => {
+	const getBrickSession = (brickId: string): BrickRuntimeSession<CommandScheduler, Ev3CommandClient> | undefined => {
 		const concreteBrickId = brickId === 'active' ? brickRegistry.getActiveBrickId() : brickId;
 		if (!concreteBrickId) {
 			return undefined;
 		}
-		return brickSessions.get(concreteBrickId);
+		return sessionManager.getSession(concreteBrickId);
 	};
 
 	const prepareBrickSession = async (brickId: string): Promise<Ev3CommandClient> => {
-		await closeBrickSession(brickId);
-		const session = createBrickSession(brickId);
-		brickSessions.set(brickId, session);
-		return session.commandClient;
+		return sessionManager.prepareSession(brickId);
 	};
 
 	const isBrickSessionAvailable = (brickId: string): boolean => {
-		return getBrickSession(brickId) !== undefined;
+		const concreteBrickId = brickId === 'active' ? brickRegistry.getActiveBrickId() : brickId;
+		if (!concreteBrickId) {
+			return false;
+		}
+		return sessionManager.isSessionAvailable(concreteBrickId);
 	};
 
 	const rebuildRuntime = () => {
@@ -191,8 +164,7 @@ export function activate(context: vscode.ExtensionContext) {
 		logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
 		void closeAllBrickSessions();
 		brickRegistry.markAllUnavailable('Runtime reinitialized.');
-		lastRunProgramPathByBrick.clear();
-		programSessionByBrick.clear();
+		sessionManager.clearProgramSession();
 		treeProvider.refreshThrottled();
 
 		logger.info('Scheduler runtime (re)initialized', {
@@ -359,14 +331,7 @@ export function activate(context: vscode.ExtensionContext) {
 		brickId: string
 	): void => {
 		const concreteBrickId = resolveConcreteBrickId(brickId);
-		lastRunProgramPathByBrick.set(concreteBrickId, remotePath);
-		const session: ProgramSessionState = {
-			remotePath,
-			startedAtIso: new Date().toISOString(),
-			transportMode: resolveCurrentTransportMode(),
-			source
-		};
-		programSessionByBrick.set(concreteBrickId, session);
+		const session = sessionManager.markProgramStarted(concreteBrickId, remotePath, source, resolveCurrentTransportMode());
 		logger.info('Program session updated', {
 			brickId: concreteBrickId,
 			...session
@@ -375,40 +340,35 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const clearProgramSession = (reason: string, brickId?: string): void => {
 		if (!brickId) {
-			if (programSessionByBrick.size === 0 && lastRunProgramPathByBrick.size === 0) {
+			const removed = sessionManager.clearProgramSession();
+			if (!removed) {
 				return;
 			}
-			programSessionByBrick.clear();
-			lastRunProgramPathByBrick.clear();
 			logger.info('Program sessions cleared', { reason, scope: 'all' });
 			return;
 		}
 
 		const concreteBrickId = resolveConcreteBrickId(brickId);
-		const removedSession = programSessionByBrick.get(concreteBrickId);
-		const removedPath = lastRunProgramPathByBrick.get(concreteBrickId);
-		programSessionByBrick.delete(concreteBrickId);
-		lastRunProgramPathByBrick.delete(concreteBrickId);
-
-		if (!removedSession && !removedPath) {
+		const removed = sessionManager.clearProgramSession(concreteBrickId);
+		if (!removed) {
 			return;
 		}
 		logger.info('Program session cleared', {
 			reason,
 			brickId: concreteBrickId,
-			lastRunProgramPath: removedPath,
-			activeProgramSession: removedSession
+			lastRunProgramPath: removed.removedPath,
+			activeProgramSession: removed.removedSession
 		});
 	};
 
 	const getLastRunProgramPathForBrick = (brickId: string): string | undefined => {
 		const concreteBrickId = resolveConcreteBrickId(brickId);
-		return lastRunProgramPathByBrick.get(concreteBrickId);
+		return sessionManager.getLastRunProgramPath(concreteBrickId);
 	};
 
 	const getRestartCandidatePathForBrick = (brickId: string): string | undefined => {
 		const concreteBrickId = resolveConcreteBrickId(brickId);
-		return programSessionByBrick.get(concreteBrickId)?.remotePath ?? lastRunProgramPathByBrick.get(concreteBrickId);
+		return sessionManager.getRestartCandidatePath(concreteBrickId);
 	};
 
 	const resolveDefaultRunDirectory = (brickId: string): string => {
