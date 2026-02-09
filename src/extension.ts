@@ -40,6 +40,7 @@ import {
 } from './ui/brickTreeProvider';
 import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
 import { BrickUiStateStore } from './ui/brickUiStateStore';
+import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
@@ -98,6 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const brickRegistry = new BrickRegistry();
 	const profileStore = new BrickConnectionProfileStore(context.workspaceState);
 	const brickUiStateStore = new BrickUiStateStore(context.workspaceState);
+	const brickTreeViewStateStore = new BrickTreeViewStateStore(context.workspaceState);
 
 	const sortSnapshotsForTree = (snapshots: BrickSnapshot[]): BrickSnapshot[] => {
 		const favoriteOrder = brickUiStateStore.getFavoriteOrder();
@@ -805,7 +807,22 @@ export function activate(context: vscode.ExtensionContext) {
 		clearInterval(busyIndicatorInterval);
 	});
 
-	const expandedNodeIds = new Set<string>();
+	const expandedNodeIds = new Set<string>(brickTreeViewStateStore.getExpandedNodeIds());
+	let pendingSelectionRestoreNodeId = brickTreeViewStateStore.getSelectedNodeId();
+	let selectedNodeId = pendingSelectionRestoreNodeId;
+	let persistTreeStateTimer: NodeJS.Timeout | undefined;
+	const persistTreeViewState = async (): Promise<void> => {
+		await brickTreeViewStateStore.update(expandedNodeIds, selectedNodeId);
+	};
+	const schedulePersistTreeViewState = (): void => {
+		if (persistTreeStateTimer) {
+			clearTimeout(persistTreeStateTimer);
+		}
+		persistTreeStateTimer = setTimeout(() => {
+			persistTreeStateTimer = undefined;
+			void persistTreeViewState();
+		}, 120);
+	};
 	const rememberExpandedState = (element: BrickTreeNode, expanded: boolean): void => {
 		if (element.kind !== 'brick' && element.kind !== 'directory') {
 			return;
@@ -816,9 +833,18 @@ export function activate(context: vscode.ExtensionContext) {
 		} else {
 			expandedNodeIds.delete(nodeId);
 		}
+		schedulePersistTreeViewState();
 	};
-	const restoreExpandedNodes = async (): Promise<void> => {
-		if (expandedNodeIds.size === 0) {
+	const rememberSelectionState = (selection: readonly BrickTreeNode[]): void => {
+		const element = selection[0];
+		if (!element || element.kind === 'message') {
+			return;
+		}
+		selectedNodeId = getBrickTreeNodeId(element);
+		schedulePersistTreeViewState();
+	};
+	const restoreTreeViewState = async (): Promise<void> => {
+		if (expandedNodeIds.size === 0 && !pendingSelectionRestoreNodeId) {
 			return;
 		}
 		const sortedNodeIds = [...expandedNodeIds].sort((left, right) => left.localeCompare(right));
@@ -841,9 +867,29 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 			if (!revealedAny) {
-				return;
+				break;
 			}
 			await new Promise<void>((resolve) => setTimeout(resolve, 25));
+		}
+		if (!pendingSelectionRestoreNodeId) {
+			return;
+		}
+		const selectedNode = treeProvider.getNodeById(pendingSelectionRestoreNodeId);
+		if (!selectedNode || selectedNode.kind === 'message') {
+			pendingSelectionRestoreNodeId = undefined;
+			selectedNodeId = undefined;
+			schedulePersistTreeViewState();
+			return;
+		}
+		try {
+			await brickTreeView.reveal(selectedNode, {
+				focus: false,
+				select: true,
+				expand: true
+			});
+			pendingSelectionRestoreNodeId = undefined;
+		} catch {
+			// Selection restore can race with async tree updates. Keep retrying on next tree refresh.
 		}
 	};
 	const treeExpandSubscription = brickTreeView.onDidExpandElement((event) => {
@@ -852,8 +898,18 @@ export function activate(context: vscode.ExtensionContext) {
 	const treeCollapseSubscription = brickTreeView.onDidCollapseElement((event) => {
 		rememberExpandedState(event.element, false);
 	});
+	const treeSelectionSubscription = brickTreeView.onDidChangeSelection((event) => {
+		rememberSelectionState(event.selection);
+	});
 	const treeChangeSubscription = treeProvider.onDidChangeTreeData(() => {
-		void restoreExpandedNodes();
+		void restoreTreeViewState();
+	});
+	const treeStatePersistenceSubscription = new vscode.Disposable(() => {
+		if (persistTreeStateTimer) {
+			clearTimeout(persistTreeStateTimer);
+			persistTreeStateTimer = undefined;
+		}
+		void persistTreeViewState();
 	});
 	const fsChangeSubscription = fsProvider.onDidChangeFile((events) => {
 		const refreshTargets = new Set<string>();
@@ -917,7 +973,9 @@ export function activate(context: vscode.ExtensionContext) {
 		brickTreeView,
 		treeExpandSubscription,
 		treeCollapseSubscription,
+		treeSelectionSubscription,
 		treeChangeSubscription,
+		treeStatePersistenceSubscription,
 		fsChangeSubscription,
 		busyIndicatorSubscription,
 		treeProvider,
