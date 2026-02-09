@@ -64,6 +64,7 @@ interface DeployCommandOptions {
 	resolveDeployTargetFromArg(arg: unknown): DeployTargetContext | { error: string };
 	resolveFsAccessContext(arg: unknown): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string };
 	markProgramStarted(path: string, source: 'deploy-and-run-single' | 'deploy-project-run', brickId: string): void;
+	onBrickOperation(brickId: string, operation: string): void;
 }
 
 interface DeployCommandRegistrations {
@@ -278,6 +279,14 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		const fsService = fsTarget.fsService;
 		const targetBrickId = fsTarget.brickId;
 		const targetAuthority = fsTarget.authority;
+		options.onBrickOperation(
+			targetBrickId,
+			deployOptions.previewOnly
+				? 'Deploy preview started'
+				: deployOptions.runAfterDeploy
+				? 'Deploy and run started'
+				: 'Deploy sync started'
+		);
 		const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 		const isCancellationError = (error: unknown): boolean =>
 			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
@@ -916,10 +925,15 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 					: '';
 
 			if (deployOptions.previewOnly) {
+				options.onBrickOperation(targetBrickId, 'Deploy preview completed');
 				vscode.window.showInformationMessage(
 					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EV3 Cockpit output for sample paths.`
 				);
 			} else {
+				options.onBrickOperation(
+					targetBrickId,
+					deployOptions.runAfterDeploy ? 'Deploy and run completed' : 'Deploy sync completed'
+				);
 				const verifySummary =
 					verifyAfterUpload !== 'none'
 					? `; verified ${verifiedFilesCount} file(s) (${verifyAfterUpload})`
@@ -934,6 +948,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			}
 		} catch (error) {
 			if (isCancellationError(error)) {
+				options.onBrickOperation(targetBrickId, 'Deploy cancelled');
 				logger.info('Deploy project operation cancelled by user.', {
 					localProjectPath: projectUri.fsPath,
 					remoteProjectRoot,
@@ -945,6 +960,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			}
 
 			const message = toErrorMessage(error);
+			options.onBrickOperation(targetBrickId, 'Deploy failed');
 			logger.warn(
 				deployOptions.previewOnly
 					? 'Deploy project preview failed'
@@ -1062,6 +1078,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		}
 
 		try {
+			options.onBrickOperation(target.brickId, 'Deploy and run executable started');
 			const bytes = await vscode.workspace.fs.readFile(localUri);
 			await fsService.writeFile(remotePath, bytes);
 			if (featureConfig.deploy.verifyAfterUpload !== 'none') {
@@ -1069,6 +1086,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			}
 			const executable = await runRemoteExecutable(fsService, remotePath);
 			options.markProgramStarted(remotePath, 'deploy-and-run-single', target.brickId);
+			options.onBrickOperation(target.brickId, 'Deploy and run executable completed');
 
 			logger.info('Deploy and run completed', {
 				localPath: localUri.fsPath,
@@ -1080,6 +1098,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			vscode.window.showInformationMessage(`Deployed and started: ev3://${target.authority}${remotePath}`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			options.onBrickOperation(target.brickId, 'Deploy and run executable failed');
 			logger.warn('Deploy and run failed', {
 				localPath: localUri.fsPath,
 				remotePath,

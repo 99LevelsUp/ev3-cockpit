@@ -17,6 +17,8 @@ export interface BrickRootNode {
 	isActive: boolean;
 	rootPath: string;
 	lastError?: string;
+	lastOperation?: string;
+	lastOperationAtIso?: string;
 	busyCommandCount?: number;
 	schedulerState?: string;
 }
@@ -406,6 +408,13 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 	private buildRootTooltip(node: BrickRootNode): string {
 		const lines = [`${node.displayName}`, `Status: ${node.status}`, `Root: ${node.rootPath}`];
 		lines.push(`Runtime: ${node.schedulerState ?? 'idle'}, busy=${node.busyCommandCount ?? 0}`);
+		if (node.lastOperation) {
+			lines.push(
+				`Last operation: ${node.lastOperation}${
+					node.lastOperationAtIso ? ` (${new Date(node.lastOperationAtIso).toLocaleTimeString()})` : ''
+				}`
+			);
+		}
 		if (node.lastError) {
 			lines.push(`Error: ${node.lastError}`);
 		}
@@ -427,6 +436,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 
 	private getRootIcon(node: BrickRootNode): vscode.ThemeIcon {
 		if (node.status === 'READY') {
+			if ((node.busyCommandCount ?? 0) > 0) {
+				return new vscode.ThemeIcon('sync~spin');
+			}
 			return new vscode.ThemeIcon(node.isActive ? 'plug' : 'device-camera-video');
 		}
 		if (node.status === 'CONNECTING') {
@@ -497,6 +509,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			existing.isActive = snapshot.isActive;
 			existing.rootPath = rootPath;
 			existing.lastError = snapshot.lastError;
+			existing.lastOperation = snapshot.lastOperation;
+			existing.lastOperationAtIso = snapshot.lastOperationAtIso;
 			existing.busyCommandCount = snapshot.busyCommandCount;
 			existing.schedulerState = snapshot.schedulerState;
 			this.nodesById.set(getBrickTreeNodeId(existing), existing);
@@ -513,6 +527,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			isActive: snapshot.isActive,
 			rootPath,
 			lastError: snapshot.lastError,
+			lastOperation: snapshot.lastOperation,
+			lastOperationAtIso: snapshot.lastOperationAtIso,
 			busyCommandCount: snapshot.busyCommandCount,
 			schedulerState: snapshot.schedulerState
 		};

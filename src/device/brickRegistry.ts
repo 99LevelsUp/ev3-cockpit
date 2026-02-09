@@ -18,6 +18,8 @@ export interface BrickRuntimeRecord extends BrickIdentity {
 	isActive: boolean;
 	lastSeenAtIso?: string;
 	lastError?: string;
+	lastOperation?: string;
+	lastOperationAtIso?: string;
 	busyCommandCount?: number;
 	schedulerState?: string;
 	fsService?: RemoteFsService;
@@ -39,6 +41,8 @@ export interface BrickSnapshot {
 	isActive: boolean;
 	lastSeenAtIso?: string;
 	lastError?: string;
+	lastOperation?: string;
+	lastOperationAtIso?: string;
 	busyCommandCount?: number;
 	schedulerState?: string;
 }
@@ -54,6 +58,8 @@ function cloneSnapshot(record: BrickRuntimeRecord): BrickSnapshot {
 		isActive: record.isActive,
 		lastSeenAtIso: record.lastSeenAtIso,
 		lastError: record.lastError,
+		lastOperation: record.lastOperation,
+		lastOperationAtIso: record.lastOperationAtIso,
 		busyCommandCount: record.busyCommandCount,
 		schedulerState: record.schedulerState
 	};
@@ -70,6 +76,8 @@ export class BrickRegistry {
 			isActive: true,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: undefined,
+			lastOperation: 'Connecting',
+			lastOperationAtIso: new Date().toISOString(),
 			busyCommandCount: 0,
 			schedulerState: 'idle',
 			fsService: undefined,
@@ -87,6 +95,8 @@ export class BrickRegistry {
 			isActive: true,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: undefined,
+			lastOperation: 'Connected',
+			lastOperationAtIso: new Date().toISOString(),
 			busyCommandCount: 0,
 			schedulerState: 'idle',
 			fsService: input.fsService,
@@ -116,6 +126,8 @@ export class BrickRegistry {
 			isActive: false,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: reason,
+			lastOperation: 'Disconnected',
+			lastOperationAtIso: new Date().toISOString(),
 			busyCommandCount: 0,
 			schedulerState: undefined,
 			fsService: undefined,
@@ -139,8 +151,8 @@ export class BrickRegistry {
 				role: 'unknown',
 				transport: 'unknown',
 				rootPath: '/home/root/lms2012/prjs/',
-				status: 'ERROR',
-				isActive: false
+			status: 'ERROR',
+			isActive: false
 			};
 
 		const updated: BrickRuntimeRecord = {
@@ -149,6 +161,8 @@ export class BrickRegistry {
 			isActive: this.activeBrickId === brickId,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: reason,
+			lastOperation: 'Error',
+			lastOperationAtIso: new Date().toISOString(),
 			busyCommandCount: 0,
 			schedulerState: undefined,
 			fsService: undefined,
@@ -186,6 +200,26 @@ export class BrickRegistry {
 			...existing,
 			busyCommandCount: nextBusy,
 			schedulerState: nextState
+		};
+		this.records.set(brickId, updated);
+		return cloneSnapshot(updated);
+	}
+
+	public noteOperation(brickId: string, operation: string): BrickSnapshot | undefined {
+		const existing = this.records.get(brickId);
+		if (!existing) {
+			return undefined;
+		}
+		const label = operation.trim();
+		if (!label) {
+			return cloneSnapshot(existing);
+		}
+		const nowIso = new Date().toISOString();
+		const updated: BrickRuntimeRecord = {
+			...existing,
+			lastOperation: label,
+			lastOperationAtIso: nowIso,
+			lastSeenAtIso: nowIso
 		};
 		this.records.set(brickId, updated);
 		return cloneSnapshot(updated);

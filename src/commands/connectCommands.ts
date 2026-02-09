@@ -40,6 +40,7 @@ interface ConnectCommandOptions {
 		existingProfile?: BrickConnectionProfile
 	): BrickConnectionProfile;
 	rememberConnectionProfile(profile: BrickConnectionProfile): Promise<void>;
+	onBrickOperation(brickId: string, operation: string): void;
 }
 
 interface ConnectCommandRegistrations {
@@ -63,6 +64,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		try {
 			const connectingRoot = requestedProfile?.rootPath ?? (readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
 			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot, requestedProfile);
+			options.onBrickOperation(connectingDescriptor.brickId, 'Connecting');
 			options.clearProgramSession('connect-start', connectingDescriptor.brickId);
 			if (requestedBrickId !== 'active') {
 				activeLogger.info('Connect requested from selected brick root.', {
@@ -202,6 +204,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				fsService: connectedFsService,
 				controlService: connectedControlService
 			});
+			options.onBrickOperation(brickDescriptor.brickId, 'Connect probe completed');
 			const connectionProfile = options.captureConnectionProfile(
 				brickDescriptor.brickId,
 				brickDescriptor.displayName,
@@ -257,6 +260,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			}
 			if (disconnectedBrickId) {
 				brickRegistry.markUnavailable(disconnectedBrickId, 'Disconnected by user.');
+				options.onBrickOperation(disconnectedBrickId, 'Disconnected by user');
 				treeProvider.refreshBrick(disconnectedBrickId);
 			} else {
 				treeProvider.refreshThrottled();
@@ -276,6 +280,9 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 
 	const reconnect = vscode.commands.registerCommand('ev3-cockpit.reconnectEV3', async (arg?: unknown) => {
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		if (requestedBrickId !== 'active') {
+			options.onBrickOperation(requestedBrickId, 'Reconnect requested');
+		}
 		options.getLogger().info('Reconnect requested; delegating to connect flow.', { requestedBrickId });
 		await vscode.commands.executeCommand('ev3-cockpit.connectEV3', arg);
 	});

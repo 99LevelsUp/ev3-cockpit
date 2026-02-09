@@ -86,3 +86,21 @@ test('BrickRegistry updates runtime metrics for tree busy indicators', () => {
 	assert.equal(unavailable?.busyCommandCount, 0);
 	assert.equal(unavailable?.schedulerState, undefined);
 });
+
+test('BrickRegistry stores last operation metadata', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'usb-auto',
+		displayName: 'EV3 USB',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	registry.noteOperation('usb-auto', 'Deploy sync completed');
+	const snapshot = registry.getSnapshot('usb-auto');
+	assert.equal(snapshot?.lastOperation, 'Deploy sync completed');
+	assert.ok(snapshot?.lastOperationAtIso);
+});

@@ -365,6 +365,14 @@ export function activate(context: vscode.ExtensionContext) {
 	const resolveConcreteBrickId = (brickId: string): string =>
 		brickId === 'active' ? brickRegistry.getActiveBrickId() ?? 'active' : brickId;
 
+	const noteBrickOperation = (brickId: string, operation: string): void => {
+		const concreteBrickId = resolveConcreteBrickId(brickId);
+		const updated = brickRegistry.noteOperation(concreteBrickId, operation);
+		if (updated) {
+			treeProvider.refreshBrick(concreteBrickId);
+		}
+	};
+
 	const markProgramStarted = (
 		remotePath: string,
 		source: ProgramSessionState['source'],
@@ -541,7 +549,8 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 		rememberConnectionProfile: async (profile) => {
 			await profileStore.upsert(profile);
-		}
+		},
+		onBrickOperation: noteBrickOperation
 	});
 
 	const deployRegistrations = registerDeployCommands({
@@ -549,7 +558,8 @@ export function activate(context: vscode.ExtensionContext) {
 		resolveCommandClient: (brickId) => getBrickSession(brickId)?.commandClient,
 		resolveDeployTargetFromArg,
 		resolveFsAccessContext,
-		markProgramStarted
+		markProgramStarted,
+		onBrickOperation: noteBrickOperation
 	});
 
 	const { runRemoteProgram, stopProgram, restartProgram, emergencyStop } = registerProgramControlCommands({
@@ -561,7 +571,8 @@ export function activate(context: vscode.ExtensionContext) {
 		getLogger: () => logger,
 		normalizeRunExecutablePath,
 		onProgramStarted: markProgramStarted,
-		onProgramCleared: clearProgramSession
+		onProgramCleared: clearProgramSession,
+		onBrickOperation: noteBrickOperation
 	});
 
 	const { inspectTransports, transportHealthReport } = registerTransportCommands({
@@ -592,7 +603,8 @@ export function activate(context: vscode.ExtensionContext) {
 		getTreeProvider: () => treeProvider,
 		resolveFsAccessContext,
 		resolveBrickIdFromCommandArg,
-		markProgramStarted
+		markProgramStarted,
+		onBrickOperation: noteBrickOperation
 	});
 	const batchRegistrations = registerBatchCommands({
 		getLogger: () => logger,
