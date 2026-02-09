@@ -76,6 +76,14 @@ function normalizeBrickRootPath(input: string): string {
 	return rootPath;
 }
 
+function normalizeRemotePathForReveal(input: string): string {
+	const normalized = path.posix.normalize(input.replace(/\\/g, '/'));
+	if (normalized === '.') {
+		return '/';
+	}
+	return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 function toSafeIdentifier(input: string): string {
 	const normalized = input
 		.toLowerCase()
@@ -772,6 +780,136 @@ export function activate(context: vscode.ExtensionContext) {
 		showCollapseAll: true,
 		dragAndDropController: brickTreeDragAndDrop
 	});
+	const revealInBricksTree = vscode.commands.registerCommand('ev3-cockpit.revealInBricksTree', async (arg?: unknown) => {
+		const resolveUriFromArg = (): vscode.Uri | undefined => {
+			if (arg instanceof vscode.Uri) {
+				return arg;
+			}
+			if (typeof arg === 'string') {
+				try {
+					return vscode.Uri.parse(arg);
+				} catch {
+					return undefined;
+				}
+			}
+			if (arg && typeof arg === 'object' && 'uri' in (arg as Record<string, unknown>)) {
+				const candidate = (arg as { uri?: unknown }).uri;
+				if (candidate instanceof vscode.Uri) {
+					return candidate;
+				}
+				if (typeof candidate === 'string') {
+					try {
+						return vscode.Uri.parse(candidate);
+					} catch {
+						return undefined;
+					}
+				}
+			}
+			return vscode.window.activeTextEditor?.document.uri;
+		};
+
+		const targetUri = resolveUriFromArg();
+		if (!targetUri || targetUri.scheme !== 'ev3') {
+			vscode.window.showErrorMessage('Reveal in Bricks Tree requires an ev3:// URI.');
+			return;
+		}
+
+		let parsed: ReturnType<typeof parseEv3UriParts>;
+		try {
+			parsed = parseEv3UriParts(targetUri.authority, targetUri.path);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			vscode.window.showErrorMessage(`Cannot parse EV3 URI: ${message}`);
+			return;
+		}
+
+		const resolvedBrickId = parsed.brickId === 'active' ? brickRegistry.getActiveBrickId() : parsed.brickId;
+		if (!resolvedBrickId) {
+			vscode.window.showErrorMessage('No active brick is available for ev3://active URI.');
+			return;
+		}
+
+		await treeProvider.getChildren();
+		const rootNodeId = `brick:${resolvedBrickId}`;
+		const rootNode = treeProvider.getNodeById(rootNodeId);
+		if (!rootNode || rootNode.kind !== 'brick') {
+			vscode.window.showErrorMessage(`Brick "${resolvedBrickId}" is not present in Bricks Tree.`);
+			return;
+		}
+
+		const rootPath = normalizeRemotePathForReveal(rootNode.rootPath);
+		const targetPath = normalizeRemotePathForReveal(parsed.remotePath);
+		if (targetPath !== rootPath && !targetPath.startsWith(`${rootPath === '/' ? '/' : `${rootPath}/`}`)) {
+			vscode.window.showWarningMessage(`Path "${targetPath}" is outside root "${rootPath}" for this brick.`);
+			return;
+		}
+
+		let currentNode: BrickTreeNode = rootNode;
+		let currentPath = rootPath;
+		const relativePath =
+			targetPath === rootPath
+				? ''
+				: targetPath.slice(rootPath === '/' ? 1 : rootPath.length + 1);
+		const segments = relativePath.length > 0 ? relativePath.split('/').filter((segment) => segment.length > 0) : [];
+		try {
+			await brickTreeView.reveal(rootNode, {
+				expand: true,
+				focus: false,
+				select: segments.length === 0
+			});
+		} catch {
+			// reveal fallback below handles unavailable target
+		}
+
+		for (let index = 0; index < segments.length; index += 1) {
+			const segment = segments[index];
+			const nextPath = path.posix.join(currentPath, segment);
+			const children = await treeProvider.getChildren(currentNode);
+			const isLast = index === segments.length - 1;
+			const nextDirectory = children.find(
+				(node): node is Extract<BrickTreeNode, { kind: 'directory' }> =>
+					node.kind === 'directory' && normalizeRemotePathForReveal(node.remotePath) === nextPath
+			);
+			if (nextDirectory) {
+				currentNode = nextDirectory;
+				currentPath = nextPath;
+				if (!isLast) {
+					await brickTreeView.reveal(currentNode, {
+						expand: true,
+						focus: false,
+						select: false
+					});
+				}
+				continue;
+			}
+
+			if (isLast) {
+				const targetFile = children.find(
+					(node): node is Extract<BrickTreeNode, { kind: 'file' }> =>
+						node.kind === 'file' && normalizeRemotePathForReveal(node.remotePath) === nextPath
+				);
+				if (targetFile) {
+					currentNode = targetFile;
+					currentPath = nextPath;
+					continue;
+				}
+			}
+
+			vscode.window.showWarningMessage(`Cannot reveal "${targetPath}" in Bricks Tree (missing path segment "${segment}").`);
+			return;
+		}
+
+		try {
+			await brickTreeView.reveal(currentNode, {
+				expand: currentNode.kind === 'directory',
+				focus: true,
+				select: true
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			vscode.window.showWarningMessage(`Reveal in Bricks Tree failed: ${message}`);
+		}
+	});
 	const busyStateByBrickId = new Map<string, string>();
 	const refreshBusyIndicators = (): void => {
 		const snapshots = brickRegistry.listSnapshots();
@@ -960,6 +1098,7 @@ export function activate(context: vscode.ExtensionContext) {
 		inspectTransports,
 		transportHealthReport,
 		inspectBrickSessions,
+		revealInBricksTree,
 		browseRegistrations.browseRemoteFs,
 		browseRegistrations.refreshBricksView,
 		browseRegistrations.uploadToBrickFolder,

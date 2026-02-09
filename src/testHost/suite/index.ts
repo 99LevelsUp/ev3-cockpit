@@ -720,6 +720,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.inspectTransports'));
 	assert.ok(commands.includes('ev3-cockpit.transportHealthReport'));
 	assert.ok(commands.includes('ev3-cockpit.inspectBrickSessions'));
+	assert.ok(commands.includes('ev3-cockpit.revealInBricksTree'));
 	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
 	assert.ok(commands.includes('ev3-cockpit.refreshBricksView'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectReadyBricks'));
@@ -1366,6 +1367,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
 			await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
 			await vscode.commands.executeCommand('ev3-cockpit.inspectBrickSessions');
+			await vscode.commands.executeCommand('ev3-cockpit.revealInBricksTree');
 			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 			assert.ok(workspaceFolder, 'Expected workspace folder for diagnostics report verification.');
 			const diagnosticsReportPath = path.join(

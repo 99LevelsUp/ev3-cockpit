@@ -117,6 +117,10 @@
         "title": "EV3 Cockpit: Inspect Brick Sessions"
       },
       {
+        "command": "ev3-cockpit.revealInBricksTree",
+        "title": "EV3 Cockpit: Reveal in Bricks Tree"
+      },
+      {
         "command": "ev3-cockpit.browseRemoteFs",
         "title": "EV3 Cockpit: Browse Remote FS (active)"
       },
@@ -230,6 +234,11 @@
         {
           "command": "ev3-cockpit.toggleFavoriteBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
+          "group": "0_navigation"
+        },
+        {
+          "command": "ev3-cockpit.revealInBricksTree",
+          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
           "group": "0_navigation"
         },
         {
