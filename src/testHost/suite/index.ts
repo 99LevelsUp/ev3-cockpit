@@ -731,6 +731,7 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.uploadToBrickFolder'));
 	assert.ok(commands.includes('ev3-cockpit.deleteRemoteEntryFromTree'));
 	assert.ok(commands.includes('ev3-cockpit.runRemoteExecutableFromTree'));
+	assert.ok(commands.includes('ev3-cockpit.retryDirectoryFromTree'));
 }
 
 async function testEv3FileSystemProvider(): Promise<void> {
@@ -1397,6 +1398,7 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
 			await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');
 			await vscode.commands.executeCommand('ev3-cockpit.runRemoteExecutableFromTree');
+			await vscode.commands.executeCommand('ev3-cockpit.retryDirectoryFromTree');
 		}
 	);
 }

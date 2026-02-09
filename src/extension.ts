@@ -718,6 +718,42 @@ export function activate(context: vscode.ExtensionContext) {
 		await updateBricksTreeFilterQuery('');
 		vscode.window.showInformationMessage('Bricks tree filter cleared.');
 	});
+	const retryDirectoryFromTree = vscode.commands.registerCommand('ev3-cockpit.retryDirectoryFromTree', async (arg?: unknown) => {
+		const directoryArg = (input: unknown): { brickId: string; remotePath: string } | undefined => {
+			if (isBrickDirectoryNode(input)) {
+				return {
+					brickId: input.brickId,
+					remotePath: input.remotePath
+				};
+			}
+			if (isBrickRootNode(input)) {
+				return {
+					brickId: input.brickId,
+					remotePath: input.rootPath
+				};
+			}
+			if (!input || typeof input !== 'object') {
+				return undefined;
+			}
+			const candidate = input as {
+				brickId?: unknown;
+				remotePath?: unknown;
+			};
+			if (typeof candidate.brickId !== 'string' || typeof candidate.remotePath !== 'string') {
+				return undefined;
+			}
+			return {
+				brickId: candidate.brickId,
+				remotePath: candidate.remotePath
+			};
+		};
+		const target = directoryArg(arg);
+		if (!target) {
+			vscode.window.showErrorMessage('Retry directory listing requires a directory node argument.');
+			return;
+		}
+		treeProvider.refreshDirectory(target.brickId, target.remotePath);
+	});
 
 	// --- Config watcher, FS provider, tree view ---
 
@@ -1148,6 +1184,7 @@ export function activate(context: vscode.ExtensionContext) {
 		toggleFavoriteBrick,
 		setBricksTreeFilter,
 		clearBricksTreeFilter,
+		retryDirectoryFromTree,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,

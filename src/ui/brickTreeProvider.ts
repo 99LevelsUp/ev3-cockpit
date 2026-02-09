@@ -43,6 +43,8 @@ export interface BrickMessageNode {
 	brickId: string;
 	label: string;
 	detail?: string;
+	contextValue?: string;
+	command?: vscode.Command;
 }
 
 export interface BrickTreeDataSource {
@@ -299,8 +301,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
 				item.id = `message:${element.brickId}:${element.label}`;
 				item.description = element.detail;
-				item.contextValue = 'ev3BrickMessage';
+				item.contextValue = element.contextValue ?? 'ev3BrickMessage';
 				item.iconPath = new vscode.ThemeIcon('info');
+				item.command = element.command;
 				return item;
 			}
 		}
@@ -515,7 +518,19 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 					kind: 'message',
 					brickId,
 					label: 'Cannot list directory',
-					detail: message
+					detail: message,
+					contextValue: 'ev3RemoteDirectoryError',
+					command: {
+						command: 'ev3-cockpit.retryDirectoryFromTree',
+						title: 'Retry Directory Listing',
+						arguments: [
+							{
+								kind: 'directory',
+								brickId,
+								remotePath: normalizedPath
+							}
+						]
+					}
 				}
 			];
 		}

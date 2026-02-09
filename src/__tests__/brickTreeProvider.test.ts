@@ -311,6 +311,48 @@ test('BrickTreeProvider returns unavailable message for expanded directory after
 	});
 });
 
+test('BrickTreeProvider exposes retry action for directory listing errors', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'usb-auto',
+						displayName: 'EV3 USB',
+						role: 'standalone',
+						transport: 'usb',
+						status: 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/'
+					}
+				],
+				getBrickSnapshot: () => ({
+					brickId: 'usb-auto',
+					displayName: 'EV3 USB',
+					role: 'standalone',
+					transport: 'usb',
+					status: 'READY',
+					isActive: true,
+					rootPath: '/home/root/lms2012/prjs/'
+				}),
+				resolveFsService: async () => ({
+					listDirectory: async () => {
+						throw new Error('simulated listing failure');
+					}
+				})
+			}
+		});
+
+		const roots = await provider.getChildren();
+		const children = await provider.getChildren(roots[0]);
+		assert.equal(children.length, 1);
+		const errorNode = children[0];
+		const errorItem = provider.getTreeItem(errorNode);
+		assert.equal(errorItem.contextValue, 'ev3RemoteDirectoryError');
+		assert.equal(errorItem.command?.command, 'ev3-cockpit.retryDirectoryFromTree');
+	});
+});
+
 test('BrickTreeProvider maps root status to context and action', async () => {
 	await withMockedProvider(async ({ BrickTreeProvider }) => {
 		const provider = new BrickTreeProvider({

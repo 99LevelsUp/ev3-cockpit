@@ -160,6 +160,10 @@
         "command": "ev3-cockpit.runRemoteExecutableFromTree",
         "title": "EV3 Cockpit: Run Executable from Remote FS",
         "icon": "$(play)"
+      },
+      {
+        "command": "ev3-cockpit.retryDirectoryFromTree",
+        "title": "EV3 Cockpit: Retry Directory Listing"
       }
     ],
     "views": {
@@ -302,6 +306,11 @@
         {
           "command": "ev3-cockpit.runRemoteExecutableFromTree",
           "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileExecutable",
+          "group": "inline"
+        },
+        {
+          "command": "ev3-cockpit.retryDirectoryFromTree",
+          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteDirectoryError",
           "group": "inline"
         }
       ]
