@@ -228,11 +228,6 @@
           "group": "1_connection"
         },
         {
-          "command": "ev3-cockpit.reconnectEV3",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
-          "group": "1_connection"
-        },
-        {
           "command": "ev3-cockpit.toggleFavoriteBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
           "group": "0_navigation"
