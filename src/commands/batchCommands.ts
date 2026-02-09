@@ -12,6 +12,11 @@ interface BatchCommandRegistrations {
 	deployWorkspaceToReadyBricks: vscode.Disposable;
 }
 
+interface BatchFailedEntry {
+	brickId: string;
+	error: string;
+}
+
 export function registerBatchCommands(options: BatchCommandOptions): BatchCommandRegistrations {
 	const resolveRequestedBrickIds = async (arg: unknown): Promise<string[] | undefined> => {
 		if (Array.isArray(arg)) {
@@ -61,10 +66,11 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		brickIds: string[],
 		title: string,
 		task: (brickId: string) => Promise<void>
-	): Promise<{ completed: number; failed: number; cancelled: boolean }> => {
+	): Promise<{ completed: number; failed: number; cancelled: boolean; failedEntries: BatchFailedEntry[] }> => {
 		let completed = 0;
 		let failed = 0;
 		let cancelled = false;
+		const failedEntries: BatchFailedEntry[] = [];
 
 		await vscode.window.withProgress(
 			{
@@ -83,8 +89,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					try {
 						await task(brickId);
 						completed += 1;
-					} catch {
+					} catch (error) {
 						failed += 1;
+						failedEntries.push({
+							brickId,
+							error: error instanceof Error ? error.message : String(error)
+						});
 					}
 					const done = index + 1;
 					progress.report({
@@ -98,8 +108,54 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		return {
 			completed,
 			failed,
-			cancelled
+			cancelled,
+			failedEntries
 		};
+	};
+
+	const buildBatchReport = (
+		actionLabel: string,
+		selectedBrickIds: string[],
+		result: { completed: number; failed: number; cancelled: boolean; failedEntries: BatchFailedEntry[] }
+	): string => {
+		const lines = [
+			`EV3 Cockpit batch report`,
+			`action: ${actionLabel}`,
+			`timestamp: ${new Date().toISOString()}`,
+			`targets: ${selectedBrickIds.join(', ')}`,
+			`result: ok=${result.completed}, failed=${result.failed}, cancelled=${result.cancelled}`
+		];
+		if (result.failedEntries.length > 0) {
+			lines.push('failed entries:');
+			for (const entry of result.failedEntries) {
+				lines.push(`- ${entry.brickId}: ${entry.error}`);
+			}
+		}
+		return lines.join('\n');
+	};
+
+	const presentBatchResult = async (
+		actionLabel: string,
+		successSummary: string,
+		result: { completed: number; failed: number; cancelled: boolean; failedEntries: BatchFailedEntry[] },
+		selectedBrickIds: string[],
+		retryCommandId: string
+	): Promise<void> => {
+		const actions: string[] = ['Copy report'];
+		if (result.failedEntries.length > 0) {
+			actions.unshift('Retry failed');
+		}
+		const choice = await vscode.window.showInformationMessage(successSummary, ...actions);
+		if (choice === 'Copy report') {
+			const report = buildBatchReport(actionLabel, selectedBrickIds, result);
+			await vscode.env.clipboard.writeText(report);
+			vscode.window.showInformationMessage('Batch report copied to clipboard.');
+			return;
+		}
+		if (choice === 'Retry failed') {
+			const failedBrickIds = result.failedEntries.map((entry) => entry.brickId);
+			await vscode.commands.executeCommand(retryCommandId, failedBrickIds);
+		}
 	};
 
 	const reconnectReadyBricks = vscode.commands.registerCommand('ev3-cockpit.reconnectReadyBricks', async (arg?: unknown) => {
@@ -123,8 +179,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		});
 
 		const suffix = result.cancelled ? ' (cancelled)' : '';
-		vscode.window.showInformationMessage(
-			`Batch reconnect finished: ok=${result.completed}, failed=${result.failed}${suffix}.`
+		await presentBatchResult(
+			'reconnect-ready-bricks',
+			`Batch reconnect finished: ok=${result.completed}, failed=${result.failed}${suffix}.`,
+			result,
+			selectedBrickIds,
+			'ev3-cockpit.reconnectReadyBricks'
 		);
 	});
 
@@ -155,8 +215,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 			);
 
 			const suffix = result.cancelled ? ' (cancelled)' : '';
-			vscode.window.showInformationMessage(
-				`Batch workspace deploy finished: ok=${result.completed}, failed=${result.failed}${suffix}.`
+			await presentBatchResult(
+				'deploy-workspace-ready-bricks',
+				`Batch workspace deploy finished: ok=${result.completed}, failed=${result.failed}${suffix}.`,
+				result,
+				selectedBrickIds,
+				'ev3-cockpit.deployWorkspaceToReadyBricks'
 			);
 		}
 	);

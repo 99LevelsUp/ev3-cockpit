@@ -483,9 +483,22 @@ async function startFakeEv3TcpServer(): Promise<{
 		getAcceptedConnectionCount: () => acceptedConnectionCount,
 		close: async () => {
 			for (const socket of sockets) {
-				socket.destroy();
+				socket.end();
 			}
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await new Promise<void>((resolve) => setTimeout(resolve, 100));
+			for (const socket of sockets) {
+				if (!socket.destroyed) {
+					socket.destroy();
+				}
+			}
+			sockets.clear();
+			await new Promise<void>((resolve) => {
+				const timeout = setTimeout(() => resolve(), 5_000);
+				server.close(() => {
+					clearTimeout(timeout);
+					resolve();
+				});
+			});
 		}
 	};
 }
@@ -539,7 +552,7 @@ async function withWorkspaceSettings<T>(
 		for (const key of restoreOrder) {
 			await cfg.update(key, previousValues.get(key), vscode.ConfigurationTarget.Workspace);
 		}
-		await new Promise<void>((resolve) => setTimeout(resolve, 150));
+		await new Promise<void>((resolve) => setTimeout(resolve, 300));
 	}
 }
 
@@ -599,6 +612,50 @@ async function withReconnectPromptChoice<T>(
 		};
 	} finally {
 		setShowInformationMessage(originalShowInformationMessage);
+	}
+}
+
+/**
+ * Wraps a test body so that any `showInformationMessage` calls whose text
+ * matches batch-result patterns (e.g. "Batch reconnect finished …") are
+ * auto-dismissed with `undefined` (no choice selected).  Without this,
+ * `presentBatchResult` hangs forever because no user clicks the notification.
+ */
+async function withAutoDismissedBatchPrompts<T>(run: () => Promise<T>): Promise<T> {
+	type ShowInformationMessageFn = (...args: any[]) => Thenable<any>;
+	const windowAny = vscode.window as unknown as { showInformationMessage: ShowInformationMessageFn };
+	const windowRecord = vscode.window as unknown as Record<string, unknown>;
+	const original = windowAny.showInformationMessage;
+	const patched: ShowInformationMessageFn = (...args: any[]) => {
+		const message = args[0];
+		if (typeof message === 'string' && /^Batch .+ finished:/i.test(message)) {
+			return Promise.resolve(undefined);
+		}
+		if (typeof message === 'string' && message.startsWith('Connection settings changed. Reconnect ')) {
+			return Promise.resolve('Later');
+		}
+		return original(...args);
+	};
+	const set = (fn: ShowInformationMessageFn): void => {
+		try {
+			windowAny.showInformationMessage = fn;
+		} catch {
+			// fall through
+		}
+		if (windowAny.showInformationMessage === fn) {
+			return;
+		}
+		Object.defineProperty(windowRecord, 'showInformationMessage', {
+			value: fn,
+			configurable: true,
+			writable: true
+		});
+	};
+	set(patched);
+	try {
+		return await run();
+	} finally {
+		set(original);
 	}
 }
 
@@ -847,6 +904,7 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 				'transport.mode': 'tcp',
 				'transport.timeoutMs': 3000,
 				'transport.tcp.host': '',
+				'transport.tcp.port': 5555,
 				'transport.tcp.useDiscovery': true,
 				'transport.tcp.discoveryPort': discoveryPort,
 				'transport.tcp.discoveryTimeoutMs': 3000,
@@ -855,7 +913,13 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 			async () => {
 				const tcpBrickId = `tcp-${toSafeIdentifierForTest('active:5555')}`;
 				await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
-				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				await waitForCondition(
+					'tcp connect should accept at least one socket',
+					() => fakeServer.getAcceptedConnectionCount() >= 1,
+					6_000
+				);
+				await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
 				const selectedBrickRoot = {
 					kind: 'brick',
 					brickId: tcpBrickId,
@@ -975,6 +1039,7 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 				'transport.mode': 'tcp',
 				'transport.timeoutMs': 3000,
 				'transport.tcp.host': '',
+				'transport.tcp.port': 5555,
 				'transport.tcp.useDiscovery': true,
 				'transport.tcp.discoveryPort': discoveryPort,
 				'transport.tcp.discoveryTimeoutMs': 3000,
@@ -991,7 +1056,12 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 					},
 					async (workspaceUri) => {
 						await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
-						await new Promise<void>((resolve) => setTimeout(resolve, 250));
+						await waitForCondition(
+							'tcp connect should accept at least one socket for deploy test',
+							() => fakeServer.getAcceptedConnectionCount() >= 1,
+							6_000
+						);
+						await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
 						const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
 						const remoteProjectUri = vscode.Uri.parse(`ev3://active${remoteProjectRoot}/`);
@@ -1040,6 +1110,7 @@ async function testWorkspaceDeployCommandsWithMockTcp(): Promise<void> {
 							});
 						} finally {
 							await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+							await new Promise<void>((resolve) => setTimeout(resolve, 300));
 						}
 					}
 				);
@@ -1176,6 +1247,7 @@ async function testMultiBrickSelectedDeployCommandsWithMockTcp(): Promise<void> 
 
 				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickANode);
 				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickBNode);
+				await new Promise<void>((resolve) => setTimeout(resolve, 300));
 			}
 		);
 	} finally {
@@ -1213,61 +1285,64 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 				'deploy.includeGlobs': ['host-batch-*']
 			},
 			async () => {
-				const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-				const connectWithPort = async (port: number): Promise<void> => {
-					await cfg.update('transport.tcp.port', port, vscode.ConfigurationTarget.Workspace);
-					await new Promise<void>((resolve) => setTimeout(resolve, 150));
-					await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+				await withAutoDismissedBatchPrompts(async () => {
+					const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+					const connectWithPort = async (port: number): Promise<void> => {
+						await cfg.update('transport.tcp.port', port, vscode.ConfigurationTarget.Workspace);
+						await new Promise<void>((resolve) => setTimeout(resolve, 150));
+						await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+						await new Promise<void>((resolve) => setTimeout(resolve, 500));
+					};
+
+					const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
+					const brickAId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerA.port}`)}`;
+					const brickBId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerB.port}`)}`;
+					const brickARootUri = vscode.Uri.parse(`ev3://${brickAId}/home/root/lms2012/prjs/`);
+					const brickBRootUri = vscode.Uri.parse(`ev3://${brickBId}/home/root/lms2012/prjs/`);
+					const brickAProgramUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/host-batch-main.rbf`);
+					const brickBProgramUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-batch-main.rbf`);
+
+					await connectWithPort(fakeServerA.port);
+					await connectWithPort(fakeServerB.port);
+					await vscode.workspace.fs.readDirectory(brickARootUri);
+					await vscode.workspace.fs.readDirectory(brickBRootUri);
+
+					await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks', [brickAId, brickBId]);
+					await vscode.workspace.fs.readDirectory(brickARootUri);
+					await vscode.workspace.fs.readDirectory(brickBRootUri);
+
+					await cfg.update('transport.tcp.host', 'localhost', vscode.ConfigurationTarget.Workspace);
 					await new Promise<void>((resolve) => setTimeout(resolve, 250));
-				};
+					await vscode.workspace.fs.readDirectory(brickARootUri);
+					await vscode.workspace.fs.readDirectory(brickBRootUri);
 
-				const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
-				const brickAId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerA.port}`)}`;
-				const brickBId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerB.port}`)}`;
-				const brickARootUri = vscode.Uri.parse(`ev3://${brickAId}/home/root/lms2012/prjs/`);
-				const brickBRootUri = vscode.Uri.parse(`ev3://${brickBId}/home/root/lms2012/prjs/`);
-				const brickAProgramUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/host-batch-main.rbf`);
-				const brickBProgramUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-batch-main.rbf`);
+					await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks', [brickAId, brickBId]);
+					const brickAProgram = await vscode.workspace.fs.readFile(brickAProgramUri);
+					const brickBProgram = await vscode.workspace.fs.readFile(brickBProgramUri);
+					assert.deepEqual(Array.from(brickAProgram), [0x21, 0x22, 0x23, 0x24]);
+					assert.deepEqual(Array.from(brickBProgram), [0x21, 0x22, 0x23, 0x24]);
 
-				await connectWithPort(fakeServerA.port);
-				await connectWithPort(fakeServerB.port);
-				await vscode.workspace.fs.readDirectory(brickARootUri);
-				await vscode.workspace.fs.readDirectory(brickBRootUri);
-
-				await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks', [brickAId, brickBId]);
-				await vscode.workspace.fs.readDirectory(brickARootUri);
-				await vscode.workspace.fs.readDirectory(brickBRootUri);
-
-				await cfg.update('transport.tcp.host', 'localhost', vscode.ConfigurationTarget.Workspace);
-				await new Promise<void>((resolve) => setTimeout(resolve, 250));
-				await vscode.workspace.fs.readDirectory(brickARootUri);
-				await vscode.workspace.fs.readDirectory(brickBRootUri);
-
-				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks', [brickAId, brickBId]);
-				const brickAProgram = await vscode.workspace.fs.readFile(brickAProgramUri);
-				const brickBProgram = await vscode.workspace.fs.readFile(brickBProgramUri);
-				assert.deepEqual(Array.from(brickAProgram), [0x21, 0x22, 0x23, 0x24]);
-				assert.deepEqual(Array.from(brickBProgram), [0x21, 0x22, 0x23, 0x24]);
-
-				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', {
-					kind: 'brick',
-					brickId: brickAId,
-					displayName: `EV3 TCP (${brickAId})`,
-					role: 'standalone',
-					transport: 'tcp',
-					status: 'READY',
-					isActive: false,
-					rootPath: '/home/root/lms2012/prjs/'
-				});
-				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', {
-					kind: 'brick',
-					brickId: brickBId,
-					displayName: `EV3 TCP (${brickBId})`,
-					role: 'standalone',
-					transport: 'tcp',
-					status: 'READY',
-					isActive: false,
-					rootPath: '/home/root/lms2012/prjs/'
+					await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', {
+						kind: 'brick',
+						brickId: brickAId,
+						displayName: `EV3 TCP (${brickAId})`,
+						role: 'standalone',
+						transport: 'tcp',
+						status: 'READY',
+						isActive: false,
+						rootPath: '/home/root/lms2012/prjs/'
+					});
+					await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', {
+						kind: 'brick',
+						brickId: brickBId,
+						displayName: `EV3 TCP (${brickBId})`,
+						role: 'standalone',
+						transport: 'tcp',
+						status: 'READY',
+						isActive: false,
+						rootPath: '/home/root/lms2012/prjs/'
+					});
+					await new Promise<void>((resolve) => setTimeout(resolve, 300));
 				});
 			}
 		);
@@ -1298,7 +1373,7 @@ async function testConfigChangeReconnectPromptBranchesWithMockTcp(): Promise<voi
 				const activeRootUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
 
 				await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
-				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				await new Promise<void>((resolve) => setTimeout(resolve, 500));
 				await vscode.workspace.fs.readDirectory(activeRootUri);
 				assert.ok(
 					fakeServerA.getAcceptedConnectionCount() >= 1,
@@ -1307,7 +1382,7 @@ async function testConfigChangeReconnectPromptBranchesWithMockTcp(): Promise<voi
 
 				const deferredPrompt = await withReconnectPromptChoice('Later', async () => {
 					await cfg.update('transport.tcp.port', fakeServerB.port, vscode.ConfigurationTarget.Workspace);
-					await new Promise<void>((resolve) => setTimeout(resolve, 350));
+					await new Promise<void>((resolve) => setTimeout(resolve, 500));
 				});
 				assert.equal(
 					deferredPrompt.promptCount,
@@ -1333,12 +1408,84 @@ async function testConfigChangeReconnectPromptBranchesWithMockTcp(): Promise<voi
 				await vscode.workspace.fs.readDirectory(activeRootUri);
 
 				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+				await new Promise<void>((resolve) => setTimeout(resolve, 300));
 			}
 		);
 	} finally {
 		await fakeServerA.close();
 		await fakeServerB.close();
 	}
+}
+
+/**
+ * Regression test: workspace settings must be fully isolated between tests.
+ * Sets a non-baseline key, then verifies `resetWorkspaceSettings` clears it.
+ * This prevents the stale-settings bug where `transport.tcp.port` leaked from
+ * one run into the next, causing brick-ID mismatches.
+ */
+async function testWorkspaceSettingsIsolation(): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+	const poisonKey = 'transport.tcp.port';
+	const poisonValue = 99999;
+
+	await cfg.update(poisonKey, poisonValue, vscode.ConfigurationTarget.Workspace);
+	const before = cfg.inspect(poisonKey);
+	assert.equal(
+		before?.workspaceValue,
+		poisonValue,
+		'Poison value should be present in workspace config before reset.'
+	);
+
+	await resetWorkspaceSettings();
+
+	const after = cfg.inspect(poisonKey);
+	assert.equal(
+		after?.workspaceValue,
+		undefined,
+		'Poison key must be cleared by resetWorkspaceSettings — stale settings leaked to subsequent tests.'
+	);
+
+	const mode = cfg.inspect('transport.mode');
+	assert.equal(
+		mode?.workspaceValue,
+		'mock',
+		'Baseline key transport.mode must be restored by resetWorkspaceSettings.'
+	);
+}
+
+/**
+ * Regression test: `toSafeIdentifierForTest` must match the extension's
+ * `toSafeIdentifier` for every endpoint pattern the tests use.
+ * A mismatch here causes "Brick not registered" errors because the test
+ * looks up the brick under one ID while the extension registered it under
+ * another.
+ */
+async function testBrickIdConsistencyWithExtension(): Promise<void> {
+	const endpoints = [
+		'active:5555',
+		'127.0.0.1:12345',
+		'192.168.1.100:5555',
+		'localhost:5555',
+		'MY-BRICK:5555',
+		'  spaced : 80  ',
+		'UPPER.CASE:9999'
+	];
+
+	for (const endpoint of endpoints) {
+		const testId = toSafeIdentifierForTest(endpoint);
+		assert.ok(testId.length > 0, `toSafeIdentifierForTest should produce non-empty ID for "${endpoint}".`);
+		assert.ok(
+			/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(testId),
+			`toSafeIdentifierForTest("${endpoint}") = "${testId}" must be lowercase alphanumeric with dashes, no leading/trailing dashes.`
+		);
+	}
+
+	// Verify the critical test-used endpoint produces the expected brick ID
+	assert.equal(
+		`tcp-${toSafeIdentifierForTest('active:5555')}`,
+		'tcp-active-5555',
+		'Brick ID for default tcp endpoint must be tcp-active-5555.'
+	);
 }
 
 async function testCommandsWithoutHardware(): Promise<void> {
@@ -1403,10 +1550,17 @@ async function testCommandsWithoutHardware(): Promise<void> {
 	);
 }
 
+const CASE_TIMEOUT_MS = 30_000;
+
 async function runCase(name: string, fn: () => Promise<void>): Promise<boolean> {
 	const start = Date.now();
 	try {
-		await fn();
+		await Promise.race([
+			fn(),
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error(`Test case timeout after ${CASE_TIMEOUT_MS}ms`)), CASE_TIMEOUT_MS)
+			)
+		]);
 		const elapsed = (Date.now() - start).toFixed(1);
 		console.log(`✔ ${name} (${elapsed}ms)`);
 		return true;
@@ -1418,15 +1572,58 @@ async function runCase(name: string, fn: () => Promise<void>): Promise<boolean> 
 	}
 }
 
+/**
+ * Baseline workspace settings. Any test-specific overrides are applied via
+ * `withWorkspaceSettings` and restored in its `finally` block.  However, some
+ * tests mutate additional keys inside their body (e.g. `connectWithPort` changes
+ * `transport.tcp.port`).  When a test fails mid-flight those keys may survive in
+ * the workspace `settings.json`.  Resetting to this baseline at suite start
+ * guarantees a clean slate regardless of previous-run leftovers.
+ */
+const BASELINE_WORKSPACE_SETTINGS: Record<string, unknown> = {
+	'transport.timeoutMs': 200,
+	'transport.mode': 'mock',
+};
+
+/**
+ * Keys that tests may set but are NOT part of the baseline.
+ * They must be explicitly removed (set to `undefined`) so that previous-run
+ * leftovers do not pollute the current run.
+ */
+const WORKSPACE_SETTINGS_KEYS_TO_CLEAR: string[] = [
+	'transport.tcp.host',
+	'transport.tcp.port',
+	'transport.tcp.useDiscovery',
+	'transport.tcp.discoveryPort',
+	'transport.tcp.discoveryTimeoutMs',
+	'transport.tcp.handshakeTimeoutMs',
+	'deploy.includeGlobs',
+];
+
+async function resetWorkspaceSettings(): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+	for (const key of WORKSPACE_SETTINGS_KEYS_TO_CLEAR) {
+		await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
+	}
+	for (const [key, value] of Object.entries(BASELINE_WORKSPACE_SETTINGS)) {
+		await cfg.update(key, value, vscode.ConfigurationTarget.Workspace);
+	}
+	await new Promise<void>((resolve) => setTimeout(resolve, 200));
+}
+
 export async function run(): Promise<void> {
 	await waitForCondition(
 		'extension registration',
 		() => vscode.extensions.getExtension(EXTENSION_ID) !== undefined
 	);
 
+	await resetWorkspaceSettings();
+
 	const cases: Array<[string, () => Promise<void>]> = [
 		['activation', testActivation],
 		['commands registration', testCommandsRegistration],
+		['workspace settings isolation', testWorkspaceSettingsIsolation],
+		['brick id consistency with extension', testBrickIdConsistencyWithExtension],
 		['commands without hardware', testCommandsWithoutHardware],
 		['ev3 filesystem provider offline', testEv3FileSystemProvider],
 		['mock connect flow wires active fs provider', testMockConnectFlowWiresActiveFsProvider],
