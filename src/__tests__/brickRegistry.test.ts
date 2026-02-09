@@ -60,3 +60,29 @@ test('BrickRegistry preserves known bricks and sorts active first', () => {
 	assert.equal(snapshots[1].brickId, 'tcp-active');
 	assert.equal(snapshots[1].status, 'UNAVAILABLE');
 });
+
+test('BrickRegistry updates runtime metrics for tree busy indicators', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'tcp-active',
+		displayName: 'EV3 TCP',
+		role: 'standalone',
+		transport: 'tcp',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	registry.updateRuntimeMetrics('tcp-active', {
+		busyCommandCount: 2,
+		schedulerState: 'running'
+	});
+	const snapshot = registry.getSnapshot('tcp-active');
+	assert.equal(snapshot?.busyCommandCount, 2);
+	assert.equal(snapshot?.schedulerState, 'running');
+
+	registry.markUnavailable('tcp-active', 'disconnect');
+	const unavailable = registry.getSnapshot('tcp-active');
+	assert.equal(unavailable?.busyCommandCount, 0);
+	assert.equal(unavailable?.schedulerState, undefined);
+});

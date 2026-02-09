@@ -638,6 +638,40 @@ export function activate(context: vscode.ExtensionContext) {
 		showCollapseAll: true,
 		dragAndDropController: brickTreeDragAndDrop
 	});
+	const busyStateByBrickId = new Map<string, string>();
+	const refreshBusyIndicators = (): void => {
+		const snapshots = brickRegistry.listSnapshots();
+		const knownBrickIds = new Set<string>();
+		for (const snapshot of snapshots) {
+			knownBrickIds.add(snapshot.brickId);
+			const runtime = sessionManager.getRuntimeSnapshot(snapshot.brickId);
+			const busyCount = runtime?.busyCommandCount ?? 0;
+			const schedulerState = runtime?.schedulerState;
+			const nextSignature = `${busyCount}|${schedulerState ?? 'none'}`;
+			if (busyStateByBrickId.get(snapshot.brickId) === nextSignature) {
+				continue;
+			}
+			busyStateByBrickId.set(snapshot.brickId, nextSignature);
+			brickRegistry.updateRuntimeMetrics(snapshot.brickId, {
+				busyCommandCount: busyCount,
+				schedulerState
+			});
+			treeProvider.refreshBrick(snapshot.brickId);
+		}
+
+		for (const brickId of [...busyStateByBrickId.keys()]) {
+			if (!knownBrickIds.has(brickId)) {
+				busyStateByBrickId.delete(brickId);
+			}
+		}
+	};
+	const busyIndicatorInterval = setInterval(() => {
+		refreshBusyIndicators();
+	}, 250);
+	const busyIndicatorSubscription = new vscode.Disposable(() => {
+		clearInterval(busyIndicatorInterval);
+	});
+
 	const expandedNodeIds = new Set<string>();
 	const rememberExpandedState = (element: BrickTreeNode, expanded: boolean): void => {
 		if (element.kind !== 'brick' && element.kind !== 'directory') {
@@ -708,6 +742,7 @@ export function activate(context: vscode.ExtensionContext) {
 			treeProvider.refreshDirectory(brickId, remotePath);
 		}
 	});
+	refreshBusyIndicators();
 	treeProvider.refresh();
 
 	context.subscriptions.push(
@@ -748,6 +783,7 @@ export function activate(context: vscode.ExtensionContext) {
 		treeCollapseSubscription,
 		treeChangeSubscription,
 		fsChangeSubscription,
+		busyIndicatorSubscription,
 		treeProvider,
 		output,
 		{

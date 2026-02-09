@@ -18,6 +18,8 @@ export interface BrickRuntimeRecord extends BrickIdentity {
 	isActive: boolean;
 	lastSeenAtIso?: string;
 	lastError?: string;
+	busyCommandCount?: number;
+	schedulerState?: string;
 	fsService?: RemoteFsService;
 	controlService?: BrickControlService;
 }
@@ -37,6 +39,8 @@ export interface BrickSnapshot {
 	isActive: boolean;
 	lastSeenAtIso?: string;
 	lastError?: string;
+	busyCommandCount?: number;
+	schedulerState?: string;
 }
 
 function cloneSnapshot(record: BrickRuntimeRecord): BrickSnapshot {
@@ -49,7 +53,9 @@ function cloneSnapshot(record: BrickRuntimeRecord): BrickSnapshot {
 		status: record.status,
 		isActive: record.isActive,
 		lastSeenAtIso: record.lastSeenAtIso,
-		lastError: record.lastError
+		lastError: record.lastError,
+		busyCommandCount: record.busyCommandCount,
+		schedulerState: record.schedulerState
 	};
 }
 
@@ -64,6 +70,8 @@ export class BrickRegistry {
 			isActive: true,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: undefined,
+			busyCommandCount: 0,
+			schedulerState: 'idle',
 			fsService: undefined,
 			controlService: undefined
 		});
@@ -79,6 +87,8 @@ export class BrickRegistry {
 			isActive: true,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: undefined,
+			busyCommandCount: 0,
+			schedulerState: 'idle',
 			fsService: input.fsService,
 			controlService: input.controlService
 		});
@@ -106,6 +116,8 @@ export class BrickRegistry {
 			isActive: false,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: reason,
+			busyCommandCount: 0,
+			schedulerState: undefined,
 			fsService: undefined,
 			controlService: undefined
 		};
@@ -137,8 +149,43 @@ export class BrickRegistry {
 			isActive: this.activeBrickId === brickId,
 			lastSeenAtIso: new Date().toISOString(),
 			lastError: reason,
+			busyCommandCount: 0,
+			schedulerState: undefined,
 			fsService: undefined,
 			controlService: undefined
+		};
+		this.records.set(brickId, updated);
+		return cloneSnapshot(updated);
+	}
+
+	public updateRuntimeMetrics(
+		brickId: string,
+		metrics: {
+			busyCommandCount?: number;
+			schedulerState?: string;
+		}
+	): BrickSnapshot | undefined {
+		const existing = this.records.get(brickId);
+		if (!existing) {
+			return undefined;
+		}
+
+		const nextBusy =
+			typeof metrics.busyCommandCount === 'number' && Number.isFinite(metrics.busyCommandCount)
+				? Math.max(0, Math.floor(metrics.busyCommandCount))
+				: 0;
+		const nextState =
+			typeof metrics.schedulerState === 'string' && metrics.schedulerState.trim().length > 0
+				? metrics.schedulerState
+				: undefined;
+		if (existing.busyCommandCount === nextBusy && existing.schedulerState === nextState) {
+			return cloneSnapshot(existing);
+		}
+
+		const updated: BrickRuntimeRecord = {
+			...existing,
+			busyCommandCount: nextBusy,
+			schedulerState: nextState
 		};
 		this.records.set(brickId, updated);
 		return cloneSnapshot(updated);

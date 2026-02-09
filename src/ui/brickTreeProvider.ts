@@ -17,6 +17,8 @@ export interface BrickRootNode {
 	isActive: boolean;
 	rootPath: string;
 	lastError?: string;
+	busyCommandCount?: number;
+	schedulerState?: string;
 }
 
 export interface BrickDirectoryNode {
@@ -251,7 +253,12 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.Collapsed);
 				item.id = buildRootNodeId(element.brickId);
 				const statusBadge = this.renderStatusBadge(element.status, element.isActive);
-				item.description = `${statusBadge} | ${element.transport} | ${element.role}`;
+				const descriptionParts = [statusBadge];
+				if ((element.busyCommandCount ?? 0) > 0) {
+					descriptionParts.push(`busy:${element.busyCommandCount}`);
+				}
+				descriptionParts.push(element.transport, element.role);
+				item.description = descriptionParts.join(' | ');
 				item.tooltip = this.buildRootTooltip(element);
 				item.contextValue = this.getRootContextValue(element);
 				item.iconPath = this.getRootIcon(element);
@@ -398,6 +405,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 
 	private buildRootTooltip(node: BrickRootNode): string {
 		const lines = [`${node.displayName}`, `Status: ${node.status}`, `Root: ${node.rootPath}`];
+		lines.push(`Runtime: ${node.schedulerState ?? 'idle'}, busy=${node.busyCommandCount ?? 0}`);
 		if (node.lastError) {
 			lines.push(`Error: ${node.lastError}`);
 		}
@@ -489,6 +497,8 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			existing.isActive = snapshot.isActive;
 			existing.rootPath = rootPath;
 			existing.lastError = snapshot.lastError;
+			existing.busyCommandCount = snapshot.busyCommandCount;
+			existing.schedulerState = snapshot.schedulerState;
 			this.nodesById.set(getBrickTreeNodeId(existing), existing);
 			return existing;
 		}
@@ -502,7 +512,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			status: snapshot.status,
 			isActive: snapshot.isActive,
 			rootPath,
-			lastError: snapshot.lastError
+			lastError: snapshot.lastError,
+			busyCommandCount: snapshot.busyCommandCount,
+			schedulerState: snapshot.schedulerState
 		};
 		this.rootNodesByBrickId.set(snapshot.brickId, created);
 		this.nodesById.set(getBrickTreeNodeId(created), created);

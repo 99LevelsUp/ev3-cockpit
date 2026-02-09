@@ -60,6 +60,7 @@ async function withMockedProvider<T>(
 				contextValue?: string;
 				collapsibleState?: number;
 				description?: string;
+				tooltip?: string;
 				command?: { command: string };
 			};
 			refreshDirectory: (brickId: string, remotePath: string) => void;
@@ -88,6 +89,7 @@ async function withMockedProvider<T>(
 					contextValue?: string;
 					collapsibleState?: number;
 					description?: string;
+					tooltip?: string;
 					command?: { command: string };
 				};
 				refreshDirectory: (brickId: string, remotePath: string) => void;
@@ -321,5 +323,39 @@ test('BrickTreeProvider caches directory listing and refreshDirectory invalidate
 		provider.refreshDirectory('usb-auto', '/home/root/lms2012/prjs/');
 		await provider.getChildren(root);
 		assert.equal(listCalls, 2);
+	});
+});
+
+test('BrickTreeProvider renders busy counter in root description when runtime is active', async () => {
+	await withMockedProvider(async ({ BrickTreeProvider }) => {
+		const provider = new BrickTreeProvider({
+			dataSource: {
+				listBricks: () => [
+					{
+						brickId: 'tcp-busy',
+						displayName: 'EV3 TCP Busy',
+						role: 'standalone',
+						transport: 'tcp',
+						status: 'READY',
+						isActive: true,
+						rootPath: '/home/root/lms2012/prjs/',
+						busyCommandCount: 3,
+						schedulerState: 'running'
+					}
+				],
+				getBrickSnapshot: () => undefined,
+				resolveFsService: async () => ({
+					listDirectory: async () => ({
+						folders: [],
+						files: []
+					})
+				})
+			}
+		});
+
+		const roots = await provider.getChildren();
+		const item = provider.getTreeItem(roots[0]);
+		assert.match(item.description ?? '', /busy:3/);
+		assert.match(item.tooltip?.toString() ?? '', /Runtime: running, busy=3/);
 	});
 });
