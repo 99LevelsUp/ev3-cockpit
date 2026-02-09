@@ -125,6 +125,14 @@
         "title": "EV3 Cockpit: Refresh Bricks View"
       },
       {
+        "command": "ev3-cockpit.reconnectReadyBricks",
+        "title": "EV3 Cockpit: Reconnect Ready Bricks"
+      },
+      {
+        "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
+        "title": "EV3 Cockpit: Deploy Workspace to Ready Bricks"
+      },
+      {
         "command": "ev3-cockpit.uploadToBrickFolder",
         "title": "EV3 Cockpit: Upload to Folder"
       },
@@ -152,6 +160,16 @@
           "command": "ev3-cockpit.refreshBricksView",
           "when": "view == ev3-cockpit.bricksView",
           "group": "navigation"
+        },
+        {
+          "command": "ev3-cockpit.reconnectReadyBricks",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

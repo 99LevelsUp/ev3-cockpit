@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import { registerBatchCommands } from './commands/batchCommands';
 import { registerBrowseCommands } from './commands/browseCommands';
 import { registerConnectCommands } from './commands/connectCommands';
 import { registerDeployCommands, DeployTargetContext } from './commands/deployCommands';
@@ -593,6 +594,10 @@ export function activate(context: vscode.ExtensionContext) {
 		resolveBrickIdFromCommandArg,
 		markProgramStarted
 	});
+	const batchRegistrations = registerBatchCommands({
+		getLogger: () => logger,
+		getBrickRegistry: () => brickRegistry
+	});
 
 	// --- Config watcher, FS provider, tree view ---
 
@@ -822,6 +827,8 @@ export function activate(context: vscode.ExtensionContext) {
 		browseRegistrations.uploadToBrickFolder,
 		browseRegistrations.deleteRemoteEntryFromTree,
 		browseRegistrations.runRemoteExecutableFromTree,
+		batchRegistrations.reconnectReadyBricks,
+		batchRegistrations.deployWorkspaceToReadyBricks,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
