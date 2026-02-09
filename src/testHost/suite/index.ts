@@ -394,11 +394,13 @@ function executeFakeSystemCommand(ctx: FakeEv3CommandContext, opcode: number, co
 async function startFakeEv3TcpServer(): Promise<{
 	port: number;
 	getRunProgramCommandCount: () => number;
+	getAcceptedConnectionCount: () => number;
 	close: () => Promise<void>;
 }> {
 	const sockets = new Set<net.Socket>();
 	const capabilityPayload = buildCapabilityReplyPayload();
 	let runProgramCommandCount = 0;
+	let acceptedConnectionCount = 0;
 	const commandContext: FakeEv3CommandContext = {
 		fs: new FakeRemoteFsState(),
 		uploads: new Map<number, UploadSession>(),
@@ -406,6 +408,7 @@ async function startFakeEv3TcpServer(): Promise<{
 		nextHandle: 1
 	};
 	const server = net.createServer((socket) => {
+		acceptedConnectionCount += 1;
 		sockets.add(socket);
 		let handshakeComplete = false;
 		let receiveBuffer = Buffer.alloc(0);
@@ -477,6 +480,7 @@ async function startFakeEv3TcpServer(): Promise<{
 	return {
 		port: address.port,
 		getRunProgramCommandCount: () => runProgramCommandCount,
+		getAcceptedConnectionCount: () => acceptedConnectionCount,
 		close: async () => {
 			for (const socket of sockets) {
 				socket.destroy();
@@ -536,6 +540,65 @@ async function withWorkspaceSettings<T>(
 			await cfg.update(key, previousValues.get(key), vscode.ConfigurationTarget.Workspace);
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 150));
+	}
+}
+
+async function withReconnectPromptChoice<T>(
+	choice: 'Reconnect all' | 'Later',
+	run: () => Promise<T>
+): Promise<{ result: T; promptCount: number }> {
+	type ShowInformationMessageFn = (...args: any[]) => Thenable<any>;
+	const windowAny = vscode.window as unknown as {
+		showInformationMessage: ShowInformationMessageFn;
+	};
+	const windowRecord = vscode.window as unknown as Record<string, unknown>;
+	const originalShowInformationMessage = windowAny.showInformationMessage;
+	let promptCount = 0;
+	const patchedShowInformationMessage = ((...args: any[]) => {
+		const message = args[0];
+		if (typeof message === 'string' && message.startsWith('Connection settings changed. Reconnect ')) {
+			promptCount += 1;
+			return Promise.resolve(choice);
+		}
+		return originalShowInformationMessage(...args);
+	}) as ShowInformationMessageFn;
+	const setShowInformationMessage = (fn: ShowInformationMessageFn): void => {
+		try {
+			windowAny.showInformationMessage = fn;
+		} catch {
+			// Fall back to defineProperty below.
+		}
+		if (windowAny.showInformationMessage === fn) {
+			return;
+		}
+		Object.defineProperty(windowRecord, 'showInformationMessage', {
+			value: fn,
+			configurable: true,
+			writable: true
+		});
+		if (windowAny.showInformationMessage !== fn) {
+			throw new Error('Unable to patch vscode.window.showInformationMessage for host test.');
+		}
+	};
+
+	setShowInformationMessage(patchedShowInformationMessage);
+	const probe = await windowAny.showInformationMessage(
+		'Connection settings changed. Reconnect 1 brick(s) now to apply them?',
+		'Reconnect all',
+		'Later'
+	);
+	if (probe !== choice) {
+		throw new Error('Patched reconnect prompt did not return expected choice in host test.');
+	}
+	promptCount = 0;
+	try {
+		const result = await run();
+		return {
+			result,
+			promptCount
+		};
+	} finally {
+		setShowInformationMessage(originalShowInformationMessage);
 	}
 }
 
@@ -1212,6 +1275,68 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 	}
 }
 
+async function testConfigChangeReconnectPromptBranchesWithMockTcp(): Promise<void> {
+	const fakeServerA = await startFakeEv3TcpServer();
+	const fakeServerB = await startFakeEv3TcpServer();
+
+	try {
+		await withWorkspaceSettings(
+			{
+				'transport.mode': 'tcp',
+				'transport.timeoutMs': 3000,
+				'transport.tcp.host': '127.0.0.1',
+				'transport.tcp.useDiscovery': false,
+				'transport.tcp.handshakeTimeoutMs': 3000,
+				'transport.tcp.port': fakeServerA.port
+			},
+			async () => {
+				const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+				const activeRootUri = vscode.Uri.parse('ev3://active/home/root/lms2012/prjs/');
+
+				await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+				await vscode.workspace.fs.readDirectory(activeRootUri);
+				assert.ok(
+					fakeServerA.getAcceptedConnectionCount() >= 1,
+					'Expected initial tcp connect to open at least one socket on server A.'
+				);
+
+				const deferredPrompt = await withReconnectPromptChoice('Later', async () => {
+					await cfg.update('transport.tcp.port', fakeServerB.port, vscode.ConfigurationTarget.Workspace);
+					await new Promise<void>((resolve) => setTimeout(resolve, 350));
+				});
+				assert.equal(
+					deferredPrompt.promptCount,
+					1,
+					'Expected reconnect prompt to appear once when relevant transport config changes.'
+				);
+				assert.equal(
+					fakeServerB.getAcceptedConnectionCount(),
+					0,
+					'Expected Later choice to keep existing session without reconnecting to new endpoint.'
+				);
+				await vscode.workspace.fs.readDirectory(activeRootUri);
+
+				const reconnectPrompt = await withReconnectPromptChoice('Reconnect all', async () => {
+					await cfg.update('transport.tcp.host', 'localhost', vscode.ConfigurationTarget.Workspace);
+					await waitForCondition(
+						'reconnect all should open socket on server B',
+						() => fakeServerB.getAcceptedConnectionCount() >= 1,
+						6_000
+					);
+				});
+				assert.equal(reconnectPrompt.promptCount, 1, 'Expected reconnect prompt to appear once for reconnect-all branch.');
+				await vscode.workspace.fs.readDirectory(activeRootUri);
+
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3');
+			}
+		);
+	} finally {
+		await fakeServerA.close();
+		await fakeServerB.close();
+	}
+}
+
 async function testCommandsWithoutHardware(): Promise<void> {
 	await withWorkspaceSettings(
 		{
@@ -1300,6 +1425,7 @@ export async function run(): Promise<void> {
 		['provider rejects non-active brick authority', testProviderRejectsNonActiveBrickAuthority],
 		['tcp connect flow with mock discovery and server', testTcpConnectFlowWithMockDiscoveryAndServer],
 		['workspace deploy commands with mock tcp', testWorkspaceDeployCommandsWithMockTcp],
+		['config reconnect prompt branches with mock tcp', testConfigChangeReconnectPromptBranchesWithMockTcp],
 		['multi-brick selected deploy commands with mock tcp', testMultiBrickSelectedDeployCommandsWithMockTcp],
 		['batch commands with multi-brick mock tcp', testBatchCommandsWithMultiBrickMockTcp],
 	];

@@ -709,6 +709,15 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 			for (const brickId of connectedBrickIds) {
 				try {
+					const snapshot = brickRegistry.getSnapshot(brickId);
+					if (snapshot) {
+						const updatedProfile = captureConnectionProfileFromWorkspace(
+							brickId,
+							snapshot.displayName,
+							snapshot.rootPath
+						);
+						await profileStore.upsert(updatedProfile);
+					}
 					await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
 				} catch (error) {
 					logger.warn('Reconnect after configuration change failed.', {
