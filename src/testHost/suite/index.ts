@@ -1166,7 +1166,7 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 				await vscode.workspace.fs.readDirectory(brickARootUri);
 				await vscode.workspace.fs.readDirectory(brickBRootUri);
 
-				await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks');
+				await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks', [brickAId, brickBId]);
 				await vscode.workspace.fs.readDirectory(brickARootUri);
 				await vscode.workspace.fs.readDirectory(brickBRootUri);
 
@@ -1175,7 +1175,7 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 				await vscode.workspace.fs.readDirectory(brickARootUri);
 				await vscode.workspace.fs.readDirectory(brickBRootUri);
 
-				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks');
+				await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks', [brickAId, brickBId]);
 				const brickAProgram = await vscode.workspace.fs.readFile(brickAProgramUri);
 				const brickBProgram = await vscode.workspace.fs.readFile(brickBProgramUri);
 				assert.deepEqual(Array.from(brickAProgram), [0x21, 0x22, 0x23, 0x24]);
