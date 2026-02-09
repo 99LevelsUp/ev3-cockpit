@@ -11,6 +11,7 @@ import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { BrickTreeProvider } from '../ui/brickTreeProvider';
 import { TransportMode } from '../transport/transportFactory';
 import { BrickRole } from '../device/brickRegistry';
+import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
 
 interface ConnectedBrickDescriptor {
 	brickId: string;
@@ -27,10 +28,18 @@ interface ConnectCommandOptions {
 	clearProgramSession(reason: string, brickId?: string): void;
 	resolveBrickIdFromCommandArg(arg: unknown): string;
 	resolveProbeTimeoutMs(): number;
-	resolveConnectedBrickDescriptor(rootPath: string): ConnectedBrickDescriptor;
-	prepareBrickSession(brickId: string): Promise<Ev3CommandClient>;
+	resolveConnectedBrickDescriptor(rootPath: string, profile?: BrickConnectionProfile): ConnectedBrickDescriptor;
+	prepareBrickSession(brickId: string, profile?: BrickConnectionProfile): Promise<Ev3CommandClient>;
 	closeBrickSession(brickId: string): Promise<void>;
 	isBrickSessionAvailable(brickId: string): boolean;
+	getConnectionProfile(brickId: string): BrickConnectionProfile | undefined;
+	captureConnectionProfile(
+		brickId: string,
+		displayName: string,
+		rootPath: string,
+		existingProfile?: BrickConnectionProfile
+	): BrickConnectionProfile;
+	rememberConnectionProfile(profile: BrickConnectionProfile): Promise<void>;
 }
 
 interface ConnectCommandRegistrations {
@@ -46,22 +55,24 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		const requestedProfile = requestedBrickId === 'active' ? undefined : options.getConnectionProfile(requestedBrickId);
 		let keepConnectionOpen = false;
 		let connectingDescriptor: ConnectedBrickDescriptor | undefined;
 		let commandClient: Ev3CommandClient | undefined;
 
 		try {
-			const connectingRoot = readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
-			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot);
+			const connectingRoot = requestedProfile?.rootPath ?? (readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
+			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot, requestedProfile);
 			options.clearProgramSession('connect-start', connectingDescriptor.brickId);
 			if (requestedBrickId !== 'active') {
-				activeLogger.info('Connect requested from selected brick root; current workspace transport settings will be used.', {
-					requestedBrickId
+				activeLogger.info('Connect requested from selected brick root.', {
+					requestedBrickId,
+					profileApplied: requestedProfile !== undefined
 				});
 			}
 			brickRegistry.upsertConnecting(connectingDescriptor);
 			treeProvider.refreshBrick(connectingDescriptor.brickId);
-			commandClient = await options.prepareBrickSession(connectingDescriptor.brickId);
+			commandClient = await options.prepareBrickSession(connectingDescriptor.brickId, requestedProfile);
 			await commandClient.open();
 			const probeCommand = 0x9d; // LIST_OPEN_HANDLES
 			const result = await commandClient.send({
@@ -184,13 +195,20 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
 				logger: activeLogger
 			});
-			const rootPath = featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
-			const brickDescriptor = options.resolveConnectedBrickDescriptor(rootPath);
+			const rootPath = requestedProfile?.rootPath ?? (featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
+			const brickDescriptor = options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
 			brickRegistry.upsertReady({
 				...brickDescriptor,
 				fsService: connectedFsService,
 				controlService: connectedControlService
 			});
+			const connectionProfile = options.captureConnectionProfile(
+				brickDescriptor.brickId,
+				brickDescriptor.displayName,
+				brickDescriptor.rootPath,
+				requestedProfile
+			);
+			await options.rememberConnectionProfile(connectionProfile);
 			keepConnectionOpen = true;
 			activeLogger.info('Remote FS service ready', {
 				scheme: 'ev3',

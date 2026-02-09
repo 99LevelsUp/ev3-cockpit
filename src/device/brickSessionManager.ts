@@ -60,17 +60,23 @@ function toBusyCommandCount(schedulerState: string, queuedCommands: number): num
 
 export class BrickSessionManager<
 	TScheduler extends RuntimeSchedulerLike = RuntimeSchedulerLike,
-	TCommandClient extends RuntimeCommandClientLike = RuntimeCommandClientLike
+	TCommandClient extends RuntimeCommandClientLike = RuntimeCommandClientLike,
+	TConnectContext = unknown
 > {
 	private readonly brickSessions = new Map<string, BrickRuntimeSession<TScheduler, TCommandClient>>();
 	private readonly lastRunProgramPathByBrick = new Map<string, string>();
 	private readonly programSessionByBrick = new Map<string, ProgramSessionState>();
 
-	public constructor(private readonly createSession: (brickId: string) => BrickRuntimeSession<TScheduler, TCommandClient>) {}
+	public constructor(
+		private readonly createSession: (
+			brickId: string,
+			connectContext?: TConnectContext
+		) => BrickRuntimeSession<TScheduler, TCommandClient>
+	) {}
 
-	public async prepareSession(brickId: string): Promise<TCommandClient> {
+	public async prepareSession(brickId: string, connectContext?: TConnectContext): Promise<TCommandClient> {
 		await this.closeSession(brickId);
-		const session = this.createSession(brickId);
+		const session = this.createSession(brickId, connectContext);
 		this.brickSessions.set(brickId, session);
 		return session.commandClient;
 	}

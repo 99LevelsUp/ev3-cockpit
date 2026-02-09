@@ -15,6 +15,20 @@ import { listSerialCandidates, listUsbHidCandidates } from './discovery';
 
 export type TransportMode = 'auto' | 'usb' | 'bluetooth' | 'tcp' | 'mock';
 
+interface ConfigurationReader {
+	get<T>(section: string, defaultValue?: T): T;
+}
+
+export interface TransportConfigOverrides {
+	mode?: TransportMode;
+	usbPath?: string;
+	bluetoothPort?: string;
+	tcpHost?: string;
+	tcpPort?: number;
+	tcpUseDiscovery?: boolean;
+	tcpSerialNumber?: string;
+}
+
 interface CandidateFactory {
 	name: string;
 	create: () => TransportAdapter;
@@ -305,7 +319,7 @@ function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAda
 	});
 }
 
-function createUsbTransport(cfg: vscode.WorkspaceConfiguration): UsbHidAdapter {
+function createUsbTransport(cfg: ConfigurationReader): UsbHidAdapter {
 	const rawPath = cfg.get('transport.usb.path');
 	const path = typeof rawPath === 'string' && rawPath.trim().length > 0 ? rawPath.trim() : undefined;
 	const vendorId = sanitizeNumber(cfg.get('transport.usb.vendorId'), 0x0694, 0);
@@ -322,10 +336,7 @@ function createUsbTransport(cfg: vscode.WorkspaceConfiguration): UsbHidAdapter {
 	});
 }
 
-function createBluetoothTransport(
-	cfg: vscode.WorkspaceConfiguration,
-	logger: OutputChannelLogger
-): TransportAdapter {
+function createBluetoothTransport(cfg: ConfigurationReader, logger: OutputChannelLogger): TransportAdapter {
 	const rawPort = cfg.get('transport.bluetooth.port');
 	const port = typeof rawPort === 'string' ? rawPort.trim() : '';
 	const baudRate = sanitizeNumber(cfg.get('transport.bluetooth.baudRate'), 115_200, 300);
@@ -387,7 +398,7 @@ function createBluetoothTransport(
 	return new BluetoothSppAdapter({ port, baudRate, dtr });
 }
 
-function createTcpTransport(cfg: vscode.WorkspaceConfiguration, timeoutMs: number): TcpAdapter {
+function createTcpTransport(cfg: ConfigurationReader, timeoutMs: number): TcpAdapter {
 	const rawHost = cfg.get('transport.tcp.host');
 	const host = typeof rawHost === 'string' ? rawHost.trim() : '';
 	const useDiscovery = cfg.get('transport.tcp.useDiscovery') === true;
@@ -416,7 +427,7 @@ function createTcpTransport(cfg: vscode.WorkspaceConfiguration, timeoutMs: numbe
 }
 
 export function createProbeTransportForMode(
-	cfg: vscode.WorkspaceConfiguration,
+	cfg: ConfigurationReader,
 	logger: OutputChannelLogger,
 	timeoutMs: number,
 	modeRaw: unknown
@@ -464,7 +475,40 @@ export function createProbeTransportForMode(
 	]);
 }
 
-export function createProbeTransportFromWorkspace(logger: OutputChannelLogger, timeoutMs: number): TransportAdapter {
+export function createProbeTransportFromWorkspace(
+	logger: OutputChannelLogger,
+	timeoutMs: number,
+	overrides?: TransportConfigOverrides
+): TransportAdapter {
 	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-	return createProbeTransportForMode(cfg, logger, timeoutMs, cfg.get('transport.mode'));
+	const profileReader: ConfigurationReader = {
+		get<T>(section: string, defaultValue?: T): T {
+			if (overrides) {
+				const mappedKey = section
+					.replace(/^transport\./, '')
+					.replace(/\./g, '') as
+					| 'mode'
+					| 'usbpath'
+					| 'bluetoothport'
+					| 'tcphost'
+					| 'tcpport'
+					| 'tcpusediscovery'
+					| 'tcpserialnumber';
+				const overrideMap: Partial<Record<typeof mappedKey, unknown>> = {
+					mode: overrides.mode,
+					usbpath: overrides.usbPath,
+					bluetoothport: overrides.bluetoothPort,
+					tcphost: overrides.tcpHost,
+					tcpport: overrides.tcpPort,
+					tcpusediscovery: overrides.tcpUseDiscovery,
+					tcpserialnumber: overrides.tcpSerialNumber
+				};
+				if (overrideMap[mappedKey] !== undefined) {
+					return overrideMap[mappedKey] as T;
+				}
+			}
+			return cfg.get(section, defaultValue as T);
+		}
+	};
+	return createProbeTransportForMode(profileReader, logger, timeoutMs, overrides?.mode ?? cfg.get('transport.mode'));
 }

@@ -7,6 +7,11 @@ import { registerProgramControlCommands } from './commands/programControlCommand
 import { registerTransportCommands } from './commands/transportCommands';
 import { readFeatureConfig } from './config/featureConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
+import {
+	BrickConnectionProfile,
+	BrickConnectionProfileStore,
+	captureConnectionProfileFromWorkspace
+} from './device/brickConnectionProfiles';
 import { BrickControlService } from './device/brickControlService';
 import { BrickRegistry, BrickRole } from './device/brickRegistry';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
@@ -18,7 +23,11 @@ import { RemoteFsService } from './fs/remoteFsService';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
 import { CommandScheduler } from './scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from './scheduler/orphanRecovery';
-import { createProbeTransportFromWorkspace, TransportMode } from './transport/transportFactory';
+import {
+	createProbeTransportFromWorkspace,
+	TransportConfigOverrides,
+	TransportMode
+} from './transport/transportFactory';
 import {
 	BrickTreeNode,
 	BrickTreeProvider,
@@ -84,6 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
 	const brickRegistry = new BrickRegistry();
+	const profileStore = new BrickConnectionProfileStore(context.workspaceState);
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
@@ -117,7 +127,25 @@ export function activate(context: vscode.ExtensionContext) {
 		throw new Error(`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`);
 	});
 
-	const createBrickSession = (brickId: string): BrickRuntimeSession<CommandScheduler, Ev3CommandClient> => {
+	const toTransportOverrides = (profile?: BrickConnectionProfile): TransportConfigOverrides | undefined => {
+		if (!profile?.transport) {
+			return undefined;
+		}
+		return {
+			mode: profile.transport.mode,
+			usbPath: profile.transport.usbPath,
+			bluetoothPort: profile.transport.bluetoothPort,
+			tcpHost: profile.transport.tcpHost,
+			tcpPort: profile.transport.tcpPort,
+			tcpUseDiscovery: profile.transport.tcpUseDiscovery,
+			tcpSerialNumber: profile.transport.tcpSerialNumber
+		};
+	};
+
+	const createBrickSession = (
+		brickId: string,
+		connectionProfile?: BrickConnectionProfile
+	): BrickRuntimeSession<CommandScheduler, Ev3CommandClient> => {
 		const config = readSchedulerConfig();
 		const scheduler = new CommandScheduler({
 			defaultTimeoutMs: config.timeoutMs,
@@ -127,7 +155,7 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 		const commandClient = new Ev3CommandClient({
 			scheduler,
-			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs),
+			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs, toTransportOverrides(connectionProfile)),
 			logger
 		});
 		return {
@@ -137,7 +165,9 @@ export function activate(context: vscode.ExtensionContext) {
 		};
 	};
 
-	const sessionManager = new BrickSessionManager<CommandScheduler, Ev3CommandClient>(createBrickSession);
+	const sessionManager = new BrickSessionManager<CommandScheduler, Ev3CommandClient, BrickConnectionProfile>(
+		createBrickSession
+	);
 
 	const closeBrickSession = async (brickId: string): Promise<void> => {
 		await sessionManager.closeSession(brickId);
@@ -155,8 +185,8 @@ export function activate(context: vscode.ExtensionContext) {
 		return sessionManager.getSession(concreteBrickId);
 	};
 
-	const prepareBrickSession = async (brickId: string): Promise<Ev3CommandClient> => {
-		return sessionManager.prepareSession(brickId);
+	const prepareBrickSession = async (brickId: string, profile?: BrickConnectionProfile): Promise<Ev3CommandClient> => {
+		return sessionManager.prepareSession(brickId, profile);
 	};
 
 	const isBrickSessionAvailable = (brickId: string): boolean => {
@@ -267,16 +297,16 @@ export function activate(context: vscode.ExtensionContext) {
 			: 'unknown';
 	};
 
-	const resolveConnectedBrickDescriptor = (rootPath: string): ConnectedBrickDescriptor => {
+	const resolveConnectedBrickDescriptor = (rootPath: string, profile?: BrickConnectionProfile): ConnectedBrickDescriptor => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const transport = resolveCurrentTransportMode();
-		const normalizedRootPath = normalizeBrickRootPath(rootPath);
+		const transport = profile?.transport.mode ?? resolveCurrentTransportMode();
+		const normalizedRootPath = normalizeBrickRootPath(profile?.rootPath ?? rootPath);
 		const role: BrickRole = 'standalone';
 
 		if (transport === 'tcp') {
-			const hostRaw = cfg.get('transport.tcp.host');
+			const hostRaw = profile?.transport.tcpHost ?? cfg.get('transport.tcp.host');
 			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
-			const portRaw = cfg.get('transport.tcp.port');
+			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
 			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : 5555;
 			const endpoint = `${host}:${port}`;
 			return {
@@ -289,7 +319,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		if (transport === 'bluetooth') {
-			const portRaw = cfg.get('transport.bluetooth.port');
+			const portRaw = profile?.transport.bluetoothPort ?? cfg.get('transport.bluetooth.port');
 			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
 			return {
 				brickId: `bluetooth-${toSafeIdentifier(port)}`,
@@ -301,7 +331,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		if (transport === 'usb') {
-			const pathRaw = cfg.get('transport.usb.path');
+			const pathRaw = profile?.transport.usbPath ?? cfg.get('transport.usb.path');
 			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
 			return {
 				brickId: `usb-${toSafeIdentifier(usbPath)}`,
@@ -494,7 +524,23 @@ export function activate(context: vscode.ExtensionContext) {
 		resolveConnectedBrickDescriptor,
 		prepareBrickSession,
 		closeBrickSession,
-		isBrickSessionAvailable
+		isBrickSessionAvailable,
+		getConnectionProfile: (brickId) => profileStore.get(brickId),
+		captureConnectionProfile: (brickId, displayName, rootPath, existingProfile) => {
+			if (existingProfile) {
+				return {
+					...existingProfile,
+					brickId,
+					displayName,
+					rootPath,
+					savedAtIso: new Date().toISOString()
+				};
+			}
+			return captureConnectionProfileFromWorkspace(brickId, displayName, rootPath);
+		},
+		rememberConnectionProfile: async (profile) => {
+			await profileStore.upsert(profile);
+		}
 	});
 
 	const deployRegistrations = registerDeployCommands({
