@@ -49,7 +49,16 @@ interface ScaffoldState {
 interface BrickResolversModule {
 	createBrickResolvers: (deps: { brickRegistry: BrickRegistryMock; getLogger: () => LoggerMock }) => {
 		resolveProbeTimeoutMs: () => number;
+		resolveCurrentTransportMode: () => string;
+		resolveConnectedBrickDescriptor: (
+			rootPath: string,
+			profile?: {
+				transport: { mode: 'auto' | 'usb' | 'bluetooth' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; bluetoothPort?: string; usbPath?: string };
+				rootPath?: string;
+			}
+		) => { brickId: string; displayName: string; transport: string; rootPath: string };
 		resolveConcreteBrickId: (brickId: string) => string;
+		resolveBrickIdFromCommandArg: (arg: unknown) => string;
 		resolveFsAccessContext: (arg: unknown) => { brickId: string; authority: string; fsService: unknown } | { error: string };
 		resolveControlAccessContext: (
 			arg: unknown
@@ -249,6 +258,154 @@ test('brickResolvers scaffold initializes module with controlled mocks', async (
 			assert.equal(resolvers.resolveConcreteBrickId('active'), 'usb-main');
 			assert.equal(resolvers.resolveDefaultRunDirectory('active'), '/home/root/lms2012/prjs/');
 			assert.equal(state.warningCalls.length, 0);
+		}
+	);
+});
+
+test('brickResolvers resolves active FS/control/deploy contexts in success path', async () => {
+	const fsService = { id: 'fs-main' };
+	const controlService = { id: 'control-main' };
+
+	await withMockedBrickResolvers(
+		{
+			activeBrickId: 'usb-main',
+			fsServices: { 'usb-main': fsService },
+			controlServices: { 'usb-main': controlService },
+			snapshots: {
+				'usb-main': {
+					status: 'READY',
+					rootPath: '/home/root/lms2012/prjs/'
+				}
+			}
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+
+			const fsContext = resolvers.resolveFsAccessContext('active');
+			assert.deepEqual(fsContext, {
+				brickId: 'usb-main',
+				authority: 'active',
+				fsService
+			});
+
+			const controlContext = resolvers.resolveControlAccessContext('active');
+			assert.deepEqual(controlContext, {
+				brickId: 'usb-main',
+				authority: 'active',
+				controlService
+			});
+
+			const deployContext = resolvers.resolveDeployTargetFromArg('active');
+			assert.deepEqual(deployContext, {
+				brickId: 'usb-main',
+				authority: 'active',
+				rootPath: '/home/root/lms2012/prjs/',
+				fsService
+			});
+		}
+	);
+});
+
+test('brickResolvers resolves brick id from string and tree node args', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.equal(resolvers.resolveBrickIdFromCommandArg(' brick-x '), 'brick-x');
+		assert.equal(resolvers.resolveBrickIdFromCommandArg({ kind: 'brick', brickId: 'brick-root', rootPath: '/home/root/lms2012/prjs/' }), 'brick-root');
+		assert.equal(
+			resolvers.resolveBrickIdFromCommandArg({
+				kind: 'directory',
+				brickId: 'brick-dir',
+				remotePath: '/home/root/lms2012/prjs/Demo'
+			}),
+			'brick-dir'
+		);
+		assert.equal(
+			resolvers.resolveBrickIdFromCommandArg({
+				kind: 'file',
+				brickId: 'brick-file',
+				remotePath: '/home/root/lms2012/prjs/Demo/main.rbf'
+			}),
+			'brick-file'
+		);
+	});
+});
+
+test('brickResolvers resolves connected descriptor by transport mode', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'transport.mode': 'tcp',
+				'transport.tcp.host': '192.168.0.10',
+				'transport.tcp.port': 5566
+			}
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const tcp = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/');
+			assert.equal(tcp.transport, 'tcp');
+			assert.equal(tcp.rootPath, '/home/root/lms2012/prjs/');
+			assert.match(tcp.brickId, /^tcp-/);
+			assert.match(tcp.displayName, /192\.168\.0\.10:5566/);
+
+			const bt = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
+				transport: { mode: 'bluetooth', bluetoothPort: 'COM9' },
+				rootPath: '/media/card/'
+			});
+			assert.equal(bt.transport, 'bluetooth');
+			assert.equal(bt.rootPath, '/media/card/');
+			assert.match(bt.brickId, /^bluetooth-/);
+
+			const usb = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
+				transport: { mode: 'usb', usbPath: 'hid#ev3' }
+			});
+			assert.equal(usb.transport, 'usb');
+			assert.match(usb.brickId, /^usb-/);
+
+			const mock = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
+				transport: { mode: 'mock' }
+			});
+			assert.equal(mock.transport, 'mock');
+			assert.equal(mock.brickId, 'mock-active');
+		}
+	);
+});
+
+test('brickResolvers normalizes executable paths and validates normalized value', async () => {
+	const validatedPaths: string[] = [];
+	await withMockedBrickResolvers(
+		{
+			assertRemoteExecutablePath: (remotePath) => {
+				validatedPaths.push(remotePath);
+			}
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const fromUri = resolvers.normalizeRunExecutablePath('ev3://active/home/root/lms2012/prjs/demo.rbf');
+			const fromRelative = resolvers.normalizeRunExecutablePath('home/root/lms2012/prjs/demo.rbf');
+			assert.equal(fromUri, '/home/root/lms2012/prjs/demo.rbf');
+			assert.equal(fromRelative, '/home/root/lms2012/prjs/demo.rbf');
+		}
+	);
+	assert.deepEqual(validatedPaths, ['/home/root/lms2012/prjs/demo.rbf', '/home/root/lms2012/prjs/demo.rbf']);
+});
+
+test('brickResolvers confirms full filesystem mode when user accepts', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'fs.mode': 'full',
+				'fs.fullMode.confirmationRequired': true
+			},
+			warningChoice: 'Enable Full Mode'
+		},
+		async ({ module, deps, state }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const allowed = await resolvers.ensureFullFsModeConfirmation();
+			assert.equal(allowed, true);
+			assert.equal(state.warningCalls.length, 1);
+			assert.equal(state.configUpdates.length, 0);
+			assert.equal(state.logger.info.length, 1);
+			assert.equal(state.logger.warn.length, 0);
 		}
 	);
 });

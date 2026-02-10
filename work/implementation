@@ -177,7 +177,7 @@ Validation rule (mandatory):
 ## Checklist
 
 1. [x] Add test scaffold for `activation/brickResolvers.ts` (shared fixtures + mocks)
-2. [ ] Add success-path tests for `activation/brickResolvers.ts`
+2. [x] Add success-path tests for `activation/brickResolvers.ts`
 3. [ ] Add error-path tests for `activation/brickResolvers.ts` (error-return pattern)
 4. [ ] Build interaction test harness for `commands/browseCommands.ts` (QuickPick/input stubs)
 5. [ ] Add upload/download/tree operation tests for `commands/browseCommands.ts`
