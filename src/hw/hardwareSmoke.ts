@@ -26,6 +26,15 @@ export interface HardwareSummary {
 	fail: number;
 }
 
+export interface HardwareBenchmarkResult {
+	id: 'CONNECT_USB' | 'CONNECT_TCP' | 'CONNECT_BT';
+	transport: TransportKind;
+	status: HardwareStatus;
+	durationMs?: number;
+	warnThresholdMs: number;
+	withinThreshold?: boolean;
+}
+
 export interface HardwareCaseResult {
 	transport: TransportKind;
 	status: HardwareStatus;
@@ -44,6 +53,7 @@ export interface HardwareSmokeReport {
 	warning?: string;
 	results: HardwareCaseResult[];
 	summary: HardwareSummary;
+	benchmarks: HardwareBenchmarkResult[];
 	exitCode: number;
 }
 
@@ -102,6 +112,11 @@ const DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS = 20_000;
 const DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS = 500;
 const SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
 const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-run-fixture.rbf';
+const CONNECT_WARN_THRESHOLD_MS: Record<TransportKind, number> = {
+	usb: 800,
+	tcp: 1_500,
+	bluetooth: 3_500
+};
 
 const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 	usb: [
@@ -424,6 +439,45 @@ function summarizeResults(results: HardwareCaseResult[]): HardwareSummary {
 	};
 }
 
+function benchmarkIdForTransport(transport: TransportKind): HardwareBenchmarkResult['id'] {
+	switch (transport) {
+		case 'usb':
+			return 'CONNECT_USB';
+		case 'tcp':
+			return 'CONNECT_TCP';
+		default:
+			return 'CONNECT_BT';
+	}
+}
+
+function getProbeDurationMs(result: HardwareCaseResult): number | undefined {
+	const detail = result.detail;
+	if (!detail) {
+		return undefined;
+	}
+	const value = detail.probeDurationMs;
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function buildBenchmarkResults(results: HardwareCaseResult[]): HardwareBenchmarkResult[] {
+	return TRANSPORT_ORDER.map((transport) => {
+		const result = results.find((entry) => entry.transport === transport);
+		const durationMs = result ? getProbeDurationMs(result) : undefined;
+		const warnThresholdMs = CONNECT_WARN_THRESHOLD_MS[transport];
+		const withinThreshold =
+			typeof durationMs === 'number' ? durationMs <= warnThresholdMs : undefined;
+
+		return {
+			id: benchmarkIdForTransport(transport),
+			transport,
+			status: result?.status ?? 'SKIP',
+			durationMs,
+			warnThresholdMs,
+			withinThreshold
+		};
+	});
+}
+
 export function resolveHardwareSmokeReportPath(env: NodeJS.ProcessEnv = process.env): string {
 	const raw = env.EV3_COCKPIT_HW_REPORT?.trim();
 	const relative = raw && raw.length > 0 ? raw : path.join('artifacts', 'hw', 'hardware-smoke.json');
@@ -445,6 +499,7 @@ export function buildHardwareSmokeReport(
 		warning: suite.warning,
 		results: suite.results,
 		summary: summarizeResults(suite.results),
+		benchmarks: buildBenchmarkResults(suite.results),
 		exitCode
 	};
 }
@@ -1035,6 +1090,7 @@ async function runUsbCase(
 				detail: {
 					path: path ?? candidates[0]?.path ?? 'auto',
 					attempt,
+					probeDurationMs: probe.durationMs,
 					runProgramPath: runSpec?.remotePath ?? undefined,
 					runProgramMode: runSpec?.mode ?? undefined,
 					runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
@@ -1210,6 +1266,7 @@ async function runTcpCase(
 					host: host || 'discovery',
 					port,
 					attempt,
+					probeDurationMs: probe.durationMs,
 					runProgramPath: runSpec?.remotePath ?? undefined,
 					runProgramMode: runSpec?.mode ?? undefined,
 					runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
@@ -1458,6 +1515,7 @@ async function runBluetoothCase(
 								port,
 								attempt,
 								dtr: dtrProfile,
+								probeDurationMs: probe.durationMs,
 								runProgramPath: runSpec?.remotePath ?? undefined,
 								runProgramMode: runSpec?.mode ?? undefined,
 								runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
@@ -1600,6 +1658,18 @@ function printSummary(
 	}
 	for (const result of results) {
 		console.log(formatResult(result));
+	}
+	for (const benchmark of buildBenchmarkResults(results)) {
+		const durationPart = typeof benchmark.durationMs === 'number' ? `${benchmark.durationMs}ms` : 'n/a';
+		const thresholdPart =
+			benchmark.withinThreshold === undefined
+				? 'n/a'
+				: benchmark.withinThreshold
+				? 'within-threshold'
+				: 'above-threshold';
+		console.log(
+			`[HW][BENCH] ${benchmark.id} ${benchmark.status} duration=${durationPart} threshold=${benchmark.warnThresholdMs}ms (${thresholdPart})`
+		);
 	}
 
 	const { pass, skip, fail } = summarizeResults(results);

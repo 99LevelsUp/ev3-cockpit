@@ -183,5 +183,10 @@ test('hardware smoke report builder computes summary counters', () => {
 	assert.equal(report.summary.pass, 1);
 	assert.equal(report.summary.skip, 1);
 	assert.equal(report.summary.fail, 1);
+	assert.equal(report.benchmarks.length, 3);
+	assert.deepEqual(
+		report.benchmarks.map((entry) => entry.id),
+		['CONNECT_USB', 'CONNECT_TCP', 'CONNECT_BT']
+	);
 	assert.equal(report.exitCode, 1);
 });

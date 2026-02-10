@@ -7,10 +7,12 @@ const { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath } = requi
 
 function spawnCapture(command, args, options = {}) {
 	return new Promise((resolve, reject) => {
+		const isCmdScript = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+		const commandToRun = isCmdScript ? 'cmd.exe' : command;
+		const argsToRun = isCmdScript ? ['/d', '/s', '/c', command, ...args] : args;
 		let stdout = '';
 		let stderr = '';
-		const child = spawn(command, args, {
-			shell: process.platform === 'win32',
+		const child = spawn(commandToRun, argsToRun, {
 			stdio: ['ignore', 'pipe', 'pipe'],
 			...options
 		});
@@ -31,7 +33,7 @@ function spawnCapture(command, args, options = {}) {
 				resolve({ stdout, stderr });
 				return;
 			}
-			reject(new Error(`Command failed (${code}): ${command} ${args.join(' ')}\n${stderr}`));
+			reject(new Error(`Command failed (${code}): ${commandToRun} ${argsToRun.join(' ')}\n${stderr}`));
 		});
 	});
 }
@@ -63,10 +65,10 @@ async function main() {
 
 	try {
 		const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
-		const cliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePath);
+		const vscodeCliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePath);
 
 		await spawnCapture(
-			cliPath,
+			vscodeCliPath,
 			[
 				'--extensions-dir',
 				extensionsDir,
@@ -80,7 +82,7 @@ async function main() {
 		);
 
 		const listResult = await spawnCapture(
-			cliPath,
+			vscodeCliPath,
 			[
 				'--extensions-dir',
 				extensionsDir,

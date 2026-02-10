@@ -4,6 +4,7 @@
 **/.vscode-test/**
 **/.claude/**
 **/.work/**
+work/**
 src/**
 scripts/**
 resources/**

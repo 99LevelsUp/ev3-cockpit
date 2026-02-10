@@ -1,0 +1,71 @@
+# Implementation Plan Tracker
+
+Last updated: 2026-02-10
+
+## Steps
+1. [x] Gap analysis against phases 0-4 and current repository state
+2. [x] Phase 0: observability (perf timing, cache hit/miss, per-file deploy timing)
+3. [x] Phase 1: missing tests (priority modules + command layer)
+4. [x] Phase 2: structural refactoring completion and typed error mapping
+5. [x] Phase 3: performance changes (busy indicator gating, streaming MD5, safe optimizations)
+6. [x] Phase 4: benchmark/regression expansion in hardware reports
+7. [x] Validate: compile + lint + test:ci + test:ci:release
+8. [x] Commit and push
+
+## Step 7 progress
+- [x] `npm run compile`
+- [x] `npm run lint`
+- [x] `npm run test:ci`
+- [x] `npm run test:ci:release`
+- Revalidation after test-host runner change:
+  - [x] `npm run compile`
+  - [x] `npm run lint`
+  - [x] `npm run test:ci` (DEP0190 warning removed)
+- Packaging hygiene:
+  - added `work/**` to `.vscodeignore` so internal tracker is not shipped in VSIX
+  - validated with `npm run package:vsix` + `npm run test:vsix-smoke`
+
+## Step 3 (Tests)
+- Added unit tests:
+  - `src/__tests__/discovery.test.ts`
+  - `src/__tests__/ev3Bytecode.test.ts`
+  - `src/__tests__/logger.test.ts`
+  - `src/__tests__/orphanRecovery.test.ts`
+- Extended tests:
+  - `src/__tests__/hashUtils.test.ts` (stream MD5)
+  - `src/__tests__/deployIncremental.test.ts` (metadata incremental mode)
+  - `src/__tests__/hardwareSmoke.test.ts` (benchmark section assertions)
+- Validation: `npm run test:unit` passed (333 tests).
+
+## Step 4 (Refactoring / Typed Mapping)
+- Added typed FS availability errors:
+  - `FsAvailabilityError` in `src/fs/ev3FileSystemProvider.ts`
+  - resolver now throws typed codes in `src/extension.ts`
+- Kept compatibility fallback for legacy offline message mapping to avoid regressions.
+
+## Step 5 (Performance)
+- Busy indicator poller changed to adaptive scheduling (active vs idle interval) in `src/ui/busyIndicator.ts`.
+- Added stream-based file MD5 helper: `computeFileMd5Hex()` in `src/fs/hashUtils.ts`.
+- Incremental deploy now computes md5 from file stream before deciding upload when remote size matches:
+  - `src/fs/deployIncremental.ts`
+  - `src/commands/deployCommands.ts`
+
+## Step 6 (HW Benchmarks)
+- Added benchmark metadata to hardware smoke report:
+  - `HardwareBenchmarkResult[]` with IDs `CONNECT_USB`, `CONNECT_TCP`, `CONNECT_BT`
+  - threshold comparison and probe duration capture
+  - report now contains `benchmarks`
+  - summary printing includes benchmark lines
+- Updated `src/hw/hardwareSmoke.ts` accordingly.
+
+## Extra fix (requested earlier)
+- Removed `shell: true` spawn usage causing Node DEP0190 warning:
+  - `scripts/package-vsix.cjs`
+  - `scripts/vsix-smoke.cjs`
+- Windows VS Code CLI invocation updated in `scripts/vsix-smoke.cjs`:
+  - uses `resolveCliPathFromVSCodeExecutablePath(...)`
+  - if target is `.cmd`/`.bat`, executes via `cmd.exe /d /s /c <script> <args...>`
+  - avoids `shell: true` and avoids manual argument concatenation
+- Replaced test-host runner dependency path that used `shell: true`:
+  - `src/testHost/runTestHost.ts` now runs VS Code test host via
+    `downloadAndUnzipVSCode(...) + spawn(executable, args, { shell: false })`

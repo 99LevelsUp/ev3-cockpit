@@ -12,18 +12,30 @@ export function createBusyIndicatorPoller(
 	sessionManager: BusyIndicatorRuntimeSource,
 	treeProvider: BrickTreeProvider,
 	brickUiStateStore: BrickUiStateStore,
-	intervalMs = 250
+	intervalMs = 250,
+	idleIntervalMs = 2_000
 ): vscode.Disposable {
 	const busyStateByBrickId = new Map<string, string>();
+	let disposed = false;
+	let timer: NodeJS.Timeout | undefined;
 
-	const refresh = (): void => {
+	const refresh = (): boolean => {
 		const snapshots = brickRegistry.listSnapshots();
 		if (snapshots.length === 0) {
-			return;
+			void brickUiStateStore.pruneMissing(new Set<string>());
+			return false;
 		}
 		const knownBrickIds = new Set<string>();
+		let hasConnectedSnapshot = false;
 		for (const snapshot of snapshots) {
 			knownBrickIds.add(snapshot.brickId);
+			if (
+				!('status' in snapshot) ||
+				snapshot.status === 'READY' ||
+				snapshot.status === 'CONNECTING'
+			) {
+				hasConnectedSnapshot = true;
+			}
 			const runtime = sessionManager.getRuntimeSnapshot(snapshot.brickId);
 			const busyCount = runtime?.busyCommandCount ?? 0;
 			const schedulerState = runtime?.schedulerState;
@@ -45,13 +57,29 @@ export function createBusyIndicatorPoller(
 			}
 		}
 		void brickUiStateStore.pruneMissing(knownBrickIds);
+		return hasConnectedSnapshot;
+	};
+
+	const scheduleNextTick = (hasConnectedSnapshot: boolean): void => {
+		if (disposed) {
+			return;
+		}
+		const nextDelay = hasConnectedSnapshot ? intervalMs : Math.max(idleIntervalMs, intervalMs);
+		timer = setTimeout(() => {
+			const active = refresh();
+			scheduleNextTick(active);
+		}, nextDelay);
+		timer.unref?.();
 	};
 
 	// Initial tick
-	refresh();
-
-	const timer = setInterval(refresh, intervalMs);
+	const active = refresh();
+	scheduleNextTick(active);
 	return new vscode.Disposable(() => {
-		clearInterval(timer);
+		disposed = true;
+		if (timer) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
 	});
 }

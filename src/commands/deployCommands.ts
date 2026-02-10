@@ -10,12 +10,14 @@ import {
 } from '../fs/deployActions';
 import { DeployConflictPromptChoice, resolveDeployConflictDecision } from '../fs/deployConflict';
 import { buildLocalProjectLayout, planRemoteCleanup } from '../fs/deployCleanup';
-import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from '../fs/deployIncremental';
+import { RemoteFileSnapshot, shouldUploadByRemoteSnapshotMeta } from '../fs/deployIncremental';
+import { computeFileMd5Hex } from '../fs/hashUtils';
 import { isDeployTransientTransportError, sleepMs } from '../fs/deployResilience';
 import { verifyUploadedFile } from '../fs/deployVerify';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
+import { nextCorrelationId, withTiming } from '../diagnostics/perfTiming';
 import { toErrorMessage, withBrickOperation } from './commandUtils';
 import { resolveDeployFlow } from './deployFlow';
 import { collectLocalFilesRecursive, collectRemoteFileIndexRecursive } from './deployScan';
@@ -64,6 +66,8 @@ async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 export function registerDeployCommands(options: DeployCommandOptions): DeployCommandRegistrations {
 	const executeProjectDeploy = async (deployOptions: ProjectDeployRequest): Promise<void> => {
 		const logger = options.getLogger();
+		const correlationId = nextCorrelationId();
+		const deployStartedAt = Date.now();
 		const fsTarget: DeployTargetContext | undefined = deployOptions.target ?? (() => {
 			const resolved = options.resolveFsAccessContext('active');
 			if ('error' in resolved) {
@@ -180,7 +184,17 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		const deployProjectRoot = atomicEnabled ? atomicStagingRoot : remoteProjectRoot;
 
 		try {
-			const scan = await collectLocalFilesRecursive(projectUri, featureConfig.deploy);
+			const scan = await withTiming(
+				logger,
+				'deploy.scan-local',
+				() => collectLocalFilesRecursive(projectUri, featureConfig.deploy),
+				{
+					correlationId,
+					brickId: targetBrickId,
+					projectPath: projectUri.fsPath,
+					previewOnly: deployOptions.previewOnly
+				}
+			);
 			if (scan.files.length === 0) {
 				vscode.window.showWarningMessage(
 					`Project folder "${projectUri.fsPath}" has no deployable files after filters.`
@@ -268,8 +282,18 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			let remoteIndex = new Map<string, RemoteFileSnapshot>();
 			let remoteDirectories: string[] = [];
 			if (incrementalEnabled || cleanupEnabled || effectiveConflictPolicy !== 'overwrite') {
-				const remoteIndexResult = await runDeployStepWithResilience('collect-remote-index', () =>
-					collectRemoteFileIndexRecursive(fsService, remoteProjectRoot)
+				const remoteIndexResult = await withTiming(
+					logger,
+					'deploy.collect-remote-index',
+					() =>
+						runDeployStepWithResilience('collect-remote-index', () =>
+							collectRemoteFileIndexRecursive(fsService, remoteProjectRoot)
+						),
+					{
+						correlationId,
+						brickId: targetBrickId,
+						remoteProjectRoot
+					}
 				);
 				if (!remoteIndexResult.available) {
 					if (incrementalEnabled) {
@@ -453,10 +477,29 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 					for (let index = 0; index < files.length; index += 1) {
 						throwIfCancelled();
 						const file = files[index];
-						const bytes =
-							deployOptions.previewOnly && !incrementalEnabled ? undefined : await vscode.workspace.fs.readFile(file.localUri);
 						if (incrementalEnabled) {
-							const decision = shouldUploadByRemoteSnapshot(bytes ?? new Uint8Array(), remoteIndex.get(file.remotePath));
+							const remoteSnapshot = remoteIndex.get(file.remotePath);
+							let decision: { upload: boolean; localMd5: string } | undefined;
+							if (!remoteSnapshot || remoteSnapshot.sizeBytes !== file.sizeBytes) {
+								decision = {
+									upload: true,
+									localMd5: ''
+								};
+							} else {
+								const localMd5 = await withTiming(
+									logger,
+									'deploy.compute-local-md5',
+									() => computeFileMd5Hex(file.localUri.fsPath),
+									{
+										correlationId,
+										brickId: targetBrickId,
+										file: file.relativePath,
+										fileIndex: index + 1,
+										fileCount: files.length
+									}
+								);
+								decision = shouldUploadByRemoteSnapshotMeta(file.sizeBytes, localMd5, remoteSnapshot);
+							}
 							if (!decision.upload) {
 								skippedUnchangedCount += 1;
 								progress.report({
@@ -467,9 +510,25 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 							}
 						}
 
+						const bytes =
+							deployOptions.previewOnly
+								? undefined
+								: await withTiming(
+									logger,
+									'deploy.read-local-file',
+									() => vscode.workspace.fs.readFile(file.localUri),
+									{
+										correlationId,
+										brickId: targetBrickId,
+										file: file.relativePath,
+										fileIndex: index + 1,
+										fileCount: files.length
+									}
+								);
+
 						if (deployOptions.previewOnly) {
 							plannedUploadCount += 1;
-							uploadedBytes += bytes?.length ?? file.sizeBytes;
+							uploadedBytes += file.sizeBytes;
 							if (previewUploadSamples.length < 8) {
 								previewUploadSamples.push(file.relativePath);
 							}
@@ -525,12 +584,40 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 								}
 							}
 
-							await runDeployStepWithResilience('write-file', () =>
-								fsService.writeFile(file.remotePath, bytes ?? new Uint8Array())
+							await withTiming(
+								logger,
+								'deploy.write-remote-file',
+								() =>
+									runDeployStepWithResilience('write-file', () =>
+										fsService.writeFile(file.remotePath, bytes ?? new Uint8Array())
+									),
+								{
+									correlationId,
+									brickId: targetBrickId,
+									file: file.relativePath,
+									remotePath: file.remotePath,
+									bytes: (bytes ?? new Uint8Array()).length,
+									fileIndex: index + 1,
+									fileCount: files.length
+								}
 							);
 							if (verifyAfterUpload !== 'none') {
-								await runDeployStepWithResilience('verify-upload', () =>
-									verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload)
+								await withTiming(
+									logger,
+									'deploy.verify-upload',
+									() =>
+										runDeployStepWithResilience('verify-upload', () =>
+											verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload)
+										),
+									{
+										correlationId,
+										brickId: targetBrickId,
+										file: file.relativePath,
+										remotePath: file.remotePath,
+										mode: verifyAfterUpload,
+										fileIndex: index + 1,
+										fileCount: files.length
+									}
 								);
 								verifiedFilesCount += 1;
 							}
@@ -647,7 +734,16 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			}
 
 			if (!deployOptions.previewOnly && deployOptions.runAfterDeploy && runTarget) {
-				await runDeployStepWithResilience('run-program', () => runRemoteExecutable(fsService, runTarget));
+				await withTiming(
+					logger,
+					'deploy.run-program',
+					() => runDeployStepWithResilience('run-program', () => runRemoteExecutable(fsService, runTarget)),
+					{
+						correlationId,
+						brickId: targetBrickId,
+						runTarget
+					}
+				);
 				options.markProgramStarted(runTarget, 'deploy-project-run', targetBrickId);
 			}
 
@@ -681,6 +777,8 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				resilienceMaxRetries: deployResilience.maxRetries,
 				resilienceRetryDelayMs: deployResilience.retryDelayMs,
 				resilienceReopenConnection: deployResilience.reopenConnection,
+				totalDurationMs: Date.now() - deployStartedAt,
+				correlationId,
 				totalUploadedBytes: uploadedBytes,
 				deletedStaleFilesCount,
 				deletedStaleDirectoriesCount,
@@ -888,15 +986,45 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
 			return;
 		}
+		const correlationId = nextCorrelationId();
 
 		try {
 			const executable = await withBrickOperation(target.brickId, 'Deploy and run executable', options.onBrickOperation, async () => {
-				const bytes = await vscode.workspace.fs.readFile(localUri);
-				await fsService.writeFile(remotePath, bytes);
-				if (featureConfig.deploy.verifyAfterUpload !== 'none') {
-					await verifyUploadedFile(fsService, remotePath, bytes, featureConfig.deploy.verifyAfterUpload);
+				const bytes = await withTiming(logger, 'deploy-single.read-local-file', () => vscode.workspace.fs.readFile(localUri), {
+					correlationId,
+					brickId: target.brickId,
+					localPath: localUri.fsPath
+				});
+				await withTiming(logger, 'deploy-single.write-remote-file', () => fsService.writeFile(remotePath, bytes), {
+					correlationId,
+					brickId: target.brickId,
+					remotePath,
+					bytes: bytes.length
+				});
+				const verifyMode = featureConfig.deploy.verifyAfterUpload;
+				if (verifyMode !== 'none') {
+					await withTiming(
+						logger,
+						'deploy-single.verify-upload',
+						() => verifyUploadedFile(fsService, remotePath, bytes, verifyMode),
+						{
+							correlationId,
+							brickId: target.brickId,
+							remotePath,
+							mode: verifyMode
+						}
+					);
 				}
-				const exec = await runRemoteExecutable(fsService, remotePath);
+				const exec = await withTiming(
+					logger,
+					'deploy-single.run-program',
+					() => runRemoteExecutable(fsService, remotePath),
+					{
+						correlationId,
+						brickId: target.brickId,
+						remotePath
+					}
+				);
 				options.markProgramStarted(remotePath, 'deploy-and-run-single', target.brickId);
 				return { exec, bytes };
 			});

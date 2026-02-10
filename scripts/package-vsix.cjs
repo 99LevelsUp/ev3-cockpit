@@ -6,7 +6,6 @@ function spawnCommand(command, args, options = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			stdio: 'inherit',
-			shell: process.platform === 'win32',
 			...options
 		});
 		child.on('error', reject);
@@ -26,8 +25,11 @@ async function main() {
 	const outputPath = path.resolve(artifactsDir, 'ev3-cockpit.vsix');
 	await fs.mkdir(artifactsDir, { recursive: true });
 
-	const runner = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-	await spawnCommand(runner, ['exec', '--', 'vsce', 'package', '--out', outputPath], { cwd: root });
+	const npmCli = process.env.npm_execpath;
+	if (!npmCli) {
+		throw new Error('Cannot resolve npm CLI path from npm_execpath.');
+	}
+	await spawnCommand(process.execPath, [npmCli, 'exec', '--', 'vsce', 'package', '--out', outputPath], { cwd: root });
 
 	console.log(`[vsix-package] Created ${outputPath}`);
 }

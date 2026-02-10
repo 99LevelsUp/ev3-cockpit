@@ -1,7 +1,30 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { runTests } from '@vscode/test-electron';
+import { spawn } from 'node:child_process';
+import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+
+async function runVsCodeExtensionTests(
+	vscodeExecutablePath: string,
+	args: readonly string[],
+	cwd: string
+): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		const child = spawn(vscodeExecutablePath, args, {
+			cwd,
+			stdio: 'inherit',
+			env: process.env
+		});
+		child.on('error', reject);
+		child.on('exit', (code) => {
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			reject(new Error(`VS Code test host exited with code ${String(code)}.`));
+		});
+	});
+}
 
 async function main(): Promise<void> {
 	const extensionDevelopmentPath = path.resolve(__dirname, '..', '..');
@@ -15,23 +38,24 @@ async function main(): Promise<void> {
 	await fs.mkdir(extensionsDir, { recursive: true });
 
 	try {
-		await runTests({
+		const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
+		const launchArgs = [
+			workspacePath,
+			'--disable-extensions',
+			'--disable-updates',
+			'--skip-release-notes',
+			'--skip-welcome',
+			'--disable-workspace-trust',
+			'--user-data-dir',
+			userDataDir,
+			'--extensions-dir',
+			extensionsDir,
+			'--extensionDevelopmentPath',
 			extensionDevelopmentPath,
-			extensionTestsPath,
-			version: vscodeVersion,
-			launchArgs: [
-				workspacePath,
-				'--disable-extensions',
-				'--disable-updates',
-				'--skip-release-notes',
-				'--skip-welcome',
-				'--disable-workspace-trust',
-				'--user-data-dir',
-				userDataDir,
-				'--extensions-dir',
-				extensionsDir
-			]
-		});
+			'--extensionTestsPath',
+			extensionTestsPath
+		];
+		await runVsCodeExtensionTests(vscodeExecutablePath, launchArgs, extensionDevelopmentPath);
 	} finally {
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	}

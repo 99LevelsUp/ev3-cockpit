@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import test from 'node:test';
-import { computeMd5Hex } from '../fs/hashUtils';
+import { computeFileMd5Hex, computeMd5Hex } from '../fs/hashUtils';
 
 test('hashUtils computes correct MD5 for ASCII bytes', () => {
 	// MD5("abc") = 900150983cd24fb0d6963f7d28e17f72
@@ -32,4 +35,16 @@ test('hashUtils produces different hashes for different inputs', () => {
 test('hashUtils produces consistent results for same input', () => {
 	const input = new Uint8Array([10, 20, 30, 40, 50]);
 	assert.equal(computeMd5Hex(input), computeMd5Hex(input));
+});
+
+test('hashUtils computes MD5 from file stream', async () => {
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-hash-'));
+	const tempFile = path.join(tempDir, 'sample.bin');
+	try {
+		await fs.writeFile(tempFile, Buffer.from([0x61, 0x62, 0x63]));
+		const md5 = await computeFileMd5Hex(tempFile);
+		assert.equal(md5, '900150983cd24fb0d6963f7d28e17f72');
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
 });

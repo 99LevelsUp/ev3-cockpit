@@ -5,11 +5,11 @@ export interface RemoteFileSnapshot {
 	md5: string;
 }
 
-export function shouldUploadByRemoteSnapshot(
-	localBytes: Uint8Array,
+export function shouldUploadByRemoteSnapshotMeta(
+	localSizeBytes: number,
+	localMd5: string,
 	remote: RemoteFileSnapshot | undefined
 ): { upload: boolean; localMd5: string } {
-	const localMd5 = computeMd5Hex(localBytes);
 	if (!remote) {
 		return {
 			upload: true,
@@ -17,7 +17,7 @@ export function shouldUploadByRemoteSnapshot(
 		};
 	}
 
-	if (remote.sizeBytes !== localBytes.length) {
+	if (remote.sizeBytes !== localSizeBytes) {
 		return {
 			upload: true,
 			localMd5
@@ -36,4 +36,12 @@ export function shouldUploadByRemoteSnapshot(
 		upload: false,
 		localMd5
 	};
+}
+
+export function shouldUploadByRemoteSnapshot(
+	localBytes: Uint8Array,
+	remote: RemoteFileSnapshot | undefined
+): { upload: boolean; localMd5: string } {
+	const localMd5 = computeMd5Hex(localBytes);
+	return shouldUploadByRemoteSnapshotMeta(localBytes.length, localMd5, remote);
 }

@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import { Logger, NoopLogger } from '../diagnostics/logger';
+import { isPerfEnabled } from '../diagnostics/perfTiming';
 import { isRemoteExecutablePath } from '../fs/remoteExecutable';
 import type { RemoteFsService } from '../fs/remoteFsService';
 
@@ -130,6 +131,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 	private readonly fileNodesByPath = new Map<string, BrickFileNode>();
 	private readonly nodesById = new Map<string, BrickTreeNode>();
 	private readonly directoryCache = new Map<string, DirectoryCacheEntry>();
+	private cacheHitCount = 0;
+	private cacheMissCount = 0;
+	private cacheAccessCount = 0;
 
 	public readonly onDidChangeTreeData = this.eventEmitter.event;
 
@@ -222,19 +226,57 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		return this.nodesById.get(nodeId);
 	}
 
+	public getDirectoryCacheMetrics(): { hits: number; misses: number; hitRate: number; size: number } {
+		const total = this.cacheHitCount + this.cacheMissCount;
+		const hitRate = total === 0 ? 0 : this.cacheHitCount / total;
+		return {
+			hits: this.cacheHitCount,
+			misses: this.cacheMissCount,
+			hitRate,
+			size: this.directoryCache.size
+		};
+	}
+
+	private recordDirectoryCacheAccess(hit: boolean): void {
+		if (hit) {
+			this.cacheHitCount += 1;
+		} else {
+			this.cacheMissCount += 1;
+		}
+		if (!isPerfEnabled()) {
+			return;
+		}
+		this.cacheAccessCount += 1;
+		if (this.cacheAccessCount % 50 !== 0) {
+			return;
+		}
+		const logger = this.options.logger ?? new NoopLogger();
+		const total = this.cacheHitCount + this.cacheMissCount;
+		const hitRate = total === 0 ? 0 : this.cacheHitCount / total;
+		logger.info('[perf] tree-directory-cache', {
+			hits: this.cacheHitCount,
+			misses: this.cacheMissCount,
+			hitRate: Number(hitRate.toFixed(4)),
+			size: this.directoryCache.size
+		});
+	}
+
 	private getCachedDirectoryChildren(key: string): BrickTreeNode[] | undefined {
 		const entry = this.directoryCache.get(key);
 		if (!entry) {
+			this.recordDirectoryCacheAccess(false);
 			return undefined;
 		}
 		if (entry.expiresAt <= Date.now()) {
 			this.directoryCache.delete(key);
+			this.recordDirectoryCacheAccess(false);
 			return undefined;
 		}
 
 		// LRU touch.
 		this.directoryCache.delete(key);
 		this.directoryCache.set(key, entry);
+		this.recordDirectoryCacheAccess(true);
 		return entry.children;
 	}
 

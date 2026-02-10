@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { computeMd5Hex } from '../fs/hashUtils';
-import { shouldUploadByRemoteSnapshot } from '../fs/deployIncremental';
+import { shouldUploadByRemoteSnapshot, shouldUploadByRemoteSnapshotMeta } from '../fs/deployIncremental';
 
 test('deployIncremental computes deterministic MD5 hex', () => {
 	const md5 = computeMd5Hex(new Uint8Array([0x61, 0x62, 0x63]));
@@ -37,6 +37,23 @@ test('deployIncremental uploads when md5 differs', () => {
 	const result = shouldUploadByRemoteSnapshot(bytes, {
 		sizeBytes: bytes.length,
 		md5: '00000000000000000000000000000000'
+	});
+	assert.equal(result.upload, true);
+});
+
+test('deployIncremental metadata mode skips upload when size and md5 match', () => {
+	const localMd5 = '900150983cd24fb0d6963f7d28e17f72';
+	const result = shouldUploadByRemoteSnapshotMeta(3, localMd5, {
+		sizeBytes: 3,
+		md5: localMd5
+	});
+	assert.equal(result.upload, false);
+});
+
+test('deployIncremental metadata mode uploads when md5 differs', () => {
+	const result = shouldUploadByRemoteSnapshotMeta(3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {
+		sizeBytes: 3,
+		md5: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 	});
 	assert.equal(result.upload, true);
 });

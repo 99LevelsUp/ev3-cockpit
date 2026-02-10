@@ -1,12 +1,25 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { Logger, NoopLogger } from '../diagnostics/logger';
+import { withTiming } from '../diagnostics/perfTiming';
 import { RemoteFsService } from './remoteFsService';
 import { parseEv3UriParts } from './ev3Uri';
 import { copyRemotePath, deleteRemotePath, getRemotePathKind, RemoteFsPathError, renameRemotePath } from './remoteFsOps';
 import { PathPolicyError } from './pathPolicy';
 
 type RemoteFsResolver = (brickId: string) => Promise<RemoteFsService>;
+
+export type FsAvailabilityErrorCode = 'NO_ACTIVE_BRICK' | 'BRICK_UNAVAILABLE' | 'BRICK_NOT_REGISTERED';
+
+export class FsAvailabilityError extends Error {
+	public readonly code: FsAvailabilityErrorCode;
+
+	public constructor(code: FsAvailabilityErrorCode, message: string) {
+		super(message);
+		this.name = 'FsAvailabilityError';
+		this.code = code;
+	}
+}
 
 export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 	private readonly eventEmitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
@@ -22,43 +35,79 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 	}
 
 	public async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
-		return this.withFs(uri, 'read', async (service, remotePath) => {
-			const kind = await getRemotePathKind(service, remotePath);
-			if (kind === 'directory') {
-				return this.makeDirectoryStat();
-			}
-			if (kind === 'file') {
-				const parentPath = path.posix.dirname(remotePath);
-				const name = path.posix.basename(remotePath);
-				const listing = await service.listDirectory(parentPath);
-				const file = listing.files.find((entry) => entry.name === name);
-				return this.makeFileStat(file?.size ?? 0);
-			}
+		return withTiming(
+			this.logger,
+			'fs-provider.stat',
+			() =>
+				this.withFs(uri, 'read', async (service, remotePath) => {
+					const kind = await getRemotePathKind(service, remotePath);
+					if (kind === 'directory') {
+						return this.makeDirectoryStat();
+					}
+					if (kind === 'file') {
+						const parentPath = path.posix.dirname(remotePath);
+						const name = path.posix.basename(remotePath);
+						const listing = await service.listDirectory(parentPath);
+						const file = listing.files.find((entry) => entry.name === name);
+						return this.makeFileStat(file?.size ?? 0);
+					}
 
-			throw new RemoteFsPathError('NOT_FOUND', `Path not found: ${remotePath}`);
-		});
+					throw new RemoteFsPathError('NOT_FOUND', `Path not found: ${remotePath}`);
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority
+			}
+		);
 	}
 
 	public async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
-		return this.withFs(uri, 'read', async (service, remotePath) => {
-			const listing = await service.listDirectory(remotePath);
-			const folders: [string, vscode.FileType][] = listing.folders.map((name) => [name, vscode.FileType.Directory]);
-			const files: [string, vscode.FileType][] = listing.files.map((entry) => [entry.name, vscode.FileType.File]);
-			return [...folders, ...files];
-		});
+		return withTiming(
+			this.logger,
+			'fs-provider.read-directory',
+			() =>
+				this.withFs(uri, 'read', async (service, remotePath) => {
+					const listing = await service.listDirectory(remotePath);
+					const folders: [string, vscode.FileType][] = listing.folders.map((name) => [name, vscode.FileType.Directory]);
+					const files: [string, vscode.FileType][] = listing.files.map((entry) => [entry.name, vscode.FileType.File]);
+					return [...folders, ...files];
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority
+			}
+		);
 	}
 
 	public async createDirectory(uri: vscode.Uri): Promise<void> {
-		await this.withFs(uri, 'write', async (service, remotePath) => {
-			await service.createDirectory(remotePath);
-			this.emitChanged(uri, vscode.FileChangeType.Created);
-		});
+		await withTiming(
+			this.logger,
+			'fs-provider.create-directory',
+			() =>
+				this.withFs(uri, 'write', async (service, remotePath) => {
+					await service.createDirectory(remotePath);
+					this.emitChanged(uri, vscode.FileChangeType.Created);
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority
+			}
+		);
 	}
 
 	public async readFile(uri: vscode.Uri): Promise<Uint8Array> {
-		return this.withFs(uri, 'read', async (service, remotePath) => {
-			return service.readFile(remotePath);
-		});
+		return withTiming(
+			this.logger,
+			'fs-provider.read-file',
+			() =>
+				this.withFs(uri, 'read', async (service, remotePath) => {
+					return service.readFile(remotePath);
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority
+			}
+		);
 	}
 
 	public async writeFile(
@@ -66,56 +115,100 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 		content: Uint8Array,
 		options: { readonly create: boolean; readonly overwrite: boolean }
 	): Promise<void> {
-		await this.withFs(uri, 'write', async (service, remotePath) => {
-			const exists = await this.fileExists(uri);
-			if (!exists && !options.create) {
-				throw new RemoteFsPathError('NOT_FOUND', `Path not found: ${remotePath}`);
-			}
-			if (exists && !options.overwrite) {
-				throw new RemoteFsPathError('ALREADY_EXISTS', `Path already exists: ${remotePath}`);
-			}
+		await withTiming(
+			this.logger,
+			'fs-provider.write-file',
+			() =>
+				this.withFs(uri, 'write', async (service, remotePath) => {
+					const exists = await this.fileExists(uri);
+					if (!exists && !options.create) {
+						throw new RemoteFsPathError('NOT_FOUND', `Path not found: ${remotePath}`);
+					}
+					if (exists && !options.overwrite) {
+						throw new RemoteFsPathError('ALREADY_EXISTS', `Path already exists: ${remotePath}`);
+					}
 
-			await service.writeFile(remotePath, content);
-			this.emitChanged(uri, exists ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created);
-		});
+					await service.writeFile(remotePath, content);
+					this.emitChanged(uri, exists ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created);
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority,
+				size: content.length,
+				create: options.create,
+				overwrite: options.overwrite
+			}
+		);
 	}
 
 	public async delete(uri: vscode.Uri, options: { readonly recursive: boolean }): Promise<void> {
-		await this.withFs(uri, 'write', async (service, remotePath) => {
-			await deleteRemotePath(service, remotePath, { recursive: options.recursive });
-			this.emitChanged(uri, vscode.FileChangeType.Deleted);
-		});
+		await withTiming(
+			this.logger,
+			'fs-provider.delete',
+			() =>
+				this.withFs(uri, 'write', async (service, remotePath) => {
+					await deleteRemotePath(service, remotePath, { recursive: options.recursive });
+					this.emitChanged(uri, vscode.FileChangeType.Deleted);
+				}),
+			{
+				uri: uri.path,
+				authority: uri.authority,
+				recursive: options.recursive
+			}
+		);
 	}
 
 	public async rename(oldUri: vscode.Uri, newUri: vscode.Uri, options: { readonly overwrite: boolean }): Promise<void> {
-		await this.withFs(oldUri, 'write', async (service, sourcePath) => {
-			const { brickId: sourceBrickId } = parseEv3UriParts(oldUri.authority, oldUri.path);
-			const { brickId: destinationBrickId, remotePath: destinationPath } = parseEv3UriParts(newUri.authority, newUri.path);
-			if (sourceBrickId !== destinationBrickId) {
-				throw new RemoteFsPathError('INVALID_OPERATION', 'Cross-brick rename is not supported.');
-			}
+		await withTiming(
+			this.logger,
+			'fs-provider.rename',
+			() =>
+				this.withFs(oldUri, 'write', async (service, sourcePath) => {
+					const { brickId: sourceBrickId } = parseEv3UriParts(oldUri.authority, oldUri.path);
+					const { brickId: destinationBrickId, remotePath: destinationPath } = parseEv3UriParts(newUri.authority, newUri.path);
+					if (sourceBrickId !== destinationBrickId) {
+						throw new RemoteFsPathError('INVALID_OPERATION', 'Cross-brick rename is not supported.');
+					}
 
-			await renameRemotePath(service, sourcePath, destinationPath, { overwrite: options.overwrite });
-			this.emitChanged(oldUri, vscode.FileChangeType.Deleted);
-			this.emitChanged(newUri, vscode.FileChangeType.Created);
-		});
+					await renameRemotePath(service, sourcePath, destinationPath, { overwrite: options.overwrite });
+					this.emitChanged(oldUri, vscode.FileChangeType.Deleted);
+					this.emitChanged(newUri, vscode.FileChangeType.Created);
+				}),
+			{
+				from: oldUri.path,
+				to: newUri.path,
+				authority: oldUri.authority,
+				overwrite: options.overwrite
+			}
+		);
 	}
 
 	public async copy(source: vscode.Uri, destination: vscode.Uri, options: { readonly overwrite: boolean }): Promise<void> {
-		await this.withFs(source, 'write', async (service, sourcePath) => {
-			const { brickId: sourceBrickId } = parseEv3UriParts(source.authority, source.path);
-			const { brickId: destinationBrickId, remotePath: destinationPath } = parseEv3UriParts(
-				destination.authority,
-				destination.path
-			);
-			if (sourceBrickId !== destinationBrickId) {
-				throw new RemoteFsPathError('INVALID_OPERATION', 'Cross-brick copy is not supported.');
-			}
+		await withTiming(
+			this.logger,
+			'fs-provider.copy',
+			() =>
+				this.withFs(source, 'write', async (service, sourcePath) => {
+					const { brickId: sourceBrickId } = parseEv3UriParts(source.authority, source.path);
+					const { brickId: destinationBrickId, remotePath: destinationPath } = parseEv3UriParts(
+						destination.authority,
+						destination.path
+					);
+					if (sourceBrickId !== destinationBrickId) {
+						throw new RemoteFsPathError('INVALID_OPERATION', 'Cross-brick copy is not supported.');
+					}
 
-			await copyRemotePath(service, sourcePath, destinationPath, { overwrite: options.overwrite });
-			this.emitChanged(source, vscode.FileChangeType.Changed);
-			this.emitChanged(destination, vscode.FileChangeType.Created);
-		});
+					await copyRemotePath(service, sourcePath, destinationPath, { overwrite: options.overwrite });
+					this.emitChanged(source, vscode.FileChangeType.Changed);
+					this.emitChanged(destination, vscode.FileChangeType.Created);
+				}),
+			{
+				from: source.path,
+				to: destination.path,
+				authority: source.authority,
+				overwrite: options.overwrite
+			}
+		);
 	}
 
 	private async withFs<T>(
@@ -168,6 +261,16 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 
 		if (error instanceof PathPolicyError) {
 			return vscode.FileSystemError.NoPermissions(error.message);
+		}
+
+		if (error instanceof FsAvailabilityError) {
+			if (error.code === 'NO_ACTIVE_BRICK') {
+				if (access === 'write') {
+					return vscode.FileSystemError.NoPermissions('EV3 is offline. Filesystem is currently read-only.');
+				}
+				return vscode.FileSystemError.Unavailable(error.message);
+			}
+			return vscode.FileSystemError.Unavailable(error.message);
 		}
 
 		const message = error instanceof Error ? error.message : String(error);

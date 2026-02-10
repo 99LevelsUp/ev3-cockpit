@@ -17,9 +17,10 @@ import {
 } from './device/brickConnectionProfiles';
 import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
-import { OutputChannelLogger } from './diagnostics/logger';
+import { Logger, OutputChannelLogger } from './diagnostics/logger';
+import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
 import { parseEv3UriParts } from './fs/ev3Uri';
-import { Ev3FileSystemProvider } from './fs/ev3FileSystemProvider';
+import { Ev3FileSystemProvider, FsAvailabilityError } from './fs/ev3FileSystemProvider';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
 import { CommandScheduler } from './scheduler/commandScheduler';
 import {
@@ -44,6 +45,13 @@ import { createBrickResolvers } from './activation/brickResolvers';
 export function activate(context: vscode.ExtensionContext) {
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
+	const perfLogger: Logger = {
+		error: (message, meta) => logger?.error(message, meta),
+		warn: (message, meta) => logger?.warn(message, meta),
+		info: (message, meta) => logger?.info(message, meta),
+		debug: (message, meta) => logger?.debug(message, meta),
+		trace: (message, meta) => logger?.trace(message, meta)
+	};
 	const brickRegistry = new BrickRegistry();
 	const profileStore = new BrickConnectionProfileStore(context.workspaceState);
 	const brickUiStateStore = new BrickUiStateStore(context.workspaceState);
@@ -110,15 +118,24 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		if (brickId === 'active') {
-			throw new Error('No active EV3 connection for filesystem access. Run "EV3 Cockpit: Connect to EV3 Brick".');
+			throw new FsAvailabilityError(
+				'NO_ACTIVE_BRICK',
+				'No active EV3 connection for filesystem access. Run "EV3 Cockpit: Connect to EV3 Brick".'
+			);
 		}
 
 		const snapshot = brickRegistry.getSnapshot(brickId);
 		if (snapshot) {
-			throw new Error(`Brick "${brickId}" is currently ${snapshot.status.toLowerCase()}.`);
+			throw new FsAvailabilityError(
+				'BRICK_UNAVAILABLE',
+				`Brick "${brickId}" is currently ${snapshot.status.toLowerCase()}.`
+			);
 		}
 
-		throw new Error(`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`);
+		throw new FsAvailabilityError(
+			'BRICK_NOT_REGISTERED',
+			`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`
+		);
 	});
 
 	const toTransportOverrides = (profile?: BrickConnectionProfile): TransportConfigOverrides | undefined => {
@@ -192,24 +209,35 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const rebuildRuntime = () => {
-		const config = readSchedulerConfig();
-		const featureConfig = readFeatureConfig();
-		logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
-		void closeAllBrickSessions();
-		brickRegistry.markAllUnavailable('Runtime reinitialized.');
-		sessionManager.clearProgramSession();
-		treeProvider.refreshThrottled();
+		const correlationId = nextCorrelationId();
+		withTimingSync(
+			perfLogger,
+			'activate.rebuild-runtime',
+			() => {
+				const config = readSchedulerConfig();
+				const featureConfig = readFeatureConfig();
+				logger = new OutputChannelLogger((line) => output.appendLine(line), config.logLevel);
+				void closeAllBrickSessions();
+				brickRegistry.markAllUnavailable('Runtime reinitialized.');
+				sessionManager.clearProgramSession();
+				treeProvider.refreshThrottled();
 
-		logger.info('Scheduler runtime (re)initialized', {
-			timeoutMs: config.timeoutMs,
-			logLevel: config.logLevel,
-			retry: config.defaultRetryPolicy,
-			compatProfileMode: featureConfig.compatProfileMode,
-			fsMode: featureConfig.fs.mode
-		});
+				logger.info('Scheduler runtime (re)initialized', {
+					timeoutMs: config.timeoutMs,
+					logLevel: config.logLevel,
+					retry: config.defaultRetryPolicy,
+					compatProfileMode: featureConfig.compatProfileMode,
+					fsMode: featureConfig.fs.mode
+				});
+			},
+			{
+				correlationId
+			}
+		);
 	};
 
 	rebuildRuntime();
+	const stopEventLoopMonitor = startEventLoopMonitor(perfLogger);
 
 	const resolvers = createBrickResolvers({ brickRegistry, getLogger: () => logger });
 	const {
@@ -703,6 +731,9 @@ export function activate(context: vscode.ExtensionContext) {
 		treeStatePersistence,
 		fsChangeSubscription,
 		busyIndicatorSubscription,
+		{
+			dispose: () => stopEventLoopMonitor()
+		},
 		treeProvider,
 		output,
 		{
