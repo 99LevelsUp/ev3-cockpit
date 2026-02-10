@@ -69,3 +69,128 @@ Last updated: 2026-02-10
 - Replaced test-host runner dependency path that used `shell: true`:
   - `src/testHost/runTestHost.ts` now runs VS Code test host via
     `downloadAndUnzipVSCode(...) + spawn(executable, args, { shell: false })`
+
+---
+
+# Implementation Plan — Phase 5+ (based on regenerated architecture documentation)
+
+Last updated: 2026-02-10
+
+## Summary of findings
+
+Architecture documentation regenerated (30 files, ~330 KB). Key findings:
+- **70 production modules**, **12,729 LOC** total
+- **50 unit test files** (5,114 LOC) + **4 integration test files** + **2 hardware test files**
+- **~71% modules have direct unit tests**, ~29% tested indirectly or untested
+- **No circular dependencies** detected
+- **Max import depth: 6** (extension → commands → device → protocol → scheduler → transport)
+- **Bundle limit: 256 KB** enforced
+
+## Phase 5: Test coverage expansion
+
+### 5.1 HIGH priority (complex logic, no direct tests)
+- [ ] `activation/brickResolvers.ts` (268 LOC) — 12 resolver methods, error-return pattern, critical for command dispatch
+- [ ] `commands/browseCommands.ts` (476 LOC) — interactive QuickPick browser, upload/download, tree operations
+- [ ] `commands/batchCommands.ts` (286 LOC) — multi-brick batch operations, retry logic
+- [ ] `commands/programControlCommands.ts` (175 LOC) — run/stop/restart lifecycle
+
+### 5.2 MEDIUM priority (config/utility, moderate risk)
+- [ ] `activation/configWatcher.ts` (92 LOC) — reconnect prompt logic
+- [ ] `config/schedulerConfig.ts` (53 LOC) — config reading + sanitization
+- [ ] `config/featureConfig.ts` (34 LOC) — FS mode + safe roots config
+- [ ] `transport/bluetoothPortSelection.ts` (120 LOC) — EV3-priority port ranking strategy
+- [ ] `diagnostics/perfTiming.ts` (112 LOC) — timing wrappers, event loop monitor
+
+### 5.3 LOW priority (thin wrappers, type-only, or tested via integration)
+- [ ] `commands/deployScan.ts` (126 LOC) — tested indirectly via deploy tests
+- [ ] `transport/mockTransportAdapter.ts` (46 LOC) — used extensively in tests themselves
+- [ ] `commands/deployTypes.ts` (71 LOC) — type definitions only
+- [ ] `protocol/commandSendLike.ts` (6 LOC) — interface only
+
+## Phase 6: Code cleanup & refactoring
+
+### 6.1 Error handling improvements
+- [ ] Replace string-based error detection in `deployResilience.ts` with typed error codes
+      — Currently uses regex on error messages; fragile across refactors
+- [ ] Create shared `ExtensionError` base class for `SchedulerError`, `Ev3SystemCommandError`, `RemoteFsPathError`, `PathPolicyError`, `FsAvailabilityError`
+      — Enables `instanceof` checking across layers without string matching
+
+### 6.2 Large file decomposition
+- [ ] Split `commands/deployCommands.ts` (1177 LOC):
+      — Extract deploy planning phase into `commands/deployPlan.ts`
+      — Extract atomic deploy logic into `commands/deployAtomic.ts`
+      — Keep `deployCommands.ts` as orchestrator
+- [ ] Extract cache logic from `ui/brickTreeProvider.ts` (755 LOC) into `ui/treeCache.ts`
+      — LRU cache, TTL management, hit/miss tracking as standalone class
+
+### 6.3 API surface cleanup
+- [ ] Audit internal-only exports in command modules (`*Options`, `*Registrations` interfaces)
+      — Some are exported but only used internally; reduce public API surface
+- [ ] Consolidate config readers (`readSchedulerConfig`, `readFeatureConfig`, `readDeployConfig`)
+      — Consider single `ConfigService` class or unified `readAllConfig()` function
+
+## Phase 7: Performance optimization
+
+### 7.1 Protocol-level improvements (MEDIUM ROI)
+- [ ] Investigate parallel file uploads in deploy (currently sequential)
+      — CommandScheduler supports multiple lanes; could pipeline uploads
+      — Risk: EV3 firmware may not handle concurrent file ops well
+- [ ] Chunk size auto-tuning based on measured throughput per transport
+      — Current: static per capability profile (768-1000 bytes)
+      — Proposal: start conservative, increase if no errors
+
+### 7.2 UI responsiveness (LOW ROI, already good)
+- [ ] Predictive directory caching (prefetch children of expanded nodes)
+      — Current: lazy load on expand; cache TTL 900ms root / 2200ms deep
+      — Minimal benefit since TTL is already short
+
+## Phase 8: Validate & release
+
+- [ ] `npm run compile`
+- [ ] `npm run lint`
+- [ ] `npm run test:ci`
+- [ ] `npm run test:ci:release`
+- [ ] Commit and push
+
+---
+
+# Execution Checklist (Phase 5+)
+
+Last updated: 2026-02-10
+
+Validation rule (mandatory):
+- [ ] After EACH completed step below, run this full validation sequence:
+      `npm run compile`
+      `npm run lint`
+      `npm run test:unit`
+      `npm run test:host`
+      `npm run test:hw`
+      `npm run test:hw:matrix`
+      `npm run test:hw:all`
+      `npm run test:all`
+      `npm run test:ci`
+      `npm run test:ci:release`
+      and only then continue to the next step.
+- [ ] After successful validation of EACH completed step below:
+      create commit and push immediately (`git add ...` + `git commit ...` + `git push`).
+
+## Checklist
+
+1. [x] Add test scaffold for `activation/brickResolvers.ts` (shared fixtures + mocks)
+2. [ ] Add success-path tests for `activation/brickResolvers.ts`
+3. [ ] Add error-path tests for `activation/brickResolvers.ts` (error-return pattern)
+4. [ ] Build interaction test harness for `commands/browseCommands.ts` (QuickPick/input stubs)
+5. [ ] Add upload/download/tree operation tests for `commands/browseCommands.ts`
+6. [ ] Add retry + partial-failure tests for `commands/batchCommands.ts`
+7. [ ] Add run/stop/restart lifecycle tests for `commands/programControlCommands.ts`
+8. [ ] Add reconnect prompt tests for `activation/configWatcher.ts`
+9. [ ] Add sanitization/default tests for `config/schedulerConfig.ts`
+10. [ ] Add FS mode + safe roots tests for `config/featureConfig.ts`
+11. [ ] Add EV3-priority port ranking tests for `transport/bluetoothPortSelection.ts`
+12. [ ] Add timing wrapper + event-loop monitor tests for `diagnostics/perfTiming.ts`
+13. [ ] Replace string-based error detection in `deployResilience.ts` with typed error codes
+14. [ ] Introduce shared `ExtensionError` base class and map existing extension errors to it
+15. [ ] Extract deploy planning from `commands/deployCommands.ts` into `commands/deployPlan.ts`
+16. [ ] Extract atomic deploy flow from `commands/deployCommands.ts` into `commands/deployAtomic.ts`
+17. [ ] Extract tree cache from `ui/brickTreeProvider.ts` into `ui/treeCache.ts` (TTL/LRU/hit-miss)
+18. [ ] Final consistency pass: verify all step commits are already pushed and tracker state is up to date
