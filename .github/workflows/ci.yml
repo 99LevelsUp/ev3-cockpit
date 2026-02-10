@@ -7,9 +7,10 @@ on:
   pull_request:
 
 jobs:
-  lint_unit:
-    name: Lint + Unit
+  test_ci:
+    name: Compile + Lint + Unit + Host
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,30 +24,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run lint
-        run: npm run lint
-
-      - name: Run unit tests
-        run: npm test
-
-  host:
-    name: Extension Host
-    runs-on: windows-latest
-    needs:
-      - lint_unit
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run extension-host tests
-        run: npm run test:host
-
+      - name: Run CI test suite
+        run: npm run test:ci
