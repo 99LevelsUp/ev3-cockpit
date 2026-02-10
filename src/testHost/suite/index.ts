@@ -57,7 +57,9 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.setBricksTreeFilter'));
 	assert.ok(commands.includes('ev3-cockpit.clearBricksTreeFilter'));
 	assert.ok(commands.includes('ev3-cockpit.reconnectReadyBricks'));
+	assert.ok(commands.includes('ev3-cockpit.previewWorkspaceDeployToReadyBricks'));
 	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceToReadyBricks'));
+	assert.ok(commands.includes('ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks'));
 	assert.ok(commands.includes('ev3-cockpit.toggleFavoriteBrick'));
 	assert.ok(commands.includes('ev3-cockpit.uploadToBrickFolder'));
 	assert.ok(commands.includes('ev3-cockpit.deleteRemoteEntryFromTree'));
@@ -590,11 +592,52 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 					await vscode.workspace.fs.readDirectory(brickARootUri);
 					await vscode.workspace.fs.readDirectory(brickBRootUri);
 
+					await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToReadyBricks', [brickAId]);
+					await assert.rejects(
+						async () => {
+							await vscode.workspace.fs.readFile(brickAProgramUri);
+						},
+						(error: unknown) => {
+							const message = error instanceof Error ? error.message : String(error);
+							assert.match(message, /not found|path not found|status|file/i);
+							return true;
+						}
+					);
+					await assert.rejects(
+						async () => {
+							await vscode.workspace.fs.readFile(brickBProgramUri);
+						},
+						(error: unknown) => {
+							const message = error instanceof Error ? error.message : String(error);
+							assert.match(message, /not found|path not found|status|file/i);
+							return true;
+						}
+					);
+
 					await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks', [brickAId, brickBId]);
 					const brickAProgram = await vscode.workspace.fs.readFile(brickAProgramUri);
 					const brickBProgram = await vscode.workspace.fs.readFile(brickBProgramUri);
 					assert.deepEqual(Array.from(brickAProgram), [0x21, 0x22, 0x23, 0x24]);
 					assert.deepEqual(Array.from(brickBProgram), [0x21, 0x22, 0x23, 0x24]);
+
+					await fs.writeFile(localProgramPath, Buffer.from([0x31, 0x32, 0x33, 0x34]));
+					const runCountABefore = fakeServerA.getRunProgramCommandCount();
+					const runCountBBefore = fakeServerB.getRunProgramCommandCount();
+					await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks', [brickAId]);
+					assert.ok(
+						fakeServerA.getRunProgramCommandCount() > runCountABefore,
+						'Expected selected batch deploy+run to run on brick A.'
+					);
+					assert.equal(
+						fakeServerB.getRunProgramCommandCount(),
+						runCountBBefore,
+						'Expected selected batch deploy+run to not run on brick B.'
+					);
+
+					const brickAProgramAfterRun = await vscode.workspace.fs.readFile(brickAProgramUri);
+					const brickBProgramAfterRun = await vscode.workspace.fs.readFile(brickBProgramUri);
+					assert.deepEqual(Array.from(brickAProgramAfterRun), [0x31, 0x32, 0x33, 0x34]);
+					assert.deepEqual(Array.from(brickBProgramAfterRun), [0x21, 0x22, 0x23, 0x24]);
 
 					await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', {
 						kind: 'brick',
@@ -814,7 +857,9 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.setBricksTreeFilter', 'host-batch');
 			await vscode.commands.executeCommand('ev3-cockpit.clearBricksTreeFilter');
 			await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks');
+			await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToReadyBricks');
 			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToReadyBricks');
+			await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks');
 			await vscode.commands.executeCommand('ev3-cockpit.toggleFavoriteBrick');
 			await vscode.commands.executeCommand('ev3-cockpit.uploadToBrickFolder');
 			await vscode.commands.executeCommand('ev3-cockpit.deleteRemoteEntryFromTree');

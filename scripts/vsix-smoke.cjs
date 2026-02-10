@@ -49,6 +49,7 @@ async function main() {
 	const pkgJsonPath = path.resolve(root, 'package.json');
 	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
 	const extensionId = `${pkg.publisher}.${pkg.name}`;
+	const vscodeVersion = process.env.VSCODE_TEST_VERSION?.trim() || '1.109.0';
 	const vsixPath = resolveVsixPath();
 	if (!fs.existsSync(vsixPath)) {
 		throw new Error(`VSIX package not found: ${vsixPath}. Run "npm run package:vsix" first.`);
@@ -61,7 +62,7 @@ async function main() {
 	await fsp.mkdir(extensionsDir, { recursive: true });
 
 	try {
-		const vscodeExecutablePath = await downloadAndUnzipVSCode();
+		const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
 		const cliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePath);
 
 		await spawnCapture(

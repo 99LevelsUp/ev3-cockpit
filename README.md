@@ -29,7 +29,7 @@ It is an extension that runs inside Visual Studio Code and adds EV3-specific com
 - Run, stop, restart remote executables (currently `.rbf`).
 - Trigger Emergency Stop.
 - Store per-brick connection profiles for targeted reconnect.
-- Run batch actions for ready bricks (batch reconnect, batch workspace deploy).
+- Run batch actions for ready bricks (batch reconnect, batch workspace preview/deploy/deploy+run).
 
 ## Explorer Tree Workflow (User UI)
 

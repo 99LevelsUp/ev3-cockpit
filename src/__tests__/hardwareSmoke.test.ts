@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import {
+	resolveBluetoothStrictModeFromEnv,
 	resolveEmergencyStopCheckFromEnv,
 	resolveReconnectDriverDropCheckFromEnv,
 	resolveReconnectGlitchCheckFromEnv,
@@ -139,6 +140,15 @@ test('hardware smoke reconnect driver-drop check can be enabled by env', () => {
 	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'true' }), true);
 });
 
+test('hardware smoke bluetooth strict mode is disabled by default', () => {
+	assert.equal(resolveBluetoothStrictModeFromEnv({}), false);
+});
+
+test('hardware smoke bluetooth strict mode can be enabled by env', () => {
+	assert.equal(resolveBluetoothStrictModeFromEnv({ EV3_COCKPIT_HW_BT_STRICT: '1' }), true);
+	assert.equal(resolveBluetoothStrictModeFromEnv({ EV3_COCKPIT_HW_BT_STRICT: 'true' }), true);
+});
+
 test('hardware smoke report path defaults to artifacts/hw/hardware-smoke.json', () => {
 	const reportPath = resolveHardwareSmokeReportPath({});
 	assert.match(reportPath, /artifacts[\\/]+hw[\\/]+hardware-smoke\.json$/i);
@@ -159,6 +169,7 @@ test('hardware smoke report builder computes summary counters', () => {
 			reconnectCheckEnabled: true,
 			reconnectGlitchCheckEnabled: false,
 			reconnectDriverDropCheckEnabled: true,
+			bluetoothStrictModeEnabled: true,
 			warning: undefined,
 			results: [
 				{ transport: 'usb', status: 'PASS', reason: 'ok' },

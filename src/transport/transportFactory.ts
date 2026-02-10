@@ -7,8 +7,10 @@ import { TcpAdapter } from './tcpAdapter';
 import { BluetoothSppAdapter } from './bluetoothSppAdapter';
 import { buildBluetoothPortSelectionPlans, BluetoothPortSelectionPlan } from './bluetoothPortSelection';
 import {
+	classifyBluetoothFailure,
 	isLikelyDynamicBluetoothAvailabilityFailure,
-	isLikelyTransientBluetoothFailure
+	isLikelyTransientBluetoothFailure,
+	summarizeBluetoothFailures
 } from './bluetoothFailure';
 import { UsbHidAdapter } from './usbHidAdapter';
 import { listSerialCandidates, listUsbHidCandidates } from './discovery';
@@ -163,8 +165,21 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 				await sleep(this.rediscoveryDelayMs);
 			}
 		}
+		const summary = summarizeBluetoothFailures(failures);
+		this.logger.warn('Bluetooth auto-port failed after exhausting candidates', {
+			totalFailures: summary.total,
+			primaryPhase: summary.primaryPhase,
+			phaseBreakdown: summary.byPhase,
+			likelyTransientCount: summary.likelyTransientCount,
+			likelyDynamicAvailabilityCount: summary.likelyDynamicAvailabilityCount,
+			windowsCodes: summary.windowsCodes
+		});
 
-		throw new Error(`Bluetooth auto-port failed. ${failures.join(' | ')}`);
+		const windowsCodes =
+			summary.windowsCodes.length > 0 ? `codes=${summary.windowsCodes.join(',')}` : 'codes=n/a';
+		throw new Error(
+			`Bluetooth auto-port failed (${windowsCodes}, phase=${summary.primaryPhase}, transient=${summary.likelyTransientCount}/${summary.total}, dynamic=${summary.likelyDynamicAvailabilityCount}/${summary.total}). ${failures.join(' | ')}`
+		);
 	}
 
 	public async close(): Promise<void> {
@@ -253,15 +268,24 @@ class BluetoothAutoPortAdapter implements TransportAdapter {
 						return failures;
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
+						const classification = classifyBluetoothFailure(message, plan.name);
 						this.logger.info('Bluetooth auto-port candidate attempt failed', {
 							pass,
 							dtr,
 							strategy: plan.name,
 							port,
 							attempt,
-							message
+							message,
+							phase: classification.phase,
+							windowsCode: classification.windowsCode,
+							likelyTransient: classification.likelyTransient,
+							likelyDynamicAvailability: classification.likelyDynamicAvailability
 						});
-						failures.push(`${plan.name}/${port}#${attempt}(dtr=${dtr}): ${message}`);
+						failures.push(
+							`${plan.name}/${port}#${attempt}(dtr=${dtr},phase=${classification.phase}${
+								classification.windowsCode !== undefined ? `,code=${classification.windowsCode}` : ''
+							}): ${message}`
+						);
 						await adapter.close().catch(() => undefined);
 						const transient = isLikelyTransientBluetoothFailure(message, plan.name);
 						if (!transient) {

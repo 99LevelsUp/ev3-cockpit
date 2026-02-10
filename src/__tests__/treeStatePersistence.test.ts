@@ -154,6 +154,11 @@ test('treeStatePersistence restores saved expansion and selection on tree refres
 		const afterCollapse = updates[updates.length - 1];
 		assert.deepEqual(afterCollapse.expanded, ['brick:brick-1']);
 
+		selectionEvent.fire({ selection: [] });
+		await sleep(160);
+		const afterClearSelection = updates[updates.length - 1];
+		assert.equal(afterClearSelection.selected, undefined);
+
 		handle.dispose();
 	});
 });

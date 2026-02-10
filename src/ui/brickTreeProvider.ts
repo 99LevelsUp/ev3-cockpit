@@ -324,6 +324,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 						this.nodesById.delete(getBrickTreeNodeId(root));
 					}
 					this.rootNodesByBrickId.delete(brickId);
+					this.pruneBrickChildNodes(brickId);
 					this.invalidateBrickCache(brickId);
 				}
 			}
@@ -659,6 +660,9 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			existing.lastOperationAtIso = snapshot.lastOperationAtIso;
 			existing.busyCommandCount = snapshot.busyCommandCount;
 			existing.schedulerState = snapshot.schedulerState;
+			if (existing.status !== 'READY') {
+				this.pruneBrickChildNodes(existing.brickId);
+			}
 			this.nodesById.set(getBrickTreeNodeId(existing), existing);
 			return existing;
 		}
@@ -680,7 +684,27 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		};
 		this.rootNodesByBrickId.set(snapshot.brickId, created);
 		this.nodesById.set(getBrickTreeNodeId(created), created);
+		if (created.status !== 'READY') {
+			this.pruneBrickChildNodes(created.brickId);
+		}
 		return created;
+	}
+
+	private pruneBrickChildNodes(brickId: string): void {
+		for (const [key, node] of this.directoryNodesByPath.entries()) {
+			if (node.brickId !== brickId) {
+				continue;
+			}
+			this.directoryNodesByPath.delete(key);
+			this.nodesById.delete(getBrickTreeNodeId(node));
+		}
+		for (const [key, node] of this.fileNodesByPath.entries()) {
+			if (node.brickId !== brickId) {
+				continue;
+			}
+			this.fileNodesByPath.delete(key);
+			this.nodesById.delete(getBrickTreeNodeId(node));
+		}
 	}
 
 	private upsertDirectoryNode(brickId: string, name: string, remotePath: string): BrickDirectoryNode {

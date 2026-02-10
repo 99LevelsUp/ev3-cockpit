@@ -7,6 +7,7 @@ async function main(): Promise<void> {
 	const extensionDevelopmentPath = path.resolve(__dirname, '..', '..');
 	const extensionTestsPath = path.resolve(__dirname, 'suite', 'index.js');
 	const workspacePath = path.resolve(__dirname, '..', '..', 'test-fixtures', 'empty-workspace');
+	const vscodeVersion = process.env.VSCODE_TEST_VERSION?.trim() || '1.109.0';
 	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-testhost-'));
 	const userDataDir = path.join(tempRoot, 'user-data');
 	const extensionsDir = path.join(tempRoot, 'extensions');
@@ -17,6 +18,7 @@ async function main(): Promise<void> {
 		await runTests({
 			extensionDevelopmentPath,
 			extensionTestsPath,
+			version: vscodeVersion,
 			launchArgs: [
 				workspacePath,
 				'--disable-extensions',

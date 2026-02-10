@@ -10,7 +10,9 @@ interface BatchCommandOptions {
 
 interface BatchCommandRegistrations {
 	reconnectReadyBricks: vscode.Disposable;
+	previewWorkspaceDeployToReadyBricks: vscode.Disposable;
 	deployWorkspaceToReadyBricks: vscode.Disposable;
+	deployWorkspaceAndRunExecutableToReadyBricks: vscode.Disposable;
 }
 
 interface BatchFailedEntry {
@@ -226,8 +228,84 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		}
 	);
 
+	const previewWorkspaceDeployToReadyBricks = vscode.commands.registerCommand(
+		'ev3-cockpit.previewWorkspaceDeployToReadyBricks',
+		async (arg?: unknown) => {
+			const logger = options.getLogger();
+			const selectedBrickIds = await selectReadyBrickIds(arg, 'Preview Workspace Deploy To Ready Bricks');
+			if (selectedBrickIds.length === 0) {
+				vscode.window.showInformationMessage('No ready bricks available for batch workspace preview.');
+				return;
+			}
+
+			const result = await runBatchWithProgress(
+				selectedBrickIds,
+				'Batch preview workspace deploy to bricks',
+				async (brickId) => {
+					try {
+						await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick', brickId);
+					} catch (error) {
+						logger.warn('Batch workspace deploy preview failed for brick', {
+							brickId,
+							error: toErrorMessage(error)
+						});
+						throw error;
+					}
+				}
+			);
+
+			const suffix = result.cancelled ? ' (cancelled)' : '';
+			await presentBatchResult(
+				'preview-workspace-ready-bricks',
+				`Batch workspace deploy preview finished: ok=${result.completed}, failed=${result.failed}${suffix}.`,
+				result,
+				selectedBrickIds,
+				'ev3-cockpit.previewWorkspaceDeployToReadyBricks'
+			);
+		}
+	);
+
+	const deployWorkspaceAndRunExecutableToReadyBricks = vscode.commands.registerCommand(
+		'ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks',
+		async (arg?: unknown) => {
+			const logger = options.getLogger();
+			const selectedBrickIds = await selectReadyBrickIds(arg, 'Deploy Workspace + Run To Ready Bricks');
+			if (selectedBrickIds.length === 0) {
+				vscode.window.showInformationMessage('No ready bricks available for batch workspace deploy+run.');
+				return;
+			}
+
+			const result = await runBatchWithProgress(
+				selectedBrickIds,
+				'Batch deploy workspace + run to bricks',
+				async (brickId) => {
+					try {
+						await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick', brickId);
+					} catch (error) {
+						logger.warn('Batch workspace deploy+run failed for brick', {
+							brickId,
+							error: toErrorMessage(error)
+						});
+						throw error;
+					}
+				}
+			);
+
+			const suffix = result.cancelled ? ' (cancelled)' : '';
+			await presentBatchResult(
+				'deploy-workspace-run-ready-bricks',
+				`Batch workspace deploy+run finished: ok=${result.completed}, failed=${result.failed}${suffix}.`,
+				result,
+				selectedBrickIds,
+				'ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks'
+			);
+		}
+	);
+
 	return {
 		reconnectReadyBricks,
-		deployWorkspaceToReadyBricks
+		previewWorkspaceDeployToReadyBricks,
+		deployWorkspaceToReadyBricks,
+		deployWorkspaceAndRunExecutableToReadyBricks
 	};
 }

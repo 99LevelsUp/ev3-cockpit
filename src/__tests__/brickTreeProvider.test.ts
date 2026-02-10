@@ -15,6 +15,7 @@ async function withMockedProvider<T>(
 				command?: { command: string };
 			};
 			refreshDirectory: (brickId: string, remotePath: string) => void;
+			getNodeById: (nodeId: string) => unknown;
 		};
 	}) => Promise<T>
 ): Promise<T> {
@@ -44,6 +45,7 @@ async function withMockedProvider<T>(
 					command?: { command: string };
 				};
 				refreshDirectory: (brickId: string, remotePath: string) => void;
+				getNodeById: (nodeId: string) => unknown;
 			};
 		};
 		return await run(providerModule);
@@ -268,10 +270,12 @@ test('BrickTreeProvider returns unavailable message for expanded directory after
 		assert.equal((children[0] as { kind: string }).kind, 'directory');
 
 		unavailable = true;
+		await provider.getChildren();
 		const afterDisconnect = await provider.getChildren(children[0]);
 		assert.equal(afterDisconnect.length, 1);
 		assert.equal((afterDisconnect[0] as { kind: string }).kind, 'message');
 		assert.match((afterDisconnect[0] as { label: string }).label, /Brick unavailable/);
+		assert.equal(provider.getNodeById('dir:usb-auto:/home/root/lms2012/prjs/Demo'), undefined);
 	});
 });
 

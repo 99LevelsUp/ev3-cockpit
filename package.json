@@ -4,6 +4,14 @@
   "description": "Connect and control LEGO Mindstorms EV3 from VS Code",
   "version": "0.0.1",
   "publisher": "ev3-cockpit",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/99LevelsUp/ev3-cockpit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/99LevelsUp/ev3-cockpit/issues"
+  },
+  "homepage": "https://github.com/99LevelsUp/ev3-cockpit#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -141,8 +149,16 @@
         "title": "EV3 Cockpit: Reconnect Ready Bricks"
       },
       {
+        "command": "ev3-cockpit.previewWorkspaceDeployToReadyBricks",
+        "title": "EV3 Cockpit: Preview Workspace Deploy to Ready Bricks"
+      },
+      {
         "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
         "title": "EV3 Cockpit: Deploy Workspace to Ready Bricks"
+      },
+      {
+        "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks",
+        "title": "EV3 Cockpit: Deploy Workspace and Run on Ready Bricks"
       },
       {
         "command": "ev3-cockpit.toggleFavoriteBrick",
@@ -197,14 +213,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
+          "command": "ev3-cockpit.previewWorkspaceDeployToReadyBricks",
           "when": "view == ev3-cockpit.bricksView",
           "group": "navigation@3"
         },
         {
+          "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks",
+          "when": "view == ev3-cockpit.bricksView",
+          "group": "navigation@5"
+        },
+        {
           "command": "ev3-cockpit.toggleFavoriteBrick",
           "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
-          "group": "navigation@4"
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [

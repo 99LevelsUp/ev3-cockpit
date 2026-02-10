@@ -49,6 +49,8 @@ export function createTreeStatePersistence(
 	const rememberSelectionState = (selection: readonly BrickTreeNode[]): void => {
 		const element = selection[0];
 		if (!element || element.kind === 'message') {
+			selectedNodeId = undefined;
+			schedulePersist();
 			return;
 		}
 		selectedNodeId = getBrickTreeNodeId(element);

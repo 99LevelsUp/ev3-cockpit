@@ -40,6 +40,7 @@ export interface HardwareSmokeReport {
 	reconnectCheckEnabled: boolean;
 	reconnectGlitchCheckEnabled: boolean;
 	reconnectDriverDropCheckEnabled: boolean;
+	bluetoothStrictModeEnabled: boolean;
 	warning?: string;
 	results: HardwareCaseResult[];
 	summary: HardwareSummary;
@@ -92,6 +93,7 @@ const DEFAULT_EMERGENCY_STOP_CHECK = true;
 const DEFAULT_RECONNECT_CHECK = false;
 const DEFAULT_RECONNECT_GLITCH_CHECK = true;
 const DEFAULT_RECONNECT_DRIVER_DROP_CHECK = false;
+const DEFAULT_BT_STRICT = false;
 const DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS = 20_000;
 const DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS = 500;
 const SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
@@ -337,6 +339,22 @@ export function resolveReconnectDriverDropCheckFromEnv(env: NodeJS.ProcessEnv = 
 	return DEFAULT_RECONNECT_DRIVER_DROP_CHECK;
 }
 
+export function resolveBluetoothStrictModeFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+	const raw = env.EV3_COCKPIT_HW_BT_STRICT?.trim();
+	if (!raw) {
+		return DEFAULT_BT_STRICT;
+	}
+
+	const normalized = raw.toLowerCase();
+	if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+		return true;
+	}
+	if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+		return false;
+	}
+	return DEFAULT_BT_STRICT;
+}
+
 export function isLikelyUnavailableError(transport: TransportKind, error: unknown): boolean {
 	const message = errorMessage(error);
 	return UNAVAILABLE_PATTERNS[transport].some((pattern) => pattern.test(message));
@@ -409,6 +427,7 @@ export function buildHardwareSmokeReport(
 		reconnectCheckEnabled: suite.reconnectCheckEnabled,
 		reconnectGlitchCheckEnabled: suite.reconnectGlitchCheckEnabled,
 		reconnectDriverDropCheckEnabled: suite.reconnectDriverDropCheckEnabled,
+		bluetoothStrictModeEnabled: suite.bluetoothStrictModeEnabled,
 		warning: suite.warning,
 		results: suite.results,
 		summary: summarizeResults(suite.results),
@@ -1206,7 +1225,8 @@ async function runBluetoothCase(
 	emergencyStopCheckEnabled: boolean,
 	reconnectCheckEnabled: boolean,
 	reconnectGlitchCheckEnabled: boolean,
-	reconnectDriverDropCheckEnabled: boolean
+	reconnectDriverDropCheckEnabled: boolean,
+	bluetoothStrictModeEnabled: boolean
 ): Promise<HardwareCaseResult> {
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS', DEFAULT_BT_PROBE_TIMEOUT_MS, 50);
 	const baudRate = envNumber('EV3_COCKPIT_HW_BT_BAUD_RATE', 115200, 300);
@@ -1238,6 +1258,13 @@ async function runBluetoothCase(
 	const autoPorts = preferredPort ? [] : collectBluetoothPorts(await listSerialCandidates(), preferredSerial);
 	const ports = preferredPort ? [preferredPort] : autoPorts;
 	if (ports.length === 0) {
+		if (bluetoothStrictModeEnabled) {
+			return {
+				transport: 'bluetooth',
+				status: 'FAIL',
+				reason: 'Bluetooth strict mode: no COM candidates found.'
+			};
+		}
 		return {
 			transport: 'bluetooth',
 			status: 'SKIP',
@@ -1310,6 +1337,13 @@ async function runBluetoothCase(
 						reconnectDriverDropPollMs
 					);
 					if (driverDropCheck.skipped) {
+						if (bluetoothStrictModeEnabled) {
+							return {
+								transport: 'bluetooth',
+								status: 'FAIL',
+								reason: `Bluetooth strict mode: driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+							};
+						}
 						return {
 							transport: 'bluetooth',
 							status: 'SKIP',
@@ -1376,6 +1410,13 @@ async function runBluetoothCase(
 	}
 
 	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('bluetooth', message))) {
+		if (bluetoothStrictModeEnabled) {
+			return {
+				transport: 'bluetooth',
+				status: 'FAIL',
+				reason: `Bluetooth strict mode: unavailable failures observed (${failures[0]}).`
+			};
+		}
 		return {
 			transport: 'bluetooth',
 			status: 'SKIP',
@@ -1397,6 +1438,7 @@ async function runHardwareSuite(): Promise<{
 	reconnectCheckEnabled: boolean;
 	reconnectGlitchCheckEnabled: boolean;
 	reconnectDriverDropCheckEnabled: boolean;
+	bluetoothStrictModeEnabled: boolean;
 	warning?: string;
 }> {
 	const results: HardwareCaseResult[] = [];
@@ -1406,6 +1448,7 @@ async function runHardwareSuite(): Promise<{
 	const reconnectCheckEnabled = resolveReconnectCheckFromEnv();
 	const reconnectGlitchCheckEnabled = resolveReconnectGlitchCheckFromEnv();
 	const reconnectDriverDropCheckEnabled = resolveReconnectDriverDropCheckFromEnv();
+	const bluetoothStrictModeEnabled = resolveBluetoothStrictModeFromEnv();
 
 	for (const transport of selection.transports) {
 		if (transport === 'usb') {
@@ -1434,7 +1477,8 @@ async function runHardwareSuite(): Promise<{
 					emergencyStopCheckEnabled,
 					reconnectCheckEnabled,
 					reconnectGlitchCheckEnabled,
-					reconnectDriverDropCheckEnabled
+					reconnectDriverDropCheckEnabled,
+					bluetoothStrictModeEnabled
 				)
 			);
 		}
@@ -1447,6 +1491,7 @@ async function runHardwareSuite(): Promise<{
 		reconnectCheckEnabled,
 		reconnectGlitchCheckEnabled,
 		reconnectDriverDropCheckEnabled,
+		bluetoothStrictModeEnabled,
 		warning: selection.warning
 	};
 }
@@ -1458,6 +1503,7 @@ function printSummary(
 	reconnectCheckEnabled: boolean,
 	reconnectGlitchCheckEnabled: boolean,
 	reconnectDriverDropCheckEnabled: boolean,
+	bluetoothStrictModeEnabled: boolean,
 	warning?: string
 ): void {
 	console.log(`[HW] Running hardware smoke tests in order: ${selectedTransports.join(' -> ')}`);
@@ -1469,6 +1515,7 @@ function printSummary(
 	console.log(
 		`[HW] Reconnect driver-drop check: ${reconnectCheckEnabled ? (reconnectDriverDropCheckEnabled ? 'enabled' : 'disabled') : 'disabled'}`
 	);
+	console.log(`[HW] Bluetooth strict mode: ${bluetoothStrictModeEnabled ? 'enabled' : 'disabled'}`);
 	if (warning) {
 		console.log(`[HW] Selection warning: ${warning}`);
 	}
@@ -1489,6 +1536,7 @@ export async function main(): Promise<number> {
 		suite.reconnectCheckEnabled,
 		suite.reconnectGlitchCheckEnabled,
 		suite.reconnectDriverDropCheckEnabled,
+		suite.bluetoothStrictModeEnabled,
 		suite.warning
 	);
 	const exitCode = suite.results.some((entry) => entry.status === 'FAIL') ? 1 : 0;

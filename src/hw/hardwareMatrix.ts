@@ -39,6 +39,7 @@ interface MatrixReport {
 	generatedAt: string;
 	nodeVersion: string;
 	transports: string;
+	bluetoothStrictMode: boolean;
 	scenarios: MatrixScenarioResult[];
 	totals: {
 		pass: number;
@@ -237,6 +238,7 @@ function resolveReportPath(): string {
 
 export async function runHardwareMatrix(): Promise<{ report: MatrixReport; exitCode: number; reportPath: string }> {
 	const selectedTransports = process.env.EV3_COCKPIT_HW_TRANSPORTS?.trim() || 'usb,tcp,bluetooth';
+	const bluetoothStrictMode = /^(1|true|yes|on)$/i.test(process.env.EV3_COCKPIT_HW_BT_STRICT?.trim() ?? '');
 	const baseEnv: NodeJS.ProcessEnv = {
 		...process.env,
 		EV3_COCKPIT_HW_TRANSPORTS: selectedTransports
@@ -277,6 +279,7 @@ export async function runHardwareMatrix(): Promise<{ report: MatrixReport; exitC
 		generatedAt: new Date().toISOString(),
 		nodeVersion: process.version,
 		transports: selectedTransports,
+		bluetoothStrictMode,
 		scenarios: results,
 		totals
 	};

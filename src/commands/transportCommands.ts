@@ -7,6 +7,7 @@ import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
 import { listSerialCandidates, listUsbHidCandidates } from '../transport/discovery';
+import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
 
@@ -98,17 +99,26 @@ async function runTransportProbe(
 		};
 	} catch (error) {
 		const message = toErrorMessage(error);
+		const diagnosticMessage = (() => {
+			if (mode !== 'bluetooth') {
+				return message;
+			}
+			const classification = classifyBluetoothFailure(message);
+			return `${message} [phase=${classification.phase}${
+				classification.windowsCode !== undefined ? `, code=${classification.windowsCode}` : ''
+			}]`;
+		})();
 		if (isTransportLikelyUnavailable(message)) {
 			return {
 				mode,
 				status: 'SKIP',
-				message
+				message: diagnosticMessage
 			};
 		}
 		return {
 			mode,
 			status: 'FAIL',
-			message
+			message: diagnosticMessage
 		};
 	} finally {
 		await probeClient?.close().catch(() => undefined);
