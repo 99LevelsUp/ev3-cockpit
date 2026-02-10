@@ -694,10 +694,12 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run package",
     "clean": "node -e \"const fs=require('node:fs'); for (const p of ['out','.vscode-test']) fs.rmSync(p,{recursive:true,force:true});\"",
     "compile": "tsc -p ./",
+    "compile:bundle": "tsc -p ./ --noEmit && node esbuild.mjs",
     "watch": "tsc -watch -p ./",
+    "package": "npm run compile:bundle -- --production",
     "lint": "eslint src --ext ts",
     "test": "npm run test:unit",
     "test:unit": "npm run compile && node scripts/run-unit-tests.cjs",
@@ -718,6 +720,7 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.24.2",
     "eslint": "^8.56.0",
     "typescript": "^5.5.4"
   }

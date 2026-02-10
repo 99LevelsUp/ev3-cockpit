@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { sanitizeBoolean, sanitizeEnum, sanitizeGlobList, sanitizeNumber, sanitizeStringList } from './sanitizers';
 
 export type DeployVerifyMode = 'none' | 'size' | 'md5';
 export type DeployConflictPolicy = 'overwrite' | 'skip' | 'ask';
@@ -45,41 +46,6 @@ export const DEFAULT_DEPLOY_RESILIENCE_ENABLED = true;
 export const DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES = 1;
 export const DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS = 300;
 export const DEFAULT_DEPLOY_RESILIENCE_REOPEN_CONNECTION = true;
-
-// --- Generic sanitizer helpers ---
-
-function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
-	return typeof value === 'boolean' ? value : fallback;
-}
-
-function sanitizeNumber(value: unknown, fallback: number, min: number): number {
-	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
-		return fallback;
-	}
-	return Math.max(min, Math.floor(value));
-}
-
-function sanitizeEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
-	return (allowed as readonly string[]).includes(value as string) ? (value as T) : fallback;
-}
-
-function sanitizeStringList(value: unknown): string[] {
-	if (!Array.isArray(value)) {
-		return [];
-	}
-
-	return value
-		.filter((entry): entry is string => typeof entry === 'string')
-		.map((entry) => entry.trim())
-		.filter((entry) => entry.length > 0);
-}
-
-function sanitizeGlobList(value: unknown): string[] {
-	const cleaned = sanitizeStringList(value)
-		.map((entry) => entry.replace(/\\/g, '/'))
-		.map((entry) => entry.replace(/^\.\//, ''));
-	return [...new Set(cleaned)];
-}
 
 // --- Exported sanitizers ---
 

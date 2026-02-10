@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { canonicalizeEv3Path } from './pathPolicy';
+import { canonicalizeEv3Path, PathPolicyError } from './pathPolicy';
 
 export type RemoteFsPathKind = 'file' | 'directory' | 'missing';
 
@@ -35,8 +35,7 @@ function splitParentAndName(remotePath: string): { parentPath: string; name: str
 }
 
 function isPathPolicyError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return /outside safe roots|safe mode|blocked/i.test(message);
+	return error instanceof PathPolicyError;
 }
 
 export async function getRemotePathKind(fs: RemoteFsLike, remotePath: string): Promise<RemoteFsPathKind> {

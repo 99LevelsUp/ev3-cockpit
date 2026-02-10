@@ -68,6 +68,13 @@ export function isAsciiSafePath(path: string): boolean {
 	return /^[\x20-\x7E]+$/.test(path);
 }
 
+export class PathPolicyError extends Error {
+	public constructor(message: string) {
+		super(message);
+		this.name = 'PathPolicyError';
+	}
+}
+
 export function evaluateFsAccess(rawPath: string, config: FsPolicyConfig): FsAccessDecision {
 	const normalizedPath = canonicalizeEv3Path(rawPath);
 	const pathPrefix = normalizePrefix(normalizedPath);

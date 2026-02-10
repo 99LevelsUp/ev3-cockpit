@@ -29,13 +29,14 @@ import {
 import {
 	BrickTreeNode,
 	BrickTreeProvider,
-	getBrickTreeNodeId,
 	isBrickDirectoryNode,
 	isBrickRootNode
 } from './ui/brickTreeProvider';
 import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
 import { BrickUiStateStore } from './ui/brickUiStateStore';
 import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
+import { createBusyIndicatorPoller } from './ui/busyIndicator';
+import { createTreeStatePersistence } from './ui/treeStatePersistence';
 import { LoggingOrphanRecoveryStrategy, normalizeRemotePathForReveal } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
@@ -622,145 +623,14 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 	void vscode.commands.executeCommand('setContext', 'ev3-cockpit.bricksFilterActive', false);
-	const busyStateByBrickId = new Map<string, string>();
-	const refreshBusyIndicators = (): void => {
-		const snapshots = brickRegistry.listSnapshots();
-		const knownBrickIds = new Set<string>();
-		for (const snapshot of snapshots) {
-			knownBrickIds.add(snapshot.brickId);
-			const runtime = sessionManager.getRuntimeSnapshot(snapshot.brickId);
-			const busyCount = runtime?.busyCommandCount ?? 0;
-			const schedulerState = runtime?.schedulerState;
-			const nextSignature = `${busyCount}|${schedulerState ?? 'none'}`;
-			if (busyStateByBrickId.get(snapshot.brickId) === nextSignature) {
-				continue;
-			}
-			busyStateByBrickId.set(snapshot.brickId, nextSignature);
-			brickRegistry.updateRuntimeMetrics(snapshot.brickId, {
-				busyCommandCount: busyCount,
-				schedulerState
-			});
-			treeProvider.refreshBrick(snapshot.brickId);
-		}
+	const busyIndicatorSubscription = createBusyIndicatorPoller(
+		brickRegistry, sessionManager, treeProvider, brickUiStateStore
+	);
 
-		for (const brickId of [...busyStateByBrickId.keys()]) {
-			if (!knownBrickIds.has(brickId)) {
-				busyStateByBrickId.delete(brickId);
-			}
-		}
-		void brickUiStateStore.pruneMissing(knownBrickIds);
-	};
-	const busyIndicatorInterval = setInterval(() => {
-		refreshBusyIndicators();
-	}, 250);
-	const busyIndicatorSubscription = new vscode.Disposable(() => {
-		clearInterval(busyIndicatorInterval);
-	});
+	const treeStatePersistence = createTreeStatePersistence(
+		brickTreeViewStateStore, treeProvider, brickTreeView
+	);
 
-	const expandedNodeIds = new Set<string>(brickTreeViewStateStore.getExpandedNodeIds());
-	let pendingSelectionRestoreNodeId = brickTreeViewStateStore.getSelectedNodeId();
-	let selectedNodeId = pendingSelectionRestoreNodeId;
-	let persistTreeStateTimer: NodeJS.Timeout | undefined;
-	const persistTreeViewState = async (): Promise<void> => {
-		await brickTreeViewStateStore.update(expandedNodeIds, selectedNodeId);
-	};
-	const schedulePersistTreeViewState = (): void => {
-		if (persistTreeStateTimer) {
-			clearTimeout(persistTreeStateTimer);
-		}
-		persistTreeStateTimer = setTimeout(() => {
-			persistTreeStateTimer = undefined;
-			void persistTreeViewState();
-		}, 120);
-	};
-	const rememberExpandedState = (element: BrickTreeNode, expanded: boolean): void => {
-		if (element.kind !== 'brick' && element.kind !== 'directory') {
-			return;
-		}
-		const nodeId = getBrickTreeNodeId(element);
-		if (expanded) {
-			expandedNodeIds.add(nodeId);
-		} else {
-			expandedNodeIds.delete(nodeId);
-		}
-		schedulePersistTreeViewState();
-	};
-	const rememberSelectionState = (selection: readonly BrickTreeNode[]): void => {
-		const element = selection[0];
-		if (!element || element.kind === 'message') {
-			return;
-		}
-		selectedNodeId = getBrickTreeNodeId(element);
-		schedulePersistTreeViewState();
-	};
-	const restoreTreeViewState = async (): Promise<void> => {
-		if (expandedNodeIds.size === 0 && !pendingSelectionRestoreNodeId) {
-			return;
-		}
-		const sortedNodeIds = [...expandedNodeIds].sort((left, right) => left.localeCompare(right));
-		for (let pass = 0; pass < 3; pass += 1) {
-			let revealedAny = false;
-			for (const nodeId of sortedNodeIds) {
-				const node = treeProvider.getNodeById(nodeId);
-				if (!node) {
-					continue;
-				}
-				try {
-					await brickTreeView.reveal(node, {
-						expand: true,
-						focus: false,
-						select: false
-					});
-					revealedAny = true;
-				} catch {
-					// ignore reveal failures for stale node ids
-				}
-			}
-			if (!revealedAny) {
-				break;
-			}
-			await new Promise<void>((resolve) => setTimeout(resolve, 25));
-		}
-		if (!pendingSelectionRestoreNodeId) {
-			return;
-		}
-		const selectedNode = treeProvider.getNodeById(pendingSelectionRestoreNodeId);
-		if (!selectedNode || selectedNode.kind === 'message') {
-			pendingSelectionRestoreNodeId = undefined;
-			selectedNodeId = undefined;
-			schedulePersistTreeViewState();
-			return;
-		}
-		try {
-			await brickTreeView.reveal(selectedNode, {
-				focus: false,
-				select: true,
-				expand: true
-			});
-			pendingSelectionRestoreNodeId = undefined;
-		} catch {
-			// Selection restore can race with async tree updates. Keep retrying on next tree refresh.
-		}
-	};
-	const treeExpandSubscription = brickTreeView.onDidExpandElement((event) => {
-		rememberExpandedState(event.element, true);
-	});
-	const treeCollapseSubscription = brickTreeView.onDidCollapseElement((event) => {
-		rememberExpandedState(event.element, false);
-	});
-	const treeSelectionSubscription = brickTreeView.onDidChangeSelection((event) => {
-		rememberSelectionState(event.selection);
-	});
-	const treeChangeSubscription = treeProvider.onDidChangeTreeData(() => {
-		void restoreTreeViewState();
-	});
-	const treeStatePersistenceSubscription = new vscode.Disposable(() => {
-		if (persistTreeStateTimer) {
-			clearTimeout(persistTreeStateTimer);
-			persistTreeStateTimer = undefined;
-		}
-		void persistTreeViewState();
-	});
 	const fsChangeSubscription = fsProvider.onDidChangeFile((events) => {
 		const refreshTargets = new Set<string>();
 		for (const event of events) {
@@ -781,7 +651,6 @@ export function activate(context: vscode.ExtensionContext) {
 			treeProvider.refreshDirectory(brickId, remotePath);
 		}
 	});
-	refreshBusyIndicators();
 	treeProvider.refresh();
 
 	context.subscriptions.push(
@@ -825,11 +694,11 @@ export function activate(context: vscode.ExtensionContext) {
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
-		treeExpandSubscription,
-		treeCollapseSubscription,
-		treeSelectionSubscription,
-		treeChangeSubscription,
-		treeStatePersistenceSubscription,
+		treeStatePersistence.expandSubscription,
+		treeStatePersistence.collapseSubscription,
+		treeStatePersistence.selectionSubscription,
+		treeStatePersistence.changeSubscription,
+		treeStatePersistence,
 		fsChangeSubscription,
 		busyIndicatorSubscription,
 		treeProvider,

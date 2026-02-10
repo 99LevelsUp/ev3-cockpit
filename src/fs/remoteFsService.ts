@@ -4,7 +4,7 @@ import { Logger, NoopLogger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, cString, gv0, lc0, lc2, lcs, readUint32le, uint16le, uint32le } from '../protocol/ev3Bytecode';
 import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
-import { evaluateFsAccess } from './pathPolicy';
+import { evaluateFsAccess, PathPolicyError } from './pathPolicy';
 
 const SYSTEM_STATUS = {
 	OK: 0x00,
@@ -358,7 +358,7 @@ export class RemoteFsService {
 		});
 
 		if (!decision.allowed) {
-			throw new Error(decision.reason ?? `Access denied for path "${path}".`);
+			throw new PathPolicyError(decision.reason ?? `Access denied for path "${path}".`);
 		}
 
 		if (!decision.asciiSafe) {

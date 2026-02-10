@@ -4,6 +4,7 @@ import { Logger, NoopLogger } from '../diagnostics/logger';
 import { RemoteFsService } from './remoteFsService';
 import { parseEv3UriParts } from './ev3Uri';
 import { copyRemotePath, deleteRemotePath, getRemotePathKind, RemoteFsPathError, renameRemotePath } from './remoteFsOps';
+import { PathPolicyError } from './pathPolicy';
 
 type RemoteFsResolver = (brickId: string) => Promise<RemoteFsService>;
 
@@ -165,10 +166,11 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 			return vscode.FileSystemError.NoPermissions(error.message);
 		}
 
-		const message = error instanceof Error ? error.message : String(error);
-		if (/outside safe roots|safe mode|blocked/i.test(message)) {
-			return vscode.FileSystemError.NoPermissions(message);
+		if (error instanceof PathPolicyError) {
+			return vscode.FileSystemError.NoPermissions(error.message);
 		}
+
+		const message = error instanceof Error ? error.message : String(error);
 		if (/No active EV3 connection/i.test(message)) {
 			if (access === 'write') {
 				return vscode.FileSystemError.NoPermissions('EV3 is offline. Filesystem is currently read-only.');

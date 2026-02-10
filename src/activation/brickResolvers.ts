@@ -8,7 +8,7 @@ import { readSchedulerConfig } from '../config/schedulerConfig';
 import { assertRemoteExecutablePath } from '../fs/remoteExecutable';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { TransportMode } from '../transport/transportFactory';
-import { DeployTargetContext } from '../commands/deployCommands';
+import { DeployTargetContext } from '../commands/deployTypes';
 import { isBrickRootNode, isBrickDirectoryNode, isBrickFileNode } from '../ui/brickTreeProvider';
 import { ConnectedBrickDescriptor, normalizeBrickRootPath, toSafeIdentifier } from './helpers';
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
