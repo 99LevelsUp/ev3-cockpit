@@ -8,7 +8,7 @@ on:
 
 jobs:
   test_ci:
-    name: Compile + Lint + Unit + Host
+    name: Compile + Lint + Unit + Host + Release Gates
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -24,5 +24,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run CI test suite
-        run: npm run test:ci
+      - name: Run CI release gate suite
+        run: npm run test:ci:release
+
+      - name: Upload release-gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-release-gates
+          path: artifacts/vsix

@@ -13,19 +13,18 @@ import { buildLocalProjectLayout, planRemoteCleanup } from '../fs/deployCleanup'
 import { RemoteFileSnapshot, shouldUploadByRemoteSnapshot } from '../fs/deployIncremental';
 import { isDeployTransientTransportError, sleepMs } from '../fs/deployResilience';
 import { verifyUploadedFile } from '../fs/deployVerify';
-import { createGlobMatcher } from '../fs/globMatch';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { toErrorMessage, withBrickOperation } from './commandUtils';
+import { resolveDeployFlow } from './deployFlow';
+import { collectLocalFilesRecursive, collectRemoteFileIndexRecursive } from './deployScan';
 import {
 	DeployCommandOptions,
 	DeployCommandRegistrations,
 	DeployTargetContext,
 	LocalProjectFileEntry,
-	LocalScannedFile,
-	ProjectScanResult,
-	RemoteFileIndexResult
+	ProjectDeployRequest
 } from './deployTypes';
 
 function isRemoteAlreadyExistsError(error: unknown): boolean {
@@ -35,135 +34,6 @@ function isRemoteAlreadyExistsError(error: unknown): boolean {
 
 function pathDepth(remotePath: string): number {
 	return remotePath.split('/').filter((part) => part.length > 0).length;
-}
-
-async function collectRemoteFileIndexRecursive(
-	fsService: RemoteFsService,
-	rootPath: string
-): Promise<RemoteFileIndexResult> {
-	const files = new Map<string, RemoteFileSnapshot>();
-	const directories = new Set<string>();
-	const queue: string[] = [rootPath];
-	let truncated = false;
-
-	while (queue.length > 0) {
-		const current = queue.shift() ?? rootPath;
-		directories.add(current);
-		let listing;
-		try {
-			listing = await fsService.listDirectory(current);
-		} catch (error) {
-			const message = toErrorMessage(error);
-			return {
-				available: false,
-				truncated,
-				files,
-				directories: [...directories],
-				message
-			};
-		}
-
-		truncated = truncated || listing.truncated;
-		for (const folder of listing.folders) {
-			queue.push(path.posix.join(current, folder));
-		}
-		for (const file of listing.files) {
-			const filePath = path.posix.join(current, file.name);
-			files.set(filePath, {
-				sizeBytes: file.size,
-				md5: file.md5
-			});
-		}
-	}
-
-	return {
-		available: true,
-		truncated,
-		files,
-		directories: [...directories].sort((a, b) => a.localeCompare(b))
-	};
-}
-
-async function collectLocalFilesRecursive(
-	root: vscode.Uri,
-	options: {
-		excludeDirectories: string[];
-		excludeExtensions: string[];
-		includeGlobs: string[];
-		excludeGlobs: string[];
-		maxFileBytes: number;
-	}
-): Promise<ProjectScanResult> {
-	const files: LocalScannedFile[] = [];
-	const skippedDirectories: string[] = [];
-	const skippedByExtension: string[] = [];
-	const skippedByIncludeGlob: string[] = [];
-	const skippedByExcludeGlob: string[] = [];
-	const skippedBySize: Array<{ relativePath: string; sizeBytes: number }> = [];
-	const excludedDirNames = new Set(options.excludeDirectories.map((entry) => entry.toLowerCase()));
-	const excludedExtensions = new Set(options.excludeExtensions.map((entry) => entry.toLowerCase()));
-	const includeMatcher = createGlobMatcher(options.includeGlobs);
-	const excludeMatcher = createGlobMatcher(options.excludeGlobs);
-
-	const walk = async (dir: vscode.Uri, relativeDir: string): Promise<void> => {
-		const entries = await vscode.workspace.fs.readDirectory(dir);
-		for (const [name, type] of entries) {
-			const child = vscode.Uri.joinPath(dir, name);
-			const relativePath = relativeDir ? `${relativeDir}/${name}` : name;
-			if (type === vscode.FileType.Directory) {
-				if (excludedDirNames.has(name.toLowerCase())) {
-					skippedDirectories.push(relativePath);
-					continue;
-				}
-				await walk(child, relativePath);
-			} else if (type === vscode.FileType.File) {
-				const extension = path.extname(name).toLowerCase();
-				if (excludedExtensions.has(extension)) {
-					skippedByExtension.push(relativePath);
-					continue;
-				}
-				if (!includeMatcher(relativePath)) {
-					skippedByIncludeGlob.push(relativePath);
-					continue;
-				}
-				if (excludeMatcher(relativePath)) {
-					skippedByExcludeGlob.push(relativePath);
-					continue;
-				}
-
-				const stat = await vscode.workspace.fs.stat(child);
-				if (stat.size > options.maxFileBytes) {
-					skippedBySize.push({
-						relativePath,
-						sizeBytes: stat.size
-					});
-					continue;
-				}
-
-				files.push({
-					localUri: child,
-					relativePath,
-					sizeBytes: stat.size
-				});
-			}
-		}
-	};
-
-	await walk(root, '');
-	files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-	skippedDirectories.sort((a, b) => a.localeCompare(b));
-	skippedByExtension.sort((a, b) => a.localeCompare(b));
-	skippedByIncludeGlob.sort((a, b) => a.localeCompare(b));
-	skippedByExcludeGlob.sort((a, b) => a.localeCompare(b));
-	skippedBySize.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-	return {
-		files,
-		skippedDirectories,
-		skippedByExtension,
-		skippedByIncludeGlob,
-		skippedByExcludeGlob,
-		skippedBySize
-	};
 }
 
 async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
@@ -192,12 +62,7 @@ async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 }
 
 export function registerDeployCommands(options: DeployCommandOptions): DeployCommandRegistrations {
-	const executeProjectDeploy = async (deployOptions: {
-		runAfterDeploy: boolean;
-		previewOnly: boolean;
-		projectUri?: vscode.Uri;
-		target?: DeployTargetContext;
-	}): Promise<void> => {
+	const executeProjectDeploy = async (deployOptions: ProjectDeployRequest): Promise<void> => {
 		const logger = options.getLogger();
 		const fsTarget: DeployTargetContext | undefined = deployOptions.target ?? (() => {
 			const resolved = options.resolveFsAccessContext('active');
@@ -368,11 +233,18 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				}
 			}
 
-			let incrementalEnabled = featureConfig.deploy.incrementalEnabled;
-			let cleanupEnabled = featureConfig.deploy.cleanupEnabled;
 			const cleanupConfirmBeforeDelete = featureConfig.deploy.cleanupConfirmBeforeDelete;
 			const cleanupDryRun = featureConfig.deploy.cleanupDryRun;
-			const verifyAfterUpload = featureConfig.deploy.verifyAfterUpload;
+			const flow = resolveDeployFlow({
+				incrementalEnabled: featureConfig.deploy.incrementalEnabled,
+				cleanupEnabled: featureConfig.deploy.cleanupEnabled,
+				atomicEnabled,
+				previewOnly: deployOptions.previewOnly,
+				verifyAfterUpload: featureConfig.deploy.verifyAfterUpload
+			});
+			let incrementalEnabled = flow.incrementalEnabled;
+			let cleanupEnabled = flow.cleanupEnabled;
+			const verifyAfterUpload = flow.verifyAfterUpload;
 			const conflictPolicy = featureConfig.deploy.conflictPolicy;
 			const conflictAskFallback = featureConfig.deploy.conflictAskFallback;
 			const effectiveConflictPolicy = deployOptions.previewOnly ? 'overwrite' : conflictPolicy;
@@ -381,15 +253,13 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 					conflictAskFallback
 				});
 			}
-			if (atomicEnabled && incrementalEnabled) {
-				incrementalEnabled = false;
+			if (flow.atomicDisabledIncremental) {
 				logger.info('Project deploy incremental mode disabled because atomic deploy is enabled.', {
 					remoteProjectRoot,
 					atomicStagingRoot
 				});
 			}
-			if (atomicEnabled && cleanupEnabled) {
-				cleanupEnabled = false;
+			if (flow.atomicDisabledCleanup) {
 				logger.info('Project deploy cleanup mode disabled because atomic deploy performs full root swap.', {
 					remoteProjectRoot,
 					atomicStagingRoot

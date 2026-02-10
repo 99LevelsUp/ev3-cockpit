@@ -700,6 +700,9 @@
     "compile:bundle": "tsc -p ./ --noEmit && node esbuild.mjs",
     "watch": "tsc -watch -p ./",
     "package": "npm run compile:bundle -- --production",
+    "check:bundle-size": "node scripts/check-bundle-size.cjs",
+    "package:vsix": "node scripts/package-vsix.cjs",
+    "test:vsix-smoke": "node scripts/vsix-smoke.cjs",
     "lint": "eslint src --ext ts",
     "test": "npm run test:unit",
     "test:unit": "npm run compile && node scripts/run-unit-tests.cjs",
@@ -708,6 +711,7 @@
     "test:hw:matrix": "npm run compile && node out/hw/hardwareMatrix.js",
     "test:hw:all": "npm run test:hw && npm run test:hw:matrix",
     "test:ci": "npm run compile && npm run lint && npm run test:unit && npm run test:host",
+    "test:ci:release": "npm run test:ci && npm run package && npm run check:bundle-size && npm run package:vsix && npm run test:vsix-smoke",
     "test:all": "npm run test:unit && npm run test:host && npm run test:hw"
   },
   "optionalDependencies": {
@@ -715,6 +719,7 @@
     "serialport": "^12.0.0"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.7.1",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",

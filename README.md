@@ -97,6 +97,7 @@ git clone https://github.com/99LevelsUp/ev3-cockpit.git
 cd ev3-cockpit
 npm install
 npm run compile
+npm run package
 ```
 
 Run in VS Code (development mode):
@@ -107,13 +108,28 @@ Run in VS Code (development mode):
 Create an installable VS Code package (`.vsix`):
 
 ```bash
-npm install -g @vscode/vsce
-vsce package
+npm run package:vsix
 ```
 
 Then install the generated `.vsix` in VS Code via:
 
 - `Extensions` -> `...` -> `Install from VSIX...`
+
+## Developer Build and Release Gates
+
+- `npm run package` builds bundled production output (`out/extension.js`) via `esbuild`.
+- `npm run check:bundle-size` enforces bundle-size budget (default `256 KiB`, override with `EV3_COCKPIT_MAX_BUNDLE_BYTES`).
+- `npm run package:vsix` builds `artifacts/vsix/ev3-cockpit.vsix`.
+- `npm run test:vsix-smoke` installs the built VSIX into a temporary VS Code profile and verifies extension registration.
+- `npm run test:ci:release` runs compile/lint/unit/host tests plus bundle-size and VSIX smoke gates.
+
+## Internal Module Notes
+
+- Shared config sanitizers are centralized in `src/config/sanitizers.ts` and reused by deploy/feature/scheduler config readers.
+- Tree runtime helpers were extracted from activation bootstrap:
+  - `src/ui/busyIndicator.ts` for per-brick busy polling updates,
+  - `src/ui/treeStatePersistence.ts` for expanded/selection persistence restore.
+- Deploy command type contracts are centralized in `src/commands/deployTypes.ts`.
 
 ## Quick Start
 

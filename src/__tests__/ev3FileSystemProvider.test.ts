@@ -248,3 +248,28 @@ test('Ev3FileSystemProvider maps offline write to NoPermissions and offline read
 		);
 	});
 });
+
+test('Ev3FileSystemProvider maps PathPolicyError to NoPermissions', async () => {
+	await withMockedProvider(async ({ Ev3FileSystemProvider }) => {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { PathPolicyError } = require('../fs/pathPolicy') as { PathPolicyError: new (message: string) => Error };
+
+		const provider = new Ev3FileSystemProvider(async () => ({
+			readFile: async () => {
+				throw new PathPolicyError('outside safe roots');
+			}
+		})) as unknown as {
+			readFile: (uri: UriLike) => Promise<Uint8Array>;
+		};
+
+		await assert.rejects(
+			provider.readFile(makeUri('/etc/passwd')),
+			(error: unknown) => {
+				assert.ok(error instanceof Error);
+				assert.equal((error as Error & { code?: string }).code, 'NoPermissions');
+				assert.match(error.message, /outside safe roots/i);
+				return true;
+			}
+		);
+	});
+});
