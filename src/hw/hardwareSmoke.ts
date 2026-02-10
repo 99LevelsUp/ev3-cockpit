@@ -87,8 +87,12 @@ const DEFAULT_BT_PROBE_TIMEOUT_MS = 12_000;
 const DEFAULT_TCP_DISCOVERY_TIMEOUT_MS = 7_000;
 const DEFAULT_TCP_ATTEMPTS = 2;
 const DEFAULT_TCP_RETRY_DELAY_MS = 300;
+const DEFAULT_USB_ATTEMPTS = 2;
+const DEFAULT_USB_RETRY_DELAY_MS = 250;
 const DEFAULT_BT_PORT_ATTEMPTS = 2;
 const DEFAULT_BT_RETRY_DELAY_MS = 300;
+const DEFAULT_BT_POST_OPEN_DELAY_MS = 120;
+const DEFAULT_BT_AUTO_DTR_FALLBACK = true;
 const DEFAULT_EMERGENCY_STOP_CHECK = true;
 const DEFAULT_RECONNECT_CHECK = false;
 const DEFAULT_RECONNECT_GLITCH_CHECK = true;
@@ -112,6 +116,7 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/requires non-empty host/i,
 		/could not resolve host/i,
 		/udp discovery timeout/i,
+		/eaddrinuse/i,
 		/econnrefused/i,
 		/econnreset/i,
 		/econnaborted/i,
@@ -133,9 +138,18 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/unknown error code 1256/i,
 		/unknown error code 1167/i,
 		/timed out/i,
+		/operation aborted/i,
 		/transport is not open/i
 	]
 };
+
+function isLikelyStaleReplyValidationError(message: string): boolean {
+	return (
+		/unexpected .*reply type/i.test(message) ||
+		/command mismatch/i.test(message) ||
+		/payload is too short/i.test(message)
+	);
+}
 
 function envNumber(name: string, fallback: number, min: number): number {
 	const raw = process.env[name];
@@ -450,30 +464,45 @@ function formatResult(result: HardwareCaseResult): string {
 
 async function runProbeWithClient(client: Ev3CommandClient, timeoutMs: number): Promise<ProbeSuccess> {
 	const probeCommand = 0x9d;
-	const probeResult = await client.send({
-		id: 'hw-connect-probe',
-		lane: 'high',
-		idempotent: true,
-		timeoutMs,
-		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
-		payload: new Uint8Array([probeCommand])
-	});
-	const probeReply = probeResult.reply;
-	if (probeReply.type !== EV3_REPLY.SYSTEM_REPLY && probeReply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
-		throw new Error(`Unexpected probe reply type 0x${probeReply.type.toString(16)}.`);
+	let probeResult:
+		| { messageCounter: number; durationMs: number; reply: { type: number; payload: Uint8Array } }
+		| undefined;
+	let probeValidationError = 'Probe did not return a valid reply.';
+	for (let attempt = 1; attempt <= 2; attempt += 1) {
+		const candidate = await client.send({
+			id: `hw-connect-probe-${attempt}`,
+			lane: 'high',
+			idempotent: true,
+			timeoutMs,
+			type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+			payload: new Uint8Array([probeCommand])
+		});
+		const probeReply = candidate.reply;
+		if (probeReply.type !== EV3_REPLY.SYSTEM_REPLY && probeReply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
+			probeValidationError = `Unexpected probe reply type 0x${probeReply.type.toString(16)}.`;
+		} else if (probeReply.payload.length < 2) {
+			probeValidationError = 'Probe reply payload is too short.';
+		} else {
+			const echoedCommand = probeReply.payload[0];
+			const status = probeReply.payload[1];
+			if (echoedCommand !== probeCommand) {
+				probeValidationError = `Probe reply command mismatch: expected 0x${probeCommand.toString(16)}, got 0x${echoedCommand.toString(16)}.`;
+			} else if (probeReply.type === EV3_REPLY.SYSTEM_REPLY_ERROR || status !== 0x00) {
+				probeValidationError = `Probe reply returned status 0x${status.toString(16)}.`;
+			} else {
+				probeResult = candidate;
+				break;
+			}
+		}
+
+		if (attempt < 2 && isLikelyStaleReplyValidationError(probeValidationError)) {
+			await sleep(60);
+			continue;
+		}
 	}
-	if (probeReply.payload.length < 2) {
-		throw new Error('Probe reply payload is too short.');
-	}
-	const echoedCommand = probeReply.payload[0];
-	const status = probeReply.payload[1];
-	if (echoedCommand !== probeCommand) {
-		throw new Error(
-			`Probe reply command mismatch: expected 0x${probeCommand.toString(16)}, got 0x${echoedCommand.toString(16)}.`
-		);
-	}
-	if (probeReply.type === EV3_REPLY.SYSTEM_REPLY_ERROR || status !== 0x00) {
-		throw new Error(`Probe reply returned status 0x${status.toString(16)}.`);
+
+	if (!probeResult) {
+		throw new Error(probeValidationError);
 	}
 
 	const capabilityResult = await client.send({
@@ -632,19 +661,29 @@ async function runEmergencyStopCheckWithClient(
 	client: Ev3CommandClient,
 	timeoutMs: number
 ): Promise<{ ok: boolean; message?: string }> {
-	try {
-		const controls = new BrickControlService({
-			commandClient: client,
-			defaultTimeoutMs: timeoutMs
-		});
-		await controls.emergencyStopAll();
-		return { ok: true };
-	} catch (error) {
-		return {
-			ok: false,
-			message: errorMessage(error)
-		};
+	const controls = new BrickControlService({
+		commandClient: client,
+		defaultTimeoutMs: timeoutMs
+	});
+
+	let lastError: string | undefined;
+	for (let attempt = 1; attempt <= 2; attempt += 1) {
+		try {
+			await controls.emergencyStopAll();
+			return { ok: true };
+		} catch (error) {
+			lastError = errorMessage(error);
+			if (attempt < 2 && isLikelyStaleReplyValidationError(lastError)) {
+				await sleep(60);
+				continue;
+			}
+			break;
+		}
 	}
+	return {
+		ok: false,
+		message: lastError
+	};
 }
 
 async function runEmergencyStopCheck(createAdapter: () => TransportAdapter, timeoutMs: number): Promise<{ ok: boolean; message?: string }> {
@@ -882,6 +921,8 @@ async function runUsbCase(
 		DEFAULT_RECONNECT_DRIVER_DROP_POLL_MS,
 		50
 	);
+	const attempts = envNumber('EV3_COCKPIT_HW_USB_ATTEMPTS', DEFAULT_USB_ATTEMPTS, 1);
+	const retryDelayMs = envNumber('EV3_COCKPIT_HW_USB_RETRY_DELAY_MS', DEFAULT_USB_RETRY_DELAY_MS, 0);
 	const path = process.env.EV3_COCKPIT_HW_USB_PATH?.trim() || undefined;
 	const candidates = await listUsbHidCandidates(vendorId, productId);
 	const runSpec = runSpecResolution.spec;
@@ -902,17 +943,19 @@ async function runUsbCase(
 		};
 	}
 
-	try {
-		const createAdapter = () =>
-			new UsbHidAdapter({
-				path,
-				vendorId,
-				productId
-			});
-		const probe = await runProbe(
-			createAdapter(),
-			timeoutMs
-		);
+	const failures: string[] = [];
+	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+		try {
+			const createAdapter = () =>
+				new UsbHidAdapter({
+					path,
+					vendorId,
+					productId
+				});
+			const probe = await runProbe(
+				createAdapter(),
+				timeoutMs
+			);
 
 		if (runSpec) {
 			const runCheck = await runProgramCheck(createAdapter, timeoutMs, probe.capability, runSpec);
@@ -963,61 +1006,68 @@ async function runUsbCase(
 			}
 		}
 
-		return {
-			transport: 'usb',
-			status: 'PASS',
-			reason: runSpec
-				? emergencyStopCheckEnabled
-					? reconnectCheckEnabled
-						? reconnectDriverDropCheckEnabled
-							? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
-							: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
-						: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
-					: reconnectCheckEnabled
-						? reconnectDriverDropCheckEnabled
-							? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
-							: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
-						: 'Connect, capability probe and run-program check succeeded.'
-				: emergencyStopCheckEnabled
-					? reconnectCheckEnabled
-						? reconnectDriverDropCheckEnabled
-							? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
-							: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
-						: 'Connect, capability probe and emergency-stop check succeeded.'
-					: reconnectCheckEnabled
-						? reconnectDriverDropCheckEnabled
-							? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
-							: 'Connect, capability probe and reconnect-recovery checks succeeded.'
-						: 'Connect and capability probe succeeded.',
-			detail: {
-				path: path ?? candidates[0]?.path ?? 'auto',
-				runProgramPath: runSpec?.remotePath ?? undefined,
-				runProgramMode: runSpec?.mode ?? undefined,
-				runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
-				runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
-				emergencyStopChecked: emergencyStopCheckEnabled,
-				reconnectChecked: reconnectCheckEnabled,
-				reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
-				reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
-				fwVersion: probe.capability.fwVersion,
-				fwBuild: probe.capability.fwBuild
-			}
-		};
-	} catch (error) {
-		const message = errorMessage(error);
-		if (isLikelyUnavailableError('usb', error)) {
 			return {
 				transport: 'usb',
-				status: 'SKIP',
-				reason: `USB transport unavailable (${message}).`
+				status: 'PASS',
+				reason: runSpec
+					? emergencyStopCheckEnabled
+						? reconnectCheckEnabled
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
+						: reconnectCheckEnabled
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe and run-program check succeeded.'
+					: emergencyStopCheckEnabled
+						? reconnectCheckEnabled
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+							: 'Connect, capability probe and emergency-stop check succeeded.'
+						: reconnectCheckEnabled
+							? reconnectDriverDropCheckEnabled
+								? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
+								: 'Connect, capability probe and reconnect-recovery checks succeeded.'
+							: 'Connect and capability probe succeeded.',
+				detail: {
+					path: path ?? candidates[0]?.path ?? 'auto',
+					attempt,
+					runProgramPath: runSpec?.remotePath ?? undefined,
+					runProgramMode: runSpec?.mode ?? undefined,
+					runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
+					runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
+					emergencyStopChecked: emergencyStopCheckEnabled,
+					reconnectChecked: reconnectCheckEnabled,
+					reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
+					reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
+					fwVersion: probe.capability.fwVersion,
+					fwBuild: probe.capability.fwBuild
+				}
 			};
+		} catch (error) {
+			failures.push(`attempt ${attempt}: ${errorMessage(error)}`);
+			if (attempt < attempts) {
+				await sleep(retryDelayMs);
+			}
 		}
+	}
+
+	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('usb', message))) {
 		return {
 			transport: 'usb',
-			status: 'FAIL',
-			reason: message
+			status: 'SKIP',
+			reason: `USB transport unavailable (${failures[0]}).`
 		};
 	}
+
+	return {
+		transport: 'usb',
+		status: 'FAIL',
+		reason: failures.join(' | ')
+	};
 }
 
 async function runTcpCase(
@@ -1231,6 +1281,8 @@ async function runBluetoothCase(
 	const timeoutMs = envNumber('EV3_COCKPIT_HW_BT_PROBE_TIMEOUT_MS', DEFAULT_BT_PROBE_TIMEOUT_MS, 50);
 	const baudRate = envNumber('EV3_COCKPIT_HW_BT_BAUD_RATE', 115200, 300);
 	const dtr = envBoolean('EV3_COCKPIT_HW_BT_DTR', false);
+	const autoDtrFallback = envBoolean('EV3_COCKPIT_HW_BT_AUTO_DTR_FALLBACK', DEFAULT_BT_AUTO_DTR_FALLBACK);
+	const postOpenDelayMs = envNumber('EV3_COCKPIT_HW_BT_POST_OPEN_DELAY_MS', DEFAULT_BT_POST_OPEN_DELAY_MS, 0);
 	const reconnectDriverDropWindowMs = envNumber(
 		'EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_WINDOW_MS',
 		DEFAULT_RECONNECT_DRIVER_DROP_WINDOW_MS,
@@ -1273,140 +1325,167 @@ async function runBluetoothCase(
 	}
 
 	const failures: string[] = [];
-	for (const port of ports) {
-		for (let attempt = 1; attempt <= perPortAttempts; attempt += 1) {
-			try {
-				const createAdapter = () =>
-					new BluetoothSppAdapter({
-						port,
-						baudRate,
-						dtr
-					});
-				const scheduler = new CommandScheduler({
-					defaultTimeoutMs: timeoutMs
-				});
-				const client = new Ev3CommandClient({
-					scheduler,
-					transport: createAdapter()
-				});
+	const dtrProfiles = autoDtrFallback ? Array.from(new Set([dtr, !dtr])) : [dtr];
+	const uncaughtErrors: string[] = [];
+	const uncaughtHandler = (error: unknown): void => {
+		uncaughtErrors.push(errorMessage(error));
+	};
+	process.prependListener('uncaughtException', uncaughtHandler);
+	try {
+		for (const dtrProfile of dtrProfiles) {
+			for (const port of ports) {
+				for (let attempt = 1; attempt <= perPortAttempts; attempt += 1) {
+					try {
+						const createAdapter = () =>
+							new BluetoothSppAdapter({
+								port,
+								baudRate,
+								dtr: dtrProfile
+							});
+						const scheduler = new CommandScheduler({
+							defaultTimeoutMs: timeoutMs
+						});
+						const client = new Ev3CommandClient({
+							scheduler,
+							transport: createAdapter()
+						});
 
-				let probe: ProbeSuccess;
-				try {
-					await client.open();
-					probe = await runProbeWithClient(client, timeoutMs);
+						let probe: ProbeSuccess;
+						try {
+							await client.open();
+							await sleep(postOpenDelayMs);
+							probe = await runProbeWithClient(client, timeoutMs);
 
-					if (runSpec) {
-						const runCheck = await runProgramCheckWithClient(client, timeoutMs, probe.capability, runSpec);
-						if (!runCheck.ok) {
-							return mapPostProbeCheckFailure('bluetooth', 'Program run check', runCheck.message ?? 'unknown error');
+							if (runSpec) {
+								const runCheck = await runProgramCheckWithClient(client, timeoutMs, probe.capability, runSpec);
+								if (!runCheck.ok) {
+									return mapPostProbeCheckFailure(
+										'bluetooth',
+										'Program run check',
+										runCheck.message ?? 'unknown error'
+									);
+								}
+							}
+
+							if (emergencyStopCheckEnabled) {
+								const stopCheck = await runEmergencyStopCheckWithClient(client, timeoutMs);
+								if (!stopCheck.ok) {
+									return mapPostProbeCheckFailure(
+										'bluetooth',
+										'Emergency stop check',
+										stopCheck.message ?? 'unknown error'
+									);
+								}
+							}
+						} finally {
+							await client.close().catch(() => undefined);
+							scheduler.dispose();
 						}
-					}
 
-					if (emergencyStopCheckEnabled) {
-						const stopCheck = await runEmergencyStopCheckWithClient(client, timeoutMs);
-						if (!stopCheck.ok) {
-							return mapPostProbeCheckFailure('bluetooth', 'Emergency stop check', stopCheck.message ?? 'unknown error');
+						if (reconnectCheckEnabled) {
+							const reconnectCheck = await runReconnectRecoveryCheck(
+								createAdapter,
+								timeoutMs,
+								reconnectGlitchCheckEnabled
+							);
+							if (!reconnectCheck.ok) {
+								return mapPostProbeCheckFailure(
+									'bluetooth',
+									'Reconnect recovery check',
+									reconnectCheck.message ?? 'unknown error'
+								);
+							}
 						}
-					}
-				} finally {
-					await client.close().catch(() => undefined);
-					scheduler.dispose();
-				}
 
-				if (reconnectCheckEnabled) {
-					const reconnectCheck = await runReconnectRecoveryCheck(
-						createAdapter,
-						timeoutMs,
-						reconnectGlitchCheckEnabled
-					);
-					if (!reconnectCheck.ok) {
-						return mapPostProbeCheckFailure(
-							'bluetooth',
-							'Reconnect recovery check',
-							reconnectCheck.message ?? 'unknown error'
-						);
-					}
-				}
-
-				if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
-					const driverDropCheck = await runDriverDropRecoveryCheck(
-						'bluetooth',
-						createAdapter,
-						timeoutMs,
-						reconnectDriverDropWindowMs,
-						reconnectDriverDropPollMs
-					);
-					if (driverDropCheck.skipped) {
-						if (bluetoothStrictModeEnabled) {
-							return {
-								transport: 'bluetooth',
-								status: 'FAIL',
-								reason: `Bluetooth strict mode: driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
-							};
+						if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
+							const driverDropCheck = await runDriverDropRecoveryCheck(
+								'bluetooth',
+								createAdapter,
+								timeoutMs,
+								reconnectDriverDropWindowMs,
+								reconnectDriverDropPollMs
+							);
+							if (driverDropCheck.skipped) {
+								if (bluetoothStrictModeEnabled) {
+									return {
+										transport: 'bluetooth',
+										status: 'FAIL',
+										reason: `Bluetooth strict mode: driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+									};
+								}
+								return {
+									transport: 'bluetooth',
+									status: 'SKIP',
+									reason: `Bluetooth driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+								};
+							}
+							if (!driverDropCheck.ok) {
+								return mapPostProbeCheckFailure(
+									'bluetooth',
+									'Reconnect driver-drop check',
+									driverDropCheck.message ?? 'unknown error'
+								);
+							}
 						}
+
 						return {
 							transport: 'bluetooth',
-							status: 'SKIP',
-							reason: `Bluetooth driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
+							status: 'PASS',
+							reason: runSpec
+								? emergencyStopCheckEnabled
+									? reconnectCheckEnabled
+										? reconnectDriverDropCheckEnabled
+											? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+											: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
+										: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
+									: reconnectCheckEnabled
+										? reconnectDriverDropCheckEnabled
+											? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
+											: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
+										: 'Connect, capability probe and run-program check succeeded.'
+								: emergencyStopCheckEnabled
+									? reconnectCheckEnabled
+										? reconnectDriverDropCheckEnabled
+											? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
+											: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
+										: 'Connect, capability probe and emergency-stop check succeeded.'
+									: reconnectCheckEnabled
+										? reconnectDriverDropCheckEnabled
+											? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
+											: 'Connect, capability probe and reconnect-recovery checks succeeded.'
+										: 'Connect and capability probe succeeded.',
+							detail: {
+								port,
+								attempt,
+								dtr: dtrProfile,
+								runProgramPath: runSpec?.remotePath ?? undefined,
+								runProgramMode: runSpec?.mode ?? undefined,
+								runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
+								runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
+								emergencyStopChecked: emergencyStopCheckEnabled,
+								reconnectChecked: reconnectCheckEnabled,
+								reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
+								reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
+								fwVersion: probe.capability.fwVersion,
+								fwBuild: probe.capability.fwBuild
+							}
 						};
+					} catch (error) {
+						failures.push(`${port} attempt ${attempt} dtr=${dtrProfile}: ${errorMessage(error)}`);
+						if (uncaughtErrors.length > 0) {
+							for (const uncaught of uncaughtErrors.splice(0, uncaughtErrors.length)) {
+								failures.push(`${port} attempt ${attempt} dtr=${dtrProfile} uncaught: ${uncaught}`);
+							}
+						}
+						if (attempt < perPortAttempts) {
+							await sleep(retryDelayMs);
+						}
 					}
-					if (!driverDropCheck.ok) {
-						return mapPostProbeCheckFailure(
-							'bluetooth',
-							'Reconnect driver-drop check',
-							driverDropCheck.message ?? 'unknown error'
-						);
-					}
-				}
-
-				return {
-					transport: 'bluetooth',
-					status: 'PASS',
-					reason: runSpec
-						? emergencyStopCheckEnabled
-							? reconnectCheckEnabled
-								? reconnectDriverDropCheckEnabled
-									? 'Connect, capability probe, run-program, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
-									: 'Connect, capability probe, run-program, emergency-stop and reconnect-recovery checks succeeded.'
-								: 'Connect, capability probe, run-program and emergency-stop check succeeded.'
-							: reconnectCheckEnabled
-								? reconnectDriverDropCheckEnabled
-									? 'Connect, capability probe, run-program, reconnect-recovery and driver-drop reconnect checks succeeded.'
-									: 'Connect, capability probe, run-program and reconnect-recovery checks succeeded.'
-								: 'Connect, capability probe and run-program check succeeded.'
-						: emergencyStopCheckEnabled
-							? reconnectCheckEnabled
-								? reconnectDriverDropCheckEnabled
-									? 'Connect, capability probe, emergency-stop, reconnect-recovery and driver-drop reconnect checks succeeded.'
-									: 'Connect, capability probe, emergency-stop and reconnect-recovery checks succeeded.'
-								: 'Connect, capability probe and emergency-stop check succeeded.'
-							: reconnectCheckEnabled
-								? reconnectDriverDropCheckEnabled
-									? 'Connect, capability probe, reconnect-recovery and driver-drop reconnect checks succeeded.'
-									: 'Connect, capability probe and reconnect-recovery checks succeeded.'
-								: 'Connect and capability probe succeeded.',
-					detail: {
-						port,
-						attempt,
-						runProgramPath: runSpec?.remotePath ?? undefined,
-						runProgramMode: runSpec?.mode ?? undefined,
-						runProgramFixturePath: runSpec?.localFixturePath ?? undefined,
-						runProgramFixtureSource: runSpec?.fixtureSource ?? undefined,
-						emergencyStopChecked: emergencyStopCheckEnabled,
-						reconnectChecked: reconnectCheckEnabled,
-						reconnectGlitchChecked: reconnectCheckEnabled ? reconnectGlitchCheckEnabled : false,
-						reconnectDriverDropChecked: reconnectCheckEnabled ? reconnectDriverDropCheckEnabled : false,
-						fwVersion: probe.capability.fwVersion,
-						fwBuild: probe.capability.fwBuild
-					}
-				};
-			} catch (error) {
-				failures.push(`${port} attempt ${attempt}: ${errorMessage(error)}`);
-				if (attempt < perPortAttempts) {
-					await sleep(retryDelayMs);
 				}
 			}
 		}
+	} finally {
+		process.removeListener('uncaughtException', uncaughtHandler);
 	}
 
 	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('bluetooth', message))) {

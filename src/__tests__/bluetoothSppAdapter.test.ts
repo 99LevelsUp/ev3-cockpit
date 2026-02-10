@@ -39,7 +39,11 @@ class FakeSerialPort {
 	}
 
 	public emit(event: string, payload?: unknown): void {
-		for (const listener of this.listeners.get(event) ?? []) {
+		const listeners = this.listeners.get(event) ?? [];
+		if (event === 'error' && listeners.length === 0) {
+			throw payload instanceof Error ? payload : new Error(String(payload ?? 'Unhandled error'));
+		}
+		for (const listener of listeners) {
 			listener(payload);
 		}
 	}
@@ -166,4 +170,31 @@ test('BluetoothSppAdapter ignores stale messageCounter packets and resolves expe
 	} finally {
 		await adapter.close();
 	}
+});
+
+test('BluetoothSppAdapter close keeps error listener to avoid unhandled late serial errors', async () => {
+	const adapter = new BluetoothSppAdapter({ port: 'COM4' }) as unknown as {
+		open: () => Promise<void>;
+		close: () => Promise<void>;
+		openInternal: () => Promise<void>;
+		port?: FakeSerialPort;
+		receiveBuffer: Buffer;
+		opened: boolean;
+		handleFailure: (error: unknown) => void;
+	};
+
+	let port: FakeSerialPort | undefined;
+	adapter.openInternal = async () => {
+		port = new FakeSerialPort();
+		adapter.port = port;
+		adapter.receiveBuffer = Buffer.alloc(0);
+		adapter.opened = true;
+		port.on('data', () => undefined);
+		port.on('error', (arg) => adapter.handleFailure(arg as Error));
+		port.on('close', () => adapter.handleFailure(new Error('Bluetooth serial port closed.')));
+	};
+
+	await adapter.open();
+	await adapter.close();
+	assert.doesNotThrow(() => port?.emit('error', new Error('late write abort')));
 });

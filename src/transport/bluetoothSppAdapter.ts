@@ -105,7 +105,10 @@ export class BluetoothSppAdapter implements TransportAdapter {
 		await new Promise<void>((resolve) => {
 			port.close(() => resolve());
 		});
-		port.removeAllListeners();
+		// Keep an error handler attached after close: serialport may still emit a late
+		// write-abort error and Node would otherwise treat it as an unhandled event.
+		port.removeAllListeners('data');
+		port.removeAllListeners('close');
 		this.closing = false;
 	}
 
@@ -152,6 +155,14 @@ export class BluetoothSppAdapter implements TransportAdapter {
 			dtr: this.dtr
 		});
 
+		this.receiveBuffer = Buffer.alloc(0);
+		port.on('data', (chunk) => {
+			this.receiveBuffer = Buffer.concat([this.receiveBuffer, chunk]);
+			this.drainPendingReply();
+		});
+		port.on('error', (error) => this.handleFailure(error));
+		port.on('close', () => this.handleFailure(new Error('Bluetooth serial port closed.')));
+
 		await new Promise<void>((resolve, reject) => {
 			port.open((error?: Error | null) => {
 				if (error) {
@@ -163,15 +174,7 @@ export class BluetoothSppAdapter implements TransportAdapter {
 		});
 
 		this.port = port;
-		this.receiveBuffer = Buffer.alloc(0);
 		this.opened = true;
-
-		port.on('data', (chunk) => {
-			this.receiveBuffer = Buffer.concat([this.receiveBuffer, chunk]);
-			this.drainPendingReply();
-		});
-		port.on('error', (error) => this.handleFailure(error));
-		port.on('close', () => this.handleFailure(new Error('Bluetooth serial port closed.')));
 	}
 
 	private extractNextPacket(): Uint8Array | undefined {
