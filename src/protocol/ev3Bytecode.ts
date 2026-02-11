@@ -22,6 +22,13 @@ export function lc0(value: number): Uint8Array {
 	return new Uint8Array([value & 0x3f]);
 }
 
+export function lc1(value: number): Uint8Array {
+	if (!Number.isInteger(value) || value < -128 || value > 127) {
+		throw new Error(`LC1 value out of range: ${value}`);
+	}
+	return new Uint8Array([0x81, value & 0xff]);
+}
+
 export function uint32le(value: number): Uint8Array {
 	const out = new Uint8Array(4);
 	new DataView(out.buffer).setUint32(0, value >>> 0, true);
