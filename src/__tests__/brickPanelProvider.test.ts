@@ -173,3 +173,47 @@ test('BrickPanelProvider.refresh sends updateBricks message', async () => {
 		view.disposeHandler?.();
 	});
 });
+
+test('BrickPanelProvider.refresh includes lastError and lastOperation in payload', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		const bricks = [
+			{
+				brickId: 'b1', displayName: 'EV3', status: 'ERROR', transport: 'usb',
+				role: 'standalone', isActive: true, lastError: 'Connection lost', lastOperation: 'Deploy'
+			}
+		];
+
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => bricks as never,
+				setActiveBrick: () => true
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		const messages: unknown[] = [];
+		view.webview.postMessage = async (msg) => {
+			messages.push(msg);
+			return true;
+		};
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		provider.refresh();
+
+		const last = messages[messages.length - 1] as {
+			type: string;
+			bricks: Array<{ lastError?: string; lastOperation?: string }>
+		};
+		assert.equal(last.bricks[0].lastError, 'Connection lost');
+		assert.equal(last.bricks[0].lastOperation, 'Deploy');
+
+		view.disposeHandler?.();
+	});
+});

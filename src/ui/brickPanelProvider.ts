@@ -13,6 +13,8 @@ interface WebviewBrickInfo {
 	transport: string;
 	role: string;
 	isActive: boolean;
+	lastError?: string;
+	lastOperation?: string;
 }
 
 type MessageFromWebview =
@@ -95,7 +97,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			status: s.status,
 			transport: s.transport,
 			role: s.role,
-			isActive: s.isActive
+			isActive: s.isActive,
+			lastError: s.lastError,
+			lastOperation: s.lastOperation
 		}));
 		const message: MessageToWebview = { type: 'updateBricks', bricks };
 		void this.view.webview.postMessage(message);
@@ -194,6 +198,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		opacity: 0.7;
 		text-align: center;
 	}
+	.error-text {
+		color: var(--vscode-errorForeground, #f44);
+	}
 </style>
 </head>
 <body>
@@ -226,8 +233,14 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				html += '<div class="brick-info"><dl>'
 					+ '<dt>Status</dt><dd>' + activeBrick.status + '</dd>'
 					+ '<dt>Transport</dt><dd>' + activeBrick.transport + '</dd>'
-					+ '<dt>Role</dt><dd>' + activeBrick.role + '</dd>'
-					+ '</dl></div>';
+					+ '<dt>Role</dt><dd>' + activeBrick.role + '</dd>';
+				if (activeBrick.lastOperation) {
+					html += '<dt>Last Operation</dt><dd>' + activeBrick.lastOperation + '</dd>';
+				}
+				if (activeBrick.lastError) {
+					html += '<dt>Last Error</dt><dd class="error-text">' + activeBrick.lastError + '</dd>';
+				}
+				html += '</dl></div>';
 			}
 
 			root.innerHTML = html;
