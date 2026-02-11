@@ -61,7 +61,7 @@ const MIN_BT_BAUD_RATE = 300;
 const DEFAULT_TCP_PORT = 5555;
 /** Default EV3 UDP discovery port. */
 const DEFAULT_TCP_DISCOVERY_PORT = 3015;
-/** Default timeout (ms) for UDP-based EV3 brick discovery. */
+/** Default timeout (ms) for UDP-based EV3 Brick discovery. */
 const DEFAULT_TCP_DISCOVERY_TIMEOUT_MS = 7000;
 /** Minimum allowed timeout (ms) for Bluetooth probe and TCP discovery. */
 const MIN_PROBE_TIMEOUT_MS = 100;

@@ -58,7 +58,7 @@ export interface BrickPanelPollingConfig {
 }
 
 export class BrickPanelProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = 'ev3-cockpit.brickPanel';
+	public static readonly viewType = 'ev3-cockpit.brick';
 
 	private view?: vscode.WebviewView;
 	private onDidChangeActive?: () => void;

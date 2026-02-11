@@ -52,7 +52,7 @@ export interface ConnectCommandRegistrations {
 
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
 	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
-		vscode.window.showInformationMessage('Connecting to EV3 brick...');
+		vscode.window.showInformationMessage('Connecting to EV3 Brick...');
 		const activeLogger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();

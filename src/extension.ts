@@ -414,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
 		logger: logger!
 	});
 
-	const brickTreeView = vscode.window.createTreeView('ev3-cockpit.bricksView', {
+	const brickTreeView = vscode.window.createTreeView('ev3-cockpit.fileSystem', {
 		treeDataProvider: treeProvider,
 		showCollapseAll: true,
 		dragAndDropController: brickTreeDragAndDrop

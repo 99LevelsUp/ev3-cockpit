@@ -26,7 +26,7 @@ interface BrickControlServiceOptions {
 	logger?: Logger;
 }
 
-/** Default EV3 brick control command timeout (ms). */
+/** Default EV3 Brick control command timeout (ms). */
 const DEFAULT_BRICK_CONTROL_TIMEOUT_MS = 2000;
 
 export class BrickControlService {

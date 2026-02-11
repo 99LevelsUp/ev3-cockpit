@@ -12,7 +12,7 @@ import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
 const DEFAULT_TCP_PORT = 5555;
 /** Default EV3 UDP discovery broadcast port. */
 const DEFAULT_DISCOVERY_PORT = 3015;
-/** Default timeout (ms) for UDP-based EV3 brick discovery. */
+/** Default timeout (ms) for UDP-based EV3 Brick discovery. */
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 7_000;
 /** Default timeout (ms) for the EV3 TCP "unlock" handshake after socket connect. */
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 2_000;

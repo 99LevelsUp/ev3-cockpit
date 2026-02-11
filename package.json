@@ -182,171 +182,206 @@
         "title": "EV3 Cockpit: Retry Directory Listing"
       }
     ],
-    "views": {
-      "explorer": [
+    "viewsContainers": {
+      "secondarySidebar": [
         {
-          "id": "ev3-cockpit.bricksView",
-          "name": "EV3 Cockpit"
-        },
-        {
-          "type": "webview",
-          "id": "ev3-cockpit.brickPanel",
-          "name": "EV3 Brick Panel"
+          "id": "ev3-cockpit-brick-container",
+          "title": "EV3",
+          "icon": "$(device-camera-video)"
         }
       ]
     },
+    "views": {
+      "explorer": [
+        {
+          "id": "ev3-cockpit.fileSystem",
+          "name": "EV3"
+        }
+      ],
+      "ev3-cockpit-brick-container": [
+        {
+          "type": "webview",
+          "id": "ev3-cockpit.brick",
+          "name": "EV3"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "ev3-cockpit.fileSystem.filesystem",
+        "label": "EV3 Cockpit: Filesystem"
+      },
+      {
+        "id": "ev3-cockpit.fileSystem.batch",
+        "label": "EV3 Cockpit: Ready Bricks"
+      }
+    ],
     "menus": {
       "view/title": [
         {
+          "submenu": "ev3-cockpit.fileSystem.filesystem",
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "2_ev3@1"
+        },
+        {
+          "submenu": "ev3-cockpit.fileSystem.batch",
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "2_ev3@2"
+        }
+      ],
+      "submenu/ev3-cockpit.fileSystem.filesystem": [
+        {
+          "command": "ev3-cockpit.browseRemoteFs",
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "1_browse"
+        },
+        {
           "command": "ev3-cockpit.refreshBricksView",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "2_refresh"
         },
         {
           "command": "ev3-cockpit.setBricksTreeFilter",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation@1"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "3_filter"
         },
         {
           "command": "ev3-cockpit.clearBricksTreeFilter",
-          "when": "view == ev3-cockpit.bricksView && ev3-cockpit.bricksFilterActive",
-          "group": "navigation@1"
-        },
+          "when": "view == ev3-cockpit.fileSystem && ev3-cockpit.bricksFilterActive",
+          "group": "3_filter"
+        }
+      ],
+      "submenu/ev3-cockpit.fileSystem.batch": [
         {
           "command": "ev3-cockpit.reconnectReadyBricks",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation@2"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "1_reconnect"
         },
         {
           "command": "ev3-cockpit.previewWorkspaceDeployToReadyBricks",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation@3"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "2_preview"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceToReadyBricks",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation@4"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks",
-          "when": "view == ev3-cockpit.bricksView",
-          "group": "navigation@5"
-        },
-        {
-          "command": "ev3-cockpit.toggleFavoriteBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
-          "group": "navigation@6"
+          "when": "view == ev3-cockpit.fileSystem",
+          "group": "4_deployAndRun"
         }
       ],
       "view/item/context": [
         {
           "command": "ev3-cockpit.browseRemoteFs",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline"
         },
         {
           "command": "ev3-cockpit.connectEV3",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError)",
           "group": "inline"
         },
         {
           "command": "ev3-cockpit.connectEV3",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3BrickMessageConnect",
+          "when": "view == ev3-cockpit.fileSystem && viewItem == ev3BrickMessageConnect",
           "group": "inline"
         },
         {
           "command": "ev3-cockpit.uploadToBrickFolder",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory)",
           "group": "2_modification"
         },
         {
           "command": "ev3-cockpit.reconnectEV3",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline@2"
         },
         {
           "command": "ev3-cockpit.disconnectEV3",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline@3"
         },
         {
           "command": "ev3-cockpit.emergencyStop",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.stopProgram",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.runRemoteProgram",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline@4"
         },
         {
           "command": "ev3-cockpit.restartProgram",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "1_connection"
         },
         {
           "command": "ev3-cockpit.toggleFavoriteBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3BrickRootUnavailable || viewItem == ev3BrickRootError || viewItem == ev3BrickRootConnecting)",
           "group": "0_navigation"
         },
         {
           "command": "ev3-cockpit.revealInBricksTree",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive || viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
           "group": "0_navigation"
         },
         {
           "command": "ev3-cockpit.previewWorkspaceDeployToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.previewProjectDeployToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "inline@5"
         },
         {
           "command": "ev3-cockpit.deployProjectToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployWorkspaceAndRunExecutableToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deployProjectAndRunExecutableToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.applyDeployProfileToBrick",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3BrickRootReady || viewItem == ev3BrickRootReadyActive)",
           "group": "3_deploy"
         },
         {
           "command": "ev3-cockpit.deleteRemoteEntryFromTree",
-          "when": "view == ev3-cockpit.bricksView && (viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
+          "when": "view == ev3-cockpit.fileSystem && (viewItem == ev3RemoteDirectory || viewItem == ev3RemoteFile || viewItem == ev3RemoteFileExecutable)",
           "group": "2_modification"
         },
         {
           "command": "ev3-cockpit.runRemoteExecutableFromTree",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteFileExecutable",
+          "when": "view == ev3-cockpit.fileSystem && viewItem == ev3RemoteFileExecutable",
           "group": "inline"
         },
         {
           "command": "ev3-cockpit.retryDirectoryFromTree",
-          "when": "view == ev3-cockpit.bricksView && viewItem == ev3RemoteDirectoryError",
+          "when": "view == ev3-cockpit.fileSystem && viewItem == ev3RemoteDirectoryError",
           "group": "inline"
         }
       ]

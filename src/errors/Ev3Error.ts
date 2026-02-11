@@ -53,7 +53,7 @@ export class Ev3Error extends ExtensionError {
  */
 export const EV3_ERROR_MESSAGES: Record<Ev3ErrorCode, { message: string; action: Ev3RecoveryAction }> = {
 	DIRECT_REPLY_ERROR: {
-		message: 'The EV3 brick rejected the command. The operation or port may be invalid.',
+		message: 'The EV3 Brick rejected the command. The operation or port may be invalid.',
 		action: 'check-port'
 	},
 	SYSTEM_ERROR: {

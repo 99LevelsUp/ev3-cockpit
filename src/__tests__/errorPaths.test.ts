@@ -311,7 +311,7 @@ test('FsAvailabilityError NO_ACTIVE_BRICK on write maps to NoPermissions', async
 test('FsAvailabilityError NO_ACTIVE_BRICK on read maps to Unavailable', async () => {
 	await withMockedProvider(async ({ Ev3FileSystemProvider, FsAvailabilityError }) => {
 		const provider = new Ev3FileSystemProvider(async () => {
-			throw new FsAvailabilityError('NO_ACTIVE_BRICK', 'No active EV3 brick');
+			throw new FsAvailabilityError('NO_ACTIVE_BRICK', 'No active EV3 Brick');
 		}) as unknown as {
 			readFile: (uri: UriLike) => Promise<Uint8Array>;
 		};

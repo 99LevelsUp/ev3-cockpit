@@ -2,7 +2,7 @@
 
 EV3 Cockpit is a Visual Studio Code extension for LEGO Mindstorms EV3.
 
-Its purpose is to let you connect to EV3 bricks, manage files on the brick, deploy projects, and control program execution directly from VS Code.
+Its purpose is to let you connect to EV3 Bricks, manage files on the brick, deploy projects, and control program execution directly from VS Code.
 
 ## Goals
 
@@ -22,7 +22,7 @@ It is an extension that runs inside Visual Studio Code and adds EV3-specific com
 - Connect to EV3 over USB, Wi-Fi (TCP), or Bluetooth.
 - Detect EV3 capabilities after connection.
 - Browse and manage remote files via `ev3://active/...` and `ev3://<brickId>/...`.
-- Browse and manage files from the **EV3 Cockpit Bricks** tree in the Explorer sidebar.
+- Browse and manage files from the **EV3 Cockpit** File System view in the Explorer sidebar.
 - Upload, download, create folders, delete entries.
 - Deploy project/workspace files to EV3.
 - Preview deploy changes before applying them.
@@ -31,9 +31,9 @@ It is an extension that runs inside Visual Studio Code and adds EV3-specific com
 - Store per-brick connection profiles for targeted reconnect.
 - Run batch actions for ready bricks (batch reconnect, batch workspace preview/deploy/deploy+run).
 
-## Explorer Tree Workflow (User UI)
+## File System View (User UI)
 
-The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
+The extension adds **EV3 Cockpit** to the left Explorer panel in VS Code as the File System view.
 
 - Each connected brick is shown as its own collapsible root.
 - Expanding a brick shows its remote folders and files.
@@ -45,9 +45,9 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - Brick roots show runtime busy counters and keep per-brick last-operation metadata in tooltips.
 - Executable launch is type-based under the hood, so more executable file types can be added without changing the UI workflow.
 
-## Brick Panel (Active Brick)
+## Brick View (Active Brick)
 
-The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Bricks tree.
+The **EV3 Cockpit** webview appears as the **Brick** view in the right chat/sidebar area.
 
 - Shows a tab per connected brick with a colored status dot (green = READY, yellow = CONNECTING, grey = UNAVAILABLE, red = ERROR).
 - Clicking a tab switches the **active brick** — the target for `ev3://active/...` filesystem operations and deploy commands.
@@ -57,32 +57,32 @@ The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Br
 
 ## Sensors
 
-The extension can detect and read sensors connected to the EV3 brick's input ports (1–4).
+The extension can detect and read sensors connected to the EV3 Brick's input ports (1–4).
 
 - **Probe:** Detect what sensor type and mode is active on each port.
 - **Read:** Get the current value in SI units (e.g., distance in cm, color index, touch state).
 - **Mode switch:** Change the sensor operating mode (e.g., color sensor from reflected to ambient).
-- When sensor data is available, the Brick Panel shows a **Sensors** section listing each port with its detected type and current mode.
+- When sensor data is available, the Brick view shows a **Sensors** section listing each port with its detected type and current mode.
 
 ## Motors
 
-The extension can control and monitor motors connected to the EV3 brick's output ports (A–D).
+The extension can control and monitor motors connected to the EV3 Brick's output ports (A–D).
 
 - **Speed/Start:** Set motor speed (-100..+100%) and start regulated rotation.
 - **Stop:** Stop a motor with brake (hold position) or coast (freewheel).
 - **Tacho:** Read the tacho position counter (signed 32-bit integer, in degrees).
 - **Reset:** Reset the tacho counter to zero.
-- When motor data is available, the Brick Panel shows a **Motors** section listing each port with its running state and speed.
+- When motor data is available, the Brick view shows a **Motors** section listing each port with its running state and speed.
 
 ## Controls (LED, Sound, Buttons)
 
-The extension provides direct control of the EV3 brick's built-in peripherals:
+The extension provides direct control of the EV3 Brick's built-in peripherals:
 
 - **LED:** Set the brick status LED pattern (off, green, red, orange, flash, pulse — 10 patterns).
 - **Sound — Tone:** Play a tone at a given frequency (250–10000 Hz), volume (0–100), and duration.
 - **Sound — File:** Play a `.rsf` sound file from the brick filesystem.
-- **Buttons:** Read which button is currently pressed on the EV3 brick (Up, Down, Left, Right, Enter, Back).
-- When controls data is available, the Brick Panel shows a **Controls** section with the current button and LED state.
+- **Buttons:** Read which button is currently pressed on the EV3 Brick (Up, Down, Left, Right, Enter, Back).
+- When controls data is available, the Brick view shows a **Controls** section with the current button and LED state.
 
 ## Implementation Status
 
@@ -100,7 +100,7 @@ The extension provides direct control of the EV3 brick's built-in peripherals:
 - [x] Multi-brick tree runtime sessions + per-brick reconnect profiles
 - [x] Batch multi-brick commands (reconnect/deploy workspace)
 - [x] Test infrastructure (unit, host, hardware smoke/matrix)
-- [x] Brick Panel webview with active brick switching and polling
+- [x] Brick view webview with active brick switching and polling
 - [x] Sensor detection, reading, and mode switching (input ports 1–4)
 - [x] Motor control: speed/start, stop (brake/coast), tacho read/reset (output ports A–D)
 - [x] LED pattern control (10 patterns), sound (tone + file playback), button state reading

@@ -31,9 +31,9 @@ async function testBrickPanelViewContribution(): Promise<void> {
 	const views = extension.packageJSON?.contributes?.views;
 	assert.ok(views, 'Extension must contribute views.');
 
-	const explorerViews: Array<{ id: string; type?: string }> = views.explorer ?? [];
-	const brickPanel = explorerViews.find((v) => v.id === 'ev3-cockpit.brickPanel');
-	assert.ok(brickPanel, 'Extension must contribute ev3-cockpit.brickPanel webview view.');
+	const allViews = Object.values(views).flat() as Array<{ id: string; type?: string }>;
+	const brickPanel = allViews.find((v) => v.id === 'ev3-cockpit.brick');
+	assert.ok(brickPanel, 'Extension must contribute ev3-cockpit.brick webview view.');
 	assert.equal(brickPanel.type, 'webview', 'Brick panel must be a webview view.');
 }
 

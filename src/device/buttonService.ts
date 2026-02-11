@@ -64,7 +64,7 @@ export class ButtonService {
 	}
 
 	/**
-	 * Read the currently pressed button on the EV3 brick.
+	 * Read the currently pressed button on the EV3 Brick.
 	 * Returns 0 (NONE) if no button is pressed.
 	 * Uses opUI_READ(GET_PRESS, BUTTON) → 1 global byte.
 	 */
