@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { CompatProfileMode } from '../compat/capabilityProfile';
 import { DeployConfigSnapshot, readDeployConfig } from './deployConfig';
-import { sanitizeEnum, sanitizeStringList } from './sanitizers';
+import { sanitizeBoolean, sanitizeEnum, sanitizeStringList } from './sanitizers';
 
 export type FsMode = 'safe' | 'full';
 
@@ -11,10 +11,17 @@ export interface FsConfigSnapshot {
 	fullModeConfirmationRequired: boolean;
 }
 
+export interface ExperimentalConfigSnapshot {
+	connectionProfileCaching: boolean;
+	treePrefetch: boolean;
+	parallelUploads: boolean;
+}
+
 export interface FeatureConfigSnapshot {
 	compatProfileMode: CompatProfileMode;
 	fs: FsConfigSnapshot;
 	deploy: DeployConfigSnapshot;
+	experimental: ExperimentalConfigSnapshot;
 }
 
 export const DEFAULT_SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
@@ -77,6 +84,11 @@ export function readFeatureConfig(): FeatureConfigSnapshot {
 			defaultRoots: sanitizeRoots(cfg.get('fs.defaultRoots')),
 			fullModeConfirmationRequired: cfg.get('fs.fullMode.confirmationRequired', true)
 		},
-		deploy: readDeployConfig(cfg)
+		deploy: readDeployConfig(cfg),
+		experimental: {
+			connectionProfileCaching: sanitizeBoolean(cfg.get('experimental.connectionProfileCaching'), false),
+			treePrefetch: sanitizeBoolean(cfg.get('experimental.treePrefetch'), false),
+			parallelUploads: sanitizeBoolean(cfg.get('experimental.parallelUploads'), false)
+		}
 	};
 }

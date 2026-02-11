@@ -120,6 +120,10 @@ export class BrickConnectionProfileStore {
 		}
 		this.profilesByBrickId.set(sanitized.brickId, sanitized);
 		await this.saveToStorage();
+		// [experimental.connectionProfileCaching] When enabled, cache the last-used
+		// connection parameters (transport mode, host, port) in memory so that
+		// subsequent reconnect attempts can skip workspace config resolution and
+		// reuse the most recent successful profile immediately.
 	}
 
 	private loadFromStorage(): void {

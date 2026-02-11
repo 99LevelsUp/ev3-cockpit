@@ -715,6 +715,21 @@
             ]
           },
           "description": "Error codes eligible for retry when request is idempotent."
+        },
+        "ev3-cockpit.experimental.connectionProfileCaching": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: cache last-used connection profile parameters to speed up reconnection."
+        },
+        "ev3-cockpit.experimental.treePrefetch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: prefetch children of expanded brick tree nodes in the background."
+        },
+        "ev3-cockpit.experimental.parallelUploads": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: upload multiple files in parallel during deploy (with concurrency limit)."
         }
       }
     }

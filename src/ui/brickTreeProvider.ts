@@ -322,6 +322,11 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				];
 			}
 			const children = await this.loadDirectoryChildren(element.brickId, element.rootPath);
+			// [experimental.treePrefetch] When enabled, fire-and-forget prefetch of
+			// children for each directory node returned above. This would call
+			// this.loadDirectoryChildren() for every BrickDirectoryNode in `children`
+			// in the background, warming the directoryCache so that subsequent
+			// expansions resolve instantly from cache.
 			const queryTokens = this.resolveFilterTokens();
 			if (!queryTokens) {
 				return children;

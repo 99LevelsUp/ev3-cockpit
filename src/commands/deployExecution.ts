@@ -138,6 +138,10 @@ export async function executeDeployPlan(
 	}
 
 	for (let index = 0; index < files.length; index += 1) {
+		// [experimental.parallelUploads] When enabled, replace this sequential loop
+		// with a concurrency-limited parallel upload strategy (e.g. process N files
+		// at a time using a semaphore or work-stealing queue). The concurrency limit
+		// should be configurable and default to a conservative value (e.g. 3).
 		throwIfCancelled();
 		const file = files[index];
 		if (incrementalEnabled) {
