@@ -34,6 +34,20 @@ const DEFAULT_BT_PROBE_TIMEOUT_MS = 8_000;
 /** Default EV3 TCP communication port (LEGO standard). */
 const DEFAULT_TCP_PORT = 5555;
 
+function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	if (trimmed.length > 12) {
+		return undefined;
+	}
+	return trimmed;
+}
+
 export function createBrickResolvers(deps: {
 	brickRegistry: BrickRegistry;
 	getLogger: () => Logger;
@@ -123,6 +137,7 @@ export function createBrickResolvers(deps: {
 		const transport = profile?.transport.mode ?? resolveCurrentTransportMode();
 		const normalizedRootPath = normalizeBrickRootPath(profile?.rootPath ?? rootPath);
 		const role: BrickRole = 'standalone';
+		const profileDisplayName = normalizeBrickNameCandidate(profile?.displayName);
 
 		if (transport === 'tcp') {
 			const hostRaw = profile?.transport.tcpHost ?? cfg.get('transport.tcp.host');
@@ -130,9 +145,10 @@ export function createBrickResolvers(deps: {
 			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
 			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : DEFAULT_TCP_PORT;
 			const endpoint = `${host}:${port}`;
+			const fallbackDisplayName = `EV3 TCP (${endpoint})`;
 			return {
 				brickId: `tcp-${toSafeIdentifier(endpoint)}`,
-				displayName: `EV3 TCP (${endpoint})`,
+				displayName: profileDisplayName ?? fallbackDisplayName,
 				role,
 				transport,
 				rootPath: normalizedRootPath
@@ -142,9 +158,10 @@ export function createBrickResolvers(deps: {
 		if (transport === 'bluetooth') {
 			const portRaw = profile?.transport.bluetoothPort ?? cfg.get('transport.bluetooth.port');
 			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
+			const fallbackDisplayName = `EV3 Bluetooth (${port})`;
 			return {
 				brickId: `bluetooth-${toSafeIdentifier(port)}`,
-				displayName: `EV3 Bluetooth (${port})`,
+				displayName: profileDisplayName ?? fallbackDisplayName,
 				role,
 				transport,
 				rootPath: normalizedRootPath
@@ -154,9 +171,10 @@ export function createBrickResolvers(deps: {
 		if (transport === 'usb') {
 			const pathRaw = profile?.transport.usbPath ?? cfg.get('transport.usb.path');
 			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
+			const fallbackDisplayName = `EV3 USB (${usbPath})`;
 			return {
 				brickId: `usb-${toSafeIdentifier(usbPath)}`,
-				displayName: `EV3 USB (${usbPath})`,
+				displayName: profileDisplayName ?? fallbackDisplayName,
 				role,
 				transport,
 				rootPath: normalizedRootPath
@@ -166,7 +184,7 @@ export function createBrickResolvers(deps: {
 		if (transport === 'mock') {
 			return {
 				brickId: 'mock-active',
-				displayName: 'EV3 Mock',
+				displayName: profileDisplayName ?? 'EV3 Mock',
 				role,
 				transport,
 				rootPath: normalizedRootPath
@@ -175,7 +193,7 @@ export function createBrickResolvers(deps: {
 
 		return {
 			brickId: 'auto-active',
-			displayName: 'EV3 (Auto)',
+			displayName: profileDisplayName ?? 'EV3 (Auto)',
 			role,
 			transport,
 			rootPath: normalizedRootPath

@@ -53,6 +53,7 @@ interface BrickResolversModule {
 		resolveConnectedBrickDescriptor: (
 			rootPath: string,
 			profile?: {
+				displayName?: string;
 				transport: { mode: 'auto' | 'usb' | 'bluetooth' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; bluetoothPort?: string; usbPath?: string };
 				rootPath?: string;
 			}
@@ -366,6 +367,25 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 			});
 			assert.equal(mock.transport, 'mock');
 			assert.equal(mock.brickId, 'mock-active');
+		}
+	);
+});
+
+test('brickResolvers uses remembered Brick name as descriptor displayName', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'transport.mode': 'usb',
+				'transport.usb.path': 'hid#main'
+			}
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const descriptor = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
+				displayName: 'MyBrick',
+				transport: { mode: 'usb', usbPath: 'hid#main' }
+			});
+			assert.equal(descriptor.displayName, 'MyBrick');
 		}
 	);
 });

@@ -6,6 +6,7 @@ import { registerDeployCommands } from './commands/deployCommands';
 import { registerProgramControlCommands } from './commands/programControlCommands';
 import { registerTransportCommands } from './commands/transportCommands';
 import { readFeatureConfig } from './config/featureConfig';
+import { readBrickPanelDiscoveryConfig } from './config/brickPanelDiscoveryConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
 import {
 	BrickConnectionProfile,
@@ -24,6 +25,12 @@ import {
 	TransportConfigOverrides
 } from './transport/transportFactory';
 import {
+	SerialCandidate,
+	listSerialCandidates,
+	listTcpDiscoveryCandidates,
+	listUsbHidCandidates
+} from './transport/discovery';
+import {
 	BrickTreeProvider
 } from './ui/brickTreeProvider';
 import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
@@ -31,10 +38,10 @@ import { BrickUiStateStore } from './ui/brickUiStateStore';
 import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
 import { createBusyIndicatorPoller } from './ui/busyIndicator';
 import { createTreeStatePersistence } from './ui/treeStatePersistence';
-import { LoggingOrphanRecoveryStrategy } from './activation/helpers';
+import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
-import { BrickPanelProvider } from './ui/brickPanelProvider';
+import { BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	createTreeFilterState,
 	registerInspectBrickSessions,
@@ -299,6 +306,223 @@ export function activate(context: vscode.ExtensionContext) {
 		return sessionManager.getRestartCandidatePath(concreteBrickId);
 	};
 
+	const discoveredBrickProfiles = new Map<string, BrickConnectionProfile>();
+
+	const isLikelyEv3SerialCandidate = (
+		candidate: SerialCandidate,
+		preferredPort?: string
+	): boolean => {
+		const normalizedPath = candidate.path.trim().toUpperCase();
+		if (preferredPort && normalizedPath === preferredPort) {
+			return true;
+		}
+		const fingerprint = `${candidate.manufacturer ?? ''} ${candidate.serialNumber ?? ''} ${candidate.pnpId ?? ''}`.toUpperCase();
+		return /EV3|LEGO|MINDSTORMS|_005D/.test(fingerprint);
+	};
+
+	const normalizeBrickNameCandidate = (value: string | undefined): string | undefined => {
+		if (typeof value !== 'string') {
+			return undefined;
+		}
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return undefined;
+		}
+		if (trimmed.length > 12) {
+			return undefined;
+		}
+		return trimmed;
+	};
+
+	const resolvePreferredDisplayName = (
+		brickId: string,
+		fallbackDisplayName: string,
+		discoveredName?: string
+	): string => {
+		const connectedName = normalizeBrickNameCandidate(brickRegistry.getSnapshot(brickId)?.displayName);
+		if (connectedName) {
+			return connectedName;
+		}
+		const rememberedName = normalizeBrickNameCandidate(profileStore.get(brickId)?.displayName);
+		if (rememberedName) {
+			return rememberedName;
+		}
+		const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
+		if (liveDiscoveredName) {
+			return liveDiscoveredName;
+		}
+		return fallbackDisplayName;
+	};
+
+	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const discoveryPortRaw = cfg.get('transport.tcp.discoveryPort');
+		const discoveryPort =
+			typeof discoveryPortRaw === 'number' && Number.isFinite(discoveryPortRaw)
+				? Math.max(1, Math.floor(discoveryPortRaw))
+				: 3015;
+		const discoveryTimeoutRaw = cfg.get('transport.tcp.discoveryTimeoutMs');
+		const discoveryTimeoutMs =
+			typeof discoveryTimeoutRaw === 'number' && Number.isFinite(discoveryTimeoutRaw)
+				? Math.max(500, Math.min(3_000, Math.floor(discoveryTimeoutRaw)))
+				: 1_500;
+
+		const preferredBluetoothPortRaw = cfg.get('transport.bluetooth.port');
+		const preferredBluetoothPort =
+			typeof preferredBluetoothPortRaw === 'string' && preferredBluetoothPortRaw.trim().length > 0
+				? preferredBluetoothPortRaw.trim().toUpperCase()
+				: undefined;
+		const defaultRoot = normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
+		const nowIso = new Date().toISOString();
+
+		const [usbCandidates, serialCandidates, tcpCandidates] = await Promise.all([
+			listUsbHidCandidates(),
+			listSerialCandidates(),
+			listTcpDiscoveryCandidates(discoveryPort, discoveryTimeoutMs)
+		]);
+
+		discoveredBrickProfiles.clear();
+		const candidates: BrickPanelDiscoveryCandidate[] = [];
+		const seenCandidateIds = new Set<string>();
+
+		const registerCandidate = (
+			profile: BrickConnectionProfile,
+			candidate: BrickPanelDiscoveryCandidate
+		): void => {
+			if (seenCandidateIds.has(candidate.candidateId)) {
+				return;
+			}
+			seenCandidateIds.add(candidate.candidateId);
+			discoveredBrickProfiles.set(profile.brickId, profile);
+			candidates.push(candidate);
+		};
+
+		for (const usbCandidate of usbCandidates) {
+			const usbPath = usbCandidate.path.trim();
+			if (!usbPath) {
+				continue;
+			}
+			const brickId = `usb-${toSafeIdentifier(usbPath)}`;
+			const fallbackDisplayName = usbCandidate.serialNumber
+				? `EV3 USB (${usbCandidate.serialNumber})`
+				: `EV3 USB (${usbPath})`;
+			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
+			const profile: BrickConnectionProfile = {
+				brickId,
+				displayName,
+				savedAtIso: nowIso,
+				rootPath: defaultRoot,
+				transport: {
+					mode: 'usb',
+					usbPath
+				}
+			};
+			registerCandidate(profile, {
+				candidateId: brickId,
+				displayName,
+				transport: 'usb',
+				detail: usbPath,
+				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+			});
+		}
+
+		for (const serialCandidate of serialCandidates) {
+			const rawPath = serialCandidate.path.trim();
+			if (!rawPath || !/^COM\d+$/i.test(rawPath)) {
+				continue;
+			}
+			if (!isLikelyEv3SerialCandidate(serialCandidate, preferredBluetoothPort)) {
+				continue;
+			}
+			const bluetoothPort = rawPath.toUpperCase();
+			const brickId = `bluetooth-${toSafeIdentifier(bluetoothPort)}`;
+			const manufacturer = serialCandidate.manufacturer?.trim();
+			const fallbackDisplayName = `EV3 Bluetooth (${bluetoothPort})`;
+			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
+			const detail = manufacturer
+				? `${manufacturer} | ${bluetoothPort}`
+				: bluetoothPort;
+			const profile: BrickConnectionProfile = {
+				brickId,
+				displayName,
+				savedAtIso: nowIso,
+				rootPath: defaultRoot,
+				transport: {
+					mode: 'bluetooth',
+					bluetoothPort
+				}
+			};
+			registerCandidate(profile, {
+				candidateId: brickId,
+				displayName,
+				transport: 'bluetooth',
+				detail,
+				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+			});
+		}
+
+		for (const tcpCandidate of tcpCandidates) {
+			const endpoint = `${tcpCandidate.ip}:${tcpCandidate.port}`;
+			const brickId = `tcp-${toSafeIdentifier(endpoint)}`;
+			const fallbackDisplayName = `EV3 TCP (${endpoint})`;
+			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, tcpCandidate.name);
+			const serialPart = tcpCandidate.serialNumber ? `SN ${tcpCandidate.serialNumber}` : '';
+			const namePart = tcpCandidate.name ? tcpCandidate.name : '';
+			const detail = [namePart, serialPart].filter((part) => part.length > 0).join(' | ') || endpoint;
+			const profile: BrickConnectionProfile = {
+				brickId,
+				displayName,
+				savedAtIso: nowIso,
+				rootPath: defaultRoot,
+				transport: {
+					mode: 'tcp',
+					tcpHost: tcpCandidate.ip,
+					tcpPort: tcpCandidate.port,
+					tcpUseDiscovery: false,
+					tcpSerialNumber: tcpCandidate.serialNumber || undefined
+				}
+			};
+			registerCandidate(profile, {
+				candidateId: brickId,
+				displayName,
+				transport: 'tcp',
+				detail,
+				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+			});
+		}
+
+		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
+			usb: 0,
+			bluetooth: 1,
+			tcp: 2,
+			unknown: 3
+		};
+		candidates.sort((left, right) => {
+			const rank = transportRank[left.transport] - transportRank[right.transport];
+			if (rank !== 0) {
+				return rank;
+			}
+			return left.displayName.localeCompare(right.displayName);
+		});
+
+		logger.info('Brick panel scan completed', {
+			usbCandidates: usbCandidates.length,
+			serialCandidates: serialCandidates.length,
+			tcpCandidates: tcpCandidates.length,
+			discovered: candidates.length
+		});
+		return candidates;
+	};
+
+	const connectDiscoveredBrickFromPanel = async (candidateId: string): Promise<void> => {
+		const profile = discoveredBrickProfiles.get(candidateId);
+		if (!profile) {
+			throw new Error('Selected Brick is no longer available. Scan again.');
+		}
+		await profileStore.upsert(profile);
+		await vscode.commands.executeCommand('ev3-cockpit.connectEV3', profile.brickId);
+	};
+
 	// --- Register command modules ---
 
 	const { connect, disconnect, reconnect } = registerConnectCommands({
@@ -442,8 +666,10 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const brickPanelProvider = new BrickPanelProvider(context.extensionUri, {
 		listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
-		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId)
-	});
+		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
+		scanAvailableBricks: discoverBricksForPanel,
+		connectScannedBrick: connectDiscoveredBrickFromPanel
+	}, readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger));
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
 	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(
 		BrickPanelProvider.viewType,

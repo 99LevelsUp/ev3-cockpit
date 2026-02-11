@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { buildCapabilityProfile } from '../compat/capabilityProfile';
 import { readFeatureConfig } from '../config/featureConfig';
 import { BrickControlService } from '../device/brickControlService';
+import { BrickSettingsService } from '../device/brickSettingsService';
 import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';
 import { RemoteFsService } from '../fs/remoteFsService';
@@ -48,6 +49,21 @@ export interface ConnectCommandRegistrations {
 	connect: vscode.Disposable;
 	disconnect: vscode.Disposable;
 	reconnect: vscode.Disposable;
+}
+
+function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	// EV3 brick name is limited to 12 chars (per firmware API).
+	if (trimmed.length > 12) {
+		return undefined;
+	}
+	return trimmed;
 }
 
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
@@ -185,6 +201,19 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 					fsSafeRoots: featureConfig.fs.defaultRoots
 				});
 			}
+			let detectedBrickName: string | undefined;
+			try {
+				const settingsService = new BrickSettingsService({
+					commandClient,
+					defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
+					logger: activeLogger
+				});
+				detectedBrickName = normalizeBrickNameCandidate(await settingsService.getBrickName());
+			} catch (brickNameError) {
+				activeLogger.debug('Brick name read failed; using fallback display name.', {
+					message: brickNameError instanceof Error ? brickNameError.message : String(brickNameError)
+				});
+			}
 
 			const connectedFsService = new RemoteFsService({
 				commandClient,
@@ -199,7 +228,12 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				logger: activeLogger
 			});
 			const rootPath = requestedProfile?.rootPath ?? (featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
-			const brickDescriptor = options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
+			const baseDescriptor = options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
+			const rememberedName = normalizeBrickNameCandidate(requestedProfile?.displayName);
+			const brickDescriptor = {
+				...baseDescriptor,
+				displayName: detectedBrickName ?? rememberedName ?? baseDescriptor.displayName
+			};
 			brickRegistry.upsertReady({
 				...brickDescriptor,
 				fsService: connectedFsService,

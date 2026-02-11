@@ -1,0 +1,4 @@
+{
+  "discoveryRefreshFastMs": 2500,
+  "discoveryRefreshSlowMs": 15000
+}

@@ -8,10 +8,20 @@ import type { SensorInfo } from '../device/sensorTypes';
 export interface BrickPanelDataSource {
 	listBricks(): BrickSnapshot[];
 	setActiveBrick(brickId: string): boolean;
+	scanAvailableBricks?(): Promise<BrickPanelDiscoveryCandidate[]>;
+	connectScannedBrick?(candidateId: string): Promise<void>;
 	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
 	getMotorInfo?(brickId: string): MotorState[] | undefined;
 	getButtonState?(brickId: string): ButtonState | undefined;
 	getLedPattern?(brickId: string): LedPattern | undefined;
+}
+
+export interface BrickPanelDiscoveryCandidate {
+	candidateId: string;
+	displayName: string;
+	transport: 'usb' | 'bluetooth' | 'tcp' | 'unknown';
+	detail?: string;
+	alreadyConnected?: boolean;
 }
 
 interface WebviewBrickInfo {
@@ -27,6 +37,8 @@ interface WebviewBrickInfo {
 
 type MessageFromWebview =
 	| { type: 'selectBrick'; brickId: string }
+	| { type: 'scanBricks' }
+	| { type: 'connectScannedBrick'; candidateId: string }
 	| { type: 'ready' };
 
 interface WebviewSensorInfo {
@@ -48,13 +60,30 @@ interface WebviewControlsInfo {
 }
 
 type MessageToWebview =
-	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[]; motors?: WebviewMotorInfo[]; controls?: WebviewControlsInfo };
+	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[]; motors?: WebviewMotorInfo[]; controls?: WebviewControlsInfo }
+	| { type: 'scanStarted' }
+	| { type: 'scanResults'; candidates: BrickPanelDiscoveryCandidate[] }
+	| { type: 'scanFailed'; message: string }
+	| { type: 'connectStarted'; candidateId: string }
+	| { type: 'connectFailed'; candidateId: string; message: string }
+	| { type: 'connectSucceeded'; candidateId: string };
 
 export interface BrickPanelPollingConfig {
 	/** Polling interval (ms) when at least one brick exists. Default 500. */
 	activeIntervalMs?: number;
 	/** Polling interval (ms) when no bricks are known. Default 3000. */
 	idleIntervalMs?: number;
+	/** Discovery refresh interval (ms) while + tab is active. Default 2500. */
+	discoveryRefreshFastMs?: number;
+	/** Discovery refresh interval (ms) while + tab is not active. Default 15000. */
+	discoveryRefreshSlowMs?: number;
+}
+
+function sanitizeIntervalMs(value: number | undefined, fallback: number, min: number): number {
+	if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
+		return fallback;
+	}
+	return Math.max(min, Math.floor(value));
 }
 
 export class BrickPanelProvider implements vscode.WebviewViewProvider {
@@ -65,6 +94,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	private pollingTimer?: ReturnType<typeof setTimeout>;
 	private readonly activeIntervalMs: number;
 	private readonly idleIntervalMs: number;
+	private readonly discoveryRefreshFastMs: number;
+	private readonly discoveryRefreshSlowMs: number;
 
 	public constructor(
 		private readonly extensionUri: vscode.Uri,
@@ -73,6 +104,12 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	) {
 		this.activeIntervalMs = config?.activeIntervalMs ?? 500;
 		this.idleIntervalMs = config?.idleIntervalMs ?? 3_000;
+		this.discoveryRefreshFastMs = sanitizeIntervalMs(config?.discoveryRefreshFastMs, 2_500, 500);
+		this.discoveryRefreshSlowMs = sanitizeIntervalMs(
+			config?.discoveryRefreshSlowMs,
+			15_000,
+			Math.max(1_000, this.discoveryRefreshFastMs)
+		);
 	}
 
 	public resolveWebviewView(
@@ -96,6 +133,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					this.onDidChangeActive();
 				}
 				this.refresh();
+			} else if (message.type === 'scanBricks') {
+				void this.scanAvailableBricks();
+			} else if (message.type === 'connectScannedBrick') {
+				void this.connectScannedBrick(message.candidateId);
 			} else if (message.type === 'ready') {
 				this.refresh();
 			}
@@ -166,6 +207,68 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		void this.view.webview.postMessage(message);
 	}
 
+	private async scanAvailableBricks(): Promise<void> {
+		if (!this.view) {
+			return;
+		}
+		void this.view.webview.postMessage({ type: 'scanStarted' } satisfies MessageToWebview);
+		if (!this.dataSource.scanAvailableBricks) {
+			void this.view.webview.postMessage({
+				type: 'scanFailed',
+				message: 'Brick scan is not available in the current runtime.'
+			} satisfies MessageToWebview);
+			return;
+		}
+
+		try {
+			const candidates = await this.dataSource.scanAvailableBricks();
+			void this.view.webview.postMessage({
+				type: 'scanResults',
+				candidates
+			} satisfies MessageToWebview);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void this.view.webview.postMessage({
+				type: 'scanFailed',
+				message
+			} satisfies MessageToWebview);
+		}
+	}
+
+	private async connectScannedBrick(candidateId: string): Promise<void> {
+		if (!this.view) {
+			return;
+		}
+		void this.view.webview.postMessage({
+			type: 'connectStarted',
+			candidateId
+		} satisfies MessageToWebview);
+		if (!this.dataSource.connectScannedBrick) {
+			void this.view.webview.postMessage({
+				type: 'connectFailed',
+				candidateId,
+				message: 'Connect action is not available in the current runtime.'
+			} satisfies MessageToWebview);
+			return;
+		}
+
+		try {
+			await this.dataSource.connectScannedBrick(candidateId);
+			void this.view.webview.postMessage({
+				type: 'connectSucceeded',
+				candidateId
+			} satisfies MessageToWebview);
+			this.refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void this.view.webview.postMessage({
+				type: 'connectFailed',
+				candidateId,
+				message
+			} satisfies MessageToWebview);
+		}
+	}
+
 	private startPolling(): void {
 		this.stopPolling();
 		const tick = () => {
@@ -206,34 +309,191 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		font-family: var(--vscode-font-family);
 		font-size: var(--vscode-font-size);
 		color: var(--vscode-foreground);
+		background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 		padding: 0;
 		margin: 0;
 	}
+	#root {
+		min-height: 100vh;
+	}
+	.brick-detail-area {
+		background: var(--vscode-editor-background);
+		min-height: calc(100vh - 38px);
+	}
+	.brick-tabs-wrap {
+		position: relative;
+	}
 	.brick-tabs {
 		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		padding: 8px;
+		align-items: flex-end;
+		flex-wrap: nowrap;
+		gap: 0;
+		padding: 8px 8px 0;
+		overflow: visible;
+	}
+	.brick-tab-baseline {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 1px;
+		background: var(--vscode-panel-border, #444);
+		pointer-events: none;
+	}
+	.brick-tab-baseline-gap {
+		position: absolute;
+		bottom: 0;
+		height: 2px;
+		background: var(--vscode-editor-background);
+		pointer-events: none;
+		z-index: 3;
+		display: none;
+	}
+	.brick-tabs-main {
+		display: flex;
+		flex: 0 1 auto;
+		min-width: 0;
+		overflow: hidden;
 	}
 	.brick-tab {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		padding: 6px 12px;
-		border: 1px solid var(--vscode-panel-border, #444);
-		border-radius: 4px;
+		padding: 6px 10px;
+		margin: 0 2px -1px 0;
+		border: 1px solid transparent;
+		border-top-left-radius: 6px;
+		border-top-right-radius: 6px;
+		border-bottom-left-radius: 0;
+		border-bottom-right-radius: 0;
+		border-bottom-color: transparent;
 		cursor: pointer;
-		background: var(--vscode-editor-background);
+		background: transparent;
 		color: var(--vscode-foreground);
 		font-size: var(--vscode-font-size);
+		white-space: nowrap;
+		flex: 0 1 auto;
+		min-width: 44px;
+		max-width: 170px;
+	}
+	.brick-tab-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.brick-tab:hover {
 		background: var(--vscode-list-hoverBackground);
+		border-color: var(--vscode-panel-border, #444);
+		border-bottom-color: transparent;
 	}
 	.brick-tab.active {
+		background: var(--vscode-editor-background);
+		color: var(--vscode-foreground);
+		border-color: var(--vscode-panel-border, #444);
+		border-bottom-color: var(--vscode-editor-background);
+		position: relative;
+		z-index: 2;
+	}
+	.brick-tab.add-tab {
+		font-weight: bold;
+		min-width: 36px;
+		justify-content: center;
+	}
+	.brick-tab.overflow-toggle {
+		min-width: 36px;
+		max-width: 36px;
+		justify-content: center;
+		padding-left: 0;
+		padding-right: 0;
+	}
+	.brick-overflow-menu {
+		position: absolute;
+		top: calc(100% + 4px);
+		right: 46px;
+		z-index: 20;
+		display: flex;
+		flex-direction: column;
+		min-width: 220px;
+		max-width: 300px;
+		padding: 4px;
+		border: 1px solid var(--vscode-panel-border, #444);
+		border-radius: 6px;
+		background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+	}
+	.brick-overflow-item {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 8px;
+		border: none;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--vscode-foreground);
+		cursor: pointer;
+		text-align: left;
+	}
+	.brick-overflow-item:hover {
+		background: var(--vscode-list-hoverBackground);
+	}
+	.brick-overflow-item.active {
 		background: var(--vscode-list-activeSelectionBackground);
 		color: var(--vscode-list-activeSelectionForeground);
+	}
+	.brick-overflow-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.discovery-section {
+		padding: 8px 12px;
+	}
+	.discovery-title {
+		margin: 2px 0 6px;
+		font-weight: bold;
+	}
+	.discovery-help {
+		margin: 0 0 8px;
+		opacity: 0.75;
+	}
+	.discovery-message {
+		opacity: 0.8;
+		padding: 6px 0;
+	}
+	.discovery-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.discovery-item {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 2px;
+		padding: 6px 8px;
+		border: 1px solid var(--vscode-panel-border, #444);
+		border-radius: 4px;
+		background: var(--vscode-editor-background);
+		color: var(--vscode-foreground);
+		cursor: pointer;
+		text-align: left;
+	}
+	.discovery-item:hover:not(:disabled) {
+		background: var(--vscode-list-hoverBackground);
+	}
+	.discovery-item.selected {
 		border-color: var(--vscode-focusBorder);
+	}
+	.discovery-item:disabled {
+		opacity: 0.6;
+		cursor: wait;
+	}
+	.discovery-main {
+		font-weight: bold;
+	}
+	.discovery-meta {
+		opacity: 0.8;
+		font-size: 0.92em;
 	}
 	.status-dot {
 		width: 8px;
@@ -247,7 +507,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	.status-ERROR { background: #f44; }
 	.brick-info {
 		padding: 12px;
-		border-top: 1px solid var(--vscode-panel-border, #444);
 	}
 	.brick-info dt {
 		font-weight: bold;
@@ -339,25 +598,206 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let sensors = [];
 		let motors = [];
 		let controls = null;
+		let discoveryOpen = false;
+		let discoveryLoading = false;
+		let discoveryError = '';
+		let discoveryCandidates = [];
+		let selectedDiscoveryCandidateId = '';
+		let connectingDiscoveryCandidateId = '';
+		let overflowMenuOpen = false;
+		let initialAutoScanPending = true;
+		let scanInFlight = false;
+		let scanLoopTimer = null;
+		let scanLoopMode = '';
+		let lastScanBackground = false;
+		const DEFAULT_MAX_VISIBLE_BRICK_TABS = 4;
+		const ESTIMATED_BRICK_TAB_WIDTH = 128;
+		const ESTIMATED_CONTROL_TAB_WIDTH = 42;
+		const TAB_STRIP_HORIZONTAL_PADDING = 16;
+		const DISCOVERY_REFRESH_FAST_MS = ${this.discoveryRefreshFastMs};
+		const DISCOVERY_REFRESH_SLOW_MS = ${this.discoveryRefreshSlowMs};
+
+		function isPlusTabActive() {
+			return discoveryOpen || bricks.length === 0;
+		}
+
+		function stopScanLoop() {
+			if (scanLoopTimer) {
+				clearTimeout(scanLoopTimer);
+				scanLoopTimer = null;
+			}
+			scanLoopMode = '';
+		}
+
+		function scheduleNextScan(force = false) {
+			const desiredMode = isPlusTabActive() ? 'fast' : 'slow';
+			const delay = desiredMode === 'fast' ? DISCOVERY_REFRESH_FAST_MS : DISCOVERY_REFRESH_SLOW_MS;
+			if (scanInFlight) {
+				scanLoopMode = desiredMode;
+				return;
+			}
+			if (!force && scanLoopTimer && scanLoopMode === desiredMode) {
+				return;
+			}
+			stopScanLoop();
+			scanLoopMode = desiredMode;
+			scanLoopTimer = setTimeout(() => {
+				scanLoopTimer = null;
+				requestDiscoveryScan({
+					preserveCandidates: true,
+					openUi: isPlusTabActive(),
+					background: !isPlusTabActive()
+				});
+			}, delay);
+		}
+
+		function computeMaxVisibleBrickTabs(rootWidth, brickCount) {
+			if (!Number.isFinite(rootWidth) || rootWidth <= 0) {
+				return DEFAULT_MAX_VISIBLE_BRICK_TABS;
+			}
+			const reservedControlsWidth = ESTIMATED_CONTROL_TAB_WIDTH
+				+ (brickCount > 1 ? ESTIMATED_CONTROL_TAB_WIDTH : 0);
+			const available = Math.max(0, rootWidth - TAB_STRIP_HORIZONTAL_PADDING - reservedControlsWidth);
+			const byWidth = Math.floor(available / ESTIMATED_BRICK_TAB_WIDTH);
+			return Math.max(1, byWidth);
+		}
+
+		function buildTabLayout(allBricks, maxVisibleBrickTabs) {
+			if (!allBricks || allBricks.length <= maxVisibleBrickTabs) {
+				return { visibleBricks: allBricks || [], overflowBricks: [] };
+			}
+
+			const initiallyVisible = allBricks.slice(0, maxVisibleBrickTabs);
+			const activeBrick = allBricks.find((brick) => brick.isActive);
+			if (activeBrick && !initiallyVisible.some((brick) => brick.brickId === activeBrick.brickId)) {
+				const visibleBricks = initiallyVisible.slice(0, maxVisibleBrickTabs - 1);
+				visibleBricks.push(activeBrick);
+				const visibleIds = new Set(visibleBricks.map((brick) => brick.brickId));
+				return {
+					visibleBricks,
+					overflowBricks: allBricks.filter((brick) => !visibleIds.has(brick.brickId))
+				};
+			}
+
+			const visibleIds = new Set(initiallyVisible.map((brick) => brick.brickId));
+			return {
+				visibleBricks: initiallyVisible,
+				overflowBricks: allBricks.filter((brick) => !visibleIds.has(brick.brickId))
+			};
+		}
+
+		function mergeDiscoveryCandidates(nextCandidates) {
+			const byId = new Map();
+			for (const candidate of nextCandidates || []) {
+				if (!candidate || !candidate.candidateId) {
+					continue;
+				}
+				byId.set(candidate.candidateId, candidate);
+			}
+			discoveryCandidates = Array.from(byId.values());
+			if (selectedDiscoveryCandidateId && !byId.has(selectedDiscoveryCandidateId)) {
+				selectedDiscoveryCandidateId = '';
+			}
+		}
+
+		function requestDiscoveryScan(options = {}) {
+			if (scanInFlight) {
+				return;
+			}
+			const openUi = options.openUi !== false;
+			const background = options.background === true;
+			lastScanBackground = background;
+			if (openUi) {
+				discoveryOpen = true;
+			}
+			discoveryLoading = openUi && discoveryCandidates.length === 0;
+			discoveryError = '';
+			if (!options.preserveCandidates) {
+				discoveryCandidates = [];
+				selectedDiscoveryCandidateId = '';
+				connectingDiscoveryCandidateId = '';
+			}
+			scanInFlight = true;
+			render();
+			vscode.postMessage({ type: 'scanBricks' });
+		}
 
 		function render() {
 			const root = document.getElementById('root');
-			if (bricks.length === 0) {
-				root.innerHTML = '<div class="empty-message">No bricks connected.<br>Run "EV3 Cockpit: Connect to EV3 Brick" to get started.</div>';
-				return;
-			}
-
 			const activeBrick = bricks.find(b => b.isActive);
+			const maxVisibleBrickTabs = computeMaxVisibleBrickTabs(root.clientWidth, bricks.length);
+			const tabLayout = buildTabLayout(bricks, maxVisibleBrickTabs);
+			const visibleBricks = tabLayout.visibleBricks;
+			const overflowBricks = tabLayout.overflowBricks;
+			if (overflowBricks.length === 0 && overflowMenuOpen) {
+				overflowMenuOpen = false;
+			}
+			const overflowHasActive = overflowBricks.some((brick) => brick.isActive);
 
-			let html = '<div class="brick-tabs">';
-			for (const brick of bricks) {
+			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
+			for (const brick of visibleBricks) {
 				const activeClass = brick.isActive ? ' active' : '';
-				html += '<button class="brick-tab' + activeClass + '" data-brick-id="' + brick.brickId + '">'
+				html += '<button class="brick-tab' + activeClass + '" data-brick-id="' + brick.brickId + '" title="' + brick.displayName + '">'
 					+ '<span class="status-dot status-' + brick.status + '"></span>'
-					+ brick.displayName
+					+ '<span class="brick-tab-label">' + brick.displayName + '</span>'
 					+ '</button>';
 			}
 			html += '</div>';
+			if (overflowBricks.length > 0) {
+				const overflowActiveClass = overflowHasActive ? ' active' : '';
+				html += '<button class="brick-tab overflow-toggle' + overflowActiveClass + '" data-overflow-toggle="true" title="More Bricks" aria-label="More Bricks">...</button>';
+			}
+			const addTabActiveClass = (discoveryOpen || bricks.length === 0) ? ' active' : '';
+			html += '<button class="brick-tab add-tab' + addTabActiveClass + '" data-add-brick="true" title="Connect EV3 Brick" aria-label="Connect EV3 Brick">+</button>';
+			html += '</div>';
+			html += '<div class="brick-tab-baseline"></div>';
+			html += '<div class="brick-tab-baseline-gap"></div>';
+			if (overflowMenuOpen && overflowBricks.length > 0) {
+				html += '<div class="brick-overflow-menu">';
+				for (const brick of overflowBricks) {
+					const overflowItemActiveClass = brick.isActive ? ' active' : '';
+					html += '<button class="brick-overflow-item' + overflowItemActiveClass + '" data-overflow-brick-id="' + brick.brickId + '" title="' + brick.displayName + '">'
+						+ '<span class="status-dot status-' + brick.status + '"></span>'
+						+ '<span class="brick-overflow-label">' + brick.displayName + '</span>'
+						+ '</button>';
+				}
+				html += '</div>';
+			}
+			html += '</div>';
+
+			html += '<div class="brick-detail-area">';
+
+			if (discoveryOpen) {
+				html += '<div class="discovery-section">'
+					+ '<div class="discovery-title">Available Bricks</div>'
+					+ '<div class="discovery-help">Single-click to select, double-click to connect.</div>';
+				if (discoveryLoading) {
+					html += '<div class="discovery-message">Scanning...</div>';
+				} else if (discoveryError) {
+					html += '<div class="discovery-message error-text">' + discoveryError + '</div>';
+				} else if (!discoveryCandidates || discoveryCandidates.length === 0) {
+					html += '<div class="discovery-message">No available Bricks found.</div>';
+				} else {
+					html += '<div class="discovery-list">';
+					for (const candidate of discoveryCandidates) {
+						const selectedClass = candidate.candidateId === selectedDiscoveryCandidateId ? ' selected' : '';
+						const transportLabel = String(candidate.transport || 'unknown').toUpperCase();
+						const connectedLabel = candidate.alreadyConnected ? ' | connected' : '';
+						const detail = candidate.detail ? ' | ' + candidate.detail : '';
+						const disabledAttr = connectingDiscoveryCandidateId ? ' disabled' : '';
+						html += '<button class="discovery-item' + selectedClass + '" data-candidate-id="' + candidate.candidateId + '"' + disabledAttr + '>'
+							+ '<span class="discovery-main">' + candidate.displayName + '</span>'
+							+ '<span class="discovery-meta">' + transportLabel + detail + connectedLabel + '</span>'
+							+ '</button>';
+					}
+					html += '</div>';
+				}
+				html += '</div>';
+			}
+
+			if (bricks.length === 0) {
+				html += '<div class="empty-message">No bricks connected.<br>Use the + tab to connect an EV3 Brick.</div>';
+			}
 
 			if (activeBrick) {
 				html += '<div class="brick-info"><dl>'
@@ -414,12 +854,59 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				}
 				html += '</div>';
 			}
+			html += '</div>';
 
 			root.innerHTML = html;
+			const baselineGap = root.querySelector('.brick-tab-baseline-gap');
+			const activeTab = root.querySelector('.brick-tab.active');
+			if (baselineGap && activeTab) {
+				const left = activeTab.offsetLeft - 1;
+				const width = activeTab.offsetWidth + 2;
+				baselineGap.style.left = left + 'px';
+				baselineGap.style.width = width + 'px';
+				baselineGap.style.display = 'block';
+			} else if (baselineGap) {
+				baselineGap.style.display = 'none';
+			}
 
 			for (const tab of root.querySelectorAll('.brick-tab')) {
 				tab.addEventListener('click', () => {
+					if (tab.dataset.addBrick === 'true') {
+						overflowMenuOpen = false;
+						requestDiscoveryScan({ preserveCandidates: false });
+						return;
+					}
+					if (tab.dataset.overflowToggle === 'true') {
+						overflowMenuOpen = !overflowMenuOpen;
+						render();
+						return;
+					}
+					overflowMenuOpen = false;
+					discoveryOpen = false;
+					stopScanLoop();
 					vscode.postMessage({ type: 'selectBrick', brickId: tab.dataset.brickId });
+				});
+			}
+			for (const overflowButton of root.querySelectorAll('.brick-overflow-item')) {
+				overflowButton.addEventListener('click', () => {
+					overflowMenuOpen = false;
+					vscode.postMessage({ type: 'selectBrick', brickId: overflowButton.dataset.overflowBrickId });
+				});
+			}
+			for (const candidateButton of root.querySelectorAll('.discovery-item')) {
+				candidateButton.addEventListener('click', () => {
+					selectedDiscoveryCandidateId = candidateButton.dataset.candidateId || '';
+					render();
+				});
+				candidateButton.addEventListener('dblclick', () => {
+					const candidateId = candidateButton.dataset.candidateId || '';
+					if (!candidateId) {
+						return;
+					}
+					if (candidateButton.disabled) {
+						return;
+					}
+					vscode.postMessage({ type: 'connectScannedBrick', candidateId });
 				});
 			}
 		}
@@ -431,7 +918,83 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				sensors = message.sensors || [];
 				motors = message.motors || [];
 				controls = message.controls || null;
+				if (initialAutoScanPending && bricks.length === 0) {
+					initialAutoScanPending = false;
+					requestDiscoveryScan({ preserveCandidates: false });
+					return;
+				}
+				initialAutoScanPending = false;
 				render();
+				scheduleNextScan();
+				return;
+			}
+			if (message.type === 'scanStarted') {
+				if (!lastScanBackground) {
+					discoveryOpen = true;
+					discoveryLoading = discoveryCandidates.length === 0;
+					discoveryError = '';
+				}
+				scanInFlight = true;
+				if (discoveryOpen) {
+					render();
+				}
+				return;
+			}
+			if (message.type === 'scanResults') {
+				if (!lastScanBackground) {
+					discoveryOpen = true;
+					discoveryLoading = false;
+					discoveryError = '';
+				}
+				scanInFlight = false;
+				mergeDiscoveryCandidates(message.candidates || []);
+				connectingDiscoveryCandidateId = '';
+				if (discoveryOpen || !lastScanBackground) {
+					render();
+				}
+				scheduleNextScan();
+				return;
+			}
+			if (message.type === 'scanFailed') {
+				if (!lastScanBackground) {
+					discoveryOpen = true;
+					discoveryLoading = false;
+					discoveryError = message.message || 'Brick scan failed.';
+				}
+				scanInFlight = false;
+				connectingDiscoveryCandidateId = '';
+				if (discoveryOpen || !lastScanBackground) {
+					render();
+				}
+				scheduleNextScan();
+				return;
+			}
+			if (message.type === 'connectStarted') {
+				discoveryOpen = true;
+				connectingDiscoveryCandidateId = message.candidateId || '';
+				discoveryError = '';
+				render();
+				return;
+			}
+			if (message.type === 'connectSucceeded') {
+				discoveryOpen = false;
+				discoveryLoading = false;
+				discoveryError = '';
+				discoveryCandidates = [];
+				selectedDiscoveryCandidateId = '';
+				connectingDiscoveryCandidateId = '';
+				scanInFlight = false;
+				stopScanLoop();
+				render();
+				scheduleNextScan(true);
+				return;
+			}
+			if (message.type === 'connectFailed') {
+				connectingDiscoveryCandidateId = '';
+				discoveryError = message.message || 'Connect failed.';
+				scanInFlight = false;
+				render();
+				scheduleNextScan();
 			}
 		});
 
