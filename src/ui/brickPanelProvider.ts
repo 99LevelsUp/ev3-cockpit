@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
+import type { ButtonState } from '../device/buttonService';
+import type { LedPattern } from '../device/ledService';
 import type { MotorState } from '../device/motorTypes';
 import type { SensorInfo } from '../device/sensorTypes';
 
@@ -8,6 +10,8 @@ export interface BrickPanelDataSource {
 	setActiveBrick(brickId: string): boolean;
 	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
 	getMotorInfo?(brickId: string): MotorState[] | undefined;
+	getButtonState?(brickId: string): ButtonState | undefined;
+	getLedPattern?(brickId: string): LedPattern | undefined;
 }
 
 interface WebviewBrickInfo {
@@ -38,8 +42,13 @@ interface WebviewMotorInfo {
 	running: boolean;
 }
 
+interface WebviewControlsInfo {
+	buttonName?: string;
+	ledPattern?: number;
+}
+
 type MessageToWebview =
-	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[]; motors?: WebviewMotorInfo[] };
+	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[]; motors?: WebviewMotorInfo[]; controls?: WebviewControlsInfo };
 
 export interface BrickPanelPollingConfig {
 	/** Polling interval (ms) when at least one brick exists. Default 500. */
@@ -142,7 +151,18 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				}));
 			}
 		}
-		const message: MessageToWebview = { type: 'updateBricks', bricks, sensors, motors };
+		let controls: WebviewControlsInfo | undefined;
+		if (activeBrick) {
+			const buttonState = this.dataSource.getButtonState?.(activeBrick.brickId);
+			const ledPattern = this.dataSource.getLedPattern?.(activeBrick.brickId);
+			if (buttonState !== undefined || ledPattern !== undefined) {
+				controls = {
+					buttonName: buttonState?.buttonName,
+					ledPattern: ledPattern
+				};
+			}
+		}
+		const message: MessageToWebview = { type: 'updateBricks', bricks, sensors, motors, controls };
 		void this.view.webview.postMessage(message);
 	}
 
@@ -289,6 +309,25 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		font-weight: bold;
 		min-width: 50px;
 	}
+	.controls-section {
+		padding: 8px 12px;
+		border-top: 1px solid var(--vscode-panel-border, #444);
+	}
+	.controls-section h3 {
+		margin: 4px 0 8px;
+		font-size: var(--vscode-font-size);
+		font-weight: bold;
+	}
+	.controls-row {
+		display: flex;
+		justify-content: space-between;
+		padding: 3px 0;
+		opacity: 0.85;
+	}
+	.controls-label {
+		font-weight: bold;
+		min-width: 80px;
+	}
 </style>
 </head>
 <body>
@@ -299,6 +338,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let bricks = [];
 		let sensors = [];
 		let motors = [];
+		let controls = null;
 
 		function render() {
 			const root = document.getElementById('root');
@@ -357,6 +397,24 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				html += '</div>';
 			}
 
+			if (controls) {
+				html += '<div class="controls-section"><h3>Controls</h3>';
+				if (controls.buttonName) {
+					html += '<div class="controls-row">'
+						+ '<span class="controls-label">Button</span>'
+						+ '<span>' + controls.buttonName + '</span>'
+						+ '</div>';
+				}
+				if (typeof controls.ledPattern === 'number') {
+					const ledNames = ['Off','Green','Red','Orange','Green Flash','Red Flash','Orange Flash','Green Pulse','Red Pulse','Orange Pulse'];
+					html += '<div class="controls-row">'
+						+ '<span class="controls-label">LED</span>'
+						+ '<span>' + (ledNames[controls.ledPattern] || 'Pattern ' + controls.ledPattern) + '</span>'
+						+ '</div>';
+				}
+				html += '</div>';
+			}
+
 			root.innerHTML = html;
 
 			for (const tab of root.querySelectorAll('.brick-tab')) {
@@ -372,6 +430,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				bricks = message.bricks;
 				sensors = message.sensors || [];
 				motors = message.motors || [];
+				controls = message.controls || null;
 				render();
 			}
 		});
