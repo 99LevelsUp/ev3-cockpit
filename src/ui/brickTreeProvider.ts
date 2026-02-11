@@ -3,8 +3,9 @@ import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { isPerfEnabled } from '../diagnostics/perfTiming';
-import { isRemoteExecutablePath } from '../fs/remoteExecutable';
 import type { RemoteFsService } from '../fs/remoteFsService';
+import { renderBrickTreeItem } from './BrickTreeRenderer';
+import { TreeCache } from './TreeCache';
 
 export type BrickTreeNode = BrickRootNode | BrickDirectoryNode | BrickFileNode | BrickMessageNode;
 
@@ -61,18 +62,9 @@ interface BrickTreeProviderOptions {
 	getFilterQuery?: () => string;
 }
 
-interface DirectoryCacheEntry {
-	expiresAt: number;
-	children: BrickTreeNode[];
-}
-
 const DIRECTORY_CACHE_TTL_ROOT_MS = 900;
 const DIRECTORY_CACHE_TTL_DEEP_MS = 2_200;
 const DIRECTORY_CACHE_MAX_ENTRIES = 256;
-
-function buildEv3Uri(brickId: string, remotePath: string): vscode.Uri {
-	return vscode.Uri.parse(`ev3://${brickId}${remotePath}`);
-}
 
 function normalizeRootPath(remotePath: string): string {
 	const normalized = remotePath.replace(/\\/g, '/');
@@ -130,7 +122,10 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 	private readonly directoryNodesByPath = new Map<string, BrickDirectoryNode>();
 	private readonly fileNodesByPath = new Map<string, BrickFileNode>();
 	private readonly nodesById = new Map<string, BrickTreeNode>();
-	private readonly directoryCache = new Map<string, DirectoryCacheEntry>();
+	private readonly directoryCache = new TreeCache<string, BrickTreeNode[]>({
+		maxEntries: DIRECTORY_CACHE_MAX_ENTRIES,
+		ttlMs: DIRECTORY_CACHE_TTL_DEEP_MS
+	});
 	private cacheHitCount = 0;
 	private cacheMissCount = 0;
 	private cacheAccessCount = 0;
@@ -262,92 +257,19 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 	}
 
 	private getCachedDirectoryChildren(key: string): BrickTreeNode[] | undefined {
-		const entry = this.directoryCache.get(key);
-		if (!entry) {
-			this.recordDirectoryCacheAccess(false);
-			return undefined;
-		}
-		if (entry.expiresAt <= Date.now()) {
-			this.directoryCache.delete(key);
-			this.recordDirectoryCacheAccess(false);
-			return undefined;
-		}
-
-		// LRU touch.
-		this.directoryCache.delete(key);
-		this.directoryCache.set(key, entry);
-		this.recordDirectoryCacheAccess(true);
-		return entry.children;
+		const children = this.directoryCache.get(key);
+		this.recordDirectoryCacheAccess(children !== undefined);
+		return children;
 	}
 
 	private setCachedDirectoryChildren(key: string, remotePath: string, children: BrickTreeNode[]): void {
-		this.directoryCache.delete(key);
-		this.directoryCache.set(key, {
-			expiresAt: Date.now() + getDirectoryCacheTtlMs(remotePath),
-			children
-		});
-		while (this.directoryCache.size > DIRECTORY_CACHE_MAX_ENTRIES) {
-			const oldestKey = this.directoryCache.keys().next().value as string | undefined;
-			if (!oldestKey) {
-				break;
-			}
-			this.directoryCache.delete(oldestKey);
-		}
+		this.directoryCache.set(key, children, getDirectoryCacheTtlMs(remotePath));
 	}
 
 	public getTreeItem(element: BrickTreeNode): vscode.TreeItem {
-		switch (element.kind) {
-			case 'brick': {
-				const item = new vscode.TreeItem(element.displayName, vscode.TreeItemCollapsibleState.Collapsed);
-				item.id = buildRootNodeId(element.brickId);
-				const statusBadge = this.renderStatusBadge(element.status, element.isActive);
-				const descriptionParts = [statusBadge];
-				if (this.options.isFavoriteBrick?.(element.brickId)) {
-					descriptionParts.push('PIN');
-				}
-				if ((element.busyCommandCount ?? 0) > 0) {
-					descriptionParts.push(`busy:${element.busyCommandCount}`);
-				}
-				descriptionParts.push(element.transport, element.role);
-				item.description = descriptionParts.join(' | ');
-				item.tooltip = this.buildRootTooltip(element);
-				item.contextValue = this.getRootContextValue(element);
-				item.iconPath = this.getRootIcon(element);
-				item.resourceUri = buildEv3Uri(element.brickId, element.rootPath);
-				return item;
-			}
-			case 'directory': {
-				const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.Collapsed);
-				item.id = buildDirectoryNodeId(element.brickId, element.remotePath);
-				item.contextValue = 'ev3RemoteDirectory';
-				item.resourceUri = buildEv3Uri(element.brickId, element.remotePath);
-				return item;
-			}
-			case 'file': {
-				const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
-				item.id = buildFileNodeId(element.brickId, element.remotePath);
-				item.description = `${element.size} B`;
-				const isExecutable = isRemoteExecutablePath(element.remotePath);
-				item.contextValue = isExecutable ? 'ev3RemoteFileExecutable' : 'ev3RemoteFile';
-				item.iconPath = new vscode.ThemeIcon(isExecutable ? 'play' : 'file');
-				item.resourceUri = buildEv3Uri(element.brickId, element.remotePath);
-				item.command = {
-					command: 'vscode.open',
-					title: 'Open Remote File',
-					arguments: [item.resourceUri]
-				};
-				return item;
-			}
-			case 'message': {
-				const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
-				item.id = `message:${element.brickId}:${element.label}`;
-				item.description = element.detail;
-				item.contextValue = element.contextValue ?? 'ev3BrickMessage';
-				item.iconPath = new vscode.ThemeIcon('info');
-				item.command = element.command;
-				return item;
-			}
-		}
+		return renderBrickTreeItem(element, {
+			isFavoriteBrick: this.options.isFavoriteBrick
+		});
 	}
 
 	public async getChildren(element?: BrickTreeNode): Promise<BrickTreeNode[]> {
@@ -599,51 +521,6 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		}
 	}
 
-	private buildRootTooltip(node: BrickRootNode): string {
-		const lines = [`${node.displayName}`, `Status: ${node.status}`, `Root: ${node.rootPath}`];
-		lines.push(`Runtime: ${node.schedulerState ?? 'idle'}, busy=${node.busyCommandCount ?? 0}`);
-		if (node.lastOperation) {
-			lines.push(
-				`Last operation: ${node.lastOperation}${
-					node.lastOperationAtIso ? ` (${new Date(node.lastOperationAtIso).toLocaleTimeString()})` : ''
-				}`
-			);
-		}
-		if (node.lastError) {
-			lines.push(`Error: ${node.lastError}`);
-		}
-		return lines.join('\n');
-	}
-
-	private getRootContextValue(node: BrickRootNode): string {
-		if (node.status === 'READY') {
-			return node.isActive ? 'ev3BrickRootReadyActive' : 'ev3BrickRootReady';
-		}
-		if (node.status === 'CONNECTING') {
-			return 'ev3BrickRootConnecting';
-		}
-		if (node.status === 'ERROR') {
-			return 'ev3BrickRootError';
-		}
-		return 'ev3BrickRootUnavailable';
-	}
-
-	private getRootIcon(node: BrickRootNode): vscode.ThemeIcon {
-		if (node.status === 'READY') {
-			if ((node.busyCommandCount ?? 0) > 0) {
-				return new vscode.ThemeIcon('sync~spin');
-			}
-			return new vscode.ThemeIcon(node.isActive ? 'plug' : 'device-camera-video');
-		}
-		if (node.status === 'CONNECTING') {
-			return new vscode.ThemeIcon('sync~spin');
-		}
-		if (node.status === 'ERROR') {
-			return new vscode.ThemeIcon('error');
-		}
-		return new vscode.ThemeIcon('debug-disconnect');
-	}
-
 	private buildUnavailableMessageNode(
 		brickId: string,
 		status: BrickSnapshot['status'],
@@ -793,16 +670,6 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		this.fileNodesByPath.set(key, created);
 		this.nodesById.set(getBrickTreeNodeId(created), created);
 		return created;
-	}
-
-	private renderStatusBadge(status: BrickSnapshot['status'], isActive: boolean): string {
-		if (status === 'READY' && isActive) {
-			return 'ACTIVE';
-		}
-		if (status === 'UNAVAILABLE') {
-			return 'OFFLINE';
-		}
-		return status;
 	}
 }
 
