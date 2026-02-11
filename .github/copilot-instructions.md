@@ -9,7 +9,7 @@ Before doing any work, read these files (create `.work/` if missing):
 - `.work/IMPLEMENTATION.md`
 - `.work/EXECUTION_PLAN.md`
 - `.work/EXECUTION_PLAN_ATOMIC.md`
-- `.work/architecture 00 - Úvod.md`
+- `.work/architecture.md`
 
 If any of these files are missing, stop and create a **BLOCKER** in `.work/BLOCKERS.md` describing what is missing and how to obtain it.
 
@@ -79,9 +79,9 @@ After push:
 ## Architecture review cycle (after each package/bundle)
 A “package” is a larger chapter in the plan (e.g., BALÍČEK A, B, C…).
 After completing a package:
-1) Follow `.work/architecture 00 - Úvod.md` exactly:
-   - Generate/update `.work/architecture 01..30*.md` (overwrite from scratch).
-   - Do NOT delete `architecture 00`; only update its “Obsah” section.
+1) Follow `.work/architecture.md` exactly:
+   - Generate/update `.work/architecture_files/NN.md` (overwrite from scratch).
+   - Do NOT delete `architecture.md`; only update its “Obsah” section.
 2) Write `.work/ARCH_FINDINGS.md`:
    - concrete refactors/bugfixes/test coverage gaps
    - for each: P0/P1/P2, estimated scope, affected files, recommended tests
