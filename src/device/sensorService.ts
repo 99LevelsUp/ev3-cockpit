@@ -11,7 +11,8 @@ const OP = {
 } as const;
 
 const INPUT_DEVICE_SUB = {
-	GET_TYPEMODE: 0x05
+	GET_TYPEMODE: 0x05,
+	SET_TYPEMODE: 0x01
 } as const;
 
 const LAYER_SELF = 0x00;
@@ -136,6 +137,37 @@ export class SensorService {
 			value,
 			timestampMs: Date.now()
 		};
+	}
+
+	/**
+	 * Set sensor type and mode for a port.
+	 * Uses opINPUT_DEVICE(SET_TYPEMODE).
+	 */
+	public async setSensorMode(port: SensorPort, typeCode: number, mode: SensorMode): Promise<void> {
+		const payload = concatBytes(
+			uint16le(0),
+			new Uint8Array([OP.INPUT_DEVICE, INPUT_DEVICE_SUB.SET_TYPEMODE]),
+			lc0(LAYER_SELF),
+			lc0(port),
+			lc0(typeCode > 31 ? 0 : typeCode),
+			lc0(mode > 31 ? 0 : mode)
+		);
+
+		const requestId = `sensor-setmode-${port}-${this.nextSeq()}`;
+		const result = await this.commandClient.send({
+			id: requestId,
+			lane: 'normal',
+			idempotent: false,
+			timeoutMs: this.defaultTimeoutMs,
+			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+			payload
+		});
+
+		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
+			throw new Error(`Set sensor mode failed on port ${port + 1}: DIRECT_REPLY_ERROR`);
+		}
+
+		this.logger.info('Sensor mode set', { port: port + 1, typeCode, mode, requestId });
 	}
 
 	private nextSeq(): number {

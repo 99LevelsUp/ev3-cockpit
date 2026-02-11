@@ -155,3 +155,36 @@ test('SensorService.readSensor throws on DIRECT_REPLY_ERROR', async () => {
 		/DIRECT_REPLY_ERROR/i
 	);
 });
+
+test('SensorService.setSensorMode sends opINPUT_DEVICE SET_TYPEMODE payload', async () => {
+	const client = new FakeSensorCommandClient(EV3_REPLY.DIRECT_REPLY);
+	const service = new SensorService({ commandClient: client });
+
+	await service.setSensorMode(1 as SensorPort, EV3_SENSOR_TYPE.EV3_COLOR, 2);
+
+	assert.equal(client.requests.length, 1);
+	const req = client.requests[0];
+	const payload = req.payload ?? new Uint8Array();
+	assert.deepEqual(
+		Array.from(payload),
+		[
+			0x00, 0x00, // 0 global bytes
+			0x99, 0x01, // opINPUT_DEVICE, SET_TYPEMODE
+			0x00,       // LAYER 0
+			0x01,       // PORT 1
+			0x1d,       // TYPE = EV3_COLOR (29)
+			0x02        // MODE 2
+		]
+	);
+	assert.equal(req.idempotent, false);
+});
+
+test('SensorService.setSensorMode throws on DIRECT_REPLY_ERROR', async () => {
+	const client = new FakeSensorCommandClient(EV3_REPLY.DIRECT_REPLY_ERROR);
+	const service = new SensorService({ commandClient: client });
+
+	await assert.rejects(
+		service.setSensorMode(0 as SensorPort, EV3_SENSOR_TYPE.EV3_COLOR, 0),
+		/DIRECT_REPLY_ERROR/i
+	);
+});
