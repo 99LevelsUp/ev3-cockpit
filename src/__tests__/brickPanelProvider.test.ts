@@ -217,3 +217,56 @@ test('BrickPanelProvider.refresh includes lastError and lastOperation in payload
 		view.disposeHandler?.();
 	});
 });
+
+test('BrickPanelProvider.refresh includes motor info for active brick', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		const bricks = [
+			{
+				brickId: 'b1', displayName: 'EV3', status: 'READY', transport: 'usb',
+				role: 'standalone', isActive: true
+			}
+		];
+		const motorStates = [
+			{ port: 'A', speed: 75, running: true },
+			{ port: 'B', speed: 0, running: false }
+		];
+
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => bricks as never,
+				setActiveBrick: () => true,
+				getMotorInfo: () => motorStates as never
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		const messages: unknown[] = [];
+		view.webview.postMessage = async (msg) => {
+			messages.push(msg);
+			return true;
+		};
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		provider.refresh();
+
+		const last = messages[messages.length - 1] as {
+			type: string;
+			motors: Array<{ port: string; speed: number; running: boolean }>
+		};
+		assert.ok(last.motors, 'Should include motors');
+		assert.equal(last.motors.length, 2);
+		assert.equal(last.motors[0].port, 'A');
+		assert.equal(last.motors[0].speed, 75);
+		assert.equal(last.motors[0].running, true);
+		assert.equal(last.motors[1].running, false);
+
+		view.disposeHandler?.();
+	});
+});

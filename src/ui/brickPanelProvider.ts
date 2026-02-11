@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
+import type { MotorState } from '../device/motorTypes';
 import type { SensorInfo } from '../device/sensorTypes';
 
 export interface BrickPanelDataSource {
 	listBricks(): BrickSnapshot[];
 	setActiveBrick(brickId: string): boolean;
 	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
+	getMotorInfo?(brickId: string): MotorState[] | undefined;
 }
 
 interface WebviewBrickInfo {
@@ -30,8 +32,14 @@ interface WebviewSensorInfo {
 	connected: boolean;
 }
 
+interface WebviewMotorInfo {
+	port: string;
+	speed: number;
+	running: boolean;
+}
+
 type MessageToWebview =
-	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[] };
+	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[]; motors?: WebviewMotorInfo[] };
 
 export interface BrickPanelPollingConfig {
 	/** Polling interval (ms) when at least one brick exists. Default 500. */
@@ -123,7 +131,18 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				}));
 			}
 		}
-		const message: MessageToWebview = { type: 'updateBricks', bricks, sensors };
+		let motors: WebviewMotorInfo[] | undefined;
+		if (activeBrick && this.dataSource.getMotorInfo) {
+			const motorData = this.dataSource.getMotorInfo(activeBrick.brickId);
+			if (motorData) {
+				motors = motorData.map((m) => ({
+					port: m.port,
+					speed: m.speed,
+					running: m.running
+				}));
+			}
+		}
+		const message: MessageToWebview = { type: 'updateBricks', bricks, sensors, motors };
 		void this.view.webview.postMessage(message);
 	}
 
@@ -248,6 +267,28 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		font-weight: bold;
 		min-width: 50px;
 	}
+	.motor-section {
+		padding: 8px 12px;
+		border-top: 1px solid var(--vscode-panel-border, #444);
+	}
+	.motor-section h3 {
+		margin: 4px 0 8px;
+		font-size: var(--vscode-font-size);
+		font-weight: bold;
+	}
+	.motor-port {
+		display: flex;
+		justify-content: space-between;
+		padding: 3px 0;
+		opacity: 0.85;
+	}
+	.motor-port.stopped {
+		opacity: 0.45;
+	}
+	.motor-port-label {
+		font-weight: bold;
+		min-width: 50px;
+	}
 </style>
 </head>
 <body>
@@ -257,6 +298,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 
 		let bricks = [];
 		let sensors = [];
+		let motors = [];
 
 		function render() {
 			const root = document.getElementById('root');
@@ -303,6 +345,18 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				html += '</div>';
 			}
 
+			if (motors && motors.length > 0) {
+				html += '<div class="motor-section"><h3>Motors</h3>';
+				for (const m of motors) {
+					const cls = m.running ? 'motor-port' : 'motor-port stopped';
+					html += '<div class="' + cls + '">'
+						+ '<span class="motor-port-label">Port ' + m.port + '</span>'
+						+ '<span>' + (m.running ? 'Speed ' + m.speed + '%' : 'Stopped') + '</span>'
+						+ '</div>';
+				}
+				html += '</div>';
+			}
+
 			root.innerHTML = html;
 
 			for (const tab of root.querySelectorAll('.brick-tab')) {
@@ -317,6 +371,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (message.type === 'updateBricks') {
 				bricks = message.bricks;
 				sensors = message.sensors || [];
+				motors = message.motors || [];
 				render();
 			}
 		});
