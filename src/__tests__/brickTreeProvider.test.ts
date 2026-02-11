@@ -495,7 +495,7 @@ test('BrickTreeProvider renders busy counter in root description when runtime is
 		const roots = await provider.getChildren();
 		const item = provider.getTreeItem(roots[0]);
 		assert.match(item.description ?? '', /busy:3/);
-		assert.match(item.tooltip?.toString() ?? '', /Runtime: running, busy=3/);
+		assert.match(item.tooltip?.toString() ?? '', /ACTIVE \| busy:3 \| tcp \| standalone/);
 	});
 });
 

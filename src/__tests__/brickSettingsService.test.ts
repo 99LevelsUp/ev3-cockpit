@@ -11,6 +11,7 @@ class FakeSettingsCommandClient implements Ev3CommandSendLike {
 	private messageCounter = 0;
 	private replyType: number;
 	private replyPayload: Uint8Array;
+	private readonly queuedReplies: Array<{ type: number; payload: Uint8Array }> = [];
 
 	public constructor(replyType: number = EV3_REPLY.DIRECT_REPLY, replyPayload = new Uint8Array()) {
 		this.replyType = replyType;
@@ -22,13 +23,20 @@ class FakeSettingsCommandClient implements Ev3CommandSendLike {
 		this.replyPayload = payload;
 	}
 
+	public queueReply(type: number, payload: Uint8Array = new Uint8Array()): void {
+		this.queuedReplies.push({ type, payload });
+	}
+
 	public async send(request: Ev3CommandRequest): Promise<CommandResult<Ev3Packet>> {
 		this.requests.push(request);
 		const counter = this.messageCounter++;
+		const queued = this.queuedReplies.shift();
+		const effectiveType = queued?.type ?? this.replyType;
+		const effectivePayload = queued?.payload ?? this.replyPayload;
 		return {
 			requestId: request.id ?? `request-${counter}`,
 			messageCounter: counter,
-			reply: { messageCounter: counter, type: this.replyType, payload: this.replyPayload },
+			reply: { messageCounter: counter, type: effectiveType, payload: effectivePayload },
 			enqueuedAt: 0,
 			startedAt: 0,
 			finishedAt: 0,
@@ -37,7 +45,7 @@ class FakeSettingsCommandClient implements Ev3CommandSendLike {
 	}
 }
 
-test('BrickSettingsService.getBrickName sends opINFO GET_BRICKNAME and decodes reply', async () => {
+test('BrickSettingsService.getBrickName sends opCOM_GET GET_BRICKNAME and decodes reply', async () => {
 	const nameBytes = Buffer.from('EV3\0', 'utf8');
 	const replyPayload = new Uint8Array(13);
 	replyPayload.set(nameBytes);
@@ -55,21 +63,51 @@ test('BrickSettingsService.getBrickName sends opINFO GET_BRICKNAME and decodes r
 	// Global bytes: 13 (0x0d, 0x00)
 	assert.equal(payload[0], 0x0d);
 	assert.equal(payload[1], 0x00);
-	// opINFO=0x7c, GET_BRICKNAME=0x0d
-	assert.equal(payload[2], 0x7c);
+	// opCOM_GET=0xd3, GET_BRICKNAME=0x0d
+	assert.equal(payload[2], 0xd3);
 	assert.equal(payload[3], 0x0d);
 });
 
-test('BrickSettingsService.setBrickName sends opINFO SET_BRICKNAME with LCS string', async () => {
+test('BrickSettingsService.setBrickName sends opCOM_SET SET_BRICKNAME with LCS string', async () => {
 	const client = new FakeSettingsCommandClient();
 	const service = new BrickSettingsService({ commandClient: client });
 
 	await service.setBrickName('MyBrick');
 
 	const payload = Array.from(client.requests[0].payload ?? new Uint8Array());
-	// uint16le(0), opINFO(0x7c), SET_BRICKNAME(0x08), LCS('MyBrick')
-	assert.deepEqual(payload.slice(0, 4), [0x00, 0x00, 0x7c, 0x08]);
+	// uint16le(0), opCOM_SET(0xd4), SET_BRICKNAME(0x08), LCS('MyBrick')
+	assert.deepEqual(payload.slice(0, 4), [0x00, 0x00, 0xd4, 0x08]);
 	assert.equal(payload[4], 0x84); // LCS marker
+});
+
+test('BrickSettingsService.getBrickName falls back to opINFO when opCOM_GET fails', async () => {
+	const nameBytes = Buffer.from('MyBrick\0', 'utf8');
+	const replyPayload = new Uint8Array(13);
+	replyPayload.set(nameBytes);
+	const client = new FakeSettingsCommandClient();
+	client.queueReply(EV3_REPLY.DIRECT_REPLY_ERROR);
+	client.queueReply(EV3_REPLY.DIRECT_REPLY, replyPayload);
+	const service = new BrickSettingsService({ commandClient: client });
+
+	const name = await service.getBrickName();
+
+	assert.equal(name, 'MyBrick');
+	assert.equal(client.requests.length, 2);
+	assert.equal((client.requests[0].payload ?? new Uint8Array())[2], 0xd3);
+	assert.equal((client.requests[1].payload ?? new Uint8Array())[2], 0x7c);
+});
+
+test('BrickSettingsService.setBrickName falls back to opINFO when opCOM_SET fails', async () => {
+	const client = new FakeSettingsCommandClient();
+	client.queueReply(EV3_REPLY.DIRECT_REPLY_ERROR);
+	client.queueReply(EV3_REPLY.DIRECT_REPLY, new Uint8Array());
+	const service = new BrickSettingsService({ commandClient: client });
+
+	await service.setBrickName('MyBrick');
+
+	assert.equal(client.requests.length, 2);
+	assert.equal((client.requests[0].payload ?? new Uint8Array())[2], 0xd4);
+	assert.equal((client.requests[1].payload ?? new Uint8Array())[2], 0x7c);
 });
 
 test('BrickSettingsService.setBrickName truncates to 12 chars', async () => {

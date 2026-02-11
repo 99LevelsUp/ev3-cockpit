@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import { isRemoteExecutablePath } from '../fs/remoteExecutable';
+import { createTransportThemeIcon } from './graphicsLibrary';
 import type { BrickTreeNode, BrickRootNode } from './brickTreeProvider';
 
 function buildEv3Uri(brickId: string, remotePath: string): vscode.Uri {
@@ -29,15 +30,10 @@ function renderStatusBadge(status: BrickSnapshot['status'], isActive: boolean): 
 	return status;
 }
 
-function buildRootTooltip(node: BrickRootNode): string {
-	const lines = [`${node.displayName}`, `Status: ${node.status}`, `Root: ${node.rootPath}`];
-	lines.push(`Runtime: ${node.schedulerState ?? 'idle'}, busy=${node.busyCommandCount ?? 0}`);
-	if (node.lastOperation) {
-		lines.push(
-			`Last operation: ${node.lastOperation}${
-				node.lastOperationAtIso ? ` (${new Date(node.lastOperationAtIso).toLocaleTimeString()})` : ''
-			}`
-		);
+function buildRootTooltip(node: BrickRootNode, description: string): string {
+	const lines = [node.displayName];
+	if (description.trim().length > 0) {
+		lines.push(description);
 	}
 	if (node.lastError) {
 		lines.push(`Error: ${node.lastError}`);
@@ -63,7 +59,7 @@ function getRootIcon(node: BrickRootNode): vscode.ThemeIcon {
 		if ((node.busyCommandCount ?? 0) > 0) {
 			return new vscode.ThemeIcon('sync~spin');
 		}
-		return new vscode.ThemeIcon(node.isActive ? 'plug' : 'device-camera-video');
+		return createTransportThemeIcon(node.transport);
 	}
 	if (node.status === 'CONNECTING') {
 		return new vscode.ThemeIcon('sync~spin');
@@ -92,8 +88,9 @@ export function renderBrickTreeItem(node: BrickTreeNode, options?: RenderBrickTr
 				descriptionParts.push(`busy:${node.busyCommandCount}`);
 			}
 			descriptionParts.push(node.transport, node.role);
-			item.description = descriptionParts.join(' | ');
-			item.tooltip = buildRootTooltip(node);
+			const description = descriptionParts.join(' | ');
+			item.description = description;
+			item.tooltip = buildRootTooltip(node, description);
 			item.contextValue = getRootContextValue(node);
 			item.iconPath = getRootIcon(node);
 			item.resourceUri = buildEv3Uri(node.brickId, node.rootPath);

@@ -4,12 +4,14 @@ import type { ButtonState } from '../device/buttonService';
 import type { LedPattern } from '../device/ledService';
 import type { MotorState } from '../device/motorTypes';
 import type { SensorInfo } from '../device/sensorTypes';
+import { getWebviewTransportIcons } from './graphicsLibrary';
 
 export interface BrickPanelDataSource {
 	listBricks(): BrickSnapshot[];
 	setActiveBrick(brickId: string): boolean;
 	scanAvailableBricks?(): Promise<BrickPanelDiscoveryCandidate[]>;
 	connectScannedBrick?(candidateId: string): Promise<void>;
+	disconnectBrick?(brickId: string): Promise<void>;
 	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
 	getMotorInfo?(brickId: string): MotorState[] | undefined;
 	getButtonState?(brickId: string): ButtonState | undefined;
@@ -20,6 +22,7 @@ export interface BrickPanelDiscoveryCandidate {
 	candidateId: string;
 	displayName: string;
 	transport: 'usb' | 'bluetooth' | 'tcp' | 'unknown';
+	status?: 'READY' | 'CONNECTING' | 'UNAVAILABLE' | 'ERROR' | 'UNKNOWN';
 	detail?: string;
 	alreadyConnected?: boolean;
 }
@@ -39,6 +42,7 @@ type MessageFromWebview =
 	| { type: 'selectBrick'; brickId: string }
 	| { type: 'scanBricks' }
 	| { type: 'connectScannedBrick'; candidateId: string }
+	| { type: 'disconnectBrick'; brickId: string }
 	| { type: 'ready' };
 
 interface WebviewSensorInfo {
@@ -137,6 +141,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				void this.scanAvailableBricks();
 			} else if (message.type === 'connectScannedBrick') {
 				void this.connectScannedBrick(message.candidateId);
+			} else if (message.type === 'disconnectBrick') {
+				void this.disconnectBrick(message.brickId);
 			} else if (message.type === 'ready') {
 				this.refresh();
 			}
@@ -269,6 +275,24 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	private async disconnectBrick(brickId: string): Promise<void> {
+		const normalizedBrickId = brickId.trim();
+		if (!normalizedBrickId) {
+			return;
+		}
+		try {
+			if (this.dataSource.disconnectBrick) {
+				await this.dataSource.disconnectBrick(normalizedBrickId);
+			} else {
+				await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', normalizedBrickId);
+			}
+			this.refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void vscode.window.showErrorMessage(`Disconnect failed: ${message}`);
+		}
+	}
+
 	private startPolling(): void {
 		this.stopPolling();
 		const tick = () => {
@@ -298,6 +322,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	private getHtmlForWebview(webview: vscode.Webview): string {
 		const nonce = getNonce();
 		const cspSource = webview.cspSource;
+		const transportIconsLiteral = JSON.stringify(getWebviewTransportIcons());
 		return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -380,6 +405,25 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.brick-tab-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		font-size: 12px;
+		line-height: 12px;
+		opacity: 0.85;
+		cursor: pointer;
+		flex: 0 0 auto;
+	}
+	.brick-tab-close:hover {
+		opacity: 1;
+		background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.14));
 	}
 	.brick-tab:hover {
 		background: var(--vscode-list-hoverBackground);
@@ -452,10 +496,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		margin: 2px 0 6px;
 		font-weight: bold;
 	}
-	.discovery-help {
-		margin: 0 0 8px;
-		opacity: 0.75;
-	}
 	.discovery-message {
 		opacity: 0.8;
 		padding: 6px 0;
@@ -484,27 +524,69 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	.discovery-item.selected {
 		border-color: var(--vscode-focusBorder);
 	}
+	.discovery-item.status-ready {
+		border-left: 3px solid #00e676;
+	}
+	.discovery-item.status-connecting {
+		border-left: 3px solid #ffb300;
+	}
+	.discovery-item.status-error {
+		border-left: 3px solid #ff3b30;
+	}
+	.discovery-item.status-unavailable {
+		border-left: 3px solid #8f9aa6;
+	}
+	.discovery-item.status-unknown {
+		border-left: 3px solid #4fc3f7;
+	}
 	.discovery-item:disabled {
 		opacity: 0.6;
 		cursor: wait;
 	}
 	.discovery-main {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
 		font-weight: bold;
 	}
-	.discovery-meta {
-		opacity: 0.8;
-		font-size: 0.92em;
+	.discovery-main-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
+	.transport-indicator {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
 		flex-shrink: 0;
 	}
-	.status-READY { background: #4ec940; }
-	.status-CONNECTING { background: #dea500; }
-	.status-UNAVAILABLE { background: #888; }
-	.status-ERROR { background: #f44; }
+	.transport-indicator.status-ready {
+		color: #00e676;
+	}
+	.transport-indicator.status-connecting {
+		color: #ffb300;
+	}
+	.transport-indicator.status-unavailable {
+		color: #8f9aa6;
+	}
+	.transport-indicator.status-error {
+		color: #ff3b30;
+	}
+	.transport-indicator.status-unknown {
+		color: #4fc3f7;
+	}
+	.transport-icon-svg {
+		display: block;
+		width: 14px;
+		height: 14px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
 	.brick-info {
 		padding: 12px;
 	}
@@ -610,12 +692,15 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let scanLoopTimer = null;
 		let scanLoopMode = '';
 		let lastScanBackground = false;
+		let nextBrickOrder = 0;
+		const brickOrderById = new Map();
 		const DEFAULT_MAX_VISIBLE_BRICK_TABS = 4;
 		const ESTIMATED_BRICK_TAB_WIDTH = 128;
 		const ESTIMATED_CONTROL_TAB_WIDTH = 42;
 		const TAB_STRIP_HORIZONTAL_PADDING = 16;
 		const DISCOVERY_REFRESH_FAST_MS = ${this.discoveryRefreshFastMs};
 		const DISCOVERY_REFRESH_SLOW_MS = ${this.discoveryRefreshSlowMs};
+		const TRANSPORT_ICONS = ${transportIconsLiteral};
 
 		function isPlusTabActive() {
 			return discoveryOpen || bricks.length === 0;
@@ -700,6 +785,29 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
+		function stabilizeBrickOrder(nextBricks) {
+			const normalized = Array.isArray(nextBricks)
+				? nextBricks.filter((brick) => brick && brick.brickId)
+				: [];
+			for (const brick of normalized) {
+				if (!brickOrderById.has(brick.brickId)) {
+					brickOrderById.set(brick.brickId, nextBrickOrder);
+					nextBrickOrder += 1;
+				}
+			}
+			const visibleIds = new Set(normalized.map((brick) => brick.brickId));
+			for (const knownId of Array.from(brickOrderById.keys())) {
+				if (!visibleIds.has(knownId)) {
+					brickOrderById.delete(knownId);
+				}
+			}
+			return normalized.slice().sort((left, right) => {
+				const leftOrder = brickOrderById.get(left.brickId) ?? 0;
+				const rightOrder = brickOrderById.get(right.brickId) ?? 0;
+				return leftOrder - rightOrder;
+			});
+		}
+
 		function requestDiscoveryScan(options = {}) {
 			if (scanInFlight) {
 				return;
@@ -722,6 +830,56 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			vscode.postMessage({ type: 'scanBricks' });
 		}
 
+		function renderTransportIcon(transport) {
+			const normalized = typeof transport === 'string' ? transport.toLowerCase() : 'unknown';
+			return TRANSPORT_ICONS[normalized] || TRANSPORT_ICONS.unknown;
+		}
+
+		function renderTransportIndicator(brick) {
+			const status = String(brick.status || '').toLowerCase();
+			const statusClass = status === 'ready' || status === 'connecting' || status === 'unavailable' || status === 'error'
+				? 'status-' + status
+				: 'status-unknown';
+			return '<span class="transport-indicator ' + statusClass + '">' + renderTransportIcon(brick.transport) + '</span>';
+		}
+
+		function renderDiscoveryTransportIndicator(candidate) {
+			const normalizedStatus = String(candidate.status || '').toLowerCase();
+			const connectedStatus = candidate.alreadyConnected ? 'ready' : 'unknown';
+			const statusClass = (candidate.candidateId === connectingDiscoveryCandidateId)
+				? 'status-connecting'
+				: (
+					normalizedStatus === 'ready'
+					|| normalizedStatus === 'connecting'
+					|| normalizedStatus === 'unavailable'
+					|| normalizedStatus === 'error'
+				)
+					? 'status-' + normalizedStatus
+					: 'status-' + connectedStatus;
+			return '<span class="transport-indicator ' + statusClass + '">' + renderTransportIcon(candidate.transport) + '</span>';
+		}
+
+		function shouldShowTabClose(brick) {
+			const status = String(brick.status || '').toLowerCase();
+			return status === 'ready' || status === 'connecting';
+		}
+
+		function resolveCandidateStatusClass(candidate) {
+			if (candidate.candidateId === connectingDiscoveryCandidateId) {
+				return ' status-connecting';
+			}
+			const normalizedStatus = String(candidate.status || '').toLowerCase();
+			if (
+				normalizedStatus === 'ready'
+				|| normalizedStatus === 'connecting'
+				|| normalizedStatus === 'unavailable'
+				|| normalizedStatus === 'error'
+			) {
+				return ' status-' + normalizedStatus;
+			}
+			return candidate.alreadyConnected ? ' status-ready' : ' status-unknown';
+		}
+
 		function render() {
 			const root = document.getElementById('root');
 			const activeBrick = bricks.find(b => b.isActive);
@@ -732,14 +890,18 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (overflowBricks.length === 0 && overflowMenuOpen) {
 				overflowMenuOpen = false;
 			}
-			const overflowHasActive = overflowBricks.some((brick) => brick.isActive);
+			const overflowHasActive = !discoveryOpen && overflowBricks.some((brick) => brick.isActive);
 
 			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
 			for (const brick of visibleBricks) {
-				const activeClass = brick.isActive ? ' active' : '';
+				const activeClass = !discoveryOpen && brick.isActive ? ' active' : '';
+				const closeMarkup = shouldShowTabClose(brick)
+					? '<span class="brick-tab-close" data-close-brick-id="' + brick.brickId + '" title="Disconnect EV3 Brick" aria-label="Disconnect EV3 Brick" role="button">×</span>'
+					: '';
 				html += '<button class="brick-tab' + activeClass + '" data-brick-id="' + brick.brickId + '" title="' + brick.displayName + '">'
-					+ '<span class="status-dot status-' + brick.status + '"></span>'
+					+ renderTransportIndicator(brick)
 					+ '<span class="brick-tab-label">' + brick.displayName + '</span>'
+					+ closeMarkup
 					+ '</button>';
 			}
 			html += '</div>';
@@ -755,9 +917,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (overflowMenuOpen && overflowBricks.length > 0) {
 				html += '<div class="brick-overflow-menu">';
 				for (const brick of overflowBricks) {
-					const overflowItemActiveClass = brick.isActive ? ' active' : '';
+					const overflowItemActiveClass = !discoveryOpen && brick.isActive ? ' active' : '';
 					html += '<button class="brick-overflow-item' + overflowItemActiveClass + '" data-overflow-brick-id="' + brick.brickId + '" title="' + brick.displayName + '">'
-						+ '<span class="status-dot status-' + brick.status + '"></span>'
+						+ renderTransportIndicator(brick)
 						+ '<span class="brick-overflow-label">' + brick.displayName + '</span>'
 						+ '</button>';
 				}
@@ -769,8 +931,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 
 			if (discoveryOpen) {
 				html += '<div class="discovery-section">'
-					+ '<div class="discovery-title">Available Bricks</div>'
-					+ '<div class="discovery-help">Single-click to select, double-click to connect.</div>';
+					+ '<div class="discovery-title">Available Bricks</div>';
 				if (discoveryLoading) {
 					html += '<div class="discovery-message">Scanning...</div>';
 				} else if (discoveryError) {
@@ -781,13 +942,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					html += '<div class="discovery-list">';
 					for (const candidate of discoveryCandidates) {
 						const selectedClass = candidate.candidateId === selectedDiscoveryCandidateId ? ' selected' : '';
-						const transportLabel = String(candidate.transport || 'unknown').toUpperCase();
-						const connectedLabel = candidate.alreadyConnected ? ' | connected' : '';
-						const detail = candidate.detail ? ' | ' + candidate.detail : '';
+						const statusClass = resolveCandidateStatusClass(candidate);
 						const disabledAttr = connectingDiscoveryCandidateId ? ' disabled' : '';
-						html += '<button class="discovery-item' + selectedClass + '" data-candidate-id="' + candidate.candidateId + '"' + disabledAttr + '>'
-							+ '<span class="discovery-main">' + candidate.displayName + '</span>'
-							+ '<span class="discovery-meta">' + transportLabel + detail + connectedLabel + '</span>'
+						html += '<button class="discovery-item' + selectedClass + statusClass + '" data-candidate-id="' + candidate.candidateId + '"' + disabledAttr + '>'
+							+ '<span class="discovery-main">'
+							+ renderDiscoveryTransportIndicator(candidate)
+							+ '<span class="discovery-main-label">' + candidate.displayName + '</span>'
+							+ '</span>'
 							+ '</button>';
 					}
 					html += '</div>';
@@ -799,7 +960,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				html += '<div class="empty-message">No bricks connected.<br>Use the + tab to connect an EV3 Brick.</div>';
 			}
 
-			if (activeBrick) {
+			if (!discoveryOpen && activeBrick) {
 				html += '<div class="brick-info"><dl>'
 					+ '<dt>Status</dt><dd>' + activeBrick.status + '</dd>'
 					+ '<dt>Transport</dt><dd>' + activeBrick.transport + '</dd>'
@@ -873,7 +1034,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				tab.addEventListener('click', () => {
 					if (tab.dataset.addBrick === 'true') {
 						overflowMenuOpen = false;
-						requestDiscoveryScan({ preserveCandidates: false });
+						selectedDiscoveryCandidateId = '';
+						requestDiscoveryScan({ preserveCandidates: true });
 						return;
 					}
 					if (tab.dataset.overflowToggle === 'true') {
@@ -887,9 +1049,21 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					vscode.postMessage({ type: 'selectBrick', brickId: tab.dataset.brickId });
 				});
 			}
+			for (const closeButton of root.querySelectorAll('.brick-tab-close')) {
+				closeButton.addEventListener('click', (event) => {
+					event.stopPropagation();
+					const brickId = closeButton.dataset.closeBrickId || '';
+					if (!brickId) {
+						return;
+					}
+					vscode.postMessage({ type: 'disconnectBrick', brickId });
+				});
+			}
 			for (const overflowButton of root.querySelectorAll('.brick-overflow-item')) {
 				overflowButton.addEventListener('click', () => {
 					overflowMenuOpen = false;
+					discoveryOpen = false;
+					stopScanLoop();
 					vscode.postMessage({ type: 'selectBrick', brickId: overflowButton.dataset.overflowBrickId });
 				});
 			}
@@ -914,7 +1088,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		window.addEventListener('message', (event) => {
 			const message = event.data;
 			if (message.type === 'updateBricks') {
-				bricks = message.bricks;
+				bricks = stabilizeBrickOrder(message.bricks || []);
 				sensors = message.sensors || [];
 				motors = message.motors || [];
 				controls = message.controls || null;
@@ -930,7 +1104,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			if (message.type === 'scanStarted') {
 				if (!lastScanBackground) {
-					discoveryOpen = true;
 					discoveryLoading = discoveryCandidates.length === 0;
 					discoveryError = '';
 				}
@@ -942,14 +1115,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			if (message.type === 'scanResults') {
 				if (!lastScanBackground) {
-					discoveryOpen = true;
 					discoveryLoading = false;
 					discoveryError = '';
 				}
 				scanInFlight = false;
 				mergeDiscoveryCandidates(message.candidates || []);
 				connectingDiscoveryCandidateId = '';
-				if (discoveryOpen || !lastScanBackground) {
+				if (discoveryOpen) {
 					render();
 				}
 				scheduleNextScan();
@@ -957,13 +1129,12 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			if (message.type === 'scanFailed') {
 				if (!lastScanBackground) {
-					discoveryOpen = true;
 					discoveryLoading = false;
 					discoveryError = message.message || 'Brick scan failed.';
 				}
 				scanInFlight = false;
 				connectingDiscoveryCandidateId = '';
-				if (discoveryOpen || !lastScanBackground) {
+				if (discoveryOpen) {
 					render();
 				}
 				scheduleNextScan();
@@ -980,7 +1151,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				discoveryOpen = false;
 				discoveryLoading = false;
 				discoveryError = '';
-				discoveryCandidates = [];
 				selectedDiscoveryCandidateId = '';
 				connectingDiscoveryCandidateId = '';
 				scanInFlight = false;

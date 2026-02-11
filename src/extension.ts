@@ -403,6 +403,7 @@ export function activate(context: vscode.ExtensionContext) {
 				continue;
 			}
 			const brickId = `usb-${toSafeIdentifier(usbPath)}`;
+			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = usbCandidate.serialNumber
 				? `EV3 USB (${usbCandidate.serialNumber})`
 				: `EV3 USB (${usbPath})`;
@@ -422,7 +423,8 @@ export function activate(context: vscode.ExtensionContext) {
 				displayName,
 				transport: 'usb',
 				detail: usbPath,
-				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+				status: snapshot?.status ?? 'UNKNOWN',
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 			});
 		}
 
@@ -436,6 +438,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			const bluetoothPort = rawPath.toUpperCase();
 			const brickId = `bluetooth-${toSafeIdentifier(bluetoothPort)}`;
+			const snapshot = brickRegistry.getSnapshot(brickId);
 			const manufacturer = serialCandidate.manufacturer?.trim();
 			const fallbackDisplayName = `EV3 Bluetooth (${bluetoothPort})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
@@ -457,13 +460,15 @@ export function activate(context: vscode.ExtensionContext) {
 				displayName,
 				transport: 'bluetooth',
 				detail,
-				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+				status: snapshot?.status ?? 'UNKNOWN',
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 			});
 		}
 
 		for (const tcpCandidate of tcpCandidates) {
 			const endpoint = `${tcpCandidate.ip}:${tcpCandidate.port}`;
 			const brickId = `tcp-${toSafeIdentifier(endpoint)}`;
+			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = `EV3 TCP (${endpoint})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, tcpCandidate.name);
 			const serialPart = tcpCandidate.serialNumber ? `SN ${tcpCandidate.serialNumber}` : '';
@@ -487,7 +492,8 @@ export function activate(context: vscode.ExtensionContext) {
 				displayName,
 				transport: 'tcp',
 				detail,
-				alreadyConnected: brickRegistry.getSnapshot(brickId) !== undefined
+				status: snapshot?.status ?? 'UNKNOWN',
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 			});
 		}
 
@@ -668,7 +674,10 @@ export function activate(context: vscode.ExtensionContext) {
 		listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
 		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
 		scanAvailableBricks: discoverBricksForPanel,
-		connectScannedBrick: connectDiscoveredBrickFromPanel
+		connectScannedBrick: connectDiscoveredBrickFromPanel,
+		disconnectBrick: async (brickId: string) => {
+			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickId);
+		}
 	}, readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger));
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
 	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(

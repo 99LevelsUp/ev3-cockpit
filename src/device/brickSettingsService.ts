@@ -6,6 +6,8 @@ import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 const OP = {
 	UI_READ: 0x81,
 	UI_WRITE: 0x82,
+	COM_GET: 0xd3,
+	COM_SET: 0xd4,
 	INFO: 0x7c
 } as const;
 
@@ -62,62 +64,75 @@ export class BrickSettingsService {
 
 	/**
 	 * Read the brick name (up to 12 chars).
-	 * Uses opINFO(GET_BRICKNAME, LEN) → string in global vars.
+	 * Uses opCOM_GET(GET_BRICKNAME, LEN) with opINFO fallback for older variants.
 	 */
 	public async getBrickName(): Promise<string> {
 		const globalBytes = BRICKNAME_MAX_LEN + 1;
-		const payload = concatBytes(
-			uint16le(globalBytes),
-			new Uint8Array([OP.INFO, INFO_SUBCODE.GET_BRICKNAME]),
-			lc0(globalBytes),
-			gv0(0)
-		);
+		const opcodes = [OP.COM_GET, OP.INFO] as const;
+		let lastErrorMessage = 'DIRECT_REPLY_ERROR';
+		for (const opcode of opcodes) {
+			const payload = concatBytes(
+				uint16le(globalBytes),
+				new Uint8Array([opcode, INFO_SUBCODE.GET_BRICKNAME]),
+				lc0(globalBytes),
+				gv0(0)
+			);
 
-		const requestId = `settings-getname-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
-			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
-		});
+			const requestId = `settings-getname-${this.nextSeq()}-${opcode.toString(16)}`;
+			const result = await this.commandClient.send({
+				id: requestId,
+				lane: 'normal',
+				idempotent: true,
+				timeoutMs: this.defaultTimeoutMs,
+				type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+				payload
+			});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error('Get brick name failed: DIRECT_REPLY_ERROR');
+			if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
+				lastErrorMessage = `DIRECT_REPLY_ERROR(op=0x${opcode.toString(16)})`;
+				continue;
+			}
+
+			return this.parseCString(result.reply.payload, 0, globalBytes);
 		}
 
-		return this.parseCString(result.reply.payload, 0, globalBytes);
+		throw new Error(`Get brick name failed: ${lastErrorMessage}`);
 	}
 
 	/**
 	 * Set the brick name (max 12 chars).
-	 * Uses opINFO(SET_BRICKNAME, NAME).
+	 * Uses opCOM_SET(SET_BRICKNAME, NAME) with opINFO fallback for older variants.
 	 */
 	public async setBrickName(name: string): Promise<void> {
 		const trimmed = name.slice(0, BRICKNAME_MAX_LEN);
+		const opcodes = [OP.COM_SET, OP.INFO] as const;
+		let lastErrorMessage = 'DIRECT_REPLY_ERROR';
+		for (const opcode of opcodes) {
+			const payload = concatBytes(
+				uint16le(0),
+				new Uint8Array([opcode, INFO_SUBCODE.SET_BRICKNAME]),
+				lcs(trimmed)
+			);
 
-		const payload = concatBytes(
-			uint16le(0),
-			new Uint8Array([OP.INFO, INFO_SUBCODE.SET_BRICKNAME]),
-			lcs(trimmed)
-		);
+			const requestId = `settings-setname-${this.nextSeq()}-${opcode.toString(16)}`;
+			const result = await this.commandClient.send({
+				id: requestId,
+				lane: 'normal',
+				idempotent: false,
+				timeoutMs: this.defaultTimeoutMs,
+				type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+				payload
+			});
 
-		const requestId = `settings-setname-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
-			lane: 'normal',
-			idempotent: false,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
-		});
+			if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
+				lastErrorMessage = `DIRECT_REPLY_ERROR(op=0x${opcode.toString(16)})`;
+				continue;
+			}
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error('Set brick name failed: DIRECT_REPLY_ERROR');
+			this.logger.info('Brick name set', { name: trimmed, requestId });
+			return;
 		}
-
-		this.logger.info('Brick name set', { name: trimmed, requestId });
+		throw new Error(`Set brick name failed: ${lastErrorMessage}`);
 	}
 
 	/**
