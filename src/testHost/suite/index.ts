@@ -24,6 +24,19 @@ async function testActivation(): Promise<void> {
 	assert.equal(extension.isActive, true, 'Extension should be active after activation.');
 }
 
+async function testBrickPanelViewContribution(): Promise<void> {
+	const extension = vscode.extensions.getExtension(EXTENSION_ID);
+	assert.ok(extension, 'Extension must be available.');
+
+	const views = extension.packageJSON?.contributes?.views;
+	assert.ok(views, 'Extension must contribute views.');
+
+	const explorerViews: Array<{ id: string; type?: string }> = views.explorer ?? [];
+	const brickPanel = explorerViews.find((v) => v.id === 'ev3-cockpit.brickPanel');
+	assert.ok(brickPanel, 'Extension must contribute ev3-cockpit.brickPanel webview view.');
+	assert.equal(brickPanel.type, 'webview', 'Brick panel must be a webview view.');
+}
+
 async function testCommandsRegistration(): Promise<void> {
 	const commands = await vscode.commands.getCommands(true);
 	assert.ok(commands.includes('ev3-cockpit.connectEV3'));
@@ -879,6 +892,7 @@ export async function run(): Promise<void> {
 
 	const cases: Array<[string, () => Promise<void>]> = [
 		['activation', testActivation],
+		['brick panel view contribution', testBrickPanelViewContribution],
 		['commands registration', testCommandsRegistration],
 		['workspace settings isolation', testWorkspaceSettingsIsolation],
 		['brick id consistency with extension', testBrickIdConsistencyWithExtension],
