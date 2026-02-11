@@ -22,3 +22,30 @@ test('browserActions maps local file path to remote path', () => {
 		'/home/root/lms2012/prjs/program.rbf'
 	);
 });
+
+// --- Additional browserActions tests ---
+
+test('browserActions validates dot as invalid entry name', () => {
+	assert.equal(isValidRemoteEntryName('.'), false);
+});
+
+test('browserActions validates whitespace-only as invalid entry name', () => {
+	assert.equal(isValidRemoteEntryName('   '), false);
+});
+
+test('browserActions validates names with special characters as valid', () => {
+	assert.equal(isValidRemoteEntryName('file-name_v2.rbf'), true);
+	assert.equal(isValidRemoteEntryName('file with spaces'), true);
+});
+
+test('browserActions buildRemoteChildPath normalizes parent with dotdot', () => {
+	const result = buildRemoteChildPath('/home/root/../root/prjs/', 'Demo');
+	assert.equal(result, '/home/root/prjs/Demo');
+});
+
+test('browserActions buildRemotePathFromLocal extracts basename from deep local path', () => {
+	assert.equal(
+		buildRemotePathFromLocal('/prjs/', 'C:\\deeply\\nested\\path\\to\\file.rbf'),
+		'/prjs/file.rbf'
+	);
+});

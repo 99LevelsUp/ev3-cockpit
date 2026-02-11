@@ -492,3 +492,161 @@ test('brickResolvers reverts full filesystem mode when user rejects confirmation
 		}
 	);
 });
+
+// --- Additional brickResolvers tests ---
+
+test('brickResolvers resolveConcreteBrickId returns brickId as-is when not active', async () => {
+	await withMockedBrickResolvers(
+		{ activeBrickId: 'usb-main' },
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.equal(resolvers.resolveConcreteBrickId('tcp-custom'), 'tcp-custom');
+		}
+	);
+});
+
+test('brickResolvers resolveConcreteBrickId returns active when no active brick set', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.equal(resolvers.resolveConcreteBrickId('active'), 'active');
+	});
+});
+
+test('brickResolvers resolveBrickIdFromCommandArg returns active for undefined', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.equal(resolvers.resolveBrickIdFromCommandArg(undefined), 'active');
+	});
+});
+
+test('brickResolvers resolveBrickIdFromCommandArg returns active for empty string', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.equal(resolvers.resolveBrickIdFromCommandArg('   '), 'active');
+	});
+});
+
+test('brickResolvers resolveBrickIdFromCommandArg returns active for non-matching object', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.equal(resolvers.resolveBrickIdFromCommandArg({ kind: 'unknown' }), 'active');
+		assert.equal(resolvers.resolveBrickIdFromCommandArg(42), 'active');
+		assert.equal(resolvers.resolveBrickIdFromCommandArg(null), 'active');
+	});
+});
+
+test('brickResolvers resolveCurrentTransportMode returns configured mode', async () => {
+	await withMockedBrickResolvers(
+		{ configValues: { 'transport.mode': 'usb' } },
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.equal(resolvers.resolveCurrentTransportMode(), 'usb');
+		}
+	);
+});
+
+test('brickResolvers resolveCurrentTransportMode returns unknown for invalid value', async () => {
+	await withMockedBrickResolvers(
+		{ configValues: { 'transport.mode': 'invalid-mode' } },
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.equal(resolvers.resolveCurrentTransportMode(), 'unknown');
+		}
+	);
+});
+
+test('brickResolvers resolveProbeTimeoutMs uses bluetooth probe for bluetooth mode', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'transport.mode': 'bluetooth',
+				'transport.bluetooth.probeTimeoutMs': 12_000
+			},
+			schedulerTimeoutMs: 2_000
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.equal(resolvers.resolveProbeTimeoutMs(), 12_000);
+		}
+	);
+});
+
+test('brickResolvers resolveProbeTimeoutMs uses base timeout for non-bluetooth mode', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: { 'transport.mode': 'usb' },
+			schedulerTimeoutMs: 3_000
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.equal(resolvers.resolveProbeTimeoutMs(), 3_000);
+		}
+	);
+});
+
+test('brickResolvers resolveConnectedBrickDescriptor auto transport returns auto-active id', async () => {
+	await withMockedBrickResolvers(
+		{ configValues: { 'transport.mode': 'auto' } },
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const desc = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/');
+			assert.equal(desc.brickId, 'auto-active');
+			assert.equal(desc.transport, 'auto');
+			assert.equal(desc.displayName, 'EV3 (Auto)');
+		}
+	);
+});
+
+test('brickResolvers resolveDeployTargetFromArg extracts rootPath from directory node', async () => {
+	const fsService = { id: 'fs-main' };
+	await withMockedBrickResolvers(
+		{
+			activeBrickId: 'usb-main',
+			fsServices: { 'usb-main': fsService },
+			snapshots: { 'usb-main': { status: 'READY', rootPath: '/home/root/lms2012/prjs/' } }
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const result = resolvers.resolveDeployTargetFromArg({
+				kind: 'directory',
+				brickId: 'usb-main',
+				remotePath: '/home/root/lms2012/prjs/MyProject'
+			});
+			assert.equal('error' in result, false);
+			if (!('error' in result)) {
+				assert.equal(result.rootPath, '/home/root/lms2012/prjs/MyProject');
+			}
+		}
+	);
+});
+
+test('brickResolvers ensureFullFsModeConfirmation skips when mode is safe', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: { 'fs.mode': 'safe' }
+		},
+		async ({ module, deps, state }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const allowed = await resolvers.ensureFullFsModeConfirmation();
+			assert.equal(allowed, true);
+			assert.equal(state.warningCalls.length, 0);
+		}
+	);
+});
+
+test('brickResolvers ensureFullFsModeConfirmation skips when confirmation not required', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'fs.mode': 'full',
+				'fs.fullMode.confirmationRequired': false
+			}
+		},
+		async ({ module, deps, state }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const allowed = await resolvers.ensureFullFsModeConfirmation();
+			assert.equal(allowed, true);
+			assert.equal(state.warningCalls.length, 0);
+		}
+	);
+});
