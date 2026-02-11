@@ -45,6 +45,16 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - Brick roots show runtime busy counters and keep per-brick last-operation metadata in tooltips.
 - Executable launch is type-based under the hood, so more executable file types can be added without changing the UI workflow.
 
+## Brick Panel (Active Brick)
+
+The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Bricks tree.
+
+- Shows a tab per connected brick with a colored status dot (green = READY, yellow = CONNECTING, grey = UNAVAILABLE, red = ERROR).
+- Clicking a tab switches the **active brick** — the target for `ev3://active/...` filesystem operations and deploy commands.
+- The active brick's status tile shows transport type, role, last operation, and any error.
+- The panel polls for updates automatically: 500 ms when bricks are connected, 3 s when idle.
+- Switching the active brick also refreshes the Explorer tree so the new active brick sorts to the top.
+
 ## Implementation Status
 
 ### Implemented
@@ -61,6 +71,7 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 - [x] Multi-brick tree runtime sessions + per-brick reconnect profiles
 - [x] Batch multi-brick commands (reconnect/deploy workspace)
 - [x] Test infrastructure (unit, host, hardware smoke/matrix)
+- [x] Brick Panel webview with active brick switching and polling
 
 ### In Progress
 
@@ -69,7 +80,6 @@ The extension adds **EV3 Cockpit Bricks** to the left Explorer panel in VS Code.
 
 ### Planned
 
-- [ ] Full multi-brick UX flow (tabs/panel model)
 - [ ] Real-time sensor/motor monitoring UI
 - [ ] Advanced topology workflows (master/slave, daisy-chain optimizations)
 - [ ] Prebuilt installable release artifacts (`.vsix`)
