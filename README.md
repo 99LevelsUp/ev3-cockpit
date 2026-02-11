@@ -105,6 +105,8 @@ The extension provides direct control of the EV3 brick's built-in peripherals:
 - [x] Motor control: speed/start, stop (brake/coast), tacho read/reset (output ports A–D)
 - [x] LED pattern control (10 patterns), sound (tone + file playback), button state reading
 - [x] Brick settings: name, volume, sleep timer (read/write), battery info (read-only)
+- [x] Unified error class (Ev3Error) with error codes, message map, recovery actions
+- [x] Diagnostics: output channel logger (5 levels), RTT probe, perf timing, session inspector
 
 ### In Progress
 
