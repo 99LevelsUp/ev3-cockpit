@@ -74,6 +74,16 @@ The extension can control and monitor motors connected to the EV3 brick's output
 - **Reset:** Reset the tacho counter to zero.
 - When motor data is available, the Brick Panel shows a **Motors** section listing each port with its running state and speed.
 
+## Controls (LED, Sound, Buttons)
+
+The extension provides direct control of the EV3 brick's built-in peripherals:
+
+- **LED:** Set the brick status LED pattern (off, green, red, orange, flash, pulse — 10 patterns).
+- **Sound — Tone:** Play a tone at a given frequency (250–10000 Hz), volume (0–100), and duration.
+- **Sound — File:** Play a `.rsf` sound file from the brick filesystem.
+- **Buttons:** Read which button is currently pressed on the EV3 brick (Up, Down, Left, Right, Enter, Back).
+- When controls data is available, the Brick Panel shows a **Controls** section with the current button and LED state.
+
 ## Implementation Status
 
 ### Implemented
@@ -93,6 +103,7 @@ The extension can control and monitor motors connected to the EV3 brick's output
 - [x] Brick Panel webview with active brick switching and polling
 - [x] Sensor detection, reading, and mode switching (input ports 1–4)
 - [x] Motor control: speed/start, stop (brake/coast), tacho read/reset (output ports A–D)
+- [x] LED pattern control (10 patterns), sound (tone + file playback), button state reading
 
 ### In Progress
 
