@@ -3,12 +3,12 @@ import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';
 import { toErrorMessage } from './commandUtils';
 
-interface BatchCommandOptions {
+export interface BatchCommandOptions {
 	getLogger(): Logger;
 	getBrickRegistry(): BrickRegistry;
 }
 
-interface BatchCommandRegistrations {
+export interface BatchCommandRegistrations {
 	reconnectReadyBricks: vscode.Disposable;
 	previewWorkspaceDeployToReadyBricks: vscode.Disposable;
 	deployWorkspaceToReadyBricks: vscode.Disposable;

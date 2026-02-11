@@ -26,6 +26,9 @@ interface BrickControlServiceOptions {
 	logger?: Logger;
 }
 
+/** Default EV3 brick control command timeout (ms). */
+const DEFAULT_BRICK_CONTROL_TIMEOUT_MS = 2000;
+
 export class BrickControlService {
 	private readonly commandClient: Ev3CommandSendLike;
 	private readonly defaultTimeoutMs: number;
@@ -34,7 +37,7 @@ export class BrickControlService {
 
 	public constructor(options: BrickControlServiceOptions) {
 		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? 2000;
+		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_BRICK_CONTROL_TIMEOUT_MS;
 		this.logger = options.logger ?? new NoopLogger();
 	}
 

@@ -36,13 +36,35 @@ interface CandidateFactory {
 	create: () => TransportAdapter;
 }
 
+/** Maximum number of serial port open attempts for Bluetooth auto-port scanning. */
 const DEFAULT_BT_AUTO_PORT_ATTEMPTS = 3;
+/** Delay (ms) between Bluetooth serial port open retries. */
 const DEFAULT_BT_AUTO_RETRY_DELAY_MS = 300;
+/** Delay (ms) after opening a Bluetooth serial port before probing (firmware needs settling time). */
 const DEFAULT_BT_AUTO_POST_OPEN_DELAY_MS = 120;
+/** Timeout (ms) for a single Bluetooth probe attempt during auto-port scanning. */
 const DEFAULT_BT_AUTO_PROBE_TIMEOUT_MS = 5_000;
+/** Number of rediscovery rounds when all known Bluetooth ports fail. */
 const DEFAULT_BT_AUTO_REDISCOVERY_ATTEMPTS = 1;
+/** Delay (ms) before starting a Bluetooth rediscovery round. */
 const DEFAULT_BT_AUTO_REDISCOVERY_DELAY_MS = 700;
+/** Whether to attempt DTR toggle as fallback when Bluetooth open fails. */
 const DEFAULT_BT_AUTO_DTR_FALLBACK = true;
+
+/** Default EV3 USB HID report size (1-byte report ID + 1024-byte payload). */
+const DEFAULT_USB_HID_REPORT_SIZE = 1025;
+/** Standard EV3 Bluetooth serial baud rate. */
+const DEFAULT_BT_BAUD_RATE = 115_200;
+/** Minimum allowed baud rate for serial port configuration. */
+const MIN_BT_BAUD_RATE = 300;
+/** Default EV3 TCP communication port (LEGO standard). */
+const DEFAULT_TCP_PORT = 5555;
+/** Default EV3 UDP discovery port. */
+const DEFAULT_TCP_DISCOVERY_PORT = 3015;
+/** Default timeout (ms) for UDP-based EV3 brick discovery. */
+const DEFAULT_TCP_DISCOVERY_TIMEOUT_MS = 7000;
+/** Minimum allowed timeout (ms) for Bluetooth probe and TCP discovery. */
+const MIN_PROBE_TIMEOUT_MS = 100;
 
 async function sleep(ms: number): Promise<void> {
 	if (ms <= 0) {
@@ -349,7 +371,7 @@ function createUsbTransport(cfg: ConfigurationReader): UsbHidAdapter {
 	const vendorId = sanitizeNumber(cfg.get('transport.usb.vendorId'), 0x0694, 0);
 	const productId = sanitizeNumber(cfg.get('transport.usb.productId'), 0x0005, 0);
 	const reportId = sanitizeNumber(cfg.get('transport.usb.reportId'), 0, 0);
-	const reportSize = sanitizeNumber(cfg.get('transport.usb.reportSize'), 1025, 2);
+	const reportSize = sanitizeNumber(cfg.get('transport.usb.reportSize'), DEFAULT_USB_HID_REPORT_SIZE, 2);
 
 	return new UsbHidAdapter({
 		path,
@@ -363,7 +385,7 @@ function createUsbTransport(cfg: ConfigurationReader): UsbHidAdapter {
 function createBluetoothTransport(cfg: ConfigurationReader, logger: OutputChannelLogger): TransportAdapter {
 	const rawPort = cfg.get('transport.bluetooth.port');
 	const port = typeof rawPort === 'string' ? rawPort.trim() : '';
-	const baudRate = sanitizeNumber(cfg.get('transport.bluetooth.baudRate'), 115_200, 300);
+	const baudRate = sanitizeNumber(cfg.get('transport.bluetooth.baudRate'), DEFAULT_BT_BAUD_RATE, MIN_BT_BAUD_RATE);
 	const dtr = cfg.get('transport.bluetooth.dtr') === true;
 	const autoDtrFallbackRaw = cfg.get('transport.bluetooth.autoDtrFallback');
 	const autoDtrFallback =
@@ -371,7 +393,7 @@ function createBluetoothTransport(cfg: ConfigurationReader, logger: OutputChanne
 	const probeTimeoutMs = sanitizeNumber(
 		cfg.get('transport.bluetooth.portProbeTimeoutMs'),
 		DEFAULT_BT_AUTO_PROBE_TIMEOUT_MS,
-		100
+		MIN_PROBE_TIMEOUT_MS
 	);
 	const portAttempts = sanitizeNumber(
 		cfg.get('transport.bluetooth.portAttempts'),
@@ -432,9 +454,9 @@ function createTcpTransport(cfg: ConfigurationReader, timeoutMs: number): TcpAda
 		}
 	}
 
-	const port = sanitizeNumber(cfg.get('transport.tcp.port'), 5555, 1);
-	const discoveryPort = sanitizeNumber(cfg.get('transport.tcp.discoveryPort'), 3015, 1);
-	const discoveryTimeoutMs = sanitizeNumber(cfg.get('transport.tcp.discoveryTimeoutMs'), 7000, 100);
+	const port = sanitizeNumber(cfg.get('transport.tcp.port'), DEFAULT_TCP_PORT, 1);
+	const discoveryPort = sanitizeNumber(cfg.get('transport.tcp.discoveryPort'), DEFAULT_TCP_DISCOVERY_PORT, 1);
+	const discoveryTimeoutMs = sanitizeNumber(cfg.get('transport.tcp.discoveryTimeoutMs'), DEFAULT_TCP_DISCOVERY_TIMEOUT_MS, MIN_PROBE_TIMEOUT_MS);
 	const rawSerial = cfg.get('transport.tcp.serialNumber');
 	const serialNumber = typeof rawSerial === 'string' ? rawSerial.trim() : '';
 	const handshakeTimeoutMs = sanitizeNumber(cfg.get('transport.tcp.handshakeTimeoutMs'), timeoutMs, 50);

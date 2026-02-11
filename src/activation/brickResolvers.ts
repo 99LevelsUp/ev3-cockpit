@@ -28,6 +28,12 @@ export interface BrickResolvers {
 	ensureFullFsModeConfirmation(): Promise<boolean>;
 }
 
+/** Default Bluetooth probe timeout (ms); longer than USB/TCP due to pairing variability. */
+const DEFAULT_BT_PROBE_TIMEOUT_MS = 8_000;
+
+/** Default EV3 TCP communication port (LEGO standard). */
+const DEFAULT_TCP_PORT = 5555;
+
 export function createBrickResolvers(deps: {
 	brickRegistry: BrickRegistry;
 	getLogger: () => Logger;
@@ -43,7 +49,7 @@ export function createBrickResolvers(deps: {
 		const base = readSchedulerConfig().timeoutMs;
 		const btProbeRaw = cfg.get('transport.bluetooth.probeTimeoutMs');
 		const btProbe =
-			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : 8_000;
+			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : DEFAULT_BT_PROBE_TIMEOUT_MS;
 
 		if (mode === 'bluetooth') {
 			return Math.max(base, btProbe);
@@ -122,7 +128,7 @@ export function createBrickResolvers(deps: {
 			const hostRaw = profile?.transport.tcpHost ?? cfg.get('transport.tcp.host');
 			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
 			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
-			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : 5555;
+			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : DEFAULT_TCP_PORT;
 			const endpoint = `${host}:${port}`;
 			return {
 				brickId: `tcp-${toSafeIdentifier(endpoint)}`,

@@ -9,6 +9,9 @@ export interface TreeStatePersistenceHandle extends vscode.Disposable {
 	readonly changeSubscription: vscode.Disposable;
 }
 
+/** Debounce delay (ms) before persisting tree view expand/collapse state. */
+const PERSIST_DEBOUNCE_MS = 120;
+
 export function createTreeStatePersistence(
 	store: BrickTreeViewStateStore,
 	treeProvider: BrickTreeProvider,
@@ -30,7 +33,7 @@ export function createTreeStatePersistence(
 		persistTimer = setTimeout(() => {
 			persistTimer = undefined;
 			void persistState();
-		}, 120);
+		}, PERSIST_DEBOUNCE_MS);
 	};
 
 	const rememberExpandedState = (element: BrickTreeNode, expanded: boolean): void => {

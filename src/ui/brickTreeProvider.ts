@@ -62,8 +62,14 @@ interface BrickTreeProviderOptions {
 	getFilterQuery?: () => string;
 }
 
+/** Default throttle delay (ms) for tree view refresh to coalesce rapid updates. */
+const DEFAULT_REFRESH_THROTTLE_MS = 120;
+
+/** TTL (ms) for cached directory listings at the brick root level. */
 const DIRECTORY_CACHE_TTL_ROOT_MS = 900;
+/** TTL (ms) for cached directory listings in deeper sub-folders. */
 const DIRECTORY_CACHE_TTL_DEEP_MS = 2_200;
+/** Maximum number of cached directory listing entries before eviction. */
 const DIRECTORY_CACHE_MAX_ENTRIES = 256;
 
 function normalizeRootPath(remotePath: string): string {
@@ -152,7 +158,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 		this.eventEmitter.fire(element);
 	}
 
-	public refreshThrottled(delayMs = 120): void {
+	public refreshThrottled(delayMs = DEFAULT_REFRESH_THROTTLE_MS): void {
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}

@@ -11,6 +11,9 @@ interface HidDeviceInfo {
 	productId?: number;
 }
 
+/** Default USB HID report size for EV3 (1-byte report ID + 1024-byte payload). */
+const DEFAULT_USB_HID_REPORT_SIZE = 1025;
+
 interface HidDeviceLike {
 	write(data: number[]): number;
 	close(): void;
@@ -69,7 +72,7 @@ export class UsbHidAdapter implements TransportAdapter {
 		this.vendorId = options.vendorId ?? 0x0694;
 		this.productId = options.productId ?? 0x0005;
 		this.reportId = options.reportId ?? 0;
-		this.reportSize = options.reportSize ?? 1025;
+		this.reportSize = options.reportSize ?? DEFAULT_USB_HID_REPORT_SIZE;
 	}
 
 	public async open(): Promise<void> {

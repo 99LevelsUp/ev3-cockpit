@@ -34,10 +34,16 @@ function sanitizeRetryCodes(value: unknown, fallback: readonly SchedulerErrorCod
 	return filtered;
 }
 
+/** Default transport command timeout (ms) when no user configuration is set. */
+const DEFAULT_TRANSPORT_TIMEOUT_MS = 2_000;
+
+/** Default maximum backoff delay (ms) for retry jitter ceiling. */
+const DEFAULT_MAX_BACKOFF_MS = 500;
+
 export function readSchedulerConfig(): SchedulerConfigSnapshot {
 	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 
-	const timeoutMs = sanitizeNumber(cfg.get('transport.timeoutMs'), 2_000, 50);
+	const timeoutMs = sanitizeNumber(cfg.get('transport.timeoutMs'), DEFAULT_TRANSPORT_TIMEOUT_MS, 50);
 	const logLevel = sanitizeEnum(cfg.get('logging.level'), LOG_LEVELS, 'info');
 	const maxRetries = sanitizeNumber(cfg.get('scheduler.retry.maxRetries'), 0, 0);
 	const initialBackoffMs = sanitizeNumber(cfg.get('scheduler.retry.initialBackoffMs'), 25, 0);
@@ -46,7 +52,7 @@ export function readSchedulerConfig(): SchedulerConfigSnapshot {
 		typeof backoffFactorRaw === 'number' && !Number.isNaN(backoffFactorRaw)
 			? Math.max(1, backoffFactorRaw)
 			: 2;
-	const maxBackoffMs = sanitizeNumber(cfg.get('scheduler.retry.maxBackoffMs'), 500, initialBackoffMs);
+	const maxBackoffMs = sanitizeNumber(cfg.get('scheduler.retry.maxBackoffMs'), DEFAULT_MAX_BACKOFF_MS, initialBackoffMs);
 	const retryOn = sanitizeRetryCodes(cfg.get('scheduler.retry.retryOn'), ['TIMEOUT', 'EXECUTION_FAILED']);
 
 	return {

@@ -11,12 +11,12 @@ import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
 
-interface TransportCommandOptions {
+export interface TransportCommandOptions {
 	getLogger(): OutputChannelLogger;
 	resolveProbeTimeoutMs(): number;
 }
 
-interface TransportCommandRegistrations {
+export interface TransportCommandRegistrations {
 	inspectTransports: vscode.Disposable;
 	transportHealthReport: vscode.Disposable;
 }

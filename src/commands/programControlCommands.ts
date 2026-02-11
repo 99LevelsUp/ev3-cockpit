@@ -8,7 +8,7 @@ import { toErrorMessage, withBrickOperation } from './commandUtils';
 type ProgramStartSource = 'run-command' | 'restart-command';
 type ProgramClearReason = 'stop-program-command' | 'emergency-stop-command';
 
-interface ProgramControlCommandOptions {
+export interface ProgramControlCommandOptions {
 	resolveFsAccessContext(arg: unknown): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string };
 	resolveControlAccessContext(arg: unknown): { brickId: string; authority: string; controlService: BrickControlService } | { error: string };
 	getLastRunProgramPath(brickId: string): string | undefined;
@@ -21,7 +21,7 @@ interface ProgramControlCommandOptions {
 	onBrickOperation(brickId: string, operation: string): void;
 }
 
-interface ProgramControlCommandRegistrations {
+export interface ProgramControlCommandRegistrations {
 	runRemoteProgram: vscode.Disposable;
 	stopProgram: vscode.Disposable;
 	restartProgram: vscode.Disposable;

@@ -48,10 +48,15 @@ const DIRECT_VM_SLOT = {
 	USER: 0x01
 } as const;
 
+/** Maximum payload for the first LIST_FILES system command (1024 − header overhead). */
 const LIST_CHUNK_FIRST = 1012;
+/** Maximum payload for CONTINUE_LIST_FILES (1024 − continue header overhead). */
 const LIST_CHUNK_CONTINUE = 1016;
+/** Maximum payload for the first BEGIN_UPLOAD system command (1024 − header overhead). */
 const UPLOAD_CHUNK_FIRST = 1012;
+/** Maximum payload for CONTINUE_UPLOAD (1024 − continue header overhead). */
 const UPLOAD_CHUNK_CONTINUE = 1016;
+/** Maximum payload bytes returned in a BEGIN_DOWNLOAD reply. */
 const DOWNLOAD_CHUNK_MAX = 1017;
 
 const SYSTEM_STATUS_TEXT: Record<number, string> = {

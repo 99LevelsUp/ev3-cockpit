@@ -12,7 +12,9 @@ export function createBusyIndicatorPoller(
 	sessionManager: BusyIndicatorRuntimeSource,
 	treeProvider: BrickTreeProvider,
 	brickUiStateStore: BrickUiStateStore,
+	/** Polling interval (ms) while at least one brick is connected. */
 	intervalMs = 250,
+	/** Polling interval (ms) when no bricks are connected (reduces CPU). */
 	idleIntervalMs = 2_000
 ): vscode.Disposable {
 	const busyStateByBrickId = new Map<string, string>();

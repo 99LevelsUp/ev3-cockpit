@@ -53,6 +53,13 @@ interface NormalizedRetryPolicy {
 	retryOn: ReadonlySet<SchedulerErrorCode>;
 }
 
+/** Default initial retry backoff (ms) when no policy is configured. */
+const DEFAULT_INITIAL_BACKOFF_MS = 25;
+/** Default maximum retry backoff ceiling (ms). */
+const DEFAULT_MAX_BACKOFF_MS = 500;
+/** Default exponential backoff multiplier. */
+const DEFAULT_BACKOFF_FACTOR = 2;
+
 const DEFAULT_RETRYABLE_CODES: readonly SchedulerErrorCode[] = ['EXECUTION_FAILED', 'TIMEOUT'];
 
 type InvocationOutcome<TReply> =
@@ -659,9 +666,9 @@ export class CommandScheduler {
 	private normalizeRetryPolicy(retry?: RetryPolicy): NormalizedRetryPolicy {
 		const base = this.defaultRetryPolicy ?? {
 			maxRetries: 0,
-			initialBackoffMs: 25,
-			backoffFactor: 2,
-			maxBackoffMs: 500,
+			initialBackoffMs: DEFAULT_INITIAL_BACKOFF_MS,
+			backoffFactor: DEFAULT_BACKOFF_FACTOR,
+			maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
 			retryOn: new Set<SchedulerErrorCode>(DEFAULT_RETRYABLE_CODES)
 		};
 

@@ -91,12 +91,17 @@ export async function withTiming<T>(
 	}
 }
 
+/** Minimum allowed event-loop sample interval (ms) to avoid excessive overhead. */
+const MIN_SAMPLE_INTERVAL_MS = 250;
+/** Default event-loop sample interval (ms) between histogram snapshots. */
+const DEFAULT_SAMPLE_INTERVAL_MS = 10_000;
+
 export function startEventLoopMonitor(logger: Logger, options: EventLoopMonitorOptions = {}): () => void {
 	if (!PERF_ENABLED) {
 		return () => undefined;
 	}
 	const resolutionMs = Math.max(1, options.resolutionMs ?? 10);
-	const sampleIntervalMs = Math.max(250, options.sampleIntervalMs ?? 10_000);
+	const sampleIntervalMs = Math.max(MIN_SAMPLE_INTERVAL_MS, options.sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS);
 	const warnThresholdMs = Math.max(1, options.warnThresholdMs ?? 50);
 
 	const histogram = monitorEventLoopDelay({

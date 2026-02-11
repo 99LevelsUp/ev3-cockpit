@@ -17,7 +17,7 @@ import { toErrorMessage, withBrickOperation } from './commandUtils';
 
 type ProgramStartSource = 'remote-fs-run';
 
-interface BrowseCommandOptions {
+export interface BrowseCommandOptions {
 	getLogger(): Logger;
 	getBrickRegistry(): BrickRegistry;
 	getTreeProvider(): BrickTreeProvider;
@@ -27,7 +27,7 @@ interface BrowseCommandOptions {
 	onBrickOperation(brickId: string, operation: string): void;
 }
 
-interface BrowseCommandRegistrations {
+export interface BrowseCommandRegistrations {
 	browseRemoteFs: vscode.Disposable;
 	refreshBricksView: vscode.Disposable;
 	uploadToBrickFolder: vscode.Disposable;

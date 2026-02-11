@@ -22,7 +22,7 @@ interface ConnectedBrickDescriptor {
 	rootPath: string;
 }
 
-interface ConnectCommandOptions {
+export interface ConnectCommandOptions {
 	getLogger(): Logger;
 	getBrickRegistry(): BrickRegistry;
 	getTreeProvider(): BrickTreeProvider;
@@ -44,7 +44,7 @@ interface ConnectCommandOptions {
 	onBrickOperation(brickId: string, operation: string): void;
 }
 
-interface ConnectCommandRegistrations {
+export interface ConnectCommandRegistrations {
 	connect: vscode.Disposable;
 	disconnect: vscode.Disposable;
 	reconnect: vscode.Disposable;
