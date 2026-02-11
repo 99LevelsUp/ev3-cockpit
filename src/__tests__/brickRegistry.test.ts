@@ -104,3 +104,60 @@ test('BrickRegistry stores last operation metadata', () => {
 	assert.equal(snapshot?.lastOperation, 'Deploy sync completed');
 	assert.ok(snapshot?.lastOperationAtIso);
 });
+
+test('BrickRegistry.setActiveBrick switches active brick', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'brick-a',
+		displayName: 'EV3 A',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+	registry.upsertReady({
+		brickId: 'brick-b',
+		displayName: 'EV3 B',
+		role: 'standalone',
+		transport: 'tcp',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	// brick-b is active (last registered)
+	assert.equal(registry.getActiveBrickId(), 'brick-b');
+
+	// switch to brick-a
+	const changed = registry.setActiveBrick('brick-a');
+	assert.equal(changed, true);
+	assert.equal(registry.getActiveBrickId(), 'brick-a');
+
+	// verify isActive flags
+	const snapA = registry.getSnapshot('brick-a');
+	const snapB = registry.getSnapshot('brick-b');
+	assert.equal(snapA?.isActive, true);
+	assert.equal(snapB?.isActive, false);
+
+	// active alias resolves to new active
+	assert.equal(registry.resolveFsService('active'), mockFs);
+});
+
+test('BrickRegistry.setActiveBrick returns false for unknown brick', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'brick-a',
+		displayName: 'EV3 A',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	const result = registry.setActiveBrick('nonexistent');
+	assert.equal(result, false);
+	// active brick unchanged
+	assert.equal(registry.getActiveBrickId(), 'brick-a');
+});
