@@ -22,16 +22,30 @@ type MessageFromWebview =
 type MessageToWebview =
 	| { type: 'updateBricks'; bricks: WebviewBrickInfo[] };
 
+export interface BrickPanelPollingConfig {
+	/** Polling interval (ms) when at least one brick exists. Default 500. */
+	activeIntervalMs?: number;
+	/** Polling interval (ms) when no bricks are known. Default 3000. */
+	idleIntervalMs?: number;
+}
+
 export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'ev3-cockpit.brickPanel';
 
 	private view?: vscode.WebviewView;
 	private onDidChangeActive?: () => void;
+	private pollingTimer?: ReturnType<typeof setTimeout>;
+	private readonly activeIntervalMs: number;
+	private readonly idleIntervalMs: number;
 
 	public constructor(
 		private readonly extensionUri: vscode.Uri,
-		private readonly dataSource: BrickPanelDataSource
-	) {}
+		private readonly dataSource: BrickPanelDataSource,
+		config?: BrickPanelPollingConfig
+	) {
+		this.activeIntervalMs = config?.activeIntervalMs ?? 500;
+		this.idleIntervalMs = config?.idleIntervalMs ?? 3_000;
+	}
 
 	public resolveWebviewView(
 		webviewView: vscode.WebviewView,
@@ -60,8 +74,11 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		});
 
 		webviewView.onDidDispose(() => {
+			this.stopPolling();
 			this.view = undefined;
 		});
+
+		this.startPolling();
 	}
 
 	public setOnDidChangeActive(callback: () => void): void {
@@ -82,6 +99,32 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		}));
 		const message: MessageToWebview = { type: 'updateBricks', bricks };
 		void this.view.webview.postMessage(message);
+	}
+
+	private startPolling(): void {
+		this.stopPolling();
+		const tick = () => {
+			if (!this.view) {
+				return;
+			}
+			const bricks = this.dataSource.listBricks();
+			this.refresh();
+			const delay = bricks.length > 0 ? this.activeIntervalMs : this.idleIntervalMs;
+			this.pollingTimer = setTimeout(tick, delay);
+			this.pollingTimer.unref?.();
+		};
+		const initialDelay = this.dataSource.listBricks().length > 0
+			? this.activeIntervalMs
+			: this.idleIntervalMs;
+		this.pollingTimer = setTimeout(tick, initialDelay);
+		this.pollingTimer.unref?.();
+	}
+
+	private stopPolling(): void {
+		if (this.pollingTimer) {
+			clearTimeout(this.pollingTimer);
+			this.pollingTimer = undefined;
+		}
 	}
 
 	private getHtmlForWebview(_webview: vscode.Webview): string {
