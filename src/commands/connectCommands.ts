@@ -51,6 +51,28 @@ export interface ConnectCommandRegistrations {
 	reconnect: vscode.Disposable;
 }
 
+interface ConnectCommandArg {
+	brickId?: string;
+	silent?: boolean;
+}
+
+function parseConnectCommandArg(arg: unknown): { brickIdArg: unknown; silent: boolean } {
+	if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
+		return { brickIdArg: arg, silent: false };
+	}
+	const candidate = arg as ConnectCommandArg;
+	if (candidate.silent !== true) {
+		return { brickIdArg: arg, silent: false };
+	}
+	if (typeof candidate.brickId === 'string' && candidate.brickId.trim().length > 0) {
+		return {
+			brickIdArg: candidate.brickId.trim(),
+			silent: true
+		};
+	}
+	return { brickIdArg: arg, silent: true };
+}
+
 function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
 	if (typeof value !== 'string') {
 		return undefined;
@@ -68,11 +90,15 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
 	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
-		vscode.window.showInformationMessage('Connecting to EV3 Brick...');
+		const parsedArg = parseConnectCommandArg(arg);
+		const silent = parsedArg.silent;
+		if (!silent) {
+			vscode.window.showInformationMessage('Connecting to EV3 Brick...');
+		}
 		const activeLogger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
-		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		const requestedBrickId = options.resolveBrickIdFromCommandArg(parsedArg.brickIdArg);
 		const requestedProfile = requestedBrickId === 'active' ? undefined : options.getConnectionProfile(requestedBrickId);
 		let keepConnectionOpen = false;
 		let connectingDescriptor: ConnectedBrickDescriptor | undefined;
@@ -81,6 +107,12 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		try {
 			const connectingRoot = requestedProfile?.rootPath ?? (readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
 			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot, requestedProfile);
+			if (requestedBrickId !== 'active') {
+				connectingDescriptor = {
+					...connectingDescriptor,
+					brickId: requestedBrickId
+				};
+			}
 			options.onBrickOperation(connectingDescriptor.brickId, 'Connecting');
 			options.clearProgramSession('connect-start', connectingDescriptor.brickId);
 			if (requestedBrickId !== 'active') {
@@ -228,7 +260,8 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				logger: activeLogger
 			});
 			const rootPath = requestedProfile?.rootPath ?? (featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
-			const baseDescriptor = options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
+			const baseDescriptor =
+				connectingDescriptor ?? options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
 			const rememberedName = normalizeBrickNameCandidate(requestedProfile?.displayName);
 			const brickDescriptor = {
 				...baseDescriptor,
@@ -255,9 +288,11 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			});
 			treeProvider.refreshBrick(brickDescriptor.brickId);
 
-			vscode.window.showInformationMessage(
-				`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
-			);
+			if (!silent) {
+				vscode.window.showInformationMessage(
+					`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
+				);
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown scheduler error';
 			activeLogger.error('Connect probe failed', { message });
@@ -268,7 +303,9 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				brickRegistry.markActiveUnavailable(message);
 				treeProvider.refreshThrottled();
 			}
-			vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
+			if (!silent) {
+				vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
+			}
 		} finally {
 			if (!keepConnectionOpen && connectingDescriptor) {
 				await options.closeBrickSession(connectingDescriptor.brickId).catch((closeError: unknown) => {

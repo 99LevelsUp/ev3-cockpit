@@ -1,4 +1,7 @@
 {
   "discoveryRefreshFastMs": 2500,
-  "discoveryRefreshSlowMs": 15000
+  "discoveryRefreshSlowMs": 15000,
+  "connectionHealthActiveMs": 500,
+  "connectionHealthIdleMs": 2000,
+  "connectionHealthProbeTimeoutMs": 700
 }

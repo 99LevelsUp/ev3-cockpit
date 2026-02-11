@@ -37,6 +37,7 @@ import { BrickTreeDragAndDropController } from './ui/brickTreeDragAndDrop';
 import { BrickUiStateStore } from './ui/brickUiStateStore';
 import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
 import { createBusyIndicatorPoller } from './ui/busyIndicator';
+import { createConnectionHealthPoller } from './ui/connectionHealthPoller';
 import { createTreeStatePersistence } from './ui/treeStatePersistence';
 import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
@@ -354,6 +355,109 @@ export function activate(context: vscode.ExtensionContext) {
 		return fallbackDisplayName;
 	};
 
+	const resolveDiscoveryTransport = (
+		brickId: string,
+		profile?: BrickConnectionProfile
+	): BrickPanelDiscoveryCandidate['transport'] => {
+		const mode = profile?.transport.mode;
+		if (mode === 'usb' || mode === 'bluetooth' || mode === 'tcp') {
+			return mode;
+		}
+		if (brickId.startsWith('usb-')) {
+			return 'usb';
+		}
+		if (brickId.startsWith('bluetooth-')) {
+			return 'bluetooth';
+		}
+		if (brickId.startsWith('tcp-')) {
+			return 'tcp';
+		}
+		return 'unknown';
+	};
+
+	const resolveDiscoveryDetail = (profile?: BrickConnectionProfile): string | undefined => {
+		if (!profile) {
+			return undefined;
+		}
+		const transport = profile.transport;
+		if (transport.mode === 'usb') {
+			return transport.usbPath?.trim() || undefined;
+		}
+		if (transport.mode === 'bluetooth') {
+			return transport.bluetoothPort?.trim() || undefined;
+		}
+		if (transport.mode === 'tcp') {
+			const host = transport.tcpHost?.trim() || '';
+			const port =
+				typeof transport.tcpPort === 'number' && Number.isFinite(transport.tcpPort)
+					? Math.max(1, Math.floor(transport.tcpPort))
+					: undefined;
+			const endpoint = host && port ? `${host}:${port}` : host || (port ? String(port) : '');
+			return endpoint || transport.tcpSerialNumber?.trim() || undefined;
+		}
+		return undefined;
+	};
+
+	const resolveCandidateStatus = (
+		snapshot: BrickSnapshot | undefined,
+		fallback: 'UNKNOWN' | 'UNAVAILABLE'
+	): NonNullable<BrickPanelDiscoveryCandidate['status']> => {
+		if (!snapshot) {
+			return fallback;
+		}
+		if (
+			snapshot.status === 'READY'
+			|| snapshot.status === 'CONNECTING'
+			|| snapshot.status === 'UNAVAILABLE'
+			|| snapshot.status === 'ERROR'
+		) {
+			return snapshot.status;
+		}
+		return 'UNKNOWN';
+	};
+
+	const isUsbReconnectCandidateAvailable = async (brickId: string): Promise<boolean> => {
+		const snapshot = brickRegistry.getSnapshot(brickId);
+		if (!snapshot || snapshot.transport !== 'usb') {
+			return false;
+		}
+		const profile = profileStore.get(brickId);
+		if (!profile || profile.transport.mode !== 'usb') {
+			return false;
+		}
+		const usbCandidates = await listUsbHidCandidates();
+		if (usbCandidates.length === 0) {
+			return false;
+		}
+		const configuredPath = profile.transport.usbPath?.trim() || '';
+		let selectedPath =
+			configuredPath
+				? usbCandidates
+					.map((candidate) => candidate.path.trim())
+					.find((path) => path === configuredPath)
+				: undefined;
+		if (!selectedPath) {
+			if (usbCandidates.length !== 1) {
+				return false;
+			}
+			selectedPath = usbCandidates[0]?.path.trim();
+		}
+		if (!selectedPath) {
+			return false;
+		}
+		if (selectedPath !== configuredPath) {
+			await profileStore.upsert({
+				...profile,
+				savedAtIso: new Date().toISOString(),
+				transport: {
+					...profile.transport,
+					usbPath: selectedPath
+				}
+			});
+		}
+		return true;
+	};
+
 	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const discoveryPortRaw = cfg.get('transport.tcp.discoveryPort');
@@ -386,14 +490,16 @@ export function activate(context: vscode.ExtensionContext) {
 		const seenCandidateIds = new Set<string>();
 
 		const registerCandidate = (
-			profile: BrickConnectionProfile,
-			candidate: BrickPanelDiscoveryCandidate
+			candidate: BrickPanelDiscoveryCandidate,
+			profile?: BrickConnectionProfile
 		): void => {
 			if (seenCandidateIds.has(candidate.candidateId)) {
 				return;
 			}
 			seenCandidateIds.add(candidate.candidateId);
-			discoveredBrickProfiles.set(profile.brickId, profile);
+			if (profile) {
+				discoveredBrickProfiles.set(profile.brickId, profile);
+			}
 			candidates.push(candidate);
 		};
 
@@ -418,14 +524,14 @@ export function activate(context: vscode.ExtensionContext) {
 					usbPath
 				}
 			};
-			registerCandidate(profile, {
+			registerCandidate({
 				candidateId: brickId,
 				displayName,
 				transport: 'usb',
 				detail: usbPath,
-				status: snapshot?.status ?? 'UNKNOWN',
+				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-			});
+			}, profile);
 		}
 
 		for (const serialCandidate of serialCandidates) {
@@ -455,14 +561,14 @@ export function activate(context: vscode.ExtensionContext) {
 					bluetoothPort
 				}
 			};
-			registerCandidate(profile, {
+			registerCandidate({
 				candidateId: brickId,
 				displayName,
 				transport: 'bluetooth',
 				detail,
-				status: snapshot?.status ?? 'UNKNOWN',
+				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-			});
+			}, profile);
 		}
 
 		for (const tcpCandidate of tcpCandidates) {
@@ -487,14 +593,46 @@ export function activate(context: vscode.ExtensionContext) {
 					tcpSerialNumber: tcpCandidate.serialNumber || undefined
 				}
 			};
-			registerCandidate(profile, {
+			registerCandidate({
 				candidateId: brickId,
 				displayName,
 				transport: 'tcp',
 				detail,
-				status: snapshot?.status ?? 'UNKNOWN',
+				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-			});
+			}, profile);
+		}
+
+		for (const profile of profileStore.list()) {
+			const brickId = profile.brickId;
+			if (!brickId || seenCandidateIds.has(brickId)) {
+				continue;
+			}
+			const snapshot = brickRegistry.getSnapshot(brickId);
+			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
+			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
+			registerCandidate({
+				candidateId: brickId,
+				displayName,
+				transport: resolveDiscoveryTransport(brickId, profile),
+				detail: resolveDiscoveryDetail(profile),
+				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+			}, profile);
+		}
+
+		for (const snapshot of brickRegistry.listSnapshots()) {
+			if (seenCandidateIds.has(snapshot.brickId)) {
+				continue;
+			}
+			registerCandidate({
+				candidateId: snapshot.brickId,
+				displayName: resolvePreferredDisplayName(snapshot.brickId, snapshot.displayName),
+				transport: resolveDiscoveryTransport(snapshot.brickId, profileStore.get(snapshot.brickId)),
+				detail: resolveDiscoveryDetail(profileStore.get(snapshot.brickId)),
+				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+				alreadyConnected: snapshot.status === 'READY' || snapshot.status === 'CONNECTING'
+			}, profileStore.get(snapshot.brickId));
 		}
 
 		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
@@ -521,7 +659,7 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const connectDiscoveredBrickFromPanel = async (candidateId: string): Promise<void> => {
-		const profile = discoveredBrickProfiles.get(candidateId);
+		const profile = discoveredBrickProfiles.get(candidateId) ?? profileStore.get(candidateId);
 		if (!profile) {
 			throw new Error('Selected Brick is no longer available. Scan again.');
 		}
@@ -658,6 +796,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const busyIndicatorSubscription = createBusyIndicatorPoller(
 		brickRegistry, sessionManager, treeProvider, brickUiStateStore
 	);
+	const brickPanelConfig = readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger);
 
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
@@ -671,18 +810,59 @@ export function activate(context: vscode.ExtensionContext) {
 	treeProvider.refresh();
 
 	const brickPanelProvider = new BrickPanelProvider(context.extensionUri, {
-		listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
+		listBricks: () =>
+			sortSnapshotsForTree(
+				brickRegistry
+					.listSnapshots()
+					.filter((snapshot) =>
+						snapshot.status === 'READY'
+						|| snapshot.status === 'CONNECTING'
+						|| (
+							snapshot.status === 'UNAVAILABLE'
+							&& snapshot.lastError !== 'Disconnected by user.'
+						)
+					)
+			),
 		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
 		scanAvailableBricks: discoverBricksForPanel,
 		connectScannedBrick: connectDiscoveredBrickFromPanel,
 		disconnectBrick: async (brickId: string) => {
 			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickId);
 		}
-	}, readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger));
+	}, brickPanelConfig);
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
 	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(
 		BrickPanelProvider.viewType,
 		brickPanelProvider
+	);
+	const connectionHealthSubscription = createConnectionHealthPoller(
+		brickRegistry,
+		sessionManager,
+		treeProvider,
+		{
+			activeIntervalMs: brickPanelConfig.connectionHealthActiveMs,
+			idleIntervalMs: brickPanelConfig.connectionHealthIdleMs,
+			probeTimeoutMs: brickPanelConfig.connectionHealthProbeTimeoutMs,
+			onDisconnected: (brickId) => {
+				clearProgramSession('connection-health', brickId);
+				brickPanelProvider.refresh();
+			},
+			onReconnectRequested:
+				context.extensionMode === vscode.ExtensionMode.Test
+					? undefined
+					: async (brickId) => {
+						const usbReady = await isUsbReconnectCandidateAvailable(brickId);
+						if (!usbReady) {
+							return;
+						}
+						await vscode.commands.executeCommand('ev3-cockpit.connectEV3', {
+							brickId,
+							silent: true
+						});
+						brickPanelProvider.refresh();
+					},
+			logger: perfLogger
+		}
 	);
 
 	context.subscriptions.push(
@@ -735,6 +915,7 @@ export function activate(context: vscode.ExtensionContext) {
 		treeStatePersistence,
 		fsChangeSubscription,
 		busyIndicatorSubscription,
+		connectionHealthSubscription,
 		brickPanelRegistration,
 		{
 			dispose: () => eventLoopMonitor.stop()

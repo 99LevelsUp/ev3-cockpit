@@ -7,16 +7,28 @@ const DEFAULT_DISCOVERY_REFRESH_FAST_MS = 2_500;
 const DEFAULT_DISCOVERY_REFRESH_SLOW_MS = 15_000;
 const MIN_DISCOVERY_REFRESH_FAST_MS = 500;
 const MIN_DISCOVERY_REFRESH_SLOW_MS = 1_000;
+const DEFAULT_CONNECTION_HEALTH_ACTIVE_MS = 500;
+const DEFAULT_CONNECTION_HEALTH_IDLE_MS = 2_000;
+const DEFAULT_CONNECTION_HEALTH_PROBE_TIMEOUT_MS = 700;
+const MIN_CONNECTION_HEALTH_ACTIVE_MS = 150;
+const MIN_CONNECTION_HEALTH_IDLE_MS = 500;
+const MIN_CONNECTION_HEALTH_PROBE_TIMEOUT_MS = 100;
 const RELATIVE_DISCOVERY_CONFIG_PATH = path.join('config', 'brick-panel.scan.json');
 
 interface BrickPanelDiscoveryConfigJson {
 	discoveryRefreshFastMs?: unknown;
 	discoveryRefreshSlowMs?: unknown;
+	connectionHealthActiveMs?: unknown;
+	connectionHealthIdleMs?: unknown;
+	connectionHealthProbeTimeoutMs?: unknown;
 }
 
 export interface BrickPanelDiscoveryConfigSnapshot {
 	discoveryRefreshFastMs: number;
 	discoveryRefreshSlowMs: number;
+	connectionHealthActiveMs: number;
+	connectionHealthIdleMs: number;
+	connectionHealthProbeTimeoutMs: number;
 }
 
 function normalizeDiscoveryConfig(
@@ -32,9 +44,27 @@ function normalizeDiscoveryConfig(
 		DEFAULT_DISCOVERY_REFRESH_SLOW_MS,
 		Math.max(MIN_DISCOVERY_REFRESH_SLOW_MS, discoveryRefreshFastMs)
 	);
+	const connectionHealthActiveMs = sanitizeNumber(
+		raw.connectionHealthActiveMs,
+		DEFAULT_CONNECTION_HEALTH_ACTIVE_MS,
+		MIN_CONNECTION_HEALTH_ACTIVE_MS
+	);
+	const connectionHealthIdleMs = sanitizeNumber(
+		raw.connectionHealthIdleMs,
+		DEFAULT_CONNECTION_HEALTH_IDLE_MS,
+		Math.max(MIN_CONNECTION_HEALTH_IDLE_MS, connectionHealthActiveMs)
+	);
+	const connectionHealthProbeTimeoutMs = sanitizeNumber(
+		raw.connectionHealthProbeTimeoutMs,
+		DEFAULT_CONNECTION_HEALTH_PROBE_TIMEOUT_MS,
+		MIN_CONNECTION_HEALTH_PROBE_TIMEOUT_MS
+	);
 	return {
 		discoveryRefreshFastMs,
-		discoveryRefreshSlowMs
+		discoveryRefreshSlowMs,
+		connectionHealthActiveMs,
+		connectionHealthIdleMs,
+		connectionHealthProbeTimeoutMs
 	};
 }
 
@@ -58,7 +88,10 @@ export function readBrickPanelDiscoveryConfig(
 		});
 		return {
 			discoveryRefreshFastMs: DEFAULT_DISCOVERY_REFRESH_FAST_MS,
-			discoveryRefreshSlowMs: DEFAULT_DISCOVERY_REFRESH_SLOW_MS
+			discoveryRefreshSlowMs: DEFAULT_DISCOVERY_REFRESH_SLOW_MS,
+			connectionHealthActiveMs: DEFAULT_CONNECTION_HEALTH_ACTIVE_MS,
+			connectionHealthIdleMs: DEFAULT_CONNECTION_HEALTH_IDLE_MS,
+			connectionHealthProbeTimeoutMs: DEFAULT_CONNECTION_HEALTH_PROBE_TIMEOUT_MS
 		};
 	}
 }

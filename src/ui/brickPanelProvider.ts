@@ -412,8 +412,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 14px;
-		height: 14px;
+		width: 16px;
+		height: 16px;
+		margin-left: 4px;
 		border-radius: 50%;
 		font-size: 12px;
 		line-height: 12px;
@@ -785,6 +786,98 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
+		function setCandidateConnectionState(candidateId, status, alreadyConnected) {
+			for (const candidate of discoveryCandidates) {
+				if (candidate.candidateId !== candidateId) {
+					continue;
+				}
+				candidate.status = status;
+				candidate.alreadyConnected = alreadyConnected;
+				break;
+			}
+		}
+
+		function ensureBrickVisibleFromCandidate(candidateId, status) {
+			const candidate = discoveryCandidates.find((item) => item.candidateId === candidateId);
+			const transport = candidate?.transport || 'unknown';
+			const displayName = candidate?.displayName || candidateId;
+			let found = false;
+			bricks = bricks.map((brick) => {
+				if (brick.brickId !== candidateId) {
+					return {
+						...brick,
+						isActive: false
+					};
+				}
+				found = true;
+				return {
+					...brick,
+					displayName,
+					transport,
+					status,
+					isActive: true
+				};
+			});
+			if (!found) {
+				bricks.push({
+					brickId: candidateId,
+					displayName,
+					status,
+					transport,
+					role: 'standalone',
+					isActive: true
+				});
+				bricks = bricks.map((brick) => ({
+					...brick,
+					isActive: brick.brickId === candidateId
+				}));
+			}
+			bricks = stabilizeBrickOrder(bricks);
+		}
+
+		function removeBrickImmediately(brickId) {
+			const wasActive = bricks.some((brick) => brick.brickId === brickId && brick.isActive);
+			bricks = bricks.filter((brick) => brick.brickId !== brickId);
+			if (wasActive && bricks.length > 0) {
+				bricks = bricks.map((brick, index) => ({
+					...brick,
+					isActive: index === 0
+				}));
+			}
+			bricks = stabilizeBrickOrder(bricks);
+		}
+
+		function syncDiscoveryCandidatesWithBricks() {
+			if (!Array.isArray(discoveryCandidates) || discoveryCandidates.length === 0) {
+				return;
+			}
+			const statusByBrickId = new Map();
+			for (const brick of bricks) {
+				if (!brick || !brick.brickId) {
+					continue;
+				}
+				statusByBrickId.set(brick.brickId, String(brick.status || '').toUpperCase());
+			}
+			for (const candidate of discoveryCandidates) {
+				if (!candidate || !candidate.candidateId) {
+					continue;
+				}
+				const liveStatus = statusByBrickId.get(candidate.candidateId);
+				if (liveStatus === 'READY' || liveStatus === 'CONNECTING' || liveStatus === 'UNAVAILABLE' || liveStatus === 'ERROR') {
+					candidate.status = liveStatus;
+					candidate.alreadyConnected = liveStatus === 'READY' || liveStatus === 'CONNECTING';
+					continue;
+				}
+				if (
+					candidate.alreadyConnected === true
+					&& candidate.candidateId !== connectingDiscoveryCandidateId
+				) {
+					candidate.status = 'UNAVAILABLE';
+					candidate.alreadyConnected = false;
+				}
+			}
+		}
+
 		function stabilizeBrickOrder(nextBricks) {
 			const normalized = Array.isArray(nextBricks)
 				? nextBricks.filter((brick) => brick && brick.brickId)
@@ -878,6 +971,14 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				return ' status-' + normalizedStatus;
 			}
 			return candidate.alreadyConnected ? ' status-ready' : ' status-unknown';
+		}
+
+		function isCandidateReadyConnected(candidate) {
+			if (!candidate) {
+				return false;
+			}
+			const status = String(candidate.status || '').toLowerCase();
+			return status === 'ready' || (candidate.alreadyConnected === true && status !== 'error' && status !== 'unavailable');
 		}
 
 		function render() {
@@ -1051,11 +1152,15 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			for (const closeButton of root.querySelectorAll('.brick-tab-close')) {
 				closeButton.addEventListener('click', (event) => {
+					event.preventDefault();
 					event.stopPropagation();
 					const brickId = closeButton.dataset.closeBrickId || '';
 					if (!brickId) {
 						return;
 					}
+					removeBrickImmediately(brickId);
+					setCandidateConnectionState(brickId, 'UNKNOWN', false);
+					render();
 					vscode.postMessage({ type: 'disconnectBrick', brickId });
 				});
 			}
@@ -1080,6 +1185,19 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					if (candidateButton.disabled) {
 						return;
 					}
+					const candidate = discoveryCandidates.find((item) => item.candidateId === candidateId);
+					if (isCandidateReadyConnected(candidate)) {
+						ensureBrickVisibleFromCandidate(candidateId, 'READY');
+						discoveryOpen = false;
+						stopScanLoop();
+						render();
+						vscode.postMessage({ type: 'selectBrick', brickId: candidateId });
+						return;
+					}
+					connectingDiscoveryCandidateId = candidateId;
+					setCandidateConnectionState(candidateId, 'CONNECTING', true);
+					ensureBrickVisibleFromCandidate(candidateId, 'CONNECTING');
+					render();
 					vscode.postMessage({ type: 'connectScannedBrick', candidateId });
 				});
 			}
@@ -1092,6 +1210,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				sensors = message.sensors || [];
 				motors = message.motors || [];
 				controls = message.controls || null;
+				syncDiscoveryCandidatesWithBricks();
 				if (initialAutoScanPending && bricks.length === 0) {
 					initialAutoScanPending = false;
 					requestDiscoveryScan({ preserveCandidates: false });
@@ -1143,11 +1262,20 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (message.type === 'connectStarted') {
 				discoveryOpen = true;
 				connectingDiscoveryCandidateId = message.candidateId || '';
+				if (connectingDiscoveryCandidateId) {
+					setCandidateConnectionState(connectingDiscoveryCandidateId, 'CONNECTING', true);
+					ensureBrickVisibleFromCandidate(connectingDiscoveryCandidateId, 'CONNECTING');
+				}
 				discoveryError = '';
 				render();
 				return;
 			}
 			if (message.type === 'connectSucceeded') {
+				const connectedCandidateId = message.candidateId || connectingDiscoveryCandidateId;
+				if (connectedCandidateId) {
+					setCandidateConnectionState(connectedCandidateId, 'READY', true);
+					ensureBrickVisibleFromCandidate(connectedCandidateId, 'READY');
+				}
 				discoveryOpen = false;
 				discoveryLoading = false;
 				discoveryError = '';
@@ -1160,6 +1288,11 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 			if (message.type === 'connectFailed') {
+				const failedCandidateId = message.candidateId || connectingDiscoveryCandidateId;
+				if (failedCandidateId) {
+					setCandidateConnectionState(failedCandidateId, 'UNKNOWN', false);
+					removeBrickImmediately(failedCandidateId);
+				}
 				connectingDiscoveryCandidateId = '';
 				discoveryError = message.message || 'Connect failed.';
 				scanInFlight = false;

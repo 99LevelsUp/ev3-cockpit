@@ -13,5 +13,13 @@
     "incremental": true,
     "tsBuildInfoFile": "./out/.tsbuildinfo"
   },
-  "exclude": ["node_modules", "out"]
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "out",
+    "tests",
+    "playwright.config.ts",
+    "playwright-report",
+    "test-results"
+  ]
 }
