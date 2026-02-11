@@ -55,6 +55,15 @@ The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Br
 - The panel polls for updates automatically: 500 ms when bricks are connected, 3 s when idle.
 - Switching the active brick also refreshes the Explorer tree so the new active brick sorts to the top.
 
+## Sensors
+
+The extension can detect and read sensors connected to the EV3 brick's input ports (1–4).
+
+- **Probe:** Detect what sensor type and mode is active on each port.
+- **Read:** Get the current value in SI units (e.g., distance in cm, color index, touch state).
+- **Mode switch:** Change the sensor operating mode (e.g., color sensor from reflected to ambient).
+- When sensor data is available, the Brick Panel shows a **Sensors** section listing each port with its detected type and current mode.
+
 ## Implementation Status
 
 ### Implemented
@@ -72,6 +81,7 @@ The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Br
 - [x] Batch multi-brick commands (reconnect/deploy workspace)
 - [x] Test infrastructure (unit, host, hardware smoke/matrix)
 - [x] Brick Panel webview with active brick switching and polling
+- [x] Sensor detection, reading, and mode switching (input ports 1–4)
 
 ### In Progress
 
@@ -80,7 +90,7 @@ The **EV3 Brick Panel** webview appears in the Explorer sidebar alongside the Br
 
 ### Planned
 
-- [ ] Real-time sensor/motor monitoring UI
+- [ ] Motor control and monitoring UI
 - [ ] Advanced topology workflows (master/slave, daisy-chain optimizations)
 - [ ] Prebuilt installable release artifacts (`.vsix`)
 - [ ] Expanded troubleshooting and user docs
