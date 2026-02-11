@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
+import type { SensorInfo } from '../device/sensorTypes';
 
 export interface BrickPanelDataSource {
 	listBricks(): BrickSnapshot[];
 	setActiveBrick(brickId: string): boolean;
+	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
 }
 
 interface WebviewBrickInfo {
@@ -21,8 +23,15 @@ type MessageFromWebview =
 	| { type: 'selectBrick'; brickId: string }
 	| { type: 'ready' };
 
+interface WebviewSensorInfo {
+	port: number;
+	typeName: string;
+	mode: number;
+	connected: boolean;
+}
+
 type MessageToWebview =
-	| { type: 'updateBricks'; bricks: WebviewBrickInfo[] };
+	| { type: 'updateBricks'; bricks: WebviewBrickInfo[]; sensors?: WebviewSensorInfo[] };
 
 export interface BrickPanelPollingConfig {
 	/** Polling interval (ms) when at least one brick exists. Default 500. */
@@ -101,7 +110,20 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			lastError: s.lastError,
 			lastOperation: s.lastOperation
 		}));
-		const message: MessageToWebview = { type: 'updateBricks', bricks };
+		const activeBrick = bricks.find((b) => b.isActive);
+		let sensors: WebviewSensorInfo[] | undefined;
+		if (activeBrick && this.dataSource.getSensorInfo) {
+			const sensorData = this.dataSource.getSensorInfo(activeBrick.brickId);
+			if (sensorData) {
+				sensors = sensorData.map((s) => ({
+					port: s.port,
+					typeName: s.typeName,
+					mode: s.mode,
+					connected: s.connected
+				}));
+			}
+		}
+		const message: MessageToWebview = { type: 'updateBricks', bricks, sensors };
 		void this.view.webview.postMessage(message);
 	}
 
@@ -204,6 +226,28 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	.error-text {
 		color: var(--vscode-errorForeground, #f44);
 	}
+	.sensor-section {
+		padding: 8px 12px;
+		border-top: 1px solid var(--vscode-panel-border, #444);
+	}
+	.sensor-section h3 {
+		margin: 4px 0 8px;
+		font-size: var(--vscode-font-size);
+		font-weight: bold;
+	}
+	.sensor-port {
+		display: flex;
+		justify-content: space-between;
+		padding: 3px 0;
+		opacity: 0.85;
+	}
+	.sensor-port.disconnected {
+		opacity: 0.45;
+	}
+	.sensor-port-label {
+		font-weight: bold;
+		min-width: 50px;
+	}
 </style>
 </head>
 <body>
@@ -212,6 +256,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		const vscode = acquireVsCodeApi();
 
 		let bricks = [];
+		let sensors = [];
 
 		function render() {
 			const root = document.getElementById('root');
@@ -246,6 +291,18 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				html += '</dl></div>';
 			}
 
+			if (sensors && sensors.length > 0) {
+				html += '<div class="sensor-section"><h3>Sensors</h3>';
+				for (const s of sensors) {
+					const cls = s.connected ? 'sensor-port' : 'sensor-port disconnected';
+					html += '<div class="' + cls + '">'
+						+ '<span class="sensor-port-label">Port ' + (s.port + 1) + '</span>'
+						+ '<span>' + s.typeName + (s.connected ? ' (mode ' + s.mode + ')' : '') + '</span>'
+						+ '</div>';
+				}
+				html += '</div>';
+			}
+
 			root.innerHTML = html;
 
 			for (const tab of root.querySelectorAll('.brick-tab')) {
@@ -259,6 +316,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			const message = event.data;
 			if (message.type === 'updateBricks') {
 				bricks = message.bricks;
+				sensors = message.sensors || [];
 				render();
 			}
 		});
