@@ -8,7 +8,8 @@ import { verifyUploadedFile } from '../fs/deployVerify';
 import { deleteRemotePath, getRemotePathKind, renameRemotePath } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { Logger } from '../diagnostics/logger';
-import { withTiming } from '../diagnostics/perfTiming';
+import { withTiming, isPerfEnabled } from '../diagnostics/perfTiming';
+import { performance } from 'node:perf_hooks';
 import { toErrorMessage } from './commandUtils';
 import { LocalProjectFileEntry } from './deployTypes';
 
@@ -83,6 +84,7 @@ export async function executeDeployPlan(
 	let deletedStaleFilesCount = 0;
 	let deletedStaleDirectoriesCount = 0;
 	const previewUploadSamples: string[] = [];
+	const uploadStartedAt = performance.now();
 
 	const conflictDirectoryCache = new Map<string, Set<string>>();
 	let conflictBulkDecision: DeployConflictBulkDecision;
@@ -321,6 +323,21 @@ export async function executeDeployPlan(
 				}
 			}
 		}
+	}
+
+	if (isPerfEnabled() && uploadedFilesCount > 0) {
+		const uploadDurationMs = performance.now() - uploadStartedAt;
+		const throughputBytesPerSec = uploadDurationMs > 0 ? Math.round((uploadedBytes / uploadDurationMs) * 1000) : 0;
+		const avgFileMs = uploadDurationMs > 0 ? Number((uploadDurationMs / uploadedFilesCount).toFixed(1)) : 0;
+		logger.info('[perf] deploy.upload-throughput', {
+			correlationId,
+			brickId: targetBrickId,
+			totalBytes: uploadedBytes,
+			uploadDurationMs: Number(uploadDurationMs.toFixed(1)),
+			throughputBytesPerSec,
+			uploadedFilesCount,
+			avgFileUploadMs: avgFileMs
+		});
 	}
 
 	return {

@@ -96,9 +96,28 @@ const MIN_SAMPLE_INTERVAL_MS = 250;
 /** Default event-loop sample interval (ms) between histogram snapshots. */
 const DEFAULT_SAMPLE_INTERVAL_MS = 10_000;
 
-export function startEventLoopMonitor(logger: Logger, options: EventLoopMonitorOptions = {}): () => void {
+export interface EventLoopLagSnapshot {
+	p50Ms: number;
+	p95Ms: number;
+	p99Ms: number;
+	maxMs: number;
+}
+
+export interface EventLoopMonitorHandle {
+	/** Stops the event-loop delay monitor and releases resources. */
+	stop: () => void;
+	/** Returns a point-in-time snapshot of event-loop delay percentiles (ms). */
+	snapshot: () => EventLoopLagSnapshot;
+}
+
+export function startEventLoopMonitor(logger: Logger, options: EventLoopMonitorOptions = {}): EventLoopMonitorHandle {
+	const noopHandle: EventLoopMonitorHandle = {
+		stop: () => undefined,
+		snapshot: () => ({ p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0 })
+	};
+
 	if (!PERF_ENABLED) {
-		return () => undefined;
+		return noopHandle;
 	}
 	const resolutionMs = Math.max(1, options.resolutionMs ?? 10);
 	const sampleIntervalMs = Math.max(MIN_SAMPLE_INTERVAL_MS, options.sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS);
@@ -109,22 +128,27 @@ export function startEventLoopMonitor(logger: Logger, options: EventLoopMonitorO
 	});
 	histogram.enable();
 
+	const readSnapshot = (): EventLoopLagSnapshot => ({
+		p50Ms: Number((histogram.percentile(50) / 1e6).toFixed(1)),
+		p95Ms: Number((histogram.percentile(95) / 1e6).toFixed(1)),
+		p99Ms: Number((histogram.percentile(99) / 1e6).toFixed(1)),
+		maxMs: Number((histogram.max / 1e6).toFixed(1))
+	});
+
 	const timer = setInterval(() => {
-		const maxMs = histogram.max / 1e6;
-		if (maxMs >= warnThresholdMs) {
-			logger.warn('[perf] event-loop-delay', {
-				p50Ms: Number((histogram.percentile(50) / 1e6).toFixed(1)),
-				p95Ms: Number((histogram.percentile(95) / 1e6).toFixed(1)),
-				p99Ms: Number((histogram.percentile(99) / 1e6).toFixed(1)),
-				maxMs: Number(maxMs.toFixed(1))
-			});
+		const snap = readSnapshot();
+		if (snap.maxMs >= warnThresholdMs) {
+			logger.warn('[perf] event-loop-delay', { ...snap });
 		}
 		histogram.reset();
 	}, sampleIntervalMs);
 	timer.unref?.();
 
-	return () => {
-		clearInterval(timer);
-		histogram.disable();
+	return {
+		stop: () => {
+			clearInterval(timer);
+			histogram.disable();
+		},
+		snapshot: readSnapshot
 	};
 }

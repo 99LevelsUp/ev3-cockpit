@@ -19,6 +19,46 @@ export interface FeatureConfigSnapshot {
 
 export const DEFAULT_SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
 
+/**
+ * Recommended upload chunk sizes per transport type.
+ * These are capped by the protocol maximum (DOWNLOAD_CHUNK_MAX = 1017) in remoteFsService.
+ */
+export interface TransportChunkConfig {
+	/** Chunk size for USB HID transport (high throughput, low latency). */
+	usb: number;
+	/** Chunk size for Bluetooth SPP transport (limited bandwidth). */
+	bluetooth: number;
+	/** Chunk size for TCP transport (variable bandwidth). */
+	tcp: number;
+	/** Fallback chunk size when transport type is unknown. */
+	fallback: number;
+}
+
+export const DEFAULT_TRANSPORT_CHUNK_BYTES: Readonly<TransportChunkConfig> = {
+	usb: 1000,
+	bluetooth: 512,
+	tcp: 1000,
+	fallback: 768
+};
+
+export type TransportType = 'usb' | 'bluetooth' | 'tcp' | 'unknown';
+
+export function resolveTransportChunkBytes(
+	transportType: TransportType,
+	config: Readonly<TransportChunkConfig> = DEFAULT_TRANSPORT_CHUNK_BYTES
+): number {
+	switch (transportType) {
+		case 'usb':
+			return config.usb;
+		case 'bluetooth':
+			return config.bluetooth;
+		case 'tcp':
+			return config.tcp;
+		default:
+			return config.fallback;
+	}
+}
+
 const FS_MODES: readonly FsMode[] = ['safe', 'full'];
 const COMPAT_PROFILE_MODES: readonly CompatProfileMode[] = ['auto', 'stock-strict'];
 

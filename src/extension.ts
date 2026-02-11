@@ -227,7 +227,7 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	rebuildRuntime();
-	const stopEventLoopMonitor = startEventLoopMonitor(perfLogger);
+	const eventLoopMonitor = startEventLoopMonitor(perfLogger);
 
 	const resolvers = createBrickResolvers({ brickRegistry, getLogger: () => logger });
 	const {
@@ -490,7 +490,7 @@ export function activate(context: vscode.ExtensionContext) {
 		fsChangeSubscription,
 		busyIndicatorSubscription,
 		{
-			dispose: () => stopEventLoopMonitor()
+			dispose: () => eventLoopMonitor.stop()
 		},
 		treeProvider,
 		output,
