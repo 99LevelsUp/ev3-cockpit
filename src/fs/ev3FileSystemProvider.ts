@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { Logger, NoopLogger } from '../diagnostics/logger';
+import { ExtensionError } from '../errors/ExtensionError';
 import { withTiming } from '../diagnostics/perfTiming';
 import { RemoteFsService } from './remoteFsService';
 import { parseEv3UriParts } from './ev3Uri';
@@ -11,13 +12,10 @@ type RemoteFsResolver = (brickId: string) => Promise<RemoteFsService>;
 
 export type FsAvailabilityErrorCode = 'NO_ACTIVE_BRICK' | 'BRICK_UNAVAILABLE' | 'BRICK_NOT_REGISTERED';
 
-export class FsAvailabilityError extends Error {
-	public readonly code: FsAvailabilityErrorCode;
-
+export class FsAvailabilityError extends ExtensionError {
 	public constructor(code: FsAvailabilityErrorCode, message: string) {
-		super(message);
+		super(code, message);
 		this.name = 'FsAvailabilityError';
-		this.code = code;
 	}
 }
 

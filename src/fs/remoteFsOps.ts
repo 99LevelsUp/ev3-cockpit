@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { ExtensionError } from '../errors/ExtensionError';
 import { canonicalizeEv3Path, PathPolicyError } from './pathPolicy';
 
 export type RemoteFsPathKind = 'file' | 'directory' | 'missing';
@@ -13,13 +14,10 @@ export interface RemoteFsLike {
 
 export type RemoteFsPathErrorCode = 'NOT_FOUND' | 'ALREADY_EXISTS' | 'NOT_EMPTY' | 'INVALID_OPERATION';
 
-export class RemoteFsPathError extends Error {
-	public readonly code: RemoteFsPathErrorCode;
-
+export class RemoteFsPathError extends ExtensionError {
 	public constructor(code: RemoteFsPathErrorCode, message: string) {
-		super(message);
+		super(code, message);
 		this.name = 'RemoteFsPathError';
-		this.code = code;
 	}
 }
 

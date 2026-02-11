@@ -1,3 +1,4 @@
+import { ExtensionError } from '../errors/ExtensionError';
 import { FsMode } from '../config/featureConfig';
 
 const HARD_BLOCK_PREFIXES = ['/proc', '/sys', '/dev'];
@@ -68,9 +69,9 @@ export function isAsciiSafePath(path: string): boolean {
 	return /^[\x20-\x7E]+$/.test(path);
 }
 
-export class PathPolicyError extends Error {
+export class PathPolicyError extends ExtensionError {
 	public constructor(message: string) {
-		super(message);
+		super('PATH_POLICY', message);
 		this.name = 'PathPolicyError';
 	}
 }

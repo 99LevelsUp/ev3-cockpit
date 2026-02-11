@@ -1,6 +1,7 @@
 import { CapabilityProfile } from '../compat/capabilityProfile';
 import { FsConfigSnapshot } from '../config/featureConfig';
 import { Logger, NoopLogger } from '../diagnostics/logger';
+import { ExtensionError } from '../errors/ExtensionError';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, cString, gv0, lc0, lc2, lcs, readUint32le, uint16le, uint32le } from '../protocol/ev3Bytecode';
 import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
@@ -83,13 +84,13 @@ export interface FsListResult {
 	totalBytes: number;
 }
 
-export class Ev3SystemCommandError extends Error {
+export class Ev3SystemCommandError extends ExtensionError {
 	public readonly command: number;
 	public readonly status: number;
 	public readonly statusText: string;
 
 	public constructor(command: number, status: number, message: string) {
-		super(message);
+		super('EV3_SYSTEM_COMMAND', message);
 		this.name = 'Ev3SystemCommandError';
 		this.command = command;
 		this.status = status;

@@ -1,3 +1,5 @@
+import { Logger, NoopLogger } from '../diagnostics/logger';
+
 export type ProgramSessionSource =
 	| 'deploy-and-run-single'
 	| 'deploy-project-run'
@@ -66,13 +68,17 @@ export class BrickSessionManager<
 	private readonly brickSessions = new Map<string, BrickRuntimeSession<TScheduler, TCommandClient>>();
 	private readonly lastRunProgramPathByBrick = new Map<string, string>();
 	private readonly programSessionByBrick = new Map<string, ProgramSessionState>();
+	private readonly logger: Logger;
 
 	public constructor(
 		private readonly createSession: (
 			brickId: string,
 			connectContext?: TConnectContext
-		) => BrickRuntimeSession<TScheduler, TCommandClient>
-	) {}
+		) => BrickRuntimeSession<TScheduler, TCommandClient>,
+		logger?: Logger
+	) {
+		this.logger = logger ?? new NoopLogger();
+	}
 
 	public async prepareSession(brickId: string, connectContext?: TConnectContext): Promise<TCommandClient> {
 		await this.closeSession(brickId);
@@ -97,7 +103,14 @@ export class BrickSessionManager<
 
 		this.brickSessions.delete(brickId);
 		session.scheduler.dispose();
-		await session.commandClient.close().catch(() => undefined);
+		try {
+			await session.commandClient.close();
+		} catch (closeError) {
+			this.logger.warn('Failed to close command client during session cleanup', {
+				brickId,
+				error: closeError instanceof Error ? closeError.message : String(closeError)
+			});
+		}
 	}
 
 	public async closeAllSessions(): Promise<void> {

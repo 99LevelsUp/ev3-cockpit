@@ -1,3 +1,5 @@
+import { ExtensionError } from '../errors/ExtensionError';
+
 const DEPLOY_TRANSIENT_TRANSPORT_PATTERNS: RegExp[] = [
 	/adapter is not open/i,
 	/transport is not open/i,
@@ -21,8 +23,24 @@ const DEPLOY_TRANSIENT_TRANSPORT_PATTERNS: RegExp[] = [
 	/file not found/i
 ];
 
+const TRANSIENT_ERROR_CODES = new Set<string>([
+	'TIMEOUT',
+	'EXECUTION_FAILED'
+]);
+
 export function isDeployTransientTransportError(message: string): boolean {
 	return DEPLOY_TRANSIENT_TRANSPORT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * Detekce přechodné transportní chyby: typový kód má přednost, regex je záloha.
+ */
+export function isTransientDeployError(error: unknown): boolean {
+	if (error instanceof ExtensionError && TRANSIENT_ERROR_CODES.has(error.code)) {
+		return true;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	return isDeployTransientTransportError(message);
 }
 
 export async function sleepMs(ms: number): Promise<void> {

@@ -1,3 +1,5 @@
+import { ExtensionError } from '../errors/ExtensionError';
+
 export type Lane = 'emergency' | 'high' | 'normal' | 'low';
 
 export const LANE_PRIORITY: readonly Lane[] = ['emergency', 'high', 'normal', 'low'];
@@ -60,16 +62,12 @@ export interface RetryPolicy {
 	retryOn?: SchedulerErrorCode[];
 }
 
-export class SchedulerError extends Error {
-	public readonly code: SchedulerErrorCode;
+export class SchedulerError extends ExtensionError {
 	public readonly requestId: string;
-	public readonly cause?: unknown;
 
 	public constructor(code: SchedulerErrorCode, requestId: string, message: string, cause?: unknown) {
-		super(message);
+		super(code, message, cause);
 		this.name = 'SchedulerError';
-		this.code = code;
 		this.requestId = requestId;
-		this.cause = cause;
 	}
 }

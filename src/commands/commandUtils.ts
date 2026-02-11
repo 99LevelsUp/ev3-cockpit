@@ -1,8 +1,26 @@
+import { ExtensionError } from '../errors/ExtensionError';
+
 /**
  * Extracts a human-readable message from an unknown error value.
  */
 export function toErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Formátuje chybu pro zobrazení uživateli — bez stack trace a interních detailů.
+ */
+export function toUserFacingErrorMessage(error: unknown): string {
+	if (error instanceof ExtensionError) {
+		return `[${error.code}] ${error.message}`;
+	}
+	if (error instanceof Error) {
+		return error.message;
+	}
+	if (typeof error === 'string') {
+		return error;
+	}
+	return 'An unexpected error occurred';
 }
 
 /**
