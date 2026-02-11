@@ -233,6 +233,15 @@ export class BrickRegistry {
 		this.syncActiveFlags();
 	}
 
+	public setActiveBrick(brickId: string): boolean {
+		if (!this.records.has(brickId)) {
+			return false;
+		}
+		this.activeBrickId = brickId;
+		this.syncActiveFlags();
+		return true;
+	}
+
 	public getActiveBrickId(): string | undefined {
 		return this.activeBrickId;
 	}

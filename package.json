@@ -187,6 +187,11 @@
         {
           "id": "ev3-cockpit.bricksView",
           "name": "EV3 Cockpit"
+        },
+        {
+          "type": "webview",
+          "id": "ev3-cockpit.brickPanel",
+          "name": "EV3 Brick Panel"
         }
       ]
     },

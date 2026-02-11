@@ -34,6 +34,7 @@ import { createTreeStatePersistence } from './ui/treeStatePersistence';
 import { LoggingOrphanRecoveryStrategy } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
+import { BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	createTreeFilterState,
 	registerInspectBrickSessions,
@@ -439,6 +440,16 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	treeProvider.refresh();
 
+	const brickPanelProvider = new BrickPanelProvider(context.extensionUri, {
+		listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
+		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId)
+	});
+	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
+	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(
+		BrickPanelProvider.viewType,
+		brickPanelProvider
+	);
+
 	context.subscriptions.push(
 		connect,
 		deployRegistrations.deployAndRunExecutable,
@@ -489,6 +500,7 @@ export function activate(context: vscode.ExtensionContext) {
 		treeStatePersistence,
 		fsChangeSubscription,
 		busyIndicatorSubscription,
+		brickPanelRegistration,
 		{
 			dispose: () => eventLoopMonitor.stop()
 		},
