@@ -131,12 +131,15 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private getHtmlForWebview(_webview: vscode.Webview): string {
+	private getHtmlForWebview(webview: vscode.Webview): string {
+		const nonce = getNonce();
+		const cspSource = webview.cspSource;
 		return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
 	body {
 		font-family: var(--vscode-font-family);
@@ -205,7 +208,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	<div id="root"></div>
-	<script>
+	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi();
 
 		let bricks = [];
@@ -265,4 +268,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
 	}
+}
+
+function getNonce(): string {
+	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let nonce = '';
+	for (let i = 0; i < 32; i++) {
+		nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return nonce;
 }
