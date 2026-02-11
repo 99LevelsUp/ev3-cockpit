@@ -8,17 +8,16 @@ import {
 	choosePreferredExecutableCandidate,
 	isExecutableFileName
 } from '../fs/deployActions';
-import { DeployConflictPromptChoice, resolveDeployConflictDecision } from '../fs/deployConflict';
 import { buildLocalProjectLayout, planRemoteCleanup } from '../fs/deployCleanup';
-import { RemoteFileSnapshot, shouldUploadByRemoteSnapshotMeta } from '../fs/deployIncremental';
-import { computeFileMd5Hex } from '../fs/hashUtils';
+import { RemoteFileSnapshot } from '../fs/deployIncremental';
 import { isDeployTransientTransportError, sleepMs } from '../fs/deployResilience';
 import { verifyUploadedFile } from '../fs/deployVerify';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
-import { deleteRemotePath, getRemotePathKind, renameRemotePath } from '../fs/remoteFsOps';
+import { deleteRemotePath, getRemotePathKind } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { nextCorrelationId, withTiming } from '../diagnostics/perfTiming';
 import { toErrorMessage, withBrickOperation } from './commandUtils';
+import { executeAtomicSwap, executeDeployPlan } from './deployExecution';
 import { resolveDeployFlow } from './deployFlow';
 import { collectLocalFilesRecursive, collectRemoteFileIndexRecursive } from './deployScan';
 import {
@@ -28,15 +27,6 @@ import {
 	LocalProjectFileEntry,
 	ProjectDeployRequest
 } from './deployTypes';
-
-function isRemoteAlreadyExistsError(error: unknown): boolean {
-	const message = toErrorMessage(error);
-	return /FILE_EXISTS/i.test(message);
-}
-
-function pathDepth(remotePath: string): number {
-	return remotePath.split('/').filter((part) => part.length > 0).length;
-}
 
 async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 	const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -347,47 +337,12 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				}
 			}
 
-			let uploadedFilesCount = 0;
-			let verifiedFilesCount = 0;
-			let skippedUnchangedCount = 0;
-			let skippedByConflictCount = 0;
-			let overwrittenConflictCount = 0;
-			let conflictFallbackAppliedCount = 0;
-			let uploadedBytes = 0;
-			let plannedUploadCount = 0;
-			let deletedStaleFilesCount = 0;
-			let deletedStaleDirectoriesCount = 0;
 			let plannedStaleFilesCount = 0;
 			let plannedStaleDirectoriesCount = 0;
-			const previewUploadSamples: string[] = [];
 			const localLayout = buildLocalProjectLayout(files.map((entry) => entry.relativePath));
 			let cleanupPlan = {
 				filesToDelete: [] as string[],
 				directoriesToDelete: [] as string[]
-			};
-			const conflictDirectoryCache = new Map<string, Set<string>>();
-			let conflictBulkDecision: 'overwrite' | 'skip' | undefined;
-
-			const remoteFileExists = async (remotePath: string): Promise<boolean> => {
-				if (remoteIndex.has(remotePath)) {
-					return true;
-				}
-
-				const parent = path.posix.dirname(remotePath);
-				const fileName = path.posix.basename(remotePath);
-				const cached = conflictDirectoryCache.get(parent);
-				if (cached) {
-					return cached.has(fileName);
-				}
-
-				const listing = await runDeployStepWithResilience('conflict-list-directory', () =>
-					fsService.listDirectory(parent)
-				);
-				const names = new Set(listing.files.map((entry) => entry.name));
-				if (!listing.truncated) {
-					conflictDirectoryCache.set(parent, names);
-				}
-				return names.has(fileName);
 			};
 
 			if (cleanupEnabled) {
@@ -439,7 +394,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				}
 			}
 
-			await vscode.window.withProgress(
+			const executionResult = await vscode.window.withProgress(
 				{
 					location: vscode.ProgressLocation.Notification,
 					title: deployOptions.previewOnly
@@ -447,290 +402,50 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 						: `Deploying EV3 project: ${path.basename(projectUri.fsPath)}`,
 					cancellable: true
 				},
-				async (progress, token) => {
-					const throwIfCancelled = (): void => {
-						if (token.isCancellationRequested) {
-							throw new vscode.CancellationError();
-						}
-					};
-
-					throwIfCancelled();
-					if (!deployOptions.previewOnly) {
-						const directories = new Set<string>();
-						directories.add(deployProjectRoot);
-						for (const file of files) {
-							directories.add(path.posix.dirname(file.remotePath));
-						}
-						const orderedDirectories = [...directories].sort((a, b) => pathDepth(a) - pathDepth(b));
-						for (const dirPath of orderedDirectories) {
-							throwIfCancelled();
-							try {
-								await runDeployStepWithResilience('create-directory', () => fsService.createDirectory(dirPath));
-							} catch (error) {
-								if (!isRemoteAlreadyExistsError(error)) {
-									throw error;
-								}
-							}
-						}
-					}
-
-					for (let index = 0; index < files.length; index += 1) {
-						throwIfCancelled();
-						const file = files[index];
-						if (incrementalEnabled) {
-							const remoteSnapshot = remoteIndex.get(file.remotePath);
-							let decision: { upload: boolean; localMd5: string } | undefined;
-							if (!remoteSnapshot || remoteSnapshot.sizeBytes !== file.sizeBytes) {
-								decision = {
-									upload: true,
-									localMd5: ''
-								};
-							} else {
-								const localMd5 = await withTiming(
-									logger,
-									'deploy.compute-local-md5',
-									() => computeFileMd5Hex(file.localUri.fsPath),
-									{
-										correlationId,
-										brickId: targetBrickId,
-										file: file.relativePath,
-										fileIndex: index + 1,
-										fileCount: files.length
-									}
-								);
-								decision = shouldUploadByRemoteSnapshotMeta(file.sizeBytes, localMd5, remoteSnapshot);
-							}
-							if (!decision.upload) {
-								skippedUnchangedCount += 1;
-								progress.report({
-									increment: 100 / files.length,
-									message: `Skipped unchanged ${index + 1}/${files.length}: ${file.relativePath}`
-								});
-								continue;
-							}
-						}
-
-						const bytes =
-							deployOptions.previewOnly
-								? undefined
-								: await withTiming(
-									logger,
-									'deploy.read-local-file',
-									() => vscode.workspace.fs.readFile(file.localUri),
-									{
-										correlationId,
-										brickId: targetBrickId,
-										file: file.relativePath,
-										fileIndex: index + 1,
-										fileCount: files.length
-									}
-								);
-
-						if (deployOptions.previewOnly) {
-							plannedUploadCount += 1;
-							uploadedBytes += file.sizeBytes;
-							if (previewUploadSamples.length < 8) {
-								previewUploadSamples.push(file.relativePath);
-							}
-							progress.report({
-								increment: 100 / files.length,
-								message: `Would upload ${index + 1}/${files.length}: ${file.relativePath}`
-							});
-						} else {
-							if (effectiveConflictPolicy !== 'overwrite') {
-								const exists = await remoteFileExists(file.remotePath);
-								if (exists) {
-									let promptChoice: DeployConflictPromptChoice;
-									if (effectiveConflictPolicy === 'ask' && !conflictBulkDecision) {
-										if (conflictAskFallback === 'overwrite') {
-											promptChoice = 'Overwrite';
-											conflictFallbackAppliedCount += 1;
-										} else if (conflictAskFallback === 'skip') {
-											promptChoice = 'Skip';
-											conflictFallbackAppliedCount += 1;
-										} else {
-											const choice = await vscode.window.showWarningMessage(
-												`Remote file already exists: ${file.remotePath}`,
-												{
-													modal: true,
-													detail: 'Choose how deploy should resolve this file conflict.'
-												},
-												'Overwrite',
-												'Skip',
-												'Overwrite All',
-												'Skip All'
-											);
-											promptChoice = choice as DeployConflictPromptChoice;
-										}
-									}
-									const resolvedConflict = resolveDeployConflictDecision({
-										policy: effectiveConflictPolicy,
-										bulkDecision: conflictBulkDecision,
-										promptChoice
-									});
-									const decision = resolvedConflict.decision;
-									conflictBulkDecision = resolvedConflict.nextBulkDecision ?? conflictBulkDecision;
-
-									if (decision === 'skip') {
-										skippedByConflictCount += 1;
-										progress.report({
-											increment: 100 / files.length,
-											message: `Skipped conflict ${index + 1}/${files.length}: ${file.relativePath}`
-										});
-										continue;
-									}
-
-									overwrittenConflictCount += 1;
-								}
-							}
-
-							await withTiming(
-								logger,
-								'deploy.write-remote-file',
-								() =>
-									runDeployStepWithResilience('write-file', () =>
-										fsService.writeFile(file.remotePath, bytes ?? new Uint8Array())
-									),
-								{
-									correlationId,
-									brickId: targetBrickId,
-									file: file.relativePath,
-									remotePath: file.remotePath,
-									bytes: (bytes ?? new Uint8Array()).length,
-									fileIndex: index + 1,
-									fileCount: files.length
-								}
-							);
-							if (verifyAfterUpload !== 'none') {
-								await withTiming(
-									logger,
-									'deploy.verify-upload',
-									() =>
-										runDeployStepWithResilience('verify-upload', () =>
-											verifyUploadedFile(fsService, file.remotePath, bytes ?? new Uint8Array(), verifyAfterUpload)
-										),
-									{
-										correlationId,
-										brickId: targetBrickId,
-										file: file.relativePath,
-										remotePath: file.remotePath,
-										mode: verifyAfterUpload,
-										fileIndex: index + 1,
-										fileCount: files.length
-									}
-								);
-								verifiedFilesCount += 1;
-							}
-							uploadedFilesCount += 1;
-							uploadedBytes += (bytes ?? new Uint8Array()).length;
-							progress.report({
-								increment: 100 / files.length,
-								message: `Uploaded ${index + 1}/${files.length}: ${file.relativePath}`
-							});
-						}
-					}
-
-					if (cleanupEnabled) {
-						if (cleanupDryRun || deployOptions.previewOnly) {
-							progress.report({
-								message: `${deployOptions.previewOnly ? 'Cleanup preview' : 'Cleanup dry-run'}: ${plannedStaleFilesCount} file(s), ${plannedStaleDirectoriesCount} director${plannedStaleDirectoriesCount === 1 ? 'y' : 'ies'} planned`
-							});
-						} else {
-							for (const filePath of cleanupPlan.filesToDelete) {
-								throwIfCancelled();
-								await runDeployStepWithResilience('cleanup-delete-file', () => fsService.deleteFile(filePath));
-								deletedStaleFilesCount += 1;
-								progress.report({
-									message: `Deleted stale file: ${path.posix.basename(filePath)}`
-								});
-							}
-
-							for (const dirPath of cleanupPlan.directoriesToDelete) {
-								throwIfCancelled();
-								try {
-									await runDeployStepWithResilience('cleanup-delete-directory', () => fsService.deleteFile(dirPath));
-									deletedStaleDirectoriesCount += 1;
-								} catch (error) {
-									logger.warn('Deploy cleanup directory delete skipped', {
-										path: dirPath,
-										message: toErrorMessage(error)
-									});
-								}
-							}
-						}
-					}
-				}
+				(progress, token) =>
+					executeDeployPlan(
+						{
+							logger,
+							correlationId,
+							targetBrickId,
+							fsService,
+							runDeployStepWithResilience
+						},
+						{
+							files,
+							deployProjectRoot,
+							remoteProjectRoot,
+							incrementalEnabled,
+							cleanupEnabled,
+							cleanupDryRun,
+							verifyAfterUpload,
+							effectiveConflictPolicy,
+							conflictAskFallback,
+							remoteIndex,
+							cleanupPlan,
+							previewOnly: deployOptions.previewOnly
+						},
+						progress,
+						token
+					)
 			);
 
+			const {
+				uploadedFilesCount, verifiedFilesCount, skippedUnchangedCount,
+				skippedByConflictCount, overwrittenConflictCount, conflictFallbackAppliedCount,
+				uploadedBytes, plannedUploadCount,
+				deletedStaleFilesCount, deletedStaleDirectoriesCount,
+				previewUploadSamples
+			} = executionResult;
+
 			if (atomicEnabled && !deployOptions.previewOnly) {
-				logger.info('Atomic deploy swap started', {
+				await executeAtomicSwap({
+					logger,
+					fsService,
 					remoteProjectRoot,
 					atomicStagingRoot,
 					atomicBackupRoot
 				});
-
-				let backupCreated = false;
-				try {
-					const currentRootKind = await getRemotePathKind(fsService, remoteProjectRoot);
-					if (currentRootKind !== 'missing') {
-						await renameRemotePath(fsService, remoteProjectRoot, atomicBackupRoot, { overwrite: true });
-						backupCreated = true;
-					}
-
-					await renameRemotePath(fsService, atomicStagingRoot, remoteProjectRoot, { overwrite: true });
-
-					if (backupCreated) {
-						try {
-							await deleteRemotePath(fsService, atomicBackupRoot, { recursive: true });
-						} catch (cleanupError) {
-							logger.warn('Atomic deploy backup cleanup failed', {
-								path: atomicBackupRoot,
-								message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-							});
-						}
-					}
-				} catch (swapError) {
-					logger.warn('Atomic deploy swap failed, attempting rollback.', {
-						remoteProjectRoot,
-						atomicStagingRoot,
-						atomicBackupRoot,
-						message: swapError instanceof Error ? swapError.message : String(swapError)
-					});
-
-					if (backupCreated) {
-						try {
-							const rootKindAfterSwapError = await getRemotePathKind(fsService, remoteProjectRoot);
-							if (rootKindAfterSwapError !== 'missing') {
-								await deleteRemotePath(fsService, remoteProjectRoot, { recursive: true });
-							}
-							await renameRemotePath(fsService, atomicBackupRoot, remoteProjectRoot, { overwrite: true });
-							logger.info('Atomic deploy rollback completed.', {
-								remoteProjectRoot,
-								atomicBackupRoot
-							});
-						} catch (rollbackError) {
-							logger.error('Atomic deploy rollback failed.', {
-								remoteProjectRoot,
-								atomicBackupRoot,
-								message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-							});
-						}
-					}
-
-					throw swapError;
-				} finally {
-					try {
-						const stagingKind = await getRemotePathKind(fsService, atomicStagingRoot);
-						if (stagingKind !== 'missing') {
-							await deleteRemotePath(fsService, atomicStagingRoot, { recursive: true });
-						}
-					} catch (stagingCleanupError) {
-						logger.warn('Atomic deploy staging cleanup failed', {
-							path: atomicStagingRoot,
-							message: stagingCleanupError instanceof Error ? stagingCleanupError.message : String(stagingCleanupError)
-						});
-					}
-				}
 			}
 
 			if (!deployOptions.previewOnly && deployOptions.runAfterDeploy && runTarget) {

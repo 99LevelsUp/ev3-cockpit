@@ -409,3 +409,86 @@ test('brickResolvers confirms full filesystem mode when user accepts', async () 
 		}
 	);
 });
+
+test('brickResolvers returns active/offline error contexts when services are unavailable', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.deepEqual(resolvers.resolveFsAccessContext(undefined), {
+			error: 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
+		});
+		assert.deepEqual(resolvers.resolveControlAccessContext(undefined), {
+			error: 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
+		});
+		assert.deepEqual(resolvers.resolveDeployTargetFromArg(undefined), {
+			error: 'No active EV3 connection. Run "EV3 Cockpit: Connect to EV3 Brick" first.'
+		});
+	});
+});
+
+test('brickResolvers returns status-aware error for known brick without service', async () => {
+	await withMockedBrickResolvers(
+		{
+			snapshots: {
+				'brick-offline': {
+					status: 'UNAVAILABLE'
+				}
+			}
+		},
+		async ({ module, deps }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			assert.deepEqual(resolvers.resolveFsAccessContext('brick-offline'), {
+				error: 'Brick "brick-offline" is currently unavailable.'
+			});
+			assert.deepEqual(resolvers.resolveControlAccessContext('brick-offline'), {
+				error: 'Brick "brick-offline" is currently unavailable.'
+			});
+		}
+	);
+});
+
+test('brickResolvers returns not-connected error for unknown explicit brick', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.deepEqual(resolvers.resolveFsAccessContext('brick-missing'), {
+			error: 'Brick "brick-missing" is not connected.'
+		});
+		assert.deepEqual(resolvers.resolveControlAccessContext('brick-missing'), {
+			error: 'Brick "brick-missing" is not connected.'
+		});
+	});
+});
+
+test('brickResolvers rejects empty executable path', async () => {
+	await withMockedBrickResolvers({}, async ({ module, deps }) => {
+		const resolvers = module.createBrickResolvers(deps);
+		assert.throws(() => resolvers.normalizeRunExecutablePath('   '), /must not be empty/i);
+	});
+});
+
+test('brickResolvers reverts full filesystem mode when user rejects confirmation', async () => {
+	await withMockedBrickResolvers(
+		{
+			configValues: {
+				'fs.mode': 'full',
+				'fs.fullMode.confirmationRequired': true
+			},
+			configInspect: {
+				workspaceValue: 'full'
+			}
+		},
+		async ({ module, deps, state }) => {
+			const resolvers = module.createBrickResolvers(deps);
+			const allowed = await resolvers.ensureFullFsModeConfirmation();
+			assert.equal(allowed, false);
+			assert.equal(state.warningCalls.length, 1);
+			assert.equal(state.configUpdates.length, 1);
+			assert.deepEqual(state.configUpdates[0], {
+				key: 'fs.mode',
+				value: 'safe',
+				target: 2
+			});
+			assert.equal(state.logger.warn.length, 1);
+			assert.equal(state.logger.info.length, 0);
+		}
+	);
+});
