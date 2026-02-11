@@ -64,6 +64,16 @@ The extension can detect and read sensors connected to the EV3 brick's input por
 - **Mode switch:** Change the sensor operating mode (e.g., color sensor from reflected to ambient).
 - When sensor data is available, the Brick Panel shows a **Sensors** section listing each port with its detected type and current mode.
 
+## Motors
+
+The extension can control and monitor motors connected to the EV3 brick's output ports (A–D).
+
+- **Speed/Start:** Set motor speed (-100..+100%) and start regulated rotation.
+- **Stop:** Stop a motor with brake (hold position) or coast (freewheel).
+- **Tacho:** Read the tacho position counter (signed 32-bit integer, in degrees).
+- **Reset:** Reset the tacho counter to zero.
+- When motor data is available, the Brick Panel shows a **Motors** section listing each port with its running state and speed.
+
 ## Implementation Status
 
 ### Implemented
@@ -82,6 +92,7 @@ The extension can detect and read sensors connected to the EV3 brick's input por
 - [x] Test infrastructure (unit, host, hardware smoke/matrix)
 - [x] Brick Panel webview with active brick switching and polling
 - [x] Sensor detection, reading, and mode switching (input ports 1–4)
+- [x] Motor control: speed/start, stop (brake/coast), tacho read/reset (output ports A–D)
 
 ### In Progress
 
@@ -90,7 +101,6 @@ The extension can detect and read sensors connected to the EV3 brick's input por
 
 ### Planned
 
-- [ ] Motor control and monitoring UI
 - [ ] Advanced topology workflows (master/slave, daisy-chain optimizations)
 - [ ] Prebuilt installable release artifacts (`.vsix`)
 - [ ] Expanded troubleshooting and user docs
