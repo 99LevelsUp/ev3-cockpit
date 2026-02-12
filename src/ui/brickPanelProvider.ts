@@ -12,6 +12,8 @@ export interface BrickPanelDataSource {
 	scanAvailableBricks?(): Promise<BrickPanelDiscoveryCandidate[]>;
 	connectScannedBrick?(candidateId: string): Promise<void>;
 	disconnectBrick?(brickId: string): Promise<void>;
+	applyPendingConfigChanges?(): Promise<void>;
+	discardPendingConfigChanges?(): Promise<void>;
 	getSensorInfo?(brickId: string): SensorInfo[] | undefined;
 	getMotorInfo?(brickId: string): MotorState[] | undefined;
 	getButtonState?(brickId: string): ButtonState | undefined;
@@ -43,6 +45,8 @@ type MessageFromWebview =
 	| { type: 'scanBricks' }
 	| { type: 'connectScannedBrick'; candidateId: string }
 	| { type: 'disconnectBrick'; brickId: string }
+	| { type: 'applyConfigChanges' }
+	| { type: 'discardConfigChanges' }
 	| { type: 'ready' };
 
 interface WebviewSensorInfo {
@@ -70,7 +74,10 @@ type MessageToWebview =
 	| { type: 'scanFailed'; message: string }
 	| { type: 'connectStarted'; candidateId: string }
 	| { type: 'connectFailed'; candidateId: string; message: string }
-	| { type: 'connectSucceeded'; candidateId: string };
+	| { type: 'connectSucceeded'; candidateId: string }
+	| { type: 'configApplied' }
+	| { type: 'configDiscarded' }
+	| { type: 'configActionFailed'; action: 'apply' | 'discard'; message: string };
 
 export interface BrickPanelPollingConfig {
 	/** Polling interval (ms) when at least one brick exists. Default 500. */
@@ -143,6 +150,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				void this.connectScannedBrick(message.candidateId);
 			} else if (message.type === 'disconnectBrick') {
 				void this.disconnectBrick(message.brickId);
+			} else if (message.type === 'applyConfigChanges') {
+				void this.applyConfigChanges();
+			} else if (message.type === 'discardConfigChanges') {
+				void this.discardConfigChanges();
 			} else if (message.type === 'ready') {
 				this.refresh();
 			}
@@ -293,6 +304,41 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	private async applyConfigChanges(): Promise<void> {
+		if (!this.view) {
+			return;
+		}
+		try {
+			await this.dataSource.applyPendingConfigChanges?.();
+			void this.view.webview.postMessage({ type: 'configApplied' } satisfies MessageToWebview);
+			this.refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void this.view.webview.postMessage({
+				type: 'configActionFailed',
+				action: 'apply',
+				message
+			} satisfies MessageToWebview);
+		}
+	}
+
+	private async discardConfigChanges(): Promise<void> {
+		if (!this.view) {
+			return;
+		}
+		try {
+			await this.dataSource.discardPendingConfigChanges?.();
+			void this.view.webview.postMessage({ type: 'configDiscarded' } satisfies MessageToWebview);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void this.view.webview.postMessage({
+				type: 'configActionFailed',
+				action: 'discard',
+				message
+			} satisfies MessageToWebview);
+		}
+	}
+
 	private startPolling(): void {
 		this.stopPolling();
 		const tick = () => {
@@ -341,9 +387,81 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	#root {
 		min-height: 100vh;
 	}
+	.panel-toolbar {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		padding: 8px 8px 0;
+	}
+	.config-toolbar {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		gap: 0;
+	}
+	.config-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 24px;
+		border: 1px solid var(--vscode-button-border, transparent);
+		background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+		color: var(--vscode-foreground);
+		cursor: pointer;
+		padding: 0;
+		line-height: 1;
+	}
+	.config-btn:hover:not(:disabled) {
+		background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.14));
+	}
+	.config-btn:disabled {
+		opacity: 0.6;
+		cursor: default;
+	}
+	.config-enter {
+		border-radius: 4px;
+		font-size: 14px;
+	}
+	.config-apply {
+		color: #11d56b;
+		border-top-left-radius: 4px;
+		border-bottom-left-radius: 4px;
+		font-size: 14px;
+	}
+	.config-menu-toggle {
+		width: 18px;
+		border-left: none;
+		border-top-right-radius: 4px;
+		border-bottom-right-radius: 4px;
+		font-size: 10px;
+	}
+	.config-actions-menu {
+		position: absolute;
+		top: calc(100% + 4px);
+		right: 0;
+		display: flex;
+		flex-direction: column;
+		min-width: 34px;
+		padding: 4px;
+		border: 1px solid var(--vscode-panel-border, #444);
+		border-radius: 6px;
+		background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+		z-index: 30;
+	}
+	.config-discard {
+		color: #ff4b4b;
+		border-radius: 4px;
+		font-size: 14px;
+	}
+	.config-error {
+		padding: 6px 12px 0;
+		color: var(--vscode-errorForeground, #f44);
+	}
 	.brick-detail-area {
 		background: var(--vscode-editor-background);
-		min-height: calc(100vh - 38px);
+		min-height: calc(100vh - 70px);
 	}
 	.brick-tabs-wrap {
 		position: relative;
@@ -688,6 +806,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let selectedDiscoveryCandidateId = '';
 		let connectingDiscoveryCandidateId = '';
 		let overflowMenuOpen = false;
+		let configMode = false;
+		let configMenuOpen = false;
+		let configActionInFlight = '';
+		let configError = '';
 		let initialAutoScanPending = true;
 		let scanInFlight = false;
 		let scanLoopTimer = null;
@@ -981,6 +1103,25 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			return status === 'ready' || (candidate.alreadyConnected === true && status !== 'error' && status !== 'unavailable');
 		}
 
+		function renderConfigToolbar() {
+			if (!configMode) {
+				return '<div class="panel-toolbar"><div class="config-toolbar">'
+					+ '<button class="config-btn config-enter" data-config-enter="true" title="Enter configuration mode" aria-label="Enter configuration mode">⚙</button>'
+					+ '</div></div>';
+			}
+			const disabledAttr = configActionInFlight ? ' disabled' : '';
+			let html = '<div class="panel-toolbar"><div class="config-toolbar">';
+			html += '<button class="config-btn config-apply" data-config-apply="true" title="Apply all configuration changes" aria-label="Apply all configuration changes"' + disabledAttr + '>✔</button>';
+			html += '<button class="config-btn config-menu-toggle" data-config-menu-toggle="true" title="Configuration actions" aria-label="Configuration actions"' + disabledAttr + '>▾</button>';
+			if (configMenuOpen) {
+				html += '<div class="config-actions-menu">'
+					+ '<button class="config-btn config-discard" data-config-discard="true" title="Discard all configuration changes" aria-label="Discard all configuration changes"' + disabledAttr + '>✕</button>'
+					+ '</div>';
+			}
+			html += '</div></div>';
+			return html;
+		}
+
 		function render() {
 			const root = document.getElementById('root');
 			const activeBrick = bricks.find(b => b.isActive);
@@ -993,7 +1134,11 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			const overflowHasActive = !discoveryOpen && overflowBricks.some((brick) => brick.isActive);
 
-			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
+			let html = renderConfigToolbar();
+			if (configError) {
+				html += '<div class="config-error">' + configError + '</div>';
+			}
+			html += '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
 			for (const brick of visibleBricks) {
 				const activeClass = !discoveryOpen && brick.isActive ? ' active' : '';
 				const closeMarkup = shouldShowTabClose(brick)
@@ -1131,8 +1276,64 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				baselineGap.style.display = 'none';
 			}
 
+			for (const configEnterButton of root.querySelectorAll('[data-config-enter]')) {
+				configEnterButton.addEventListener('click', () => {
+					configMode = true;
+					configMenuOpen = false;
+					configError = '';
+					render();
+				});
+			}
+			for (const configApplyButton of root.querySelectorAll('[data-config-apply]')) {
+				configApplyButton.addEventListener('click', () => {
+					if (configActionInFlight) {
+						return;
+					}
+					configMenuOpen = false;
+					configActionInFlight = 'apply';
+					configError = '';
+					render();
+					vscode.postMessage({ type: 'applyConfigChanges' });
+				});
+			}
+			for (const configMenuToggleButton of root.querySelectorAll('[data-config-menu-toggle]')) {
+				configMenuToggleButton.addEventListener('click', (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					if (configActionInFlight) {
+						return;
+					}
+					configMenuOpen = !configMenuOpen;
+					render();
+				});
+			}
+			for (const configDiscardButton of root.querySelectorAll('[data-config-discard]')) {
+				configDiscardButton.addEventListener('click', (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					if (configActionInFlight) {
+						return;
+					}
+					configMenuOpen = false;
+					configActionInFlight = 'discard';
+					configError = '';
+					render();
+					vscode.postMessage({ type: 'discardConfigChanges' });
+				});
+			}
+			for (const closeConfigMenuArea of root.querySelectorAll('.brick-detail-area, .brick-tabs-main, .brick-overflow-menu')) {
+				closeConfigMenuArea.addEventListener('click', () => {
+					if (!configMenuOpen) {
+						return;
+					}
+					configMenuOpen = false;
+					render();
+				});
+			}
+
 			for (const tab of root.querySelectorAll('.brick-tab')) {
 				tab.addEventListener('click', () => {
+					configMenuOpen = false;
 					if (tab.dataset.addBrick === 'true') {
 						overflowMenuOpen = false;
 						selectedDiscoveryCandidateId = '';
@@ -1154,6 +1355,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				closeButton.addEventListener('click', (event) => {
 					event.preventDefault();
 					event.stopPropagation();
+					configMenuOpen = false;
 					const brickId = closeButton.dataset.closeBrickId || '';
 					if (!brickId) {
 						return;
@@ -1166,6 +1368,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			for (const overflowButton of root.querySelectorAll('.brick-overflow-item')) {
 				overflowButton.addEventListener('click', () => {
+					configMenuOpen = false;
 					overflowMenuOpen = false;
 					discoveryOpen = false;
 					stopScanLoop();
@@ -1174,6 +1377,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			for (const candidateButton of root.querySelectorAll('.discovery-item')) {
 				candidateButton.addEventListener('click', () => {
+					configMenuOpen = false;
 					selectedDiscoveryCandidateId = candidateButton.dataset.candidateId || '';
 					render();
 				});
@@ -1298,6 +1502,29 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				scanInFlight = false;
 				render();
 				scheduleNextScan();
+				return;
+			}
+			if (message.type === 'configApplied') {
+				configActionInFlight = '';
+				configMenuOpen = false;
+				configMode = false;
+				configError = '';
+				render();
+				return;
+			}
+			if (message.type === 'configDiscarded') {
+				configActionInFlight = '';
+				configMenuOpen = false;
+				configMode = false;
+				configError = '';
+				render();
+				return;
+			}
+			if (message.type === 'configActionFailed') {
+				configActionInFlight = '';
+				configMenuOpen = false;
+				configError = message.message || 'Configuration action failed.';
+				render();
 			}
 		});
 

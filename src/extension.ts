@@ -830,6 +830,12 @@ export function activate(context: vscode.ExtensionContext) {
 		connectScannedBrick: connectDiscoveredBrickFromPanel,
 		disconnectBrick: async (brickId: string) => {
 			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickId);
+		},
+		applyPendingConfigChanges: async () => {
+			logger.info('Brick panel requested staged configuration apply.');
+		},
+		discardPendingConfigChanges: async () => {
+			logger.info('Brick panel requested staged configuration discard.');
 		}
 	}, brickPanelConfig);
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());

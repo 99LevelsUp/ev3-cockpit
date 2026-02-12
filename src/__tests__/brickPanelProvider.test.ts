@@ -15,6 +15,7 @@ interface FakeWebviewView {
 	};
 	onDidDispose: (handler: () => void) => void;
 	disposeHandler?: () => void;
+	receiveHandler?: (msg: unknown) => void;
 }
 
 function createFakeWebviewView(): FakeWebviewView {
@@ -22,7 +23,9 @@ function createFakeWebviewView(): FakeWebviewView {
 		webview: {
 			options: {},
 			html: '',
-			onDidReceiveMessage: () => {},
+			onDidReceiveMessage: (handler) => {
+				view.receiveHandler = handler;
+			},
 			postMessage: async () => true
 		},
 		onDidDispose: (handler) => {
@@ -266,6 +269,85 @@ test('BrickPanelProvider.refresh includes motor info for active brick', async ()
 		assert.equal(last.motors[0].speed, 75);
 		assert.equal(last.motors[0].running, true);
 		assert.equal(last.motors[1].running, false);
+
+		view.disposeHandler?.();
+	});
+});
+
+test('BrickPanelProvider applyConfigChanges posts configApplied on success', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		let applyCount = 0;
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => [],
+				setActiveBrick: () => false,
+				applyPendingConfigChanges: async () => {
+					applyCount += 1;
+				}
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		const messages: Array<{ type?: string }> = [];
+		view.webview.postMessage = async (msg) => {
+			messages.push(msg as { type?: string });
+			return true;
+		};
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
+		view.receiveHandler?.({ type: 'applyConfigChanges' });
+		await sleep(0);
+
+		assert.equal(applyCount, 1);
+		assert.ok(messages.some((msg) => msg.type === 'configApplied'), 'Expected configApplied message.');
+
+		view.disposeHandler?.();
+	});
+});
+
+test('BrickPanelProvider discardConfigChanges posts configActionFailed on failure', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => [],
+				setActiveBrick: () => false,
+				discardPendingConfigChanges: async () => {
+					throw new Error('discard failed');
+				}
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		const messages: Array<{ type?: string; action?: string; message?: string }> = [];
+		view.webview.postMessage = async (msg) => {
+			messages.push(msg as { type?: string; action?: string; message?: string });
+			return true;
+		};
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
+		view.receiveHandler?.({ type: 'discardConfigChanges' });
+		await sleep(0);
+
+		const failed = messages.find((msg) => msg.type === 'configActionFailed');
+		assert.ok(failed, 'Expected configActionFailed message.');
+		assert.equal(failed?.action, 'discard');
+		assert.equal(failed?.message, 'discard failed');
 
 		view.disposeHandler?.();
 	});
