@@ -834,6 +834,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let configMenuOpen = false;
 		let configActionInFlight = '';
 		let configError = '';
+		let detailScrollTop = 0;
 		let initialAutoScanPending = true;
 		let scanInFlight = false;
 		let scanLoopTimer = null;
@@ -1170,6 +1171,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 
 		function render() {
 			const root = document.getElementById('root');
+			const previousDetailArea = root.querySelector('.brick-detail-area');
+			if (previousDetailArea) {
+				detailScrollTop = previousDetailArea.scrollTop;
+			}
 			const activeBrick = bricks.find(b => b.isActive);
 			const maxVisibleBrickTabs = computeMaxVisibleBrickTabs(root.clientWidth, bricks.length);
 			const tabLayout = buildTabLayout(bricks, maxVisibleBrickTabs);
@@ -1306,6 +1311,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			html += '</div>';
 
 			root.innerHTML = html;
+			const detailArea = root.querySelector('.brick-detail-area');
+			if (detailArea) {
+				detailArea.scrollTop = detailScrollTop;
+				detailArea.addEventListener('scroll', () => {
+					detailScrollTop = detailArea.scrollTop;
+				}, { passive: true });
+			}
 			const baselineGap = root.querySelector('.brick-tab-baseline-gap');
 			const activeTab = root.querySelector('.brick-tab.active');
 			if (baselineGap && activeTab) {
