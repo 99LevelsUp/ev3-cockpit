@@ -107,6 +107,7 @@ The extension provides direct control of the EV3 Brick's built-in peripherals:
 - [x] Brick settings: name, volume, sleep timer (read/write), battery info (read-only)
 - [x] Unified error class (Ev3Error) with error codes, message map, recovery actions
 - [x] Diagnostics: output channel logger (5 levels), RTT probe, perf timing, session inspector
+- [x] Mock/Debug mode: virtual brick with sensors, motors, filesystem, fault injection
 
 ### In Progress
 
@@ -118,6 +119,23 @@ The extension provides direct control of the EV3 Brick's built-in peripherals:
 - [ ] Advanced topology workflows (master/slave, daisy-chain optimizations)
 - [ ] Prebuilt installable release artifacts (`.vsix`)
 - [ ] Expanded troubleshooting and user docs
+
+## Mock / Debug Mode
+
+Set `ev3-cockpit.transport.mode` to `"mock"` in VS Code settings to enable the mock transport.
+
+**What it provides:**
+- **Virtual sensors** — 4 ports with configurable type and value generators (constant, sine, random walk, step)
+- **Virtual motors** — 4 ports with speed control, tacho position tracking, and brake/coast simulation
+- **Virtual brick** — name, battery (with optional drain), volume, sleep timer, LED patterns, button state
+- **In-memory filesystem** — seeded from configuration, supports full read/write/list/delete operations
+- **Fault injection** — configurable error rate, latency, jitter, and timeout probability
+
+**VS Code Commands:**
+- `EV3 Cockpit: Reset Mock State` — reset the mock world to its initial seed
+- `EV3 Cockpit: Show Mock State` — display current mock configuration
+
+**Default seed configuration** includes a Touch sensor on port 1, Color sensor on port 3, Large motor on A, Medium motor on B, and a sample project directory.
 
 ## Download and Build
 
