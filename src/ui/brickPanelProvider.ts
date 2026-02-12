@@ -383,15 +383,22 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 		padding: 0;
 		margin: 0;
+		overflow: hidden;
 	}
 	#root {
-		min-height: 100vh;
+		height: 100vh;
+		display: flex;
+		flex-direction: column;
 	}
 	.panel-toolbar {
 		display: flex;
 		justify-content: flex-end;
 		align-items: center;
 		padding: 10px 10px 0;
+		position: sticky;
+		top: 0;
+		z-index: 50;
+		background: var(--vscode-editor-background);
 	}
 	.config-toolbar {
 		position: relative;
@@ -461,7 +468,11 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	}
 	.brick-detail-area {
 		background: var(--vscode-editor-background);
-		min-height: calc(100vh - 38px);
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-y: auto;
+		overflow-x: hidden;
+		position: relative;
 	}
 	.brick-tabs-wrap {
 		position: relative;
@@ -687,8 +698,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		flex-shrink: 0;
 	}
 	.discovery-main .transport-indicator {
-		width: 16px;
-		height: 16px;
+		width: 20px;
+		height: 20px;
 	}
 	.transport-indicator.status-ready {
 		color: #00e676;
@@ -716,8 +727,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		stroke-linejoin: round;
 	}
 	.discovery-main .transport-icon-svg {
-		width: 16px;
-		height: 16px;
+		width: 20px;
+		height: 20px;
 	}
 	.brick-info {
 		padding: 12px;
@@ -934,7 +945,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			const displayName = typeof candidate.displayName === 'string'
 				? candidate.displayName.trim().toLowerCase()
 				: '';
-			return candidateId === 'active' || displayName === 'auto';
+			const detail = typeof candidate.detail === 'string'
+				? candidate.detail.trim().toLowerCase()
+				: '';
+			return candidateId === 'active'
+				|| displayName === 'auto'
+				|| detail === 'auto'
+				|| detail.startsWith('auto ');
 		}
 
 		function setCandidateConnectionState(candidateId, status, alreadyConnected) {
