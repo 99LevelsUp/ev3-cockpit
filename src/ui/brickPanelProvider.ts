@@ -391,7 +391,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		display: flex;
 		justify-content: flex-end;
 		align-items: center;
-		padding: 8px 8px 0;
+		padding: 10px 10px 0;
 	}
 	.config-toolbar {
 		position: relative;
@@ -461,7 +461,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	}
 	.brick-detail-area {
 		background: var(--vscode-editor-background);
-		min-height: calc(100vh - 70px);
+		min-height: calc(100vh - 38px);
 	}
 	.brick-tabs-wrap {
 		position: relative;
@@ -609,30 +609,31 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		white-space: nowrap;
 	}
 	.discovery-section {
-		padding: 8px 12px;
+		padding: 8px 12px 12px;
 	}
 	.discovery-title {
-		margin: 2px 0 6px;
-		font-weight: bold;
+		margin: 0 0 14px;
+		font-size: 26px;
+		line-height: 1.2;
+		font-weight: 300;
 	}
 	.discovery-message {
-		opacity: 0.8;
-		padding: 6px 0;
+		opacity: 0.9;
+		padding: 4px 0;
 	}
 	.discovery-list {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 2px;
 	}
 	.discovery-item {
 		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 2px;
-		padding: 6px 8px;
-		border: 1px solid var(--vscode-panel-border, #444);
-		border-radius: 4px;
-		background: var(--vscode-editor-background);
+		align-items: center;
+		width: 100%;
+		padding: 6px 4px;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
 		color: var(--vscode-foreground);
 		cursor: pointer;
 		text-align: left;
@@ -641,22 +642,23 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		background: var(--vscode-list-hoverBackground);
 	}
 	.discovery-item.selected {
-		border-color: var(--vscode-focusBorder);
+		background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+		color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
 	}
 	.discovery-item.status-ready {
-		border-left: 3px solid #00e676;
+		border-left: none;
 	}
 	.discovery-item.status-connecting {
-		border-left: 3px solid #ffb300;
+		border-left: none;
 	}
 	.discovery-item.status-error {
-		border-left: 3px solid #ff3b30;
+		border-left: none;
 	}
 	.discovery-item.status-unavailable {
-		border-left: 3px solid #8f9aa6;
+		border-left: none;
 	}
 	.discovery-item.status-unknown {
-		border-left: 3px solid #4fc3f7;
+		border-left: none;
 	}
 	.discovery-item:disabled {
 		opacity: 0.6;
@@ -665,8 +667,11 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	.discovery-main {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		font-weight: bold;
+		gap: 10px;
+		font-size: 13px;
+		font-weight: 400;
+		line-height: 20px;
+		width: 100%;
 	}
 	.discovery-main-label {
 		overflow: hidden;
@@ -680,6 +685,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		width: 14px;
 		height: 14px;
 		flex-shrink: 0;
+	}
+	.discovery-main .transport-indicator {
+		width: 16px;
+		height: 16px;
 	}
 	.transport-indicator.status-ready {
 		color: #00e676;
@@ -705,6 +714,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		stroke-width: 1.6;
 		stroke-linecap: round;
 		stroke-linejoin: round;
+	}
+	.discovery-main .transport-icon-svg {
+		width: 16px;
+		height: 16px;
 	}
 	.brick-info {
 		padding: 12px;
@@ -900,12 +913,28 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				if (!candidate || !candidate.candidateId) {
 					continue;
 				}
+				if (isHiddenDiscoveryCandidate(candidate)) {
+					continue;
+				}
 				byId.set(candidate.candidateId, candidate);
 			}
 			discoveryCandidates = Array.from(byId.values());
 			if (selectedDiscoveryCandidateId && !byId.has(selectedDiscoveryCandidateId)) {
 				selectedDiscoveryCandidateId = '';
 			}
+		}
+
+		function isHiddenDiscoveryCandidate(candidate) {
+			if (!candidate) {
+				return true;
+			}
+			const candidateId = typeof candidate.candidateId === 'string'
+				? candidate.candidateId.trim().toLowerCase()
+				: '';
+			const displayName = typeof candidate.displayName === 'string'
+				? candidate.displayName.trim().toLowerCase()
+				: '';
+			return candidateId === 'active' || displayName === 'auto';
 		}
 
 		function setCandidateConnectionState(candidateId, status, alreadyConnected) {
@@ -1134,11 +1163,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			}
 			const overflowHasActive = !discoveryOpen && overflowBricks.some((brick) => brick.isActive);
 
-			let html = renderConfigToolbar();
-			if (configError) {
-				html += '<div class="config-error">' + configError + '</div>';
-			}
-			html += '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
+			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
 			for (const brick of visibleBricks) {
 				const activeClass = !discoveryOpen && brick.isActive ? ' active' : '';
 				const closeMarkup = shouldShowTabClose(brick)
@@ -1174,10 +1199,14 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			html += '</div>';
 
 			html += '<div class="brick-detail-area">';
+			html += renderConfigToolbar();
+			if (configError) {
+				html += '<div class="config-error">' + configError + '</div>';
+			}
 
 			if (discoveryOpen) {
 				html += '<div class="discovery-section">'
-					+ '<div class="discovery-title">Available Bricks</div>';
+					+ '<div class="discovery-title">Available bricks</div>';
 				if (discoveryLoading) {
 					html += '<div class="discovery-message">Scanning...</div>';
 				} else if (discoveryError) {
@@ -1200,10 +1229,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					html += '</div>';
 				}
 				html += '</div>';
-			}
-
-			if (bricks.length === 0) {
-				html += '<div class="empty-message">No bricks connected.<br>Use the + tab to connect an EV3 Brick.</div>';
 			}
 
 			if (!discoveryOpen && activeBrick) {
