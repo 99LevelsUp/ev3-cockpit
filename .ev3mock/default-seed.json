@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$comment": "EV3 Cockpit mock seed configuration — default scenario",
+  "sensors": [
+    {
+      "port": 0,
+      "typeCode": 16,
+      "mode": 0,
+      "generator": { "kind": "constant", "value": 0 }
+    },
+    {
+      "port": 2,
+      "typeCode": 29,
+      "mode": 0,
+      "generator": { "kind": "sine", "min": 0, "max": 7, "periodMs": 5000 }
+    }
+  ],
+  "motors": [
+    { "port": "A", "typeCode": 7, "initialPosition": 0 },
+    { "port": "B", "typeCode": 8, "initialPosition": 0 }
+  ],
+  "brick": {
+    "name": "MockEV3",
+    "firmwareVersion": "V1.10E",
+    "batteryVoltage": 7.5,
+    "batteryCurrent": 0.15,
+    "batteryDrainRate": 0,
+    "volume": 80,
+    "sleepMinutes": 30
+  },
+  "fsSeed": [
+    {
+      "type": "dir",
+      "name": "home",
+      "children": [
+        {
+          "type": "dir",
+          "name": "root",
+          "children": [
+            {
+              "type": "dir",
+              "name": "lms2012",
+              "children": [
+                {
+                  "type": "dir",
+                  "name": "prjs",
+                  "children": [
+                    {
+                      "type": "dir",
+                      "name": "MyProject",
+                      "children": [
+                        {
+                          "type": "file",
+                          "name": "main.rbf",
+                          "base64": "TEVOAA=="
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "fault": {
+    "errorRate": 0,
+    "latencyMs": 0,
+    "jitterMs": 0,
+    "timeoutRate": 0
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "$comment": "EV3 Cockpit mock seed — fault injection demo (20% errors, 100ms latency)",
+  "sensors": [
+    {
+      "port": 0,
+      "typeCode": 16,
+      "mode": 0,
+      "generator": { "kind": "constant", "value": 1 }
+    },
+    {
+      "port": 1,
+      "typeCode": 30,
+      "mode": 0,
+      "generator": { "kind": "randomWalk", "min": 5, "max": 255, "stepSize": 3 }
+    }
+  ],
+  "motors": [
+    { "port": "A", "typeCode": 7, "initialPosition": 0 }
+  ],
+  "brick": {
+    "name": "FaultyEV3",
+    "firmwareVersion": "V1.10E",
+    "batteryVoltage": 6.0,
+    "batteryCurrent": 0.3,
+    "batteryDrainRate": 0.5,
+    "volume": 50,
+    "sleepMinutes": 10
+  },
+  "fsSeed": [
+    {
+      "type": "dir",
+      "name": "home",
+      "children": [
+        {
+          "type": "dir",
+          "name": "root",
+          "children": [
+            {
+              "type": "dir",
+              "name": "lms2012",
+              "children": [
+                { "type": "dir", "name": "prjs", "children": [] }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "fault": {
+    "errorRate": 0.2,
+    "latencyMs": 100,
+    "jitterMs": 30,
+    "timeoutRate": 0.05
+  }
+}
