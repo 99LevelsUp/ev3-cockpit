@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { OutputChannelLogger } from '../diagnostics/logger';
+import { MockWorld } from '../mock/mockWorld';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { MockTransportAdapter } from './mockTransportAdapter';
 import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
@@ -341,6 +342,11 @@ function sanitizeTransportMode(value: unknown): TransportMode {
 }
 
 function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAdapter {
+	const world = MockWorld.create();
+	world.startTicking(100);
+
+	logger.info('MockWorld created with default seed. Tick interval: 100 ms.');
+
 	return new MockTransportAdapter(async (packet, options) => {
 		const request = decodeEv3Packet(packet);
 		logger.trace('Mock transport received packet', {
@@ -350,18 +356,8 @@ function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAda
 			timeoutMs: options.timeoutMs
 		});
 
-		await new Promise<void>((resolve) => setTimeout(resolve, 50));
-
-		const replyType =
-			request.type === EV3_COMMAND.SYSTEM_COMMAND_REPLY || request.type === EV3_COMMAND.SYSTEM_COMMAND_NO_REPLY
-				? EV3_REPLY.SYSTEM_REPLY
-				: EV3_REPLY.DIRECT_REPLY;
-		const replyPayload =
-			replyType === EV3_REPLY.SYSTEM_REPLY
-				? new Uint8Array([request.payload[0] ?? 0x00, 0x00])
-				: new Uint8Array([0x00]);
-
-		return encodeEv3Packet(request.messageCounter, replyType, replyPayload);
+		const result = world.getResponder()(packet, options);
+		return result instanceof Promise ? result : result;
 	});
 }
 
