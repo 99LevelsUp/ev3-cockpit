@@ -504,10 +504,17 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		display: none;
 	}
 	.brick-tabs-main {
-		display: flex;
-		flex: 0 1 auto;
+		display: block;
+		flex: 1 1 auto;
 		min-width: 0;
-		overflow: hidden;
+		overflow-x: auto;
+		overflow-y: hidden;
+	}
+	.brick-tabs-track {
+		display: flex;
+		align-items: flex-end;
+		min-width: max-content;
+		padding-bottom: 0;
 	}
 	.brick-tab {
 		display: flex;
@@ -515,14 +522,14 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		gap: 6px;
 		padding: 6px 10px;
 		margin: 0 2px -1px 0;
-		border: 1px solid transparent;
-		border-top-left-radius: 6px;
-		border-top-right-radius: 6px;
+		border: 1px solid var(--vscode-panel-border, #444);
+		border-top-left-radius: 0;
+		border-top-right-radius: 0;
 		border-bottom-left-radius: 0;
 		border-bottom-right-radius: 0;
 		border-bottom-color: transparent;
 		cursor: pointer;
-		background: transparent;
+		background: var(--vscode-editor-background);
 		color: var(--vscode-foreground);
 		font-size: var(--vscode-font-size);
 		white-space: nowrap;
@@ -541,12 +548,12 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 16px;
-		height: 16px;
+		width: 18px;
+		height: 18px;
 		margin-left: 4px;
-		border-radius: 50%;
-		font-size: 12px;
-		line-height: 12px;
+		border-radius: 2px;
+		font-size: 15px;
+		line-height: 15px;
 		opacity: 0.85;
 		cursor: pointer;
 		flex: 0 0 auto;
@@ -557,67 +564,53 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	}
 	.brick-tab:hover {
 		background: var(--vscode-list-hoverBackground);
-		border-color: var(--vscode-panel-border, #444);
 		border-bottom-color: transparent;
 	}
 	.brick-tab.active {
 		background: var(--vscode-editor-background);
 		color: var(--vscode-foreground);
-		border-color: var(--vscode-panel-border, #444);
 		border-bottom-color: var(--vscode-editor-background);
 		position: relative;
 		z-index: 2;
 	}
 	.brick-tab.add-tab {
 		font-weight: bold;
-		min-width: 36px;
+		min-width: 38px;
 		justify-content: center;
+		font-size: 18px;
+		line-height: 18px;
 	}
-	.brick-tab.overflow-toggle {
-		min-width: 36px;
-		max-width: 36px;
-		justify-content: center;
-		padding-left: 0;
-		padding-right: 0;
+	.brick-detail-area::-webkit-scrollbar,
+	.brick-tabs-main::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
 	}
-	.brick-overflow-menu {
-		position: absolute;
-		top: calc(100% + 4px);
-		right: 46px;
-		z-index: 20;
-		display: flex;
-		flex-direction: column;
-		min-width: 220px;
-		max-width: 300px;
-		padding: 4px;
-		border: 1px solid var(--vscode-panel-border, #444);
-		border-radius: 6px;
-		background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-	}
-	.brick-overflow-item {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 8px;
-		border: none;
-		border-radius: 4px;
+	.brick-detail-area::-webkit-scrollbar-track,
+	.brick-tabs-main::-webkit-scrollbar-track {
 		background: transparent;
-		color: var(--vscode-foreground);
-		cursor: pointer;
-		text-align: left;
 	}
-	.brick-overflow-item:hover {
-		background: var(--vscode-list-hoverBackground);
+	.brick-detail-area::-webkit-scrollbar-thumb,
+	.brick-tabs-main::-webkit-scrollbar-thumb {
+		background: transparent;
+		border-radius: 5px;
 	}
-	.brick-overflow-item.active {
-		background: var(--vscode-list-activeSelectionBackground);
-		color: var(--vscode-list-activeSelectionForeground);
+	.brick-detail-area:hover::-webkit-scrollbar-thumb,
+	.brick-tabs-main:hover::-webkit-scrollbar-thumb {
+		background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
 	}
-	.brick-overflow-label {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+	.brick-detail-area:hover::-webkit-scrollbar-thumb:hover,
+	.brick-tabs-main:hover::-webkit-scrollbar-thumb:hover {
+		background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+	}
+	.brick-detail-area:hover::-webkit-scrollbar-thumb:active,
+	.brick-tabs-main:hover::-webkit-scrollbar-thumb:active {
+		background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
+	}
+	.brick-detail-area::-webkit-scrollbar-button,
+	.brick-tabs-main::-webkit-scrollbar-button {
+		display: none;
+		width: 0;
+		height: 0;
 	}
 	.discovery-section {
 		padding: 8px 12px 12px;
@@ -829,12 +822,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let discoveryCandidates = [];
 		let selectedDiscoveryCandidateId = '';
 		let connectingDiscoveryCandidateId = '';
-		let overflowMenuOpen = false;
 		let configMode = false;
 		let configMenuOpen = false;
 		let configActionInFlight = '';
 		let configError = '';
 		let detailScrollTop = 0;
+		let tabsScrollLeft = 0;
+		let suppressRenderUntil = 0;
 		let initialAutoScanPending = true;
 		let scanInFlight = false;
 		let scanLoopTimer = null;
@@ -842,10 +836,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		let lastScanBackground = false;
 		let nextBrickOrder = 0;
 		const brickOrderById = new Map();
-		const DEFAULT_MAX_VISIBLE_BRICK_TABS = 4;
-		const ESTIMATED_BRICK_TAB_WIDTH = 128;
-		const ESTIMATED_CONTROL_TAB_WIDTH = 42;
-		const TAB_STRIP_HORIZONTAL_PADDING = 16;
 		const DISCOVERY_REFRESH_FAST_MS = ${this.discoveryRefreshFastMs};
 		const DISCOVERY_REFRESH_SLOW_MS = ${this.discoveryRefreshSlowMs};
 		const TRANSPORT_ICONS = ${transportIconsLiteral};
@@ -882,41 +872,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					background: !isPlusTabActive()
 				});
 			}, delay);
-		}
-
-		function computeMaxVisibleBrickTabs(rootWidth, brickCount) {
-			if (!Number.isFinite(rootWidth) || rootWidth <= 0) {
-				return DEFAULT_MAX_VISIBLE_BRICK_TABS;
-			}
-			const reservedControlsWidth = ESTIMATED_CONTROL_TAB_WIDTH
-				+ (brickCount > 1 ? ESTIMATED_CONTROL_TAB_WIDTH : 0);
-			const available = Math.max(0, rootWidth - TAB_STRIP_HORIZONTAL_PADDING - reservedControlsWidth);
-			const byWidth = Math.floor(available / ESTIMATED_BRICK_TAB_WIDTH);
-			return Math.max(1, byWidth);
-		}
-
-		function buildTabLayout(allBricks, maxVisibleBrickTabs) {
-			if (!allBricks || allBricks.length <= maxVisibleBrickTabs) {
-				return { visibleBricks: allBricks || [], overflowBricks: [] };
-			}
-
-			const initiallyVisible = allBricks.slice(0, maxVisibleBrickTabs);
-			const activeBrick = allBricks.find((brick) => brick.isActive);
-			if (activeBrick && !initiallyVisible.some((brick) => brick.brickId === activeBrick.brickId)) {
-				const visibleBricks = initiallyVisible.slice(0, maxVisibleBrickTabs - 1);
-				visibleBricks.push(activeBrick);
-				const visibleIds = new Set(visibleBricks.map((brick) => brick.brickId));
-				return {
-					visibleBricks,
-					overflowBricks: allBricks.filter((brick) => !visibleIds.has(brick.brickId))
-				};
-			}
-
-			const visibleIds = new Set(initiallyVisible.map((brick) => brick.brickId));
-			return {
-				visibleBricks: initiallyVisible,
-				overflowBricks: allBricks.filter((brick) => !visibleIds.has(brick.brickId))
-			};
 		}
 
 		function mergeDiscoveryCandidates(nextCandidates) {
@@ -1018,8 +973,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 
 		function syncDiscoveryCandidatesWithBricks() {
 			if (!Array.isArray(discoveryCandidates) || discoveryCandidates.length === 0) {
-				return;
+				return false;
 			}
+			let changed = false;
 			const statusByBrickId = new Map();
 			for (const brick of bricks) {
 				if (!brick || !brick.brickId) {
@@ -1033,18 +989,26 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				}
 				const liveStatus = statusByBrickId.get(candidate.candidateId);
 				if (liveStatus === 'READY' || liveStatus === 'CONNECTING' || liveStatus === 'UNAVAILABLE' || liveStatus === 'ERROR') {
-					candidate.status = liveStatus;
-					candidate.alreadyConnected = liveStatus === 'READY' || liveStatus === 'CONNECTING';
+					const nextAlreadyConnected = liveStatus === 'READY' || liveStatus === 'CONNECTING';
+					if (candidate.status !== liveStatus || candidate.alreadyConnected !== nextAlreadyConnected) {
+						candidate.status = liveStatus;
+						candidate.alreadyConnected = nextAlreadyConnected;
+						changed = true;
+					}
 					continue;
 				}
 				if (
 					candidate.alreadyConnected === true
 					&& candidate.candidateId !== connectingDiscoveryCandidateId
 				) {
-					candidate.status = 'UNAVAILABLE';
-					candidate.alreadyConnected = false;
+					if (candidate.status !== 'UNAVAILABLE' || candidate.alreadyConnected !== false) {
+						candidate.status = 'UNAVAILABLE';
+						candidate.alreadyConnected = false;
+						changed = true;
+					}
 				}
 			}
+			return changed;
 		}
 
 		function stabilizeBrickOrder(nextBricks) {
@@ -1150,6 +1114,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			return status === 'ready' || (candidate.alreadyConnected === true && status !== 'error' && status !== 'unavailable');
 		}
 
+		function isSameSnapshot(left, right) {
+			return JSON.stringify(left) === JSON.stringify(right);
+		}
+
 		function renderConfigToolbar() {
 			if (!configMode) {
 				return '<div class="panel-toolbar"><div class="config-toolbar">'
@@ -1175,18 +1143,13 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (previousDetailArea) {
 				detailScrollTop = previousDetailArea.scrollTop;
 			}
-			const activeBrick = bricks.find(b => b.isActive);
-			const maxVisibleBrickTabs = computeMaxVisibleBrickTabs(root.clientWidth, bricks.length);
-			const tabLayout = buildTabLayout(bricks, maxVisibleBrickTabs);
-			const visibleBricks = tabLayout.visibleBricks;
-			const overflowBricks = tabLayout.overflowBricks;
-			if (overflowBricks.length === 0 && overflowMenuOpen) {
-				overflowMenuOpen = false;
+			const previousTabsMain = root.querySelector('.brick-tabs-main');
+			if (previousTabsMain) {
+				tabsScrollLeft = previousTabsMain.scrollLeft;
 			}
-			const overflowHasActive = !discoveryOpen && overflowBricks.some((brick) => brick.isActive);
-
-			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main">';
-			for (const brick of visibleBricks) {
+			const activeBrick = bricks.find(b => b.isActive);
+			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-main"><div class="brick-tabs-track">';
+			for (const brick of bricks) {
 				const activeClass = !discoveryOpen && brick.isActive ? ' active' : '';
 				const closeMarkup = shouldShowTabClose(brick)
 					? '<span class="brick-tab-close" data-close-brick-id="' + brick.brickId + '" title="Disconnect EV3 Brick" aria-label="Disconnect EV3 Brick" role="button">×</span>'
@@ -1197,27 +1160,12 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					+ closeMarkup
 					+ '</button>';
 			}
-			html += '</div>';
-			if (overflowBricks.length > 0) {
-				const overflowActiveClass = overflowHasActive ? ' active' : '';
-				html += '<button class="brick-tab overflow-toggle' + overflowActiveClass + '" data-overflow-toggle="true" title="More Bricks" aria-label="More Bricks">...</button>';
-			}
+			html += '</div></div>';
 			const addTabActiveClass = (discoveryOpen || bricks.length === 0) ? ' active' : '';
 			html += '<button class="brick-tab add-tab' + addTabActiveClass + '" data-add-brick="true" title="Connect EV3 Brick" aria-label="Connect EV3 Brick">+</button>';
 			html += '</div>';
 			html += '<div class="brick-tab-baseline"></div>';
 			html += '<div class="brick-tab-baseline-gap"></div>';
-			if (overflowMenuOpen && overflowBricks.length > 0) {
-				html += '<div class="brick-overflow-menu">';
-				for (const brick of overflowBricks) {
-					const overflowItemActiveClass = !discoveryOpen && brick.isActive ? ' active' : '';
-					html += '<button class="brick-overflow-item' + overflowItemActiveClass + '" data-overflow-brick-id="' + brick.brickId + '" title="' + brick.displayName + '">'
-						+ renderTransportIndicator(brick)
-						+ '<span class="brick-overflow-label">' + brick.displayName + '</span>'
-						+ '</button>';
-				}
-				html += '</div>';
-			}
 			html += '</div>';
 
 			html += '<div class="brick-detail-area">';
@@ -1316,19 +1264,37 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				detailArea.scrollTop = detailScrollTop;
 				detailArea.addEventListener('scroll', () => {
 					detailScrollTop = detailArea.scrollTop;
+					suppressRenderUntil = Date.now() + 250;
+				}, { passive: true });
+			}
+			const tabsMain = root.querySelector('.brick-tabs-main');
+			if (tabsMain) {
+				tabsMain.scrollLeft = tabsScrollLeft;
+				tabsMain.addEventListener('scroll', () => {
+					tabsScrollLeft = tabsMain.scrollLeft;
+					suppressRenderUntil = Date.now() + 250;
+					updateTabBaselineGap();
 				}, { passive: true });
 			}
 			const baselineGap = root.querySelector('.brick-tab-baseline-gap');
 			const activeTab = root.querySelector('.brick-tab.active');
-			if (baselineGap && activeTab) {
-				const left = activeTab.offsetLeft - 1;
-				const width = activeTab.offsetWidth + 2;
+			const tabsWrap = root.querySelector('.brick-tabs-wrap');
+			function updateTabBaselineGap() {
+				if (!baselineGap || !activeTab || !tabsWrap) {
+					if (baselineGap) {
+						baselineGap.style.display = 'none';
+					}
+					return;
+				}
+				const activeRect = activeTab.getBoundingClientRect();
+				const wrapRect = tabsWrap.getBoundingClientRect();
+				const left = activeRect.left - wrapRect.left - 1;
+				const width = activeRect.width + 2;
 				baselineGap.style.left = left + 'px';
 				baselineGap.style.width = width + 'px';
 				baselineGap.style.display = 'block';
-			} else if (baselineGap) {
-				baselineGap.style.display = 'none';
 			}
+			updateTabBaselineGap();
 
 			for (const configEnterButton of root.querySelectorAll('[data-config-enter]')) {
 				configEnterButton.addEventListener('click', () => {
@@ -1375,7 +1341,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					vscode.postMessage({ type: 'discardConfigChanges' });
 				});
 			}
-			for (const closeConfigMenuArea of root.querySelectorAll('.brick-detail-area, .brick-tabs-main, .brick-overflow-menu')) {
+			for (const closeConfigMenuArea of root.querySelectorAll('.brick-detail-area, .brick-tabs-main')) {
 				closeConfigMenuArea.addEventListener('click', () => {
 					if (!configMenuOpen) {
 						return;
@@ -1389,17 +1355,10 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				tab.addEventListener('click', () => {
 					configMenuOpen = false;
 					if (tab.dataset.addBrick === 'true') {
-						overflowMenuOpen = false;
 						selectedDiscoveryCandidateId = '';
 						requestDiscoveryScan({ preserveCandidates: true });
 						return;
 					}
-					if (tab.dataset.overflowToggle === 'true') {
-						overflowMenuOpen = !overflowMenuOpen;
-						render();
-						return;
-					}
-					overflowMenuOpen = false;
 					discoveryOpen = false;
 					stopScanLoop();
 					vscode.postMessage({ type: 'selectBrick', brickId: tab.dataset.brickId });
@@ -1418,15 +1377,6 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					setCandidateConnectionState(brickId, 'UNKNOWN', false);
 					render();
 					vscode.postMessage({ type: 'disconnectBrick', brickId });
-				});
-			}
-			for (const overflowButton of root.querySelectorAll('.brick-overflow-item')) {
-				overflowButton.addEventListener('click', () => {
-					configMenuOpen = false;
-					overflowMenuOpen = false;
-					discoveryOpen = false;
-					stopScanLoop();
-					vscode.postMessage({ type: 'selectBrick', brickId: overflowButton.dataset.overflowBrickId });
 				});
 			}
 			for (const candidateButton of root.querySelectorAll('.discovery-item')) {
@@ -1464,18 +1414,39 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		window.addEventListener('message', (event) => {
 			const message = event.data;
 			if (message.type === 'updateBricks') {
-				bricks = stabilizeBrickOrder(message.bricks || []);
-				sensors = message.sensors || [];
-				motors = message.motors || [];
-				controls = message.controls || null;
-				syncDiscoveryCandidatesWithBricks();
+				const nextBricks = stabilizeBrickOrder(message.bricks || []);
+				const nextSensors = message.sensors || [];
+				const nextMotors = message.motors || [];
+				const nextControls = message.controls || null;
+				const bricksChanged = !isSameSnapshot(nextBricks, bricks);
+				const sensorsChanged = !isSameSnapshot(nextSensors, sensors);
+				const motorsChanged = !isSameSnapshot(nextMotors, motors);
+				const controlsChanged = !isSameSnapshot(nextControls, controls);
+				if (bricksChanged) {
+					bricks = nextBricks;
+				}
+				if (sensorsChanged) {
+					sensors = nextSensors;
+				}
+				if (motorsChanged) {
+					motors = nextMotors;
+				}
+				if (controlsChanged) {
+					controls = nextControls;
+				}
+				const discoveryChanged = syncDiscoveryCandidatesWithBricks();
 				if (initialAutoScanPending && bricks.length === 0) {
 					initialAutoScanPending = false;
 					requestDiscoveryScan({ preserveCandidates: false });
 					return;
 				}
 				initialAutoScanPending = false;
-				render();
+				if (
+					(bricksChanged || sensorsChanged || motorsChanged || controlsChanged || discoveryChanged)
+					&& Date.now() >= suppressRenderUntil
+				) {
+					render();
+				}
 				scheduleNextScan();
 				return;
 			}
