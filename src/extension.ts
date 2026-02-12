@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerMockCommands } from './commands/mockCommands';
 import { registerBatchCommands } from './commands/batchCommands';
 import { registerBrowseCommands } from './commands/browseCommands';
 import { registerConnectCommands } from './commands/connectCommands';
@@ -755,6 +756,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const setBricksTreeFilter = registerSetBricksTreeFilter({ filterState });
 	const clearBricksTreeFilter = registerClearBricksTreeFilter(filterState);
 	const retryDirectoryFromTree = registerRetryDirectoryFromTree(treeProvider);
+	const mockRegistrations = registerMockCommands();
 
 	// --- Config watcher, FS provider, tree view ---
 
@@ -905,6 +907,8 @@ export function activate(context: vscode.ExtensionContext) {
 		setBricksTreeFilter,
 		clearBricksTreeFilter,
 		retryDirectoryFromTree,
+		mockRegistrations.mockReset,
+		mockRegistrations.mockShowState,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,

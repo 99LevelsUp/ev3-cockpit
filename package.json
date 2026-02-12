@@ -180,6 +180,14 @@
       {
         "command": "ev3-cockpit.retryDirectoryFromTree",
         "title": "EV3 Cockpit: Retry Directory Listing"
+      },
+      {
+        "command": "ev3-cockpit.mock.reset",
+        "title": "EV3 Cockpit: Reset Mock State"
+      },
+      {
+        "command": "ev3-cockpit.mock.showState",
+        "title": "EV3 Cockpit: Show Mock State"
       }
     ],
     "viewsContainers": {
