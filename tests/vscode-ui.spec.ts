@@ -18,7 +18,7 @@ async function createWorkspace(settings: Record<string, unknown>): Promise<strin
 async function readMockNamesFromConfig(): Promise<string[]> {
 	const raw = await fs.readFile(MOCK_CONFIG_PATH, 'utf8');
 	const parsed = JSON.parse(raw) as unknown;
-	return buildMockBricksFromConfig(parsed).map((entry) => entry.displayName);
+	return buildMockBricksFromConfig(parsed).map((entry) => entry.displayName).sort();
 }
 
 async function updateWorkspaceSettings(workspaceRoot: string, updates: Record<string, unknown>): Promise<void> {
@@ -240,7 +240,7 @@ test.describe('VS Code UI', () => {
 			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);
 
 			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': true });
-			await expect.poll(listMockNames, { timeout: 15000 }).toEqual(expectedMockNames);
+			await expect.poll(async () => (await listMockNames()).sort(), { timeout: 15000 }).toEqual(expectedMockNames);
 
 			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': false });
 			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);

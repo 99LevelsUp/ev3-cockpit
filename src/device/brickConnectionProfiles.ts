@@ -100,9 +100,25 @@ export function captureConnectionProfileFromWorkspace(
 
 export class BrickConnectionProfileStore {
 	private readonly profilesByBrickId = new Map<string, BrickConnectionProfile>();
+	private persistenceEnabled: boolean = true;
 
-	public constructor(private readonly storage: Pick<vscode.Memento, 'get' | 'update'>) {
-		this.loadFromStorage();
+	public constructor(
+		private readonly storage: Pick<vscode.Memento, 'get' | 'update'>,
+		options?: { persistenceEnabled?: boolean }
+	) {
+		this.persistenceEnabled = options?.persistenceEnabled ?? true;
+		if (this.persistenceEnabled) {
+			this.loadFromStorage();
+		}
+	}
+
+	public setPersistenceEnabled(enabled: boolean): void {
+		this.persistenceEnabled = enabled;
+		if (!enabled) {
+			// Clear all profiles when persistence is disabled
+			this.profilesByBrickId.clear();
+			void this.clearStorage();
+		}
 	}
 
 	public get(brickId: string): BrickConnectionProfile | undefined {
@@ -171,8 +187,15 @@ export class BrickConnectionProfileStore {
 	}
 
 	private async saveToStorage(): Promise<void> {
+		if (!this.persistenceEnabled) {
+			return;
+		}
 		await this.storage.update(PROFILE_STORE_KEY, {
 			profiles: [...this.profilesByBrickId.values()]
 		} as ProfileStoreShape);
+	}
+
+	private async clearStorage(): Promise<void> {
+		await this.storage.update(PROFILE_STORE_KEY, undefined);
 	}
 }

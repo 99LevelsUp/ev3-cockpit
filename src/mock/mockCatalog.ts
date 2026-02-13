@@ -12,6 +12,10 @@ export interface MockBrickConfigNode {
 	bricks?: unknown;
 }
 
+interface MockBrickConfigRoot {
+	bricks?: unknown;
+}
+
 let cachedMockBricks: MockBrickDefinition[] = [];
 
 export function setMockBricks(bricks: MockBrickDefinition[]): void {
@@ -42,8 +46,19 @@ function toArray(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
+function resolveRootNodes(raw: unknown): unknown[] {
+	if (Array.isArray(raw)) {
+		return raw;
+	}
+	if (raw && typeof raw === 'object') {
+		const root = raw as MockBrickConfigRoot;
+		return toArray(root.bricks);
+	}
+	return [];
+}
+
 export function buildMockBricksFromConfig(raw: unknown): MockBrickDefinition[] {
-	const roots = toArray(raw);
+	const roots = resolveRootNodes(raw);
 	const results: MockBrickDefinition[] = [];
 	const usedIds = new Set<string>();
 

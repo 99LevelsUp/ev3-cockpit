@@ -9,23 +9,21 @@ test('mock bricks config is valid', async () => {
 	const parsed = JSON.parse(raw) as unknown;
 	const bricks = buildMockBricksFromConfig(parsed);
 
-	expect(bricks.map((entry) => entry.displayName)).toEqual([
-		'Mock 1',
-		'Mock 1.1',
-		'Mock 1.1.1',
-		'Mock 2',
-		'Mock 2.1',
-		'Mock 2.2',
-		'Mock 3'
-	]);
+	const expectedRoles: Record<string, 'master' | 'slave'> = {
+		'Mock 1': 'master',
+		'Mock 1.1': 'slave',
+		'Mock 1.1.1': 'slave',
+		'Mock 2': 'master',
+		'Mock 2.1': 'slave',
+		'Mock 2.2': 'slave',
+		'Mock 3': 'master'
+	};
 
-	expect(bricks.map((entry) => entry.role)).toEqual([
-		'master',
-		'slave',
-		'slave',
-		'master',
-		'slave',
-		'slave',
-		'master'
-	]);
+	const actualNames = bricks.map((entry) => entry.displayName).sort();
+	const expectedNames = Object.keys(expectedRoles).sort();
+	expect(actualNames).toEqual(expectedNames);
+
+	for (const entry of bricks) {
+		expect(entry.role).toBe(expectedRoles[entry.displayName]);
+	}
 });

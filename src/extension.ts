@@ -75,7 +75,9 @@ export function activate(context: vscode.ExtensionContext) {
 		trace: (message, meta) => logger?.trace(message, meta)
 	};
 	const brickRegistry = new BrickRegistry();
-	const profileStore = new BrickConnectionProfileStore(context.workspaceState);
+	const profileStore = new BrickConnectionProfileStore(context.workspaceState, {
+		persistenceEnabled: false
+	});
 	const discoveryService = new BrickDiscoveryService({
 		brickRegistry,
 		profileStore,
@@ -331,12 +333,12 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const isMockDiscoveryEnabled = (): boolean => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const explicit = cfg.get<boolean>('mock');
+		const cfg = vscode.workspace.getConfiguration();
+		const explicit = cfg.get<boolean>('ev3-cockpit.mock');
 		if (typeof explicit === 'boolean') {
 			return explicit;
 		}
-		return cfg.get<boolean>('ui.discovery.showMockBricks', false) === true;
+		return cfg.get<boolean>('ev3-cockpit.ui.discovery.showMockBricks', false) === true;
 	};
 
 	const readDiscoveryConfig = (): DiscoveryConfig => {
@@ -467,7 +469,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const clearBricksTreeFilter = registerClearBricksTreeFilter(filterState);
 	const retryDirectoryFromTree = registerRetryDirectoryFromTree(treeProvider);
 	const openBrickPanel = registerOpenBrickPanel();
-	const mockRegistrations = registerMockCommands();
+	const mockRegistrations = registerMockCommands({ profileStore });
 
 	// --- FS provider, tree view ---
 
@@ -706,6 +708,7 @@ export function activate(context: vscode.ExtensionContext) {
 		openBrickPanel,
 		mockRegistrations.mockReset,
 		mockRegistrations.mockShowState,
+		mockRegistrations.clearBrickProfiles,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,

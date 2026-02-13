@@ -1,29 +1,639 @@
-[
-  {
-    "name": "Mock 1",
-    "bricks": [
-      {
-        "name": "Mock 1.1",
-        "bricks": [
+{
+  "spec": {
+    "cpu": {
+      "model": "TI AM1808 (ARM9)",
+      "mhz": 300
+    },
+    "ramMb": 64,
+    "flashMb": 16,
+    "eepromKb": 256,
+    "os": "Linux",
+    "ports": {
+      "inputs": 4,
+      "outputs": 4,
+      "connector": "RJ-12 (6-wire)",
+      "inputAnalogRangeV": "0-5",
+      "uartKbps": {
+        "port1_2": 460,
+        "port3_4": 230
+      },
+      "i2cKbps": 9.6,
+      "i2cBufferBytes": 32,
+      "outputCurrentMa": {
+        "continuous": 700,
+        "peak": 1000
+      },
+      "outputType": "PWM brake/float",
+      "thermalProtection": true,
+      "encoder": true
+    },
+    "usb": {
+      "client": "2.0 high speed (480 Mbit/s)",
+      "host": "1.1 full speed (12 Mbit/s)"
+    },
+    "bluetooth": {
+      "version": "2.1 EDR",
+      "module": "Panasonic PAN1325 (TI CC2550)",
+      "profile": "SPP",
+      "rangeMeters": 10,
+      "maxConnections": 7
+    },
+    "wifi": {
+      "support": "External USB dongle",
+      "dongle": "NETGEAR WNA1100"
+    },
+    "sd": {
+      "type": "SDHC 2-32 GB"
+    },
+    "display": {
+      "resolution": "178x128",
+      "type": "monochrome dot-matrix",
+      "sizeMm": "41.1x29.9",
+      "controller": "ST7586S",
+      "spiMhz": 10,
+      "buttons": 6,
+      "led": "RGB (green/orange/red)"
+    },
+    "audio": {
+      "speakerDiameterMm": 23,
+      "impedanceOhm": 16,
+      "amplifier": "TPA6211A1 (TI)",
+      "maxW": 3.1
+    },
+    "power": {
+      "battery": "6x AA or Li-Ion 2000 mAh",
+      "aaRecommended": "Alkaline",
+      "liIon": "2000 mAh",
+      "polySwitchCount": 3,
+      "polySwitchHoldA": 1.1,
+      "polySwitchTripA": 2.2
+    },
+    "daisyChain": {
+      "maxBricks": 4,
+      "portsTotal": "16 inputs + 16 outputs",
+      "connection": "USB",
+      "speedMbit": 12,
+      "updateMs": 100
+    }
+  },
+  "defaults": {
+    "identity": {
+      "name": "Mock",
+      "serialNumber": "MOCK-0000"
+    },
+    "versions": {
+      "osVersion": "MOCK-OS-1.0",
+      "fwVersion": "MOCK-FW-1.10M",
+      "hwVersion": "MOCK-HW-0.1"
+    },
+    "power": {
+      "batteryVoltage": 7.8,
+      "batteryLevel": 80,
+      "batteryCurrent": 0.12,
+      "motorCurrent": 0.03
+    },
+    "storage": {
+      "totalMemoryBytes": 6000,
+      "freeMemoryBytes": 4500,
+      "sdPresent": false
+    },
+    "ui": {
+      "volume": 70,
+      "sleepMinutes": 30
+    },
+      "display": {
+        "width": 178,
+        "height": 128,
+        "bpp": 1,
+        "bufferBytes": 2944
+      },
+    "filesystem": {
+      "roots": [
+        {
+          "path": "/home/root/lms2012/prjs/",
+          "nodes": [
+            {
+              "type": "dir",
+              "name": "MockProject",
+              "children": [
+                {
+                  "type": "file",
+                  "name": "main.rbf",
+                  "base64": "TU9DSy1SQkY="
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "bricks": [
+    {
+      "name": "Mock 1",
+      "identity": {
+        "name": "Mock 1",
+        "serialNumber": "MOCK-USB-001",
+        "bluetoothMac": "02:00:00:00:00:01",
+        "wifiMac": "02:00:00:00:10:01"
+      },
+      "versions": {
+        "osVersion": "MOCK-OS-1.0",
+        "osBuild": "2026-02-13-M1",
+        "fwVersion": "MOCK-FW-1.10M",
+        "fwBuild": "2026-02-13-F1",
+        "hwVersion": "MOCK-HW-0.1"
+      },
+      "power": {
+        "batteryVoltage": 7.92,
+        "batteryLevel": 88,
+        "batteryCurrent": 0.11,
+        "motorCurrent": 0.04
+      },
+      "storage": {
+        "totalMemoryBytes": 6000,
+        "freeMemoryBytes": 4200,
+        "sdPresent": false
+      },
+      "ui": {
+        "volume": 65,
+        "sleepMinutes": 25
+      },
+      "display": {
+        "width": 178,
+        "height": 128,
+        "bpp": 2,
+        "bufferBytes": 2944
+      },
+      "ports": {
+        "sensors": [
+          {"port": 0, "typeCode": 16, "mode": 0, "connected": true, "typeName": "EV3 TOUCH"},
+          {"port": 1, "typeCode": 29, "mode": 0, "connected": true, "typeName": "EV3 COLOR"},
+          {"port": 2, "typeCode": 30, "mode": 0, "connected": true, "typeName": "EV3 ULTRASONIC"},
+          {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+        ],
+        "motors": [
+          {"port": "A", "typeCode": 7, "tachoPosition": 120},
+          {"port": "B", "typeCode": 8, "tachoPosition": 0},
+          {"port": "C", "typeCode": 7, "tachoPosition": -45},
+          {"port": "D", "typeCode": 0, "tachoPosition": 0}
+        ]
+      },
+      "filesystem": {
+        "roots": [
           {
-            "name": "Mock 1.1.1"
+            "path": "/home/root/lms2012/prjs/",
+            "nodes": [
+              {
+                "type": "dir",
+                "name": "MockProject1",
+                "children": [
+                  {
+                    "type": "file",
+                    "name": "main.rbf",
+                    "base64": "TU9DSy1NRU0tMQ=="
+                  }
+                ]
+              },
+              {
+                "type": "dir",
+                "name": "MockTools",
+                "children": [
+                  {
+                    "type": "file",
+                    "name": "readme.txt",
+                    "text": "Mock toolchain placeholder."
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "path": "/media/card/",
+            "nodes": [
+              {
+                "type": "dir",
+                "name": "MockSD",
+                "children": [
+                  {
+                    "type": "file",
+                    "name": "log.txt",
+                    "text": "Mock SD log."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "bricks": [
+        {
+          "name": "Mock 1.1",
+          "identity": {
+            "name": "Mock 1.1",
+            "serialNumber": "MOCK-USB-002",
+            "bluetoothMac": "02:00:00:00:00:11",
+            "wifiMac": "02:00:00:00:10:11"
+          },
+          "versions": {
+            "osVersion": "MOCK-OS-1.0",
+            "osBuild": "2026-02-13-M2",
+            "fwVersion": "MOCK-FW-1.10M",
+            "fwBuild": "2026-02-13-F2",
+            "hwVersion": "MOCK-HW-0.1"
+          },
+          "power": {
+            "batteryVoltage": 7.55,
+            "batteryLevel": 62,
+            "batteryCurrent": 0.14,
+            "motorCurrent": 0.06
+          },
+          "storage": {
+            "totalMemoryBytes": 6000,
+            "freeMemoryBytes": 3900,
+            "sdPresent": false
+          },
+          "ui": {
+            "volume": 55,
+            "sleepMinutes": 20
+          },
+          "display": {
+            "width": 178,
+            "height": 128,
+            "bpp": 2,
+            "bufferBytes": 2944
+          },
+          "ports": {
+            "sensors": [
+              {"port": 0, "typeCode": 33, "mode": 0, "connected": true, "typeName": "EV3 IR"},
+              {"port": 1, "typeCode": 32, "mode": 0, "connected": true, "typeName": "EV3 GYRO"},
+              {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+              {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+            ],
+            "motors": [
+              {"port": "A", "typeCode": 7, "tachoPosition": 15},
+              {"port": "B", "typeCode": 0, "tachoPosition": 0},
+              {"port": "C", "typeCode": 0, "tachoPosition": 0},
+              {"port": "D", "typeCode": 0, "tachoPosition": 0}
+            ]
+          },
+          "filesystem": {
+            "roots": [
+              {
+                "path": "/home/root/lms2012/prjs/",
+                "nodes": [
+                  {
+                    "type": "dir",
+                    "name": "MockProject1_1",
+                    "children": [
+                      {
+                        "type": "file",
+                        "name": "main.rbf",
+                        "base64": "TU9DSy1NRU0tMTE="
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "bricks": [
+            {
+              "name": "Mock 1.1.1",
+              "identity": {
+                "name": "Mock 1.1.1",
+                "serialNumber": "MOCK-USB-003",
+                "bluetoothMac": "02:00:00:00:00:21",
+                "wifiMac": "02:00:00:00:10:21"
+              },
+              "versions": {
+                "osVersion": "MOCK-OS-1.0",
+                "osBuild": "2026-02-13-M3",
+                "fwVersion": "MOCK-FW-1.10M",
+                "fwBuild": "2026-02-13-F3",
+                "hwVersion": "MOCK-HW-0.1"
+              },
+              "power": {
+                "batteryVoltage": 7.15,
+                "batteryLevel": 48,
+                "batteryCurrent": 0.18,
+                "motorCurrent": 0.02
+              },
+              "storage": {
+                "totalMemoryBytes": 6000,
+                "freeMemoryBytes": 3700,
+                "sdPresent": false
+              },
+              "ui": {
+                "volume": 40,
+                "sleepMinutes": 15
+              },
+              "display": {
+                "width": 178,
+                "height": 128,
+                "bpp": 2,
+                "bufferBytes": 2944
+              },
+              "ports": {
+                "sensors": [
+                  {"port": 0, "typeCode": 16, "mode": 0, "connected": true, "typeName": "EV3 TOUCH"},
+                  {"port": 1, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+                  {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+                  {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+                ],
+                "motors": [
+                  {"port": "A", "typeCode": 7, "tachoPosition": 5},
+                  {"port": "B", "typeCode": 7, "tachoPosition": 9},
+                  {"port": "C", "typeCode": 0, "tachoPosition": 0},
+                  {"port": "D", "typeCode": 0, "tachoPosition": 0}
+                ]
+              },
+              "filesystem": {
+                "roots": [
+                  {
+                    "path": "/home/root/lms2012/prjs/",
+                    "nodes": [
+                      {
+                        "type": "dir",
+                        "name": "MockProject1_1_1",
+                        "children": [
+                          {
+                            "type": "file",
+                            "name": "main.rbf",
+                            "base64": "TU9DSy1NRU0tMTEx"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Mock 2",
+      "identity": {
+        "name": "Mock 2",
+        "serialNumber": "MOCK-USB-010",
+        "bluetoothMac": "02:00:00:00:00:02",
+        "wifiMac": "02:00:00:00:10:02"
+      },
+      "versions": {
+        "osVersion": "MOCK-OS-1.0",
+        "osBuild": "2026-02-13-M4",
+        "fwVersion": "MOCK-FW-1.10M",
+        "fwBuild": "2026-02-13-F4",
+        "hwVersion": "MOCK-HW-0.2"
+      },
+      "power": {
+        "batteryVoltage": 8.05,
+        "batteryLevel": 92,
+        "batteryCurrent": 0.09,
+        "motorCurrent": 0.01
+      },
+      "storage": {
+        "totalMemoryBytes": 6000,
+        "freeMemoryBytes": 4700,
+        "sdPresent": true
+      },
+      "ui": {
+        "volume": 75,
+        "sleepMinutes": 35
+      },
+      "ports": {
+        "sensors": [
+          {"port": 0, "typeCode": 29, "mode": 0, "connected": true, "typeName": "EV3 COLOR"},
+          {"port": 1, "typeCode": 16, "mode": 0, "connected": true, "typeName": "EV3 TOUCH"},
+          {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+          {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+        ],
+        "motors": [
+          {"port": "A", "typeCode": 7, "tachoPosition": 200},
+          {"port": "B", "typeCode": 7, "tachoPosition": 75},
+          {"port": "C", "typeCode": 8, "tachoPosition": 20},
+          {"port": "D", "typeCode": 0, "tachoPosition": 0}
+        ]
+      },
+      "filesystem": {
+        "roots": [
+          {
+            "path": "/home/root/lms2012/prjs/",
+            "nodes": [
+              {
+                "type": "dir",
+                "name": "MockProject2",
+                "children": [
+                  {
+                    "type": "file",
+                    "name": "main.rbf",
+                    "base64": "TU9DSy1NRU0tMg=="
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "bricks": [
+        {
+          "name": "Mock 2.1",
+          "identity": {
+            "name": "Mock 2.1",
+            "serialNumber": "MOCK-USB-011",
+            "bluetoothMac": "02:00:00:00:00:12",
+            "wifiMac": "02:00:00:00:10:12"
+          },
+          "versions": {
+            "osVersion": "MOCK-OS-1.0",
+            "osBuild": "2026-02-13-M5",
+            "fwVersion": "MOCK-FW-1.10M",
+            "fwBuild": "2026-02-13-F5",
+            "hwVersion": "MOCK-HW-0.2"
+          },
+          "power": {
+            "batteryVoltage": 7.65,
+            "batteryLevel": 70,
+            "batteryCurrent": 0.13,
+            "motorCurrent": 0.03
+          },
+          "storage": {
+            "totalMemoryBytes": 6000,
+            "freeMemoryBytes": 4100,
+            "sdPresent": true
+          },
+          "ui": {
+            "volume": 60,
+            "sleepMinutes": 25
+          },
+          "ports": {
+            "sensors": [
+              {"port": 0, "typeCode": 32, "mode": 0, "connected": true, "typeName": "EV3 GYRO"},
+              {"port": 1, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+              {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+              {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+            ],
+            "motors": [
+              {"port": "A", "typeCode": 8, "tachoPosition": 12},
+              {"port": "B", "typeCode": 0, "tachoPosition": 0},
+              {"port": "C", "typeCode": 0, "tachoPosition": 0},
+              {"port": "D", "typeCode": 0, "tachoPosition": 0}
+            ]
+          },
+          "filesystem": {
+            "roots": [
+              {
+                "path": "/home/root/lms2012/prjs/",
+                "nodes": [
+                  {
+                    "type": "dir",
+                    "name": "MockProject2_1",
+                    "children": [
+                      {
+                        "type": "file",
+                        "name": "main.rbf",
+                        "base64": "TU9DSy1NRU0tMjE="
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "Mock 2.2",
+          "identity": {
+            "name": "Mock 2.2",
+            "serialNumber": "MOCK-USB-012",
+            "bluetoothMac": "02:00:00:00:00:13",
+            "wifiMac": "02:00:00:00:10:13"
+          },
+          "versions": {
+            "osVersion": "MOCK-OS-1.0",
+            "osBuild": "2026-02-13-M6",
+            "fwVersion": "MOCK-FW-1.10M",
+            "fwBuild": "2026-02-13-F6",
+            "hwVersion": "MOCK-HW-0.2"
+          },
+          "power": {
+            "batteryVoltage": 7.25,
+            "batteryLevel": 55,
+            "batteryCurrent": 0.16,
+            "motorCurrent": 0.07
+          },
+          "storage": {
+            "totalMemoryBytes": 6000,
+            "freeMemoryBytes": 3600,
+            "sdPresent": true
+          },
+          "ui": {
+            "volume": 50,
+            "sleepMinutes": 18
+          },
+          "ports": {
+            "sensors": [
+              {"port": 0, "typeCode": 30, "mode": 0, "connected": true, "typeName": "EV3 ULTRASONIC"},
+              {"port": 1, "typeCode": 16, "mode": 0, "connected": true, "typeName": "EV3 TOUCH"},
+              {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+              {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+            ],
+            "motors": [
+              {"port": "A", "typeCode": 7, "tachoPosition": 33},
+              {"port": "B", "typeCode": 7, "tachoPosition": -12},
+              {"port": "C", "typeCode": 0, "tachoPosition": 0},
+              {"port": "D", "typeCode": 0, "tachoPosition": 0}
+            ]
+          },
+          "filesystem": {
+            "roots": [
+              {
+                "path": "/home/root/lms2012/prjs/",
+                "nodes": [
+                  {
+                    "type": "dir",
+                    "name": "MockProject2_2",
+                    "children": [
+                      {
+                        "type": "file",
+                        "name": "main.rbf",
+                        "base64": "TU9DSy1NRU0tMjI="
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mock 3",
+      "identity": {
+        "name": "Mock 3",
+        "serialNumber": "MOCK-USB-020",
+        "bluetoothMac": "02:00:00:00:00:03",
+        "wifiMac": "02:00:00:00:10:03"
+      },
+      "versions": {
+        "osVersion": "MOCK-OS-1.0",
+        "osBuild": "2026-02-13-M7",
+        "fwVersion": "MOCK-FW-1.10M",
+        "fwBuild": "2026-02-13-F7",
+        "hwVersion": "MOCK-HW-0.3"
+      },
+      "power": {
+        "batteryVoltage": 8.2,
+        "batteryLevel": 96,
+        "batteryCurrent": 0.08,
+        "motorCurrent": 0.01
+      },
+      "storage": {
+        "totalMemoryBytes": 6000,
+        "freeMemoryBytes": 4900,
+        "sdPresent": false
+      },
+      "ui": {
+        "volume": 80,
+        "sleepMinutes": 40
+      },
+      "ports": {
+        "sensors": [
+          {"port": 0, "typeCode": 16, "mode": 0, "connected": true, "typeName": "EV3 TOUCH"},
+          {"port": 1, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+          {"port": 2, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"},
+          {"port": 3, "typeCode": 0, "mode": 0, "connected": false, "typeName": "NONE"}
+        ],
+        "motors": [
+          {"port": "A", "typeCode": 7, "tachoPosition": 0},
+          {"port": "B", "typeCode": 7, "tachoPosition": 0},
+          {"port": "C", "typeCode": 7, "tachoPosition": 0},
+          {"port": "D", "typeCode": 7, "tachoPosition": 0}
+        ]
+      },
+      "filesystem": {
+        "roots": [
+          {
+            "path": "/home/root/lms2012/prjs/",
+            "nodes": [
+              {
+                "type": "dir",
+                "name": "MockProject3",
+                "children": [
+                  {
+                    "type": "file",
+                    "name": "main.rbf",
+                    "base64": "TU9DSy1NRU0tMw=="
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
-    ]
-  },
-  {
-    "name": "Mock 2",
-    "bricks": [
-      {
-        "name": "Mock 2.1"
-      },
-      {
-        "name": "Mock 2.2"
-      }
-    ]
-  },
-  {
-    "name": "Mock 3"
-  }
-]
+    }
+  ]
+}
