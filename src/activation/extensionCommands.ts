@@ -199,6 +199,25 @@ export function registerRetryDirectoryFromTree(treeProvider: BrickTreeProvider):
 	});
 }
 
+// --- openBrickPanel ---
+
+export function registerOpenBrickPanel(): vscode.Disposable {
+	return vscode.commands.registerCommand('ev3-cockpit.openBrickPanel', async () => {
+		try {
+			await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
+		} catch {
+			// ignore
+		}
+		try {
+			await vscode.commands.executeCommand('vscode.openView', 'ev3-cockpit.brick');
+			return;
+		} catch {
+			// fallback below
+		}
+		await vscode.commands.executeCommand('workbench.view.extension.ev3-cockpit-brick-container');
+	});
+}
+
 // --- revealInBricksTree ---
 
 export interface RevealInBricksTreeOptions {

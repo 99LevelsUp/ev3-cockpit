@@ -50,6 +50,8 @@ import {
 	BrickDiscoveryService,
 	DiscoveryConfig
 } from './device/brickDiscoveryService';
+import { readMockBricksConfig } from './config/mockBricksConfig';
+import { isMockBrickId, setMockBricks } from './mock/mockCatalog';
 import {
 	createTreeFilterState,
 	registerInspectBrickSessions,
@@ -57,6 +59,7 @@ import {
 	registerSetBricksTreeFilter,
 	registerClearBricksTreeFilter,
 	registerRetryDirectoryFromTree,
+	registerOpenBrickPanel,
 	registerRevealInBricksTree,
 	registerFsChangeSubscription
 } from './activation/extensionCommands';
@@ -327,9 +330,20 @@ export function activate(context: vscode.ExtensionContext) {
 		return sessionManager.getRestartCandidatePath(concreteBrickId);
 	};
 
+	const isMockDiscoveryEnabled = (): boolean => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const explicit = cfg.get<boolean>('mock');
+		if (typeof explicit === 'boolean') {
+			return explicit;
+		}
+		return cfg.get<boolean>('ui.discovery.showMockBricks', false) === true;
+	};
+
 	const readDiscoveryConfig = (): DiscoveryConfig => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const showMockBricks = cfg.get<boolean>('ui.discovery.showMockBricks', false) === true;
+		const showMockBricks = isMockDiscoveryEnabled();
+		const mockBricks = readMockBricksConfig(context.extensionPath, perfLogger);
+		setMockBricks(mockBricks);
 		const discoveryPortRaw = cfg.get('transport.tcp.discoveryPort');
 		const discoveryPort =
 			typeof discoveryPortRaw === 'number' && Number.isFinite(discoveryPortRaw)
@@ -346,7 +360,7 @@ export function activate(context: vscode.ExtensionContext) {
 				? preferredBluetoothPortRaw.trim().toUpperCase()
 				: undefined;
 		const defaultRootPath = normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
-		return { showMockBricks, tcpDiscoveryPort: discoveryPort, tcpDiscoveryTimeoutMs: discoveryTimeoutMs, preferredBluetoothPort, defaultRootPath };
+		return { showMockBricks, mockBricks, tcpDiscoveryPort: discoveryPort, tcpDiscoveryTimeoutMs: discoveryTimeoutMs, preferredBluetoothPort, defaultRootPath };
 	};
 
 	const nameDeps = { brickRegistry, profileStore, discoveryService };
@@ -452,17 +466,10 @@ export function activate(context: vscode.ExtensionContext) {
 	const setBricksTreeFilter = registerSetBricksTreeFilter({ filterState });
 	const clearBricksTreeFilter = registerClearBricksTreeFilter(filterState);
 	const retryDirectoryFromTree = registerRetryDirectoryFromTree(treeProvider);
+	const openBrickPanel = registerOpenBrickPanel();
 	const mockRegistrations = registerMockCommands();
 
-	// --- Config watcher, FS provider, tree view ---
-
-	const configWatcher = createConfigWatcher({
-		getLogger: () => logger,
-		brickRegistry,
-		sessionManager,
-		profileStore,
-		ensureFullFsModeConfirmation
-	});
+	// --- FS provider, tree view ---
 
 	const fsDisposable = vscode.workspace.registerFileSystemProvider('ev3', fsProvider, {
 		isCaseSensitive: true,
@@ -508,19 +515,18 @@ export function activate(context: vscode.ExtensionContext) {
 	treeProvider.refresh();
 
 	const brickPanelProvider = new BrickPanelProvider(context.extensionUri, {
-		listBricks: () =>
-			sortSnapshotsForTree(
-				brickRegistry
-					.listSnapshots()
-					.filter((snapshot) =>
-						snapshot.status === 'READY'
-						|| snapshot.status === 'CONNECTING'
-						|| (
-							snapshot.status === 'UNAVAILABLE'
-							&& snapshot.lastError !== 'Disconnected by user.'
-						)
-					)
-			),
+		listBricks: () => {
+			const includeMocks = isMockDiscoveryEnabled();
+			const snapshots = brickRegistry.listSnapshots().filter((snapshot) => (
+				snapshot.status === 'READY'
+				|| snapshot.status === 'CONNECTING'
+				|| (
+					snapshot.status === 'UNAVAILABLE'
+					&& snapshot.lastError !== 'Disconnected by user.'
+				)
+			)).filter((snapshot) => includeMocks || !isMockBrickId(snapshot.brickId));
+			return sortSnapshotsForTree(snapshots);
+		},
 		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
 		scanAvailableBricks: discoverBricksForPanel,
 		connectScannedBrick: connectDiscoveredBrickFromPanel,
@@ -585,6 +591,42 @@ export function activate(context: vscode.ExtensionContext) {
 		BrickPanelProvider.viewType,
 		brickPanelProvider
 	);
+	const purgeMockBricks = async (reason: string): Promise<void> => {
+		const mockSnapshots = brickRegistry.listSnapshots().filter((snapshot) => isMockBrickId(snapshot.brickId));
+		if (mockSnapshots.length === 0) {
+			return;
+		}
+		for (const snapshot of mockSnapshots) {
+			clearProgramSession(reason, snapshot.brickId);
+			await closeBrickSession(snapshot.brickId);
+		}
+		brickRegistry.removeWhere((record) => isMockBrickId(record.brickId));
+		await profileStore.removeWhere((profile) => isMockBrickId(profile.brickId));
+		await brickUiStateStore.pruneMissing(new Set(brickRegistry.listSnapshots().map((snapshot) => snapshot.brickId)));
+		treeProvider.refreshThrottled();
+		brickPanelProvider.refresh();
+	};
+
+	// --- Config watcher ---
+
+	const configWatcher = createConfigWatcher({
+		getLogger: () => logger,
+		brickRegistry,
+		sessionManager,
+		profileStore,
+		ensureFullFsModeConfirmation,
+		resolveMockDiscoveryEnabled: isMockDiscoveryEnabled,
+		onMockDiscoveryChanged: async (enabled) => {
+			if (!enabled) {
+				await purgeMockBricks('mock-discovery-disabled');
+			} else {
+				brickPanelProvider.refresh();
+			}
+		}
+	});
+	if (!isMockDiscoveryEnabled()) {
+		void purgeMockBricks('mock-discovery-disabled');
+	}
 	const connectionHealthSubscription = createConnectionHealthPoller(
 		brickRegistry,
 		sessionManager,
@@ -661,6 +703,7 @@ export function activate(context: vscode.ExtensionContext) {
 		setBricksTreeFilter,
 		clearBricksTreeFilter,
 		retryDirectoryFromTree,
+		openBrickPanel,
 		mockRegistrations.mockReset,
 		mockRegistrations.mockShowState,
 		configWatcher,

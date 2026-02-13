@@ -8,7 +8,7 @@ import type { BrickSettingsService } from './brickSettingsService';
 import type { RemoteFsService } from '../fs/remoteFsService';
 import type { TransportMode } from '../transport/transportFactory';
 
-export type BrickRole = 'master' | 'standalone' | 'unknown';
+export type BrickRole = 'master' | 'slave' | 'standalone' | 'unknown';
 export type BrickStatus = 'AVAILABLE' | 'CONNECTING' | 'READY' | 'UNAVAILABLE' | 'ERROR';
 
 export interface BrickStatusChangeEvent {
@@ -427,6 +427,22 @@ export class BrickRegistry {
 			return left.displayName.localeCompare(right.displayName);
 		});
 		return snapshots;
+	}
+
+	public removeWhere(predicate: (record: BrickRuntimeRecord) => boolean): string[] {
+		const removed: string[] = [];
+		for (const [brickId, record] of this.records.entries()) {
+			if (!predicate(record)) {
+				continue;
+			}
+			this.records.delete(brickId);
+			removed.push(brickId);
+			if (this.activeBrickId === brickId) {
+				this.activeBrickId = undefined;
+			}
+		}
+		this.syncActiveFlags();
+		return removed;
 	}
 
 	public resolveFsService(brickId: string): RemoteFsService | undefined {

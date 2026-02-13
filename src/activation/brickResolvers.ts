@@ -12,6 +12,7 @@ import { DeployTargetContext } from '../commands/deployTypes';
 import { isBrickRootNode, isBrickDirectoryNode, isBrickFileNode } from '../ui/brickTreeProvider';
 import { ConnectedBrickDescriptor, normalizeBrickRootPath, toSafeIdentifier } from './helpers';
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
+import { resolveMockDisplayName, resolveMockRole } from '../mock/mockCatalog';
 
 export interface BrickResolvers {
 	resolveProbeTimeoutMs(): number;
@@ -136,7 +137,7 @@ export function createBrickResolvers(deps: {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const transport = profile?.transport.mode ?? resolveCurrentTransportMode();
 		const normalizedRootPath = normalizeBrickRootPath(profile?.rootPath ?? rootPath);
-		const role: BrickRole = 'standalone';
+		let role: BrickRole = 'standalone';
 		const profileDisplayName = normalizeBrickNameCandidate(profile?.displayName);
 
 		if (transport === 'tcp') {
@@ -182,9 +183,11 @@ export function createBrickResolvers(deps: {
 		}
 
 		if (transport === 'mock') {
+			const mockBrickId = profile?.brickId?.startsWith('mock-') ? profile.brickId : 'mock-active';
+			role = resolveMockRole(mockBrickId);
 			return {
-				brickId: 'mock-active',
-				displayName: profileDisplayName ?? 'EV3 Mock',
+				brickId: mockBrickId,
+				displayName: profileDisplayName ?? resolveMockDisplayName(mockBrickId),
 				role,
 				transport,
 				rootPath: normalizedRootPath

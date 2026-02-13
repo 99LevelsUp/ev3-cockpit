@@ -19,7 +19,9 @@
     "Other"
   ],
   "activationEvents": [
-    "onFileSystem:ev3"
+    "onFileSystem:ev3",
+    "onView:ev3-cockpit.brick",
+    "onCommand:ev3-cockpit.openBrickPanel"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -188,6 +190,10 @@
       {
         "command": "ev3-cockpit.mock.showState",
         "title": "EV3 Cockpit: Show Mock State"
+      },
+      {
+        "command": "ev3-cockpit.openBrickPanel",
+        "title": "EV3 Cockpit: Open Brick Panel"
       }
     ],
     "viewsContainers": {
@@ -409,10 +415,10 @@
           ],
           "description": "Transport mode for connect probe. Auto tries USB, then TCP, then Bluetooth, then mock fallback."
         },
-        "ev3-cockpit.ui.discovery.showMockBricks": {
+        "ev3-cockpit.mock": {
           "type": "boolean",
           "default": false,
-          "description": "Show mock Brick in the + discovery list even when no mock Brick is currently connected."
+          "description": "Make mock Bricks available."
         },
         "ev3-cockpit.transport.timeoutMs": {
           "type": "number",
@@ -799,14 +805,16 @@
     "test:vsix-smoke": "node scripts/vsix-smoke.cjs",
     "lint": "eslint src --ext ts",
     "test": "npm run test:unit",
+    "test:pw": "npx playwright test",
+    "test:pw:smoke": "npx playwright test --grep @smoke",
     "test:unit": "npm run compile && node scripts/run-unit-tests.cjs",
     "test:host": "npm run compile && node out/testHost/runTestHost.js",
     "test:hw": "npm run compile && node out/hw/hardwareSmoke.js",
     "test:hw:matrix": "npm run compile && node out/hw/hardwareMatrix.js",
     "test:hw:all": "npm run test:hw && npm run test:hw:matrix",
-    "test:ci": "npm run compile && npm run lint && npm run test:unit && npm run test:host",
+    "test:ci": "npm run compile && npm run lint && npm run test:unit && npm run test:host && npm run test:pw:smoke",
     "test:ci:release": "npm run test:ci && npm run package && npm run check:bundle-size && npm run package:vsix && npm run test:vsix-smoke",
-    "test:all": "npm run test:unit && npm run test:host && npm run test:hw"
+    "test:all": "npm run test:unit && npm run test:host && npm run test:pw && npm run test:hw"
   },
   "optionalDependencies": {
     "node-hid": "^3.1.2",

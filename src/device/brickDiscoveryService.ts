@@ -4,6 +4,7 @@ import type { BrickRegistry } from './brickRegistry';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
 import type { SerialCandidate } from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
+import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 
 export interface DiscoveryTransportScanners {
 	listUsbHidCandidates: () => Promise<Array<{ path: string; serialNumber?: string }>>;
@@ -18,6 +19,7 @@ export interface DiscoveryTransportScanners {
 
 export interface DiscoveryConfig {
 	showMockBricks: boolean;
+	mockBricks: MockBrickDefinition[];
 	tcpDiscoveryPort: number;
 	tcpDiscoveryTimeoutMs: number;
 	preferredBluetoothPort?: string;
@@ -96,6 +98,9 @@ export class BrickDiscoveryService {
 			candidate: BrickPanelDiscoveryCandidate,
 			profile?: BrickConnectionProfile
 		): void => {
+			if (!config.showMockBricks && isMockBrickId(candidate.candidateId)) {
+				return;
+			}
 			const normalizedCandidateId = candidate.candidateId.trim().toLowerCase();
 			if (normalizedCandidateId === 'active') {
 				return;
@@ -262,26 +267,36 @@ export class BrickDiscoveryService {
 		}
 
 		// Mock brick
-		if (config.showMockBricks && !seenCandidateIds.has('mock-active')) {
-			const snapshot = brickRegistry.getSnapshot('mock-active');
-			const rememberedProfile = profileStore.get('mock-active');
-			const fallbackDisplayName = rememberedProfile?.displayName?.trim() || 'EV3 Mock';
-			const displayName = resolvePreferredDisplayName('mock-active', fallbackDisplayName);
-			const profile: BrickConnectionProfile = rememberedProfile ?? {
-				brickId: 'mock-active',
-				displayName,
-				savedAtIso: nowIso,
-				rootPath: defaultRoot,
-				transport: { mode: 'mock' }
-			};
-			registerCandidate({
-				candidateId: 'mock-active',
-				displayName,
-				transport: 'mock',
-				detail: 'Mock',
-				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
-				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-			}, profile);
+		if (config.showMockBricks) {
+			for (const mock of config.mockBricks) {
+				if (seenCandidateIds.has(mock.brickId)) {
+					continue;
+				}
+				const snapshot = brickRegistry.getSnapshot(mock.brickId);
+				const rememberedProfile = profileStore.get(mock.brickId);
+				const fallbackDisplayName = mock.displayName;
+				const displayName = resolvePreferredDisplayName(mock.brickId, fallbackDisplayName);
+				const profile: BrickConnectionProfile = rememberedProfile ?? {
+					brickId: mock.brickId,
+					displayName,
+					savedAtIso: nowIso,
+					rootPath: defaultRoot,
+					transport: { mode: 'mock' }
+				};
+				const detail = mock.role === 'master'
+					? 'Mock | master'
+					: mock.parentDisplayName
+						? `Mock | slave of ${mock.parentDisplayName}`
+						: 'Mock | slave';
+				registerCandidate({
+					candidateId: mock.brickId,
+					displayName,
+					transport: 'mock',
+					detail,
+					status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
+					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+				}, profile);
+			}
 		}
 
 		// Sort

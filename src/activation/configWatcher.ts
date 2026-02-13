@@ -20,6 +20,8 @@ export function createConfigWatcher(deps: {
 	sessionManager: BrickSessionManager<any, any, any>;
 	profileStore: BrickConnectionProfileStore;
 	ensureFullFsModeConfirmation: () => Promise<boolean>;
+	resolveMockDiscoveryEnabled?: () => boolean;
+	onMockDiscoveryChanged?: (enabled: boolean) => Promise<void> | void;
 }): vscode.Disposable {
 	let reconnectPromptInFlight = false;
 	const affectsRuntimeReconnectConfig = (event: vscode.ConfigurationChangeEvent): boolean => {
@@ -86,6 +88,14 @@ export function createConfigWatcher(deps: {
 				if (!confirmed) {
 					return;
 				}
+			}
+
+			if (
+				deps.onMockDiscoveryChanged
+				&& deps.resolveMockDiscoveryEnabled
+				&& (event.affectsConfiguration('ev3-cockpit.mock') || event.affectsConfiguration('ev3-cockpit.ui.discovery.showMockBricks'))
+			) {
+				await deps.onMockDiscoveryChanged(deps.resolveMockDiscoveryEnabled());
 			}
 
 			if (event.affectsConfiguration('ev3-cockpit')) {

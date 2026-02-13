@@ -113,6 +113,33 @@ export class BrickConnectionProfileStore {
 		return [...this.profilesByBrickId.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
 	}
 
+	public async remove(brickId: string): Promise<boolean> {
+		const normalized = brickId.trim();
+		if (!normalized) {
+			return false;
+		}
+		const removed = this.profilesByBrickId.delete(normalized);
+		if (removed) {
+			await this.saveToStorage();
+		}
+		return removed;
+	}
+
+	public async removeWhere(predicate: (profile: BrickConnectionProfile) => boolean): Promise<number> {
+		let removed = 0;
+		for (const [brickId, profile] of this.profilesByBrickId.entries()) {
+			if (!predicate(profile)) {
+				continue;
+			}
+			this.profilesByBrickId.delete(brickId);
+			removed += 1;
+		}
+		if (removed > 0) {
+			await this.saveToStorage();
+		}
+		return removed;
+	}
+
 	public async upsert(profile: BrickConnectionProfile): Promise<void> {
 		const sanitized = sanitizeProfile(profile);
 		if (!sanitized.brickId) {
