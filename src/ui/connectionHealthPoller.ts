@@ -169,7 +169,7 @@ export function createConnectionHealthPoller(
 			return false;
 		}
 		const reason = (snapshot.lastError ?? '').trim();
-		return reason.startsWith('Connection lost:');
+		return !reason.startsWith('Disconnected by user');
 	};
 
 	const maybeRequestReconnect = async (brickId: string): Promise<void> => {

@@ -695,9 +695,15 @@ export function activate(context: vscode.ExtensionContext) {
 				context.extensionMode === vscode.ExtensionMode.Test
 					? undefined
 					: async (brickId) => {
-						const usbReady = await isUsbReconnectCandidateAvailable(brickId);
-						if (!usbReady) {
+						const profile = profileStore.get(brickId);
+						if (!profile) {
 							return;
+						}
+						if (profile.transport.mode === 'usb') {
+							const usbReady = await isUsbReconnectCandidateAvailable(brickId);
+							if (!usbReady) {
+								return;
+							}
 						}
 						await vscode.commands.executeCommand('ev3-cockpit.connectEV3', {
 							brickId,
