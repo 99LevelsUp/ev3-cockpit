@@ -34,7 +34,7 @@ export interface TransportChunkConfig {
 	/** Chunk size for USB HID transport (high throughput, low latency). */
 	usb: number;
 	/** Chunk size for Bluetooth SPP transport (limited bandwidth). */
-	bluetooth: number;
+	bt: number;
 	/** Chunk size for TCP transport (variable bandwidth). */
 	tcp: number;
 	/** Fallback chunk size when transport type is unknown. */
@@ -43,12 +43,12 @@ export interface TransportChunkConfig {
 
 export const DEFAULT_TRANSPORT_CHUNK_BYTES: Readonly<TransportChunkConfig> = {
 	usb: 1000,
-	bluetooth: 512,
+	bt: 512,
 	tcp: 1000,
 	fallback: 768
 };
 
-export type TransportType = 'usb' | 'bluetooth' | 'tcp' | 'unknown';
+export type TransportType = 'usb' | 'bt' | 'tcp' | 'unknown';
 
 export function resolveTransportChunkBytes(
 	transportType: TransportType,
@@ -57,8 +57,8 @@ export function resolveTransportChunkBytes(
 	switch (transportType) {
 		case 'usb':
 			return config.usb;
-		case 'bluetooth':
-			return config.bluetooth;
+		case 'bt':
+			return config.bt;
 		case 'tcp':
 			return config.tcp;
 		default:

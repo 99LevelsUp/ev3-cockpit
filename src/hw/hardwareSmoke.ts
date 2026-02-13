@@ -16,9 +16,9 @@ import { TcpAdapter } from '../transport/tcpAdapter';
 import { TransportAdapter } from '../transport/transportAdapter';
 import { UsbHidAdapter } from '../transport/usbHidAdapter';
 
-type TransportKind = 'usb' | 'tcp' | 'bluetooth';
+type TransportKind = 'usb' | 'tcp' | 'bt';
 type HardwareStatus = 'PASS' | 'SKIP' | 'FAIL';
-const TRANSPORT_ORDER: TransportKind[] = ['usb', 'tcp', 'bluetooth'];
+const TRANSPORT_ORDER: TransportKind[] = ['usb', 'tcp', 'bt'];
 
 export interface HardwareSummary {
 	pass: number;
@@ -115,7 +115,7 @@ const DEFAULT_RUN_FIXTURE_REMOTE_PATH = '/home/root/lms2012/prjs/ev3-cockpit-hw-
 const CONNECT_WARN_THRESHOLD_MS: Record<TransportKind, number> = {
 	usb: 800,
 	tcp: 1_500,
-	bluetooth: 3_500
+	bt: 3_500
 };
 
 const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
@@ -142,7 +142,7 @@ const UNAVAILABLE_PATTERNS: Record<TransportKind, RegExp[]> = {
 		/transport is not open/i,
 		/adapter is not open/i
 	],
-	bluetooth: [
+	bt: [
 		/requires package "serialport"/i,
 		/could not resolve any serial com candidates/i,
 		/non-empty serial port path/i,
@@ -406,8 +406,12 @@ export function resolveHardwareTransportsFromEnv(
 		if (!normalized) {
 			continue;
 		}
-		if (normalized === 'usb' || normalized === 'tcp' || normalized === 'bluetooth') {
+		if (normalized === 'usb' || normalized === 'tcp' || normalized === 'bt') {
 			seen.add(normalized);
+			continue;
+		}
+		if (normalized === 'bluetooth') {
+			seen.add('bt');
 			continue;
 		}
 		unknown.push(normalized);
@@ -417,7 +421,7 @@ export function resolveHardwareTransportsFromEnv(
 	if (transports.length === 0) {
 		return {
 			transports: [...TRANSPORT_ORDER],
-			warning: `EV3_COCKPIT_HW_TRANSPORTS="${raw}" did not contain valid transports (usb,tcp,bluetooth). Falling back to all.`
+			warning: `EV3_COCKPIT_HW_TRANSPORTS="${raw}" did not contain valid transports (usb,tcp,bt). Falling back to all.`
 		};
 	}
 
@@ -1356,7 +1360,7 @@ async function runBluetoothCase(
 	const runSpec = runSpecResolution.spec;
 	if (runSpecResolution.error) {
 		return {
-			transport: 'bluetooth',
+			transport: 'bt',
 			status: 'FAIL',
 			reason: runSpecResolution.error
 		};
@@ -1369,13 +1373,13 @@ async function runBluetoothCase(
 	if (ports.length === 0) {
 		if (bluetoothStrictModeEnabled) {
 			return {
-				transport: 'bluetooth',
+				transport: 'bt',
 				status: 'FAIL',
 				reason: 'Bluetooth strict mode: no COM candidates found.'
 			};
 		}
 		return {
-			transport: 'bluetooth',
+			transport: 'bt',
 			status: 'SKIP',
 			reason: 'Bluetooth transport unavailable (no COM candidates found).'
 		};
@@ -1417,7 +1421,7 @@ async function runBluetoothCase(
 								const runCheck = await runProgramCheckWithClient(client, timeoutMs, probe.capability, runSpec);
 								if (!runCheck.ok) {
 									return mapPostProbeCheckFailure(
-										'bluetooth',
+										'bt',
 										'Program run check',
 										runCheck.message ?? 'unknown error'
 									);
@@ -1428,7 +1432,7 @@ async function runBluetoothCase(
 								const stopCheck = await runEmergencyStopCheckWithClient(client, timeoutMs);
 								if (!stopCheck.ok) {
 									return mapPostProbeCheckFailure(
-										'bluetooth',
+										'bt',
 										'Emergency stop check',
 										stopCheck.message ?? 'unknown error'
 									);
@@ -1447,7 +1451,7 @@ async function runBluetoothCase(
 							);
 							if (!reconnectCheck.ok) {
 								return mapPostProbeCheckFailure(
-									'bluetooth',
+									'bt',
 									'Reconnect recovery check',
 									reconnectCheck.message ?? 'unknown error'
 								);
@@ -1456,7 +1460,7 @@ async function runBluetoothCase(
 
 						if (reconnectCheckEnabled && reconnectDriverDropCheckEnabled) {
 							const driverDropCheck = await runDriverDropRecoveryCheck(
-								'bluetooth',
+								'bt',
 								createAdapter,
 								timeoutMs,
 								reconnectDriverDropWindowMs,
@@ -1465,20 +1469,20 @@ async function runBluetoothCase(
 							if (driverDropCheck.skipped) {
 								if (bluetoothStrictModeEnabled) {
 									return {
-										transport: 'bluetooth',
+										transport: 'bt',
 										status: 'FAIL',
 										reason: `Bluetooth strict mode: driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
 									};
 								}
 								return {
-									transport: 'bluetooth',
+									transport: 'bt',
 									status: 'SKIP',
 									reason: `Bluetooth driver-drop reconnect check skipped (${driverDropCheck.message ?? 'no disconnect observed'}).`
 								};
 							}
 							if (!driverDropCheck.ok) {
 								return mapPostProbeCheckFailure(
-									'bluetooth',
+									'bt',
 									'Reconnect driver-drop check',
 									driverDropCheck.message ?? 'unknown error'
 								);
@@ -1486,7 +1490,7 @@ async function runBluetoothCase(
 						}
 
 						return {
-							transport: 'bluetooth',
+							transport: 'bt',
 							status: 'PASS',
 							reason: runSpec
 								? emergencyStopCheckEnabled
@@ -1546,23 +1550,23 @@ async function runBluetoothCase(
 		process.removeListener('uncaughtException', uncaughtHandler);
 	}
 
-	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('bluetooth', message))) {
+	if (failures.length > 0 && failures.every((message) => isLikelyUnavailableError('bt', message))) {
 		if (bluetoothStrictModeEnabled) {
 			return {
-				transport: 'bluetooth',
+				transport: 'bt',
 				status: 'FAIL',
 				reason: `Bluetooth strict mode: unavailable failures observed (${failures[0]}).`
 			};
 		}
 		return {
-			transport: 'bluetooth',
+			transport: 'bt',
 			status: 'SKIP',
 			reason: `Bluetooth transport unavailable (${failures[0]}).`
 		};
 	}
 
 	return {
-		transport: 'bluetooth',
+		transport: 'bt',
 		status: 'FAIL',
 		reason: failures.join(' | ')
 	};

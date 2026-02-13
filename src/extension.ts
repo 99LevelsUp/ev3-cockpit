@@ -146,7 +146,7 @@ export function activate(context: vscode.ExtensionContext) {
 		return {
 			mode: profile.transport.mode,
 			usbPath: profile.transport.usbPath,
-			bluetoothPort: profile.transport.bluetoothPort,
+			btPort: profile.transport.btPort,
 			tcpHost: profile.transport.tcpHost,
 			tcpPort: profile.transport.tcpPort,
 			tcpUseDiscovery: profile.transport.tcpUseDiscovery,
@@ -362,14 +362,14 @@ export function activate(context: vscode.ExtensionContext) {
 		profile?: BrickConnectionProfile
 	): BrickPanelDiscoveryCandidate['transport'] => {
 		const mode = profile?.transport.mode;
-		if (mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock') {
+		if (mode === 'usb' || mode === 'bt' || mode === 'tcp' || mode === 'mock') {
 			return mode;
 		}
 		if (brickId.startsWith('usb-')) {
 			return 'usb';
 		}
-		if (brickId.startsWith('bluetooth-')) {
-			return 'bluetooth';
+		if (brickId.startsWith('bt-')) {
+			return 'bt';
 		}
 		if (brickId.startsWith('tcp-')) {
 			return 'tcp';
@@ -388,8 +388,8 @@ export function activate(context: vscode.ExtensionContext) {
 		if (transport.mode === 'usb') {
 			return transport.usbPath?.trim() || undefined;
 		}
-		if (transport.mode === 'bluetooth') {
-			return transport.bluetoothPort?.trim() || undefined;
+		if (transport.mode === 'bt') {
+			return transport.btPort?.trim() || undefined;
 		}
 		if (transport.mode === 'tcp') {
 			const host = transport.tcpHost?.trim() || '';
@@ -615,29 +615,29 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!isLikelyEv3SerialCandidate(serialCandidate, preferredBluetoothPort)) {
 				continue;
 			}
-			const bluetoothPort = rawPath.toUpperCase();
-			const brickId = `bluetooth-${toSafeIdentifier(bluetoothPort)}`;
+			const btPort = rawPath.toUpperCase();
+			const brickId = `bt-${toSafeIdentifier(btPort)}`;
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const manufacturer = serialCandidate.manufacturer?.trim();
-			const fallbackDisplayName = `EV3 Bluetooth (${bluetoothPort})`;
+			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
 			const detail = manufacturer
-				? `${manufacturer} | ${bluetoothPort}`
-				: bluetoothPort;
+				? `${manufacturer} | ${btPort}`
+				: btPort;
 			const profile: BrickConnectionProfile = {
 				brickId,
 				displayName,
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
 				transport: {
-					mode: 'bluetooth',
-					bluetoothPort
+					mode: 'bt',
+					btPort
 				}
 			};
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
-				transport: 'bluetooth',
+				transport: 'bt',
 				detail,
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
@@ -734,7 +734,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
 			usb: 0,
-			bluetooth: 1,
+			bt: 1,
 			tcp: 2,
 			mock: 3,
 			unknown: 4

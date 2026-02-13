@@ -56,7 +56,7 @@ export function createBrickResolvers(deps: {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const modeRaw = cfg.get('transport.mode');
 		const mode: TransportMode =
-			modeRaw === 'usb' || modeRaw === 'bluetooth' || modeRaw === 'tcp' || modeRaw === 'mock'
+			modeRaw === 'usb' || modeRaw === 'bt' || modeRaw === 'tcp' || modeRaw === 'mock'
 				? modeRaw
 				: 'usb';
 
@@ -65,7 +65,7 @@ export function createBrickResolvers(deps: {
 		const btProbe =
 			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : DEFAULT_BT_PROBE_TIMEOUT_MS;
 
-		if (mode === 'bluetooth') {
+		if (mode === 'bt') {
 			return Math.max(base, btProbe);
 		}
 
@@ -127,7 +127,7 @@ export function createBrickResolvers(deps: {
 	const resolveCurrentTransportMode = (): TransportMode | 'unknown' => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const mode = cfg.get('transport.mode');
-		return mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock'
+		return mode === 'usb' || mode === 'bt' || mode === 'tcp' || mode === 'mock'
 			? mode
 			: 'unknown';
 	};
@@ -155,12 +155,12 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
-		if (transport === 'bluetooth') {
-			const portRaw = profile?.transport.bluetoothPort ?? cfg.get('transport.bluetooth.port');
+		if (transport === 'bt') {
+			const portRaw = profile?.transport.btPort ?? cfg.get('transport.bluetooth.port');
 			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
 			const fallbackDisplayName = `EV3 Bluetooth (${port})`;
 			return {
-				brickId: `bluetooth-${toSafeIdentifier(port)}`,
+				brickId: `bt-${toSafeIdentifier(port)}`,
 				displayName: profileDisplayName ?? fallbackDisplayName,
 				role,
 				transport,

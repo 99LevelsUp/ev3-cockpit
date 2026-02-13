@@ -16,7 +16,7 @@ import {
 import { UsbHidAdapter } from './usbHidAdapter';
 import { listSerialCandidates, listUsbHidCandidates } from './discovery';
 
-export type TransportMode = 'usb' | 'bluetooth' | 'tcp' | 'mock';
+export type TransportMode = 'usb' | 'bt' | 'tcp' | 'mock';
 
 interface ConfigurationReader {
 	get<T>(section: string, defaultValue?: T): T;
@@ -25,7 +25,7 @@ interface ConfigurationReader {
 export interface TransportConfigOverrides {
 	mode?: TransportMode;
 	usbPath?: string;
-	bluetoothPort?: string;
+	btPort?: string;
 	tcpHost?: string;
 	tcpPort?: number;
 	tcpUseDiscovery?: boolean;
@@ -277,7 +277,7 @@ function sanitizeNumber(value: unknown, fallback: number, min: number): number {
 }
 
 function sanitizeTransportMode(value: unknown): TransportMode {
-	if (value === 'usb' || value === 'bluetooth' || value === 'tcp' || value === 'mock') {
+	if (value === 'usb' || value === 'bt' || value === 'tcp' || value === 'mock') {
 		return value;
 	}
 
@@ -428,8 +428,8 @@ export function createProbeTransportForMode(
 		return createUsbTransport(cfg);
 	}
 
-	if (mode === 'bluetooth') {
-		logger.info('Using Bluetooth transport for connect probe (ev3-cockpit.transport.mode=bluetooth).');
+	if (mode === 'bt') {
+		logger.info('Using Bluetooth transport for connect probe (ev3-cockpit.transport.mode=bt).');
 		return createBluetoothTransport(cfg, logger);
 	}
 
@@ -465,7 +465,7 @@ export function createProbeTransportFromWorkspace(
 				const overrideMap: Partial<Record<typeof mappedKey, unknown>> = {
 					mode: overrides.mode,
 					usbpath: overrides.usbPath,
-					bluetoothport: overrides.bluetoothPort,
+					bluetoothport: overrides.btPort,
 					tcphost: overrides.tcpHost,
 					tcpport: overrides.tcpPort,
 					tcpusediscovery: overrides.tcpUseDiscovery,

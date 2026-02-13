@@ -42,10 +42,10 @@ function isTransportLikelyUnavailable(message: string): boolean {
 }
 
 async function runTransportProbe(
-	mode: 'usb' | 'tcp' | 'bluetooth',
+	mode: 'usb' | 'tcp' | 'bt',
 	logger: OutputChannelLogger,
 	resolveProbeTimeoutMs: () => number
-): Promise<{ mode: 'usb' | 'tcp' | 'bluetooth'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> {
+): Promise<{ mode: 'usb' | 'tcp' | 'bt'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> {
 	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 	const timeoutMs = resolveProbeTimeoutMs();
 	let probeScheduler: CommandScheduler | undefined;
@@ -100,7 +100,7 @@ async function runTransportProbe(
 	} catch (error) {
 		const message = toErrorMessage(error);
 		const diagnosticMessage = (() => {
-			if (mode !== 'bluetooth') {
+			if (mode !== 'bt') {
 				return message;
 			}
 			const classification = classifyBluetoothFailure(message);
@@ -167,12 +167,12 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 			serialCandidates
 		});
 
-		const probeModes: Array<'usb' | 'tcp' | 'bluetooth'> =
-			configuredMode === 'usb' || configuredMode === 'tcp' || configuredMode === 'bluetooth'
+		const probeModes: Array<'usb' | 'tcp' | 'bt'> =
+			configuredMode === 'usb' || configuredMode === 'tcp' || configuredMode === 'bt'
 				? [configuredMode]
-				: ['usb', 'tcp', 'bluetooth'];
+				: ['usb', 'tcp', 'bt'];
 
-		const results: Array<{ mode: 'usb' | 'tcp' | 'bluetooth'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> = [];
+		const results: Array<{ mode: 'usb' | 'tcp' | 'bt'; status: 'PASS' | 'SKIP' | 'FAIL'; message: string }> = [];
 		for (const mode of probeModes) {
 			const result = await runTransportProbe(mode, logger, options.resolveProbeTimeoutMs);
 			results.push(result);

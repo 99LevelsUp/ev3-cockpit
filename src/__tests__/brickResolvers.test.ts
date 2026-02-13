@@ -54,7 +54,7 @@ interface BrickResolversModule {
 			rootPath: string,
 			profile?: {
 				displayName?: string;
-				transport: { mode: 'usb' | 'bluetooth' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; bluetoothPort?: string; usbPath?: string };
+				transport: { mode: 'usb' | 'bt' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string };
 				rootPath?: string;
 			}
 		) => { brickId: string; displayName: string; transport: string; rootPath: string };
@@ -349,12 +349,12 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 			assert.match(tcp.displayName, /192\.168\.0\.10:5566/);
 
 			const bt = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
-				transport: { mode: 'bluetooth', bluetoothPort: 'COM9' },
+				transport: { mode: 'bt', btPort: 'COM9' },
 				rootPath: '/media/card/'
 			});
-			assert.equal(bt.transport, 'bluetooth');
+			assert.equal(bt.transport, 'bt');
 			assert.equal(bt.rootPath, '/media/card/');
-			assert.match(bt.brickId, /^bluetooth-/);
+			assert.match(bt.brickId, /^bt-/);
 
 			const usb = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
 				transport: { mode: 'usb', usbPath: 'hid#ev3' }
@@ -579,7 +579,7 @@ test('brickResolvers resolveProbeTimeoutMs uses bluetooth probe for bluetooth mo
 	await withMockedBrickResolvers(
 		{
 			configValues: {
-				'transport.mode': 'bluetooth',
+				'transport.mode': 'bt',
 				'transport.bluetooth.probeTimeoutMs': 12_000
 			},
 			schedulerTimeoutMs: 2_000

@@ -20,7 +20,7 @@ test('hardware matrix parser extracts case rows and summary counts', () => {
 	assert.equal(parsed.results[0].detail?.path, 'auto');
 	assert.equal(parsed.results[1].transport, 'tcp');
 	assert.equal(parsed.results[1].status, 'SKIP');
-	assert.equal(parsed.results[2].transport, 'bluetooth');
+	assert.equal(parsed.results[2].transport, 'bt');
 	assert.equal(parsed.results[2].status, 'FAIL');
 });
 

@@ -203,7 +203,7 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 		brickId: 'bt-a',
 		displayName: 'Other',
 		role: 'standalone',
-		transport: 'bluetooth',
+		transport: 'bt',
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
