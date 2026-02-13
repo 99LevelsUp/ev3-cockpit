@@ -576,13 +576,6 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 			async () => {
 				await withAutoDismissedBatchPrompts(async () => {
 					const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-					const connectWithPort = async (port: number): Promise<void> => {
-						await cfg.update('transport.tcp.port', port, vscode.ConfigurationTarget.Workspace);
-						await new Promise<void>((resolve) => setTimeout(resolve, 150));
-						await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
-						await new Promise<void>((resolve) => setTimeout(resolve, 500));
-					};
-
 					const remoteProjectRoot = buildRemoteProjectRoot(workspaceUri.fsPath, '/home/root/lms2012/prjs/');
 					const brickAId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerA.port}`)}`;
 					const brickBId = `tcp-${toSafeIdentifierForTest(`127.0.0.1:${fakeServerB.port}`)}`;
@@ -591,10 +584,28 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 					const brickAProgramUri = vscode.Uri.parse(`ev3://${brickAId}${remoteProjectRoot}/host-batch-main.rbf`);
 					const brickBProgramUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-batch-main.rbf`);
 
-					await connectWithPort(fakeServerA.port);
-					await connectWithPort(fakeServerB.port);
-					await vscode.workspace.fs.readDirectory(brickARootUri);
-					await vscode.workspace.fs.readDirectory(brickBRootUri);
+					const waitForBrickReady = async (brickRootUri: vscode.Uri): Promise<void> => {
+						const deadline = Date.now() + 5000;
+						while (Date.now() < deadline) {
+							try {
+								await vscode.workspace.fs.readDirectory(brickRootUri);
+								return;
+							} catch {
+								await new Promise<void>((resolve) => setTimeout(resolve, 150));
+							}
+						}
+						throw new Error(`Timed out waiting for ready brick: ${brickRootUri.toString()}`);
+					};
+
+					const connectWithPort = async (port: number, brickRootUri: vscode.Uri): Promise<void> => {
+						await cfg.update('transport.tcp.port', port, vscode.ConfigurationTarget.Workspace);
+						await new Promise<void>((resolve) => setTimeout(resolve, 150));
+						await vscode.commands.executeCommand('ev3-cockpit.connectEV3');
+						await waitForBrickReady(brickRootUri);
+					};
+
+					await connectWithPort(fakeServerA.port, brickARootUri);
+					await connectWithPort(fakeServerB.port, brickBRootUri);
 
 					await vscode.commands.executeCommand('ev3-cockpit.reconnectReadyBricks', [brickAId, brickBId]);
 					await vscode.workspace.fs.readDirectory(brickARootUri);
