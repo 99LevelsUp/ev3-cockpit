@@ -183,7 +183,7 @@ export function createBrickResolvers(deps: {
 		}
 
 		if (transport === 'mock') {
-			const mockBrickId = profile?.brickId?.startsWith('mock-') ? profile.brickId : 'mock-active';
+			const mockBrickId = profile?.brickId?.startsWith('mock-') ? profile.brickId : 'mock';
 			role = resolveMockRole(mockBrickId);
 			return {
 				brickId: mockBrickId,

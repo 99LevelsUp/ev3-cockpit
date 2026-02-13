@@ -389,14 +389,14 @@ test('BrickPanelProvider setMockConnection delegates to data source', async () =
 		);
 
 		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
-		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock-active', connected: false });
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock', connected: false });
 		await sleep(0);
-		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock-active', connected: true });
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock', connected: true });
 		await sleep(0);
 
 		assert.deepEqual(calls, [
-			{ candidateId: 'mock-active', connected: false },
-			{ candidateId: 'mock-active', connected: true }
+			{ candidateId: 'mock', connected: false },
+			{ candidateId: 'mock', connected: true }
 		]);
 		view.disposeHandler?.();
 	});

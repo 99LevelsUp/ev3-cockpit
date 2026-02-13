@@ -3,7 +3,9 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { buildMockBricksFromConfig } from '../src/mock/mockCatalog';
 const EXTENSION_DEV_PATH = path.resolve(__dirname, '..');
+const MOCK_CONFIG_PATH = path.resolve(EXTENSION_DEV_PATH, 'config', 'mock-bricks.json');
 
 async function createWorkspace(settings: Record<string, unknown>): Promise<string> {
 	const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-workspace-'));
@@ -11,6 +13,12 @@ async function createWorkspace(settings: Record<string, unknown>): Promise<strin
 	await fs.mkdir(vscodeDir, { recursive: true });
 	await fs.writeFile(path.join(vscodeDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
 	return workspaceRoot;
+}
+
+async function readMockNamesFromConfig(): Promise<string[]> {
+	const raw = await fs.readFile(MOCK_CONFIG_PATH, 'utf8');
+	const parsed = JSON.parse(raw) as unknown;
+	return buildMockBricksFromConfig(parsed).map((entry) => entry.displayName);
 }
 
 async function updateWorkspaceSettings(workspaceRoot: string, updates: Record<string, unknown>): Promise<void> {
@@ -183,6 +191,7 @@ test.describe('VS Code UI', () => {
 			'ev3-cockpit.transport.mode': 'usb',
 			'ev3-cockpit.mock': false
 		});
+		const expectedMockNames = await readMockNamesFromConfig();
 		const { app, tempRoot } = await launchVsCode(workspaceRoot);
 		try {
 			const page = await app.firstWindow();
@@ -207,23 +216,34 @@ test.describe('VS Code UI', () => {
 			await expect(webviewFrame.locator('.discovery-section')).toBeVisible({ timeout: 15000 });
 
 			// Verify mock bricks appear/disappear based on settings
-			const mockNames = ['Mock 1', 'Mock 1.1', 'Mock 1.1.1', 'Mock 2', 'Mock 2.1', 'Mock 2.2', 'Mock 3'];
-			const exactLabel = (name: string) =>
-				webviewFrame.locator('.discovery-main-label', { hasText: new RegExp(`^${name.replace(/\./g, '\\.')}$`) });
-
-			for (const name of mockNames) {
-				await expect(exactLabel(name)).toHaveCount(0);
-			}
-
-			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': true });
-			for (const name of mockNames) {
-				await expect(exactLabel(name)).toHaveCount(1, { timeout: 15000 });
-			}
+			const listMockNames = async (): Promise<string[]> => {
+				const items = webviewFrame.locator('.discovery-item');
+				const count = await items.count();
+				const names: string[] = [];
+				for (let i = 0; i < count; i += 1) {
+					const item = items.nth(i);
+					const transport = await item.getAttribute('data-transport');
+					const candidateId = (await item.getAttribute('data-candidate-id')) ?? '';
+					const isMock =
+						String(transport).toLowerCase() === 'mock'
+						|| candidateId.toLowerCase().startsWith('mock-');
+					if (!isMock) {
+						continue;
+					}
+					const label = await item.locator('.discovery-main-label').innerText();
+					names.push(label.trim());
+				}
+				return names;
+			};
 
 			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': false });
-			for (const name of mockNames) {
-				await expect(exactLabel(name)).toHaveCount(0, { timeout: 15000 });
-			}
+			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);
+
+			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': true });
+			await expect.poll(listMockNames, { timeout: 15000 }).toEqual(expectedMockNames);
+
+			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': false });
+			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);
 		} finally {
 			await app.close();
 			await fs.rm(tempRoot, { recursive: true, force: true });

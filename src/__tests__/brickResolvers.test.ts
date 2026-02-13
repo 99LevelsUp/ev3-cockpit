@@ -366,7 +366,7 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 				transport: { mode: 'mock' }
 			});
 			assert.equal(mock.transport, 'mock');
-			assert.equal(mock.brickId, 'mock-active');
+			assert.equal(mock.brickId, 'mock');
 		}
 	);
 });

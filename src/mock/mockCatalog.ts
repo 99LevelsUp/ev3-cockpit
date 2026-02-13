@@ -87,9 +87,6 @@ export function buildMockBricksFromConfig(raw: unknown): MockBrickDefinition[] {
 }
 
 export function resolveMockRole(brickId: string): BrickRole {
-	if (brickId === 'mock-active') {
-		return 'standalone';
-	}
 	const match = cachedMockBricks.find((entry) => entry.brickId === brickId);
 	if (match) {
 		return match.role;
@@ -101,13 +98,10 @@ export function resolveMockRole(brickId: string): BrickRole {
 }
 
 export function resolveMockDisplayName(brickId: string): string {
-	if (brickId === 'mock-active') {
-		return 'EV3 Mock';
-	}
 	const match = cachedMockBricks.find((entry) => entry.brickId === brickId);
 	return match?.displayName ?? brickId;
 }
 
 export function isMockBrickId(brickId: string): boolean {
-	return brickId === 'mock-active' || brickId.startsWith('mock-');
+	return brickId.startsWith('mock-');
 }
