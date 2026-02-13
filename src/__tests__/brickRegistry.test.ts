@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BrickRegistry } from '../device/brickRegistry';
+import { BrickRegistry, BrickStatusChangeEvent } from '../device/brickRegistry';
 
 const mockFs = { listDirectory: async () => ({ folders: [], files: [], path: '/', truncated: false, totalBytes: 0 }) } as never;
 const mockControl = { emergencyStopAll: async () => undefined } as never;
@@ -303,4 +303,73 @@ test('BrickRegistry.removeStale removes AVAILABLE bricks not in active set', () 
 	assert.ok(registry.getSnapshot('usb-001'));
 	assert.equal(registry.getSnapshot('usb-002'), undefined);
 	assert.ok(registry.getSnapshot('tcp-001'));
+});
+
+test('BrickRegistry.onStatusChange fires on status transitions', () => {
+	const registry = new BrickRegistry();
+	const events: BrickStatusChangeEvent[] = [];
+	registry.onStatusChange((e) => events.push(e));
+
+	registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(events.length, 1);
+	assert.equal(events[0].oldStatus, undefined);
+	assert.equal(events[0].newStatus, 'AVAILABLE');
+
+	registry.upsertConnecting({
+		brickId: 'usb-001',
+		displayName: 'EV3',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(events.length, 2);
+	assert.equal(events[1].oldStatus, 'AVAILABLE');
+	assert.equal(events[1].newStatus, 'CONNECTING');
+
+	registry.upsertReady({
+		brickId: 'usb-001',
+		displayName: 'EV3',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+	assert.equal(events.length, 3);
+	assert.equal(events[2].newStatus, 'READY');
+
+	registry.markUnavailable('usb-001', 'lost');
+	assert.equal(events.length, 4);
+	assert.equal(events[3].newStatus, 'UNAVAILABLE');
+});
+
+test('BrickRegistry.onStatusChange unsubscribe works', () => {
+	const registry = new BrickRegistry();
+	const events: BrickStatusChangeEvent[] = [];
+	const unsubscribe = registry.onStatusChange((e) => events.push(e));
+
+	registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(events.length, 1);
+
+	unsubscribe();
+	registry.upsertConnecting({
+		brickId: 'usb-001',
+		displayName: 'EV3',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(events.length, 1);
 });

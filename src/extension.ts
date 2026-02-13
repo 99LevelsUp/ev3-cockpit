@@ -112,7 +112,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
-			listBricks: () => sortSnapshotsForTree(brickRegistry.listSnapshots()),
+			listBricks: () => sortSnapshotsForTree(
+				brickRegistry.listSnapshots().filter((s) => s.status === 'READY')
+			),
 			getBrickSnapshot: (brickId) => brickRegistry.getSnapshot(brickId),
 			resolveFsService: async (brickId) => {
 				const service = brickRegistry.resolveFsService(brickId);

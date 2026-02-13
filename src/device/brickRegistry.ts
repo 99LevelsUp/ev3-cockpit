@@ -5,6 +5,15 @@ import type { TransportMode } from '../transport/transportFactory';
 export type BrickRole = 'master' | 'standalone' | 'unknown';
 export type BrickStatus = 'AVAILABLE' | 'CONNECTING' | 'READY' | 'UNAVAILABLE' | 'ERROR';
 
+export interface BrickStatusChangeEvent {
+	brickId: string;
+	oldStatus: BrickStatus | undefined;
+	newStatus: BrickStatus;
+	snapshot: BrickSnapshot;
+}
+
+export type BrickRegistryListener = (event: BrickStatusChangeEvent) => void;
+
 export interface BrickIdentity {
 	brickId: string;
 	displayName: string;
@@ -68,6 +77,29 @@ function cloneSnapshot(record: BrickRuntimeRecord): BrickSnapshot {
 export class BrickRegistry {
 	private readonly records = new Map<string, BrickRuntimeRecord>();
 	private activeBrickId: string | undefined;
+	private readonly listeners: BrickRegistryListener[] = [];
+
+	public onStatusChange(listener: BrickRegistryListener): () => void {
+		this.listeners.push(listener);
+		return () => {
+			const index = this.listeners.indexOf(listener);
+			if (index >= 0) {
+				this.listeners.splice(index, 1);
+			}
+		};
+	}
+
+	private fireStatusChange(brickId: string, oldStatus: BrickStatus | undefined, newStatus: BrickStatus): void {
+		const snapshot = this.getSnapshotOrThrow(brickId);
+		const event: BrickStatusChangeEvent = { brickId, oldStatus, newStatus, snapshot };
+		for (const listener of this.listeners) {
+			try {
+				listener(event);
+			} catch {
+				// swallow listener errors
+			}
+		}
+	}
 
 	private normalizeDisplayName(value: string): string {
 		return value.trim();
@@ -85,6 +117,7 @@ export class BrickRegistry {
 			this.records.set(identity.brickId, updated);
 			return cloneSnapshot(updated);
 		}
+		const oldStatus = existing?.status;
 		this.upsertRecord({
 			...identity,
 			status: 'AVAILABLE',
@@ -98,6 +131,9 @@ export class BrickRegistry {
 			fsService: undefined,
 			controlService: undefined
 		});
+		if (oldStatus !== 'AVAILABLE') {
+			this.fireStatusChange(identity.brickId, oldStatus, 'AVAILABLE');
+		}
 		return this.getSnapshotOrThrow(identity.brickId);
 	}
 
@@ -113,6 +149,7 @@ export class BrickRegistry {
 	}
 
 	public upsertConnecting(identity: BrickIdentity): BrickSnapshot {
+		const oldStatus = this.records.get(identity.brickId)?.status;
 		this.upsertRecord({
 			...identity,
 			status: 'CONNECTING',
@@ -128,10 +165,14 @@ export class BrickRegistry {
 		});
 		this.activeBrickId = identity.brickId;
 		this.syncActiveFlags();
+		if (oldStatus !== 'CONNECTING') {
+			this.fireStatusChange(identity.brickId, oldStatus, 'CONNECTING');
+		}
 		return this.getSnapshotOrThrow(identity.brickId);
 	}
 
 	public upsertReady(input: BrickRuntimeReadyInput): BrickSnapshot {
+		const oldStatus = this.records.get(input.brickId)?.status;
 		this.upsertRecord({
 			...input,
 			status: 'READY',
@@ -147,6 +188,9 @@ export class BrickRegistry {
 		});
 		this.activeBrickId = input.brickId;
 		this.syncActiveFlags();
+		if (oldStatus !== 'READY') {
+			this.fireStatusChange(input.brickId, oldStatus, 'READY');
+		}
 		return this.getSnapshotOrThrow(input.brickId);
 	}
 
@@ -162,7 +206,7 @@ export class BrickRegistry {
 		if (!existing) {
 			return undefined;
 		}
-
+		const oldStatus = existing.status;
 		const updated: BrickRuntimeRecord = {
 			...existing,
 			status: 'UNAVAILABLE',
@@ -182,11 +226,15 @@ export class BrickRegistry {
 			this.activeBrickId = undefined;
 		}
 		this.syncActiveFlags();
+		if (oldStatus !== 'UNAVAILABLE') {
+			this.fireStatusChange(brickId, oldStatus, 'UNAVAILABLE');
+		}
 		return cloneSnapshot(updated);
 	}
 
 	public markError(brickId: string, reason: string): BrickSnapshot {
 		const existing = this.records.get(brickId);
+		const oldStatus = existing?.status;
 		const fallback: BrickRuntimeRecord =
 			existing ?? {
 				brickId,
@@ -212,6 +260,9 @@ export class BrickRegistry {
 			controlService: undefined
 		};
 		this.records.set(brickId, updated);
+		if (oldStatus !== 'ERROR') {
+			this.fireStatusChange(brickId, oldStatus, 'ERROR');
+		}
 		return cloneSnapshot(updated);
 	}
 
