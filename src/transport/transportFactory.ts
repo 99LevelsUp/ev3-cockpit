@@ -16,7 +16,7 @@ import {
 import { UsbHidAdapter } from './usbHidAdapter';
 import { listSerialCandidates, listUsbHidCandidates } from './discovery';
 
-export type TransportMode = 'auto' | 'usb' | 'bluetooth' | 'tcp' | 'mock';
+export type TransportMode = 'usb' | 'bluetooth' | 'tcp' | 'mock';
 
 interface ConfigurationReader {
 	get<T>(section: string, defaultValue?: T): T;
@@ -30,11 +30,6 @@ export interface TransportConfigOverrides {
 	tcpPort?: number;
 	tcpUseDiscovery?: boolean;
 	tcpSerialNumber?: string;
-}
-
-interface CandidateFactory {
-	name: string;
-	create: () => TransportAdapter;
 }
 
 /** Maximum number of serial port open attempts for Bluetooth auto-port scanning. */
@@ -72,58 +67,6 @@ async function sleep(ms: number): Promise<void> {
 		return;
 	}
 	await new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-class AutoTransportAdapter implements TransportAdapter {
-	private active?: { name: string; adapter: TransportAdapter };
-
-	public constructor(
-		private readonly logger: OutputChannelLogger,
-		private readonly factories: CandidateFactory[]
-	) {}
-
-	public async open(): Promise<void> {
-		if (this.active) {
-			return;
-		}
-
-		const failures: string[] = [];
-		for (const candidate of this.factories) {
-			const adapter = candidate.create();
-			try {
-				await adapter.open();
-				this.active = { name: candidate.name, adapter };
-				this.logger.info('Auto transport selected candidate', {
-					transport: candidate.name
-				});
-				return;
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				failures.push(`${candidate.name}: ${message}`);
-				await adapter.close().catch(() => undefined);
-			}
-		}
-
-		throw new Error(`Auto transport failed. ${failures.join(' | ')}`);
-	}
-
-	public async close(): Promise<void> {
-		if (!this.active) {
-			return;
-		}
-
-		const active = this.active;
-		this.active = undefined;
-		await active.adapter.close();
-	}
-
-	public async send(packet: Uint8Array, options: TransportRequestOptions): Promise<Uint8Array> {
-		if (!this.active) {
-			throw new Error('Auto transport is not open.');
-		}
-
-		return this.active.adapter.send(packet, options);
-	}
 }
 
 class BluetoothAutoPortAdapter implements TransportAdapter {
@@ -334,11 +277,11 @@ function sanitizeNumber(value: unknown, fallback: number, min: number): number {
 }
 
 function sanitizeTransportMode(value: unknown): TransportMode {
-	if (value === 'auto' || value === 'usb' || value === 'bluetooth' || value === 'tcp' || value === 'mock') {
+	if (value === 'usb' || value === 'bluetooth' || value === 'tcp' || value === 'mock') {
 		return value;
 	}
 
-	return 'auto';
+	return 'usb';
 }
 
 function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAdapter {
@@ -495,26 +438,9 @@ export function createProbeTransportForMode(
 		return createTcpTransport(cfg, timeoutMs);
 	}
 
-	// auto mode: prefer USB, then TCP, then Bluetooth, fallback mock.
-	logger.info('Using auto transport selection for connect probe (USB -> TCP -> Bluetooth -> mock).');
-	return new AutoTransportAdapter(logger, [
-		{
-			name: 'usb',
-			create: () => createUsbTransport(cfg)
-		},
-		{
-			name: 'tcp',
-			create: () => createTcpTransport(cfg, timeoutMs)
-		},
-		{
-			name: 'bluetooth',
-			create: () => createBluetoothTransport(cfg, logger)
-		},
-		{
-			name: 'mock',
-			create: () => createMockProbeTransport(logger)
-		}
-	]);
+	// Fallback to USB when mode is unrecognized (sanitizeTransportMode already defaults to 'usb').
+	logger.info('Using USB transport for connect probe (fallback).');
+	return createUsbTransport(cfg);
 }
 
 export function createProbeTransportFromWorkspace(

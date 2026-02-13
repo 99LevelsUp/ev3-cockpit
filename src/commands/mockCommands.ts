@@ -16,7 +16,7 @@ export function registerMockCommands(): MockCommandRegistrations {
 
 	const mockShowState = vscode.commands.registerCommand('ev3-cockpit.mock.showState', async () => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const mode = cfg.get<string>('transport.mode', 'auto');
+		const mode = cfg.get<string>('transport.mode', 'usb');
 		const isMock = mode === 'mock';
 
 		const lines: string[] = [

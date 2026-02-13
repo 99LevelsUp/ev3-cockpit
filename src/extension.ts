@@ -562,16 +562,8 @@ export function activate(context: vscode.ExtensionContext) {
 			candidate: BrickPanelDiscoveryCandidate,
 			profile?: BrickConnectionProfile
 		): void => {
-			const transportMode = profile?.transport.mode?.trim().toLowerCase();
 			const normalizedCandidateId = candidate.candidateId.trim().toLowerCase();
-			const normalizedDisplayName = candidate.displayName.trim().toLowerCase();
-			const normalizedDetail = (candidate.detail ?? '').trim().toLowerCase();
-			if (
-				transportMode === 'auto'
-				|| normalizedCandidateId === 'active'
-				|| normalizedDisplayName === 'auto'
-				|| normalizedDetail === 'auto'
-			) {
+			if (normalizedCandidateId === 'active') {
 				return;
 			}
 			if (seenCandidateIds.has(candidate.candidateId)) {

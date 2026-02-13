@@ -64,13 +64,13 @@ test('BrickConnectionProfileStore ignores upsert with empty brickId', async () =
 			displayName: 'Ghost',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/home/',
-			transport: { mode: 'auto' }
+			transport: { mode: 'usb' }
 		});
 		assert.equal(store.list().length, 0);
 	});
 });
 
-test('BrickConnectionProfileStore sanitizes transport mode to auto for invalid value', async () => {
+test('BrickConnectionProfileStore sanitizes transport mode to usb for invalid value', async () => {
 	await withProfileModule(async ({ BrickConnectionProfileStore }) => {
 		const memento = createFakeMemento();
 		const store = new BrickConnectionProfileStore(memento);
@@ -83,7 +83,7 @@ test('BrickConnectionProfileStore sanitizes transport mode to auto for invalid v
 		});
 		const profile = store.get('brick-1');
 		assert.ok(profile);
-		assert.equal(profile.transport.mode, 'auto');
+		assert.equal(profile.transport.mode, 'usb');
 	});
 });
 
@@ -130,14 +130,14 @@ test('BrickConnectionProfileStore list returns sorted by displayName', async () 
 			displayName: 'Zeta Brick',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/',
-			transport: { mode: 'auto' }
+			transport: { mode: 'usb' }
 		});
 		await store.upsert({
 			brickId: 'a-brick',
 			displayName: 'Alpha Brick',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/',
-			transport: { mode: 'auto' }
+			transport: { mode: 'usb' }
 		});
 		const list = store.list();
 		assert.equal(list.length, 2);

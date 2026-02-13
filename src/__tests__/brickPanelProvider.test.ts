@@ -277,11 +277,15 @@ test('BrickPanelProvider.refresh includes motor info for active brick', async ()
 test('BrickPanelProvider applyConfigChanges posts configApplied on success', async () => {
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
 		let applyCount = 0;
+		let selectedBrickId = '';
 		const provider = new BrickPanelProvider(
 			{} as never,
 			{
 				listBricks: () => [],
-				setActiveBrick: () => false,
+				setActiveBrick: (brickId: string) => {
+					selectedBrickId = brickId;
+					return false;
+				},
 				applyPendingConfigChanges: async () => {
 					applyCount += 1;
 				}
@@ -290,9 +294,9 @@ test('BrickPanelProvider applyConfigChanges posts configApplied on success', asy
 		);
 
 		const view = createFakeWebviewView();
-		const messages: Array<{ type?: string }> = [];
+		const messages: Array<{ type?: string; brickId?: string }> = [];
 		view.webview.postMessage = async (msg) => {
-			messages.push(msg as { type?: string });
+			messages.push(msg as { type?: string; brickId?: string });
 			return true;
 		};
 
@@ -303,11 +307,12 @@ test('BrickPanelProvider applyConfigChanges posts configApplied on success', asy
 		);
 
 		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
-		view.receiveHandler?.({ type: 'applyConfigChanges' });
+		view.receiveHandler?.({ type: 'applyConfigChanges', brickId: 'brick-1' });
 		await sleep(0);
 
 		assert.equal(applyCount, 1);
-		assert.ok(messages.some((msg) => msg.type === 'configApplied'), 'Expected configApplied message.');
+		assert.equal(selectedBrickId, 'brick-1');
+		assert.ok(messages.some((msg) => msg.type === 'configApplied' && msg.brickId === 'brick-1'), 'Expected configApplied message.');
 
 		view.disposeHandler?.();
 	});
@@ -315,11 +320,15 @@ test('BrickPanelProvider applyConfigChanges posts configApplied on success', asy
 
 test('BrickPanelProvider discardConfigChanges posts configActionFailed on failure', async () => {
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		let selectedBrickId = '';
 		const provider = new BrickPanelProvider(
 			{} as never,
 			{
 				listBricks: () => [],
-				setActiveBrick: () => false,
+				setActiveBrick: (brickId: string) => {
+					selectedBrickId = brickId;
+					return false;
+				},
 				discardPendingConfigChanges: async () => {
 					throw new Error('discard failed');
 				}
@@ -328,9 +337,9 @@ test('BrickPanelProvider discardConfigChanges posts configActionFailed on failur
 		);
 
 		const view = createFakeWebviewView();
-		const messages: Array<{ type?: string; action?: string; message?: string }> = [];
+		const messages: Array<{ type?: string; action?: string; brickId?: string; message?: string }> = [];
 		view.webview.postMessage = async (msg) => {
-			messages.push(msg as { type?: string; action?: string; message?: string });
+			messages.push(msg as { type?: string; action?: string; brickId?: string; message?: string });
 			return true;
 		};
 
@@ -341,14 +350,54 @@ test('BrickPanelProvider discardConfigChanges posts configActionFailed on failur
 		);
 
 		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
-		view.receiveHandler?.({ type: 'discardConfigChanges' });
+		view.receiveHandler?.({ type: 'discardConfigChanges', brickId: 'brick-2' });
 		await sleep(0);
 
 		const failed = messages.find((msg) => msg.type === 'configActionFailed');
 		assert.ok(failed, 'Expected configActionFailed message.');
 		assert.equal(failed?.action, 'discard');
+		assert.equal(failed?.brickId, 'brick-2');
 		assert.equal(failed?.message, 'discard failed');
+		assert.equal(selectedBrickId, 'brick-2');
 
+		view.disposeHandler?.();
+	});
+});
+
+test('BrickPanelProvider setMockConnection delegates to data source', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		const calls: Array<{ candidateId: string; connected: boolean }> = [];
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => [],
+				setActiveBrick: () => false,
+				setMockConnection: async (candidateId, connected) => {
+					calls.push({ candidateId, connected });
+				}
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		view.webview.postMessage = async () => true;
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock-active', connected: false });
+		await sleep(0);
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock-active', connected: true });
+		await sleep(0);
+
+		assert.deepEqual(calls, [
+			{ candidateId: 'mock-active', connected: false },
+			{ candidateId: 'mock-active', connected: true }
+		]);
 		view.disposeHandler?.();
 	});
 });

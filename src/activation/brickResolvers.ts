@@ -56,9 +56,9 @@ export function createBrickResolvers(deps: {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const modeRaw = cfg.get('transport.mode');
 		const mode: TransportMode =
-			modeRaw === 'usb' || modeRaw === 'bluetooth' || modeRaw === 'tcp' || modeRaw === 'mock' || modeRaw === 'auto'
+			modeRaw === 'usb' || modeRaw === 'bluetooth' || modeRaw === 'tcp' || modeRaw === 'mock'
 				? modeRaw
-				: 'auto';
+				: 'usb';
 
 		const base = readSchedulerConfig().timeoutMs;
 		const btProbeRaw = cfg.get('transport.bluetooth.probeTimeoutMs');
@@ -127,7 +127,7 @@ export function createBrickResolvers(deps: {
 	const resolveCurrentTransportMode = (): TransportMode | 'unknown' => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const mode = cfg.get('transport.mode');
-		return mode === 'auto' || mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock'
+		return mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock'
 			? mode
 			: 'unknown';
 	};
@@ -191,11 +191,12 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
+		// Fallback to USB when transport mode is unknown.
 		return {
-			brickId: 'auto-active',
-			displayName: profileDisplayName ?? 'EV3 (Auto)',
+			brickId: 'usb-active',
+			displayName: profileDisplayName ?? 'EV3 USB',
 			role,
-			transport,
+			transport: 'usb' as TransportMode,
 			rootPath: normalizedRootPath
 		};
 	};

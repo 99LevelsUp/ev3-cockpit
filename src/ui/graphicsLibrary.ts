@@ -4,7 +4,6 @@ import type { BrickSnapshot } from '../device/brickRegistry';
 export type BrickTransportVisual = BrickSnapshot['transport'] | 'unknown';
 
 const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
-	auto: 'symbol-misc',
 	usb: 'plug',
 	bluetooth: 'plug',
 	tcp: 'broadcast',
@@ -13,7 +12,6 @@ const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
 };
 
 const TRANSPORT_WEBVIEW_ICON_SVG: Record<BrickTransportVisual, string> = {
-	auto: 'codicon:symbol-misc',
 	usb: 'codicon:plug',
 	bluetooth: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
 		+ '<path d="M7 2l4 3-4 3 4 3-4 3V2z" />'
@@ -43,8 +41,7 @@ const TAB_ACTION_WEBVIEW_ICON_SVG: Record<'close' | 'add' | 'settings' | 'apply'
 };
 
 function isBrickTransportVisual(value: string): value is BrickTransportVisual {
-	return value === 'auto'
-		|| value === 'usb'
+	return value === 'usb'
 		|| value === 'bluetooth'
 		|| value === 'tcp'
 		|| value === 'mock'

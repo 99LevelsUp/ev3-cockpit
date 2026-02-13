@@ -1,34 +1,31 @@
-# Copilot Instructions — EV3 Cockpit (PowerShell 7, autonomous execution)
+# Copilot Instructions for EV3 Cockpit
 
-## Environment
-- Shell: **PowerShell 7 (pwsh)**. Use PowerShell syntax for all commands.
-- Repo contains an untracked working folder **`.work/`** (gitignored). All working docs, checkpoints, logs, and generated architecture files MUST be stored there.
+## Build, Test, and Lint Commands
 
-## Primary sources of truth (MUST READ)
-Before doing any work, read these files (create `.work/` if missing):
-- `.work/IMPLEMENTATION.md`
-- `.work/EXECUTION_PLAN.md`
-- `.work/EXECUTION_PLAN_ATOMIC.md`
-- `.work/architecture.md`
+- **Build:**
+  - `npm run compile` — Compile TypeScript sources
+  - `npm run package` — Build production bundle (via esbuild)
+  - `npm run package:vsix` — Create VS Code extension package (.vsix)
+- **Lint:**
+  - `npm run lint` — Run ESLint on TypeScript sources
+- **Test:**
+  - `npm run test:unit` — Run unit tests
+  - `npm run test:host` — Run host integration tests
+  - `npm run test:hw` — Run hardware smoke tests (requires EV3 hardware)
+  - `npm run test:hw:matrix` — Run hardware matrix tests
+  - `npm run test:ci` — Compile, lint, unit, and host tests
+  - `npm run test:ci:release` — Full CI release gates (compile, lint, tests, bundle, vsix, smoke)
+  - **Single test:** Run `node scripts/run-unit-tests.cjs --grep <pattern>` for unit tests
 
-If any of these files are missing, stop and create a **BLOCKER** in `.work/BLOCKERS.md` describing what is missing and how to obtain it.
+## High-Level Architecture
 
-## Autonomy checkpoint files (MUST MAINTAIN)
-These files are the “state machine” that makes long autonomous work stable and resumable:
-- `.work/STATE.md`     — current status, completed steps, remaining work, risks
-- `.work/NEXT.md`      — EXACTLY ONE next atomic step to execute (with Step ID)
-- `.work/LOG.md`       — command outputs + short summaries (compile/lint/tests + paths to reports)
-- `.work/BACKLOG.md`   — parking lot for new tasks (DO NOT implement immediately)
-- `.work/BLOCKERS.md`  — anything that prevents forward progress
-- `.work/EV3IO_OCCURRENCES.md` — any leftover mentions of “ev3io” with path + line numbers
-
-### Startup / Resume protocol (for power outage)
-On every new session (or after failure):
-1) Ensure `.work/` exists.
-2) Read `.work/STATE.md`, `.work/NEXT.md`, `.work/LOG.md`.
-3) Reconstruct context ONLY from `.work/*` and the plan files (ignore prior chat history if conflicting).
-4) Continue with the step in `.work/NEXT.md`.
-5) If `.work/NEXT.md` is missing or unclear, pick the **first not-yet-DONE** step from `.work/EXECUTION_PLAN_ATOMIC.md`, then write it into `.work/NEXT.md`.
+- **VS Code Extension:**
+  - Provides EV3-specific commands, remote file system, and brick control via custom Explorer and webview panels
+  - Connects to EV3 Bricks via USB, Wi-Fi (TCP), or Bluetooth; supports mock mode for development
+  - Core runtime: command scheduler, transport abstraction, capability probe, error handling
+  - Remote file system: `ev3://active/...` and `ev3://<brickId>/...` for per-brick operations
+  - Brick view: status, sensors, motors, controls, and batch actions
+  - Test infrastructure: unit, host, hardware, and matrix tests
 
 ## Atomic execution loop (STRICT)
 You MUST work in **ultra-atomic** steps only:

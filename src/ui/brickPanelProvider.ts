@@ -1149,10 +1149,7 @@ ${codiconsLinkTag}
 			const detail = typeof candidate.detail === 'string'
 				? candidate.detail.trim().toLowerCase()
 				: '';
-			return candidateId === 'active'
-				|| displayName === 'auto'
-				|| detail === 'auto'
-				|| detail.startsWith('auto ');
+			return candidateId === 'active';
 		}
 
 		function setCandidateConnectionState(candidateId, status, alreadyConnected) {

@@ -16,10 +16,10 @@ interface ProfileStoreShape {
 }
 
 function sanitizeTransportMode(value: unknown): TransportMode {
-	if (value === 'auto' || value === 'usb' || value === 'bluetooth' || value === 'tcp' || value === 'mock') {
+	if (value === 'usb' || value === 'bluetooth' || value === 'tcp' || value === 'mock') {
 		return value;
 	}
-	return 'auto';
+	return 'usb';
 }
 
 function normalizeRootPath(path: string): string {

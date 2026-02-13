@@ -54,7 +54,7 @@ interface BrickResolversModule {
 			rootPath: string,
 			profile?: {
 				displayName?: string;
-				transport: { mode: 'auto' | 'usb' | 'bluetooth' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; bluetoothPort?: string; usbPath?: string };
+				transport: { mode: 'usb' | 'bluetooth' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; bluetoothPort?: string; usbPath?: string };
 				rootPath?: string;
 			}
 		) => { brickId: string; displayName: string; transport: string; rootPath: string };
@@ -109,7 +109,7 @@ function createScaffold(options: ScaffoldOptions): {
 	const logger = createLoggerMock();
 	const brickRegistry = createBrickRegistryMock(options);
 	const configValues: Record<string, unknown> = {
-		'transport.mode': 'auto',
+		'transport.mode': 'usb',
 		'transport.bluetooth.probeTimeoutMs': 8_000,
 		'fs.mode': 'safe',
 		'fs.fullMode.confirmationRequired': true,
@@ -604,15 +604,15 @@ test('brickResolvers resolveProbeTimeoutMs uses base timeout for non-bluetooth m
 	);
 });
 
-test('brickResolvers resolveConnectedBrickDescriptor auto transport returns auto-active id', async () => {
+test('brickResolvers resolveConnectedBrickDescriptor unknown transport falls back to usb', async () => {
 	await withMockedBrickResolvers(
-		{ configValues: { 'transport.mode': 'auto' } },
+		{ configValues: { 'transport.mode': 'unknown-value' } },
 		async ({ module, deps }) => {
 			const resolvers = module.createBrickResolvers(deps);
 			const desc = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/');
-			assert.equal(desc.brickId, 'auto-active');
-			assert.equal(desc.transport, 'auto');
-			assert.equal(desc.displayName, 'EV3 (Auto)');
+			assert.equal(desc.brickId, 'usb-active');
+			assert.equal(desc.transport, 'usb');
+			assert.equal(desc.displayName, 'EV3 USB');
 		}
 	);
 });

@@ -69,6 +69,10 @@ export class BrickRegistry {
 	private readonly records = new Map<string, BrickRuntimeRecord>();
 	private activeBrickId: string | undefined;
 
+	private normalizeDisplayName(value: string): string {
+		return value.trim();
+	}
+
 	public upsertConnecting(identity: BrickIdentity): BrickSnapshot {
 		this.upsertRecord({
 			...identity,
@@ -263,6 +267,47 @@ export class BrickRegistry {
 	public getSnapshot(brickId: string): BrickSnapshot | undefined {
 		const record = this.records.get(brickId);
 		return record ? cloneSnapshot(record) : undefined;
+	}
+
+	public updateDisplayName(brickId: string, displayName: string): BrickSnapshot | undefined {
+		const existing = this.records.get(brickId);
+		if (!existing) {
+			return undefined;
+		}
+		const nextDisplayName = this.normalizeDisplayName(displayName);
+		if (!nextDisplayName || existing.displayName === nextDisplayName) {
+			return cloneSnapshot(existing);
+		}
+		const updated: BrickRuntimeRecord = {
+			...existing,
+			displayName: nextDisplayName
+		};
+		this.records.set(brickId, updated);
+		return cloneSnapshot(updated);
+	}
+
+	public updateDisplayNameForMatching(currentDisplayName: string, nextDisplayName: string): string[] {
+		const normalizedCurrent = this.normalizeDisplayName(currentDisplayName);
+		const normalizedNext = this.normalizeDisplayName(nextDisplayName);
+		if (!normalizedCurrent || !normalizedNext) {
+			return [];
+		}
+		const updatedBrickIds: string[] = [];
+		for (const [brickId, existing] of this.records.entries()) {
+			if (this.normalizeDisplayName(existing.displayName).toLowerCase() !== normalizedCurrent.toLowerCase()) {
+				continue;
+			}
+			if (existing.displayName === normalizedNext) {
+				updatedBrickIds.push(brickId);
+				continue;
+			}
+			this.records.set(brickId, {
+				...existing,
+				displayName: normalizedNext
+			});
+			updatedBrickIds.push(brickId);
+		}
+		return updatedBrickIds;
 	}
 
 	public listSnapshots(): BrickSnapshot[] {

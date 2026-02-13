@@ -161,3 +161,57 @@ test('BrickRegistry.setActiveBrick returns false for unknown brick', () => {
 	// active brick unchanged
 	assert.equal(registry.getActiveBrickId(), 'brick-a');
 });
+
+test('BrickRegistry.updateDisplayName updates a single brick label', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'brick-a',
+		displayName: 'EV3 A',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	const updated = registry.updateDisplayName('brick-a', 'Alpha');
+	assert.equal(updated?.displayName, 'Alpha');
+	assert.equal(registry.getSnapshot('brick-a')?.displayName, 'Alpha');
+});
+
+test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'usb-a',
+		displayName: 'Shared',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+	registry.upsertReady({
+		brickId: 'tcp-a',
+		displayName: 'Shared',
+		role: 'standalone',
+		transport: 'tcp',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+	registry.upsertReady({
+		brickId: 'bt-a',
+		displayName: 'Other',
+		role: 'standalone',
+		transport: 'bluetooth',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	const updatedIds = registry.updateDisplayNameForMatching('shared', 'Renamed').sort();
+	assert.deepEqual(updatedIds, ['tcp-a', 'usb-a']);
+	assert.equal(registry.getSnapshot('usb-a')?.displayName, 'Renamed');
+	assert.equal(registry.getSnapshot('tcp-a')?.displayName, 'Renamed');
+	assert.equal(registry.getSnapshot('bt-a')?.displayName, 'Other');
+});
