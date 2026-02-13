@@ -4,45 +4,42 @@ import type { BrickSnapshot } from '../device/brickRegistry';
 export type BrickTransportVisual = BrickSnapshot['transport'] | 'unknown';
 
 const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
-	auto: 'question',
+	auto: 'symbol-misc',
 	usb: 'plug',
-	bluetooth: 'bluetooth',
-	tcp: 'rss',
+	bluetooth: 'plug',
+	tcp: 'broadcast',
 	mock: 'beaker',
 	unknown: 'question'
 };
 
-const UNKNOWN_TRANSPORT_ICON = '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
-	+ '<circle cx="8" cy="8" r="6" />'
-	+ '<path d="M6.8 6.3a1.8 1.8 0 1 1 2.5 1.7c-.8.3-1.3.9-1.3 1.7v.4" />'
-	+ '<path d="M8 12.2h0" />'
-	+ '</svg>';
-
 const TRANSPORT_WEBVIEW_ICON_SVG: Record<BrickTransportVisual, string> = {
-	auto: UNKNOWN_TRANSPORT_ICON,
-	// Keep USB icon aligned with the File System tree icon semantics ("plug").
-	usb: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
-		+ '<rect x="4.3" y="4.8" width="7.4" height="9" rx="1.6" />'
-		+ '<rect x="5.9" y="1.6" width="4.2" height="3.4" rx="0.5" />'
-		+ '<path d="M6.6 3h0" />'
-		+ '<path d="M9.4 3h0" />'
-		+ '<path d="M6 8.2h4" />'
-		+ '</svg>',
+	auto: 'codicon:symbol-misc',
+	usb: 'codicon:plug',
 	bluetooth: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
 		+ '<path d="M7 2l4 3-4 3 4 3-4 3V2z" />'
 		+ '<path d="M4 4l6 4-6 4" />'
 		+ '</svg>',
-	// Keep WiFi/TCP icon aligned with the tab icon already used in Brick panel.
-	tcp: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
-		+ '<path d="M2.5 6.5a7.5 7.5 0 0 1 11 0" />'
-		+ '<path d="M5 9.5a4.5 4.5 0 0 1 6 0" />'
-		+ '<path d="M7.1 12a1.4 1.4 0 0 1 1.8 0" />'
+	tcp: 'codicon:broadcast',
+	mock: '<svg viewBox="-12 -12 24 24" class="transport-icon-svg" aria-hidden="true">'
+		+ '<path d="M 3,2 V -2 A 1,1 45 0 0 2,-3 h -4 a 1,1 135 0 0 -1,1 v 4 a 1,1 45 0 0 1,1 H 2 A 1,1 135 0 0 3,2 Z" />'
+		+ '<path d="M 5,4 V 1 h 6 a 1.24,1.24 67.5 0 1 0.88,2.12 L 4,11 H -4 L -11.88,3.12 A 1.24,1.24 112.5 0 1 -11,1 h 6 v 3 a 1,1 45 0 0 1,1 H 4 A 1,1 135 0 0 5,4 Z" />'
+		+ '<path d="m 5,-4 v 3 h 6 a 1.24,1.24 112.5 0 0 0.88,-2.12 L 4,-11 h -8 l -7.88,7.88 A 1.24,1.24 67.5 0 0 -11,-1 h 6 v -3 a 1,1 135 0 1 1,-1 h 8 a 1,1 45 0 1 1,1 z" />'
 		+ '</svg>',
-	mock: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
-		+ '<path d="M6 2h4" />'
-		+ '<path d="M5 4h6l-1 3v2.8a3 3 0 0 1-.9 2.1L8 13l-1.1-1.1A3 3 0 0 1 6 9.8V7L5 4z" />'
-		+ '</svg>',
-	unknown: UNKNOWN_TRANSPORT_ICON
+	unknown: 'codicon:question'
+};
+
+const TAB_ACTION_CODICON_REFERENCES = {
+	close: 'codicon:close',
+	add: 'codicon:add',
+	settings: 'codicon:gear',
+	apply: 'codicon:check',
+	menu: 'codicon:chevron-down',
+	reload: 'codicon:refresh',
+	cancel: 'codicon:close'
+} as const;
+
+const TAB_ACTION_WEBVIEW_ICON_SVG: Record<'close' | 'add' | 'settings' | 'apply' | 'menu' | 'reload' | 'cancel', string> = {
+	...TAB_ACTION_CODICON_REFERENCES
 };
 
 function isBrickTransportVisual(value: string): value is BrickTransportVisual {
@@ -68,4 +65,8 @@ export function createTransportThemeIcon(transport: string | undefined): vscode.
 
 export function getWebviewTransportIcons(): Record<BrickTransportVisual, string> {
 	return { ...TRANSPORT_WEBVIEW_ICON_SVG };
+}
+
+export function getWebviewTabActionIcons(): Record<'close' | 'add' | 'settings' | 'apply' | 'menu' | 'reload' | 'cancel', string> {
+	return { ...TAB_ACTION_WEBVIEW_ICON_SVG };
 }

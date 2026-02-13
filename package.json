@@ -409,6 +409,11 @@
           ],
           "description": "Transport mode for connect probe. Auto tries USB, then TCP, then Bluetooth, then mock fallback."
         },
+        "ev3-cockpit.ui.discovery.showMockBricks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show mock Brick in the + discovery list even when no mock Brick is currently connected."
+        },
         "ev3-cockpit.transport.timeoutMs": {
           "type": "number",
           "default": 2000,
@@ -818,5 +823,8 @@
     "esbuild": "^0.24.2",
     "eslint": "^8.56.0",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.44"
   }
 }

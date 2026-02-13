@@ -1,11 +1,43 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import { isRemoteExecutablePath } from '../fs/remoteExecutable';
 import { createTransportThemeIcon } from './graphicsLibrary';
 import type { BrickTreeNode, BrickRootNode } from './brickTreeProvider';
 
+const MOCK_TREE_ICON_LIGHT_PATH = path.resolve(__dirname, '../../media/mock-light.svg');
+const MOCK_TREE_ICON_DARK_PATH = path.resolve(__dirname, '../../media/mock-dark.svg');
+
+function toFileUri(filePath: string): vscode.Uri {
+	const uriApi = vscode.Uri as unknown as { parse?: (value: string) => vscode.Uri } | undefined;
+	const value = pathToFileURL(filePath).toString();
+	if (uriApi && typeof uriApi.parse === 'function') {
+		return uriApi.parse(value);
+	}
+	return { toString: () => value } as unknown as vscode.Uri;
+}
+
+function resolveMockTreeIconPath(): { light: vscode.Uri; dark: vscode.Uri } | undefined {
+	if (!fs.existsSync(MOCK_TREE_ICON_LIGHT_PATH) || !fs.existsSync(MOCK_TREE_ICON_DARK_PATH)) {
+		return undefined;
+	}
+	return {
+		light: toFileUri(MOCK_TREE_ICON_LIGHT_PATH),
+		dark: toFileUri(MOCK_TREE_ICON_DARK_PATH)
+	};
+}
+
+const MOCK_TREE_ICON_PATH = resolveMockTreeIconPath();
+
 function buildEv3Uri(brickId: string, remotePath: string): vscode.Uri {
-	return vscode.Uri.parse(`ev3://${brickId}${remotePath}`);
+	const uriApi = vscode.Uri as unknown as { parse?: (value: string) => vscode.Uri } | undefined;
+	const value = `ev3://${brickId}${remotePath}`;
+	if (uriApi && typeof uriApi.parse === 'function') {
+		return uriApi.parse(value);
+	}
+	return { toString: () => value } as unknown as vscode.Uri;
 }
 
 function buildRootNodeId(brickId: string): string {
@@ -54,10 +86,13 @@ function getRootContextValue(node: BrickRootNode): string {
 	return 'ev3BrickRootUnavailable';
 }
 
-function getRootIcon(node: BrickRootNode): vscode.ThemeIcon {
+function getRootIcon(node: BrickRootNode): vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri } {
 	if (node.status === 'READY') {
 		if ((node.busyCommandCount ?? 0) > 0) {
 			return new vscode.ThemeIcon('sync~spin');
+		}
+		if (node.transport === 'mock' && MOCK_TREE_ICON_PATH) {
+			return MOCK_TREE_ICON_PATH;
 		}
 		return createTransportThemeIcon(node.transport);
 	}

@@ -15,6 +15,7 @@ import {
 	captureConnectionProfileFromWorkspace
 } from './device/brickConnectionProfiles';
 import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
+import { BrickSettingsService } from './device/brickSettingsService';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { Logger, OutputChannelLogger } from './diagnostics/logger';
 import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
@@ -361,7 +362,7 @@ export function activate(context: vscode.ExtensionContext) {
 		profile?: BrickConnectionProfile
 	): BrickPanelDiscoveryCandidate['transport'] => {
 		const mode = profile?.transport.mode;
-		if (mode === 'usb' || mode === 'bluetooth' || mode === 'tcp') {
+		if (mode === 'usb' || mode === 'bluetooth' || mode === 'tcp' || mode === 'mock') {
 			return mode;
 		}
 		if (brickId.startsWith('usb-')) {
@@ -372,6 +373,9 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 		if (brickId.startsWith('tcp-')) {
 			return 'tcp';
+		}
+		if (brickId.startsWith('mock-')) {
+			return 'mock';
 		}
 		return 'unknown';
 	};
@@ -415,6 +419,69 @@ export function activate(context: vscode.ExtensionContext) {
 			return snapshot.status;
 		}
 		return 'UNKNOWN';
+	};
+
+	const normalizeDisplayName = (value: string | undefined): string => {
+		return typeof value === 'string' ? value.trim() : '';
+	};
+
+	const hasSameDisplayName = (left: string | undefined, right: string | undefined): boolean => {
+		const leftName = normalizeDisplayName(left).toLowerCase();
+		const rightName = normalizeDisplayName(right).toLowerCase();
+		return leftName.length > 0 && leftName === rightName;
+	};
+
+	const applyDisplayNameAcrossProfiles = async (
+		primaryBrickId: string,
+		previousDisplayName: string,
+		nextDisplayName: string
+	): Promise<string[]> => {
+		const updated = new Set<string>();
+		const normalizedNext = normalizeDisplayName(nextDisplayName);
+		if (!normalizedNext) {
+			return [];
+		}
+
+		const updatedPrimary = brickRegistry.updateDisplayName(primaryBrickId, normalizedNext);
+		if (updatedPrimary) {
+			updated.add(primaryBrickId);
+		}
+		for (const brickId of brickRegistry.updateDisplayNameForMatching(previousDisplayName, normalizedNext)) {
+			updated.add(brickId);
+		}
+
+		const nowIso = new Date().toISOString();
+		for (const profile of profileStore.list()) {
+			if (
+				profile.brickId === primaryBrickId
+				|| updated.has(profile.brickId)
+				|| hasSameDisplayName(profile.displayName, previousDisplayName)
+			) {
+				await profileStore.upsert({
+					...profile,
+					displayName: normalizedNext,
+					savedAtIso: nowIso
+				});
+				updated.add(profile.brickId);
+			}
+		}
+
+		for (const [brickId, profile] of discoveredBrickProfiles.entries()) {
+			if (
+				brickId === primaryBrickId
+				|| updated.has(brickId)
+				|| hasSameDisplayName(profile.displayName, previousDisplayName)
+			) {
+				discoveredBrickProfiles.set(brickId, {
+					...profile,
+					displayName: normalizedNext,
+					savedAtIso: nowIso
+				});
+				updated.add(brickId);
+			}
+		}
+
+		return Array.from(updated);
 	};
 
 	const isUsbReconnectCandidateAvailable = async (brickId: string): Promise<boolean> => {
@@ -461,6 +528,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const showMockBricks = cfg.get<boolean>('ui.discovery.showMockBricks', false) === true;
 		const discoveryPortRaw = cfg.get('transport.tcp.discoveryPort');
 		const discoveryPort =
 			typeof discoveryPortRaw === 'number' && Number.isFinite(discoveryPortRaw)
@@ -648,11 +716,36 @@ export function activate(context: vscode.ExtensionContext) {
 			}, profileStore.get(snapshot.brickId));
 		}
 
+		if (showMockBricks && !seenCandidateIds.has('mock-active')) {
+			const snapshot = brickRegistry.getSnapshot('mock-active');
+			const rememberedProfile = profileStore.get('mock-active');
+			const fallbackDisplayName = rememberedProfile?.displayName?.trim() || 'EV3 Mock';
+			const displayName = resolvePreferredDisplayName('mock-active', fallbackDisplayName);
+			const profile: BrickConnectionProfile = rememberedProfile ?? {
+				brickId: 'mock-active',
+				displayName,
+				savedAtIso: nowIso,
+				rootPath: defaultRoot,
+				transport: {
+					mode: 'mock'
+				}
+			};
+			registerCandidate({
+				candidateId: 'mock-active',
+				displayName,
+				transport: 'mock',
+				detail: 'Mock',
+				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+			}, profile);
+		}
+
 		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
 			usb: 0,
 			bluetooth: 1,
 			tcp: 2,
-			unknown: 3
+			mock: 3,
+			unknown: 4
 		};
 		candidates.sort((left, right) => {
 			const rank = transportRank[left.transport] - transportRank[right.transport];
@@ -843,11 +936,53 @@ export function activate(context: vscode.ExtensionContext) {
 		disconnectBrick: async (brickId: string) => {
 			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickId);
 		},
-		applyPendingConfigChanges: async () => {
-			logger.info('Brick panel requested staged configuration apply.');
+		setMockConnection: async (candidateId: string, connected: boolean) => {
+			const normalizedCandidateId = candidateId.trim();
+			if (!normalizedCandidateId || !normalizedCandidateId.startsWith('mock-')) {
+				return;
+			}
+			if (connected) {
+				await connectDiscoveredBrickFromPanel(normalizedCandidateId);
+				return;
+			}
+			if (isBrickSessionAvailable(normalizedCandidateId)) {
+				await closeBrickSession(normalizedCandidateId);
+			}
+			brickRegistry.markUnavailable(normalizedCandidateId, 'Connection lost.');
+			clearProgramSession('mock-connection-toggle', normalizedCandidateId);
+			treeProvider.refreshBrick(normalizedCandidateId);
 		},
-		discardPendingConfigChanges: async () => {
-			logger.info('Brick panel requested staged configuration discard.');
+		applyPendingConfigChanges: async (request) => {
+			const brickId = request.brickId.trim();
+			const requestedName = request.brickName.trim();
+			if (!brickId) {
+				throw new Error('Missing Brick ID for configuration apply.');
+			}
+			if (!requestedName) {
+				throw new Error('Brick name cannot be empty.');
+			}
+			const session = getBrickSession(brickId);
+			if (!session) {
+				throw new Error('Selected Brick is not connected.');
+			}
+			const previousSnapshot = brickRegistry.getSnapshot(brickId);
+			const previousDisplayName = previousSnapshot?.displayName ?? '';
+			const normalizedName = requestedName.slice(0, 12);
+			const settingsService = new BrickSettingsService({
+				commandClient: session.commandClient,
+				defaultTimeoutMs: resolveProbeTimeoutMs(),
+				logger
+			});
+			await settingsService.setBrickName(normalizedName);
+			const relatedBrickIds = await applyDisplayNameAcrossProfiles(brickId, previousDisplayName, normalizedName);
+			treeProvider.refreshThrottled();
+			return {
+				brickName: normalizedName,
+				relatedBrickIds
+			};
+		},
+		discardPendingConfigChanges: async (brickId) => {
+			logger.info('Brick panel requested staged configuration discard.', { brickId });
 		}
 	}, brickPanelConfig);
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
