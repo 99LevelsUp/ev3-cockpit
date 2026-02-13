@@ -3,6 +3,11 @@ import { buildCapabilityProfile } from '../compat/capabilityProfile';
 import { readFeatureConfig } from '../config/featureConfig';
 import { BrickControlService } from '../device/brickControlService';
 import { BrickSettingsService } from '../device/brickSettingsService';
+import { ButtonService } from '../device/buttonService';
+import { LedService } from '../device/ledService';
+import { MotorService } from '../device/motorService';
+import { SensorService } from '../device/sensorService';
+import { SoundService } from '../device/soundService';
 import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';
 import { RemoteFsService } from '../fs/remoteFsService';
@@ -247,18 +252,19 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				});
 			}
 
+			const serviceOpts = {
+				commandClient,
+				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
+				logger: activeLogger
+			};
 			const connectedFsService = new RemoteFsService({
 				commandClient,
 				capabilityProfile: profile,
 				fsConfig: featureConfig.fs,
-				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
+				defaultTimeoutMs: serviceOpts.defaultTimeoutMs,
 				logger: activeLogger
 			});
-			const connectedControlService = new BrickControlService({
-				commandClient,
-				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
-				logger: activeLogger
-			});
+			const connectedControlService = new BrickControlService(serviceOpts);
 			const rootPath = requestedProfile?.rootPath ?? (featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
 			const baseDescriptor =
 				connectingDescriptor ?? options.resolveConnectedBrickDescriptor(rootPath, requestedProfile);
@@ -270,7 +276,13 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			brickRegistry.upsertReady({
 				...brickDescriptor,
 				fsService: connectedFsService,
-				controlService: connectedControlService
+				controlService: connectedControlService,
+				sensorService: new SensorService(serviceOpts),
+				motorService: new MotorService(serviceOpts),
+				ledService: new LedService(serviceOpts),
+				soundService: new SoundService(serviceOpts),
+				buttonService: new ButtonService(serviceOpts),
+				settingsService: new BrickSettingsService(serviceOpts)
 			});
 			options.onBrickOperation(brickDescriptor.brickId, 'Connect probe completed');
 			const connectionProfile = options.captureConnectionProfile(

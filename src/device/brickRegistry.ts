@@ -1,4 +1,10 @@
 import type { BrickControlService } from './brickControlService';
+import type { ButtonService } from './buttonService';
+import type { LedService } from './ledService';
+import type { MotorService } from './motorService';
+import type { SensorService } from './sensorService';
+import type { SoundService } from './soundService';
+import type { BrickSettingsService } from './brickSettingsService';
 import type { RemoteFsService } from '../fs/remoteFsService';
 import type { TransportMode } from '../transport/transportFactory';
 
@@ -33,11 +39,23 @@ export interface BrickRuntimeRecord extends BrickIdentity {
 	schedulerState?: string;
 	fsService?: RemoteFsService;
 	controlService?: BrickControlService;
+	sensorService?: SensorService;
+	motorService?: MotorService;
+	ledService?: LedService;
+	soundService?: SoundService;
+	buttonService?: ButtonService;
+	settingsService?: BrickSettingsService;
 }
 
 export interface BrickRuntimeReadyInput extends BrickIdentity {
 	fsService: RemoteFsService;
 	controlService: BrickControlService;
+	sensorService?: SensorService;
+	motorService?: MotorService;
+	ledService?: LedService;
+	soundService?: SoundService;
+	buttonService?: ButtonService;
+	settingsService?: BrickSettingsService;
 }
 
 export interface BrickSnapshot {
