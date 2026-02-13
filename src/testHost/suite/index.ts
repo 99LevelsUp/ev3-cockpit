@@ -585,6 +585,7 @@ async function testBatchCommandsWithMultiBrickMockTcp(): Promise<void> {
 					const brickBProgramUri = vscode.Uri.parse(`ev3://${brickBId}${remoteProjectRoot}/host-batch-main.rbf`);
 
 					const waitForBrickReady = async (brickRootUri: vscode.Uri): Promise<void> => {
+						// Avoid flake: config updates + connect are async; wait for EV3 FS to become reachable.
 						const deadline = Date.now() + 5000;
 						while (Date.now() < deadline) {
 							try {
