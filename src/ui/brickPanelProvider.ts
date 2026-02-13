@@ -35,7 +35,7 @@ export interface BrickPanelDiscoveryCandidate {
 	candidateId: string;
 	displayName: string;
 	transport: 'usb' | 'bt' | 'tcp' | 'mock' | 'unknown';
-	status?: 'READY' | 'CONNECTING' | 'UNAVAILABLE' | 'ERROR' | 'UNKNOWN';
+	status?: 'AVAILABLE' | 'READY' | 'CONNECTING' | 'UNAVAILABLE' | 'ERROR' | 'UNKNOWN';
 	detail?: string;
 	alreadyConnected?: boolean;
 }
@@ -811,6 +811,9 @@ ${codiconsLinkTag}
 		background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
 		color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
 	}
+	.discovery-item.status-available {
+		border-left: none;
+	}
 	.discovery-item.status-ready {
 		border-left: none;
 	}
@@ -913,6 +916,9 @@ ${codiconsLinkTag}
 	.discovery-main .transport-indicator {
 		width: 20px;
 		height: 20px;
+	}
+	.transport-indicator.status-available {
+		color: var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue));
 	}
 	.transport-indicator.status-ready {
 		color: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-terminal-ansiGreen)));
@@ -1233,7 +1239,7 @@ ${codiconsLinkTag}
 					continue;
 				}
 				const liveStatus = statusByBrickId.get(candidate.candidateId);
-				if (liveStatus === 'READY' || liveStatus === 'CONNECTING' || liveStatus === 'UNAVAILABLE' || liveStatus === 'ERROR') {
+				if (liveStatus === 'AVAILABLE' || liveStatus === 'READY' || liveStatus === 'CONNECTING' || liveStatus === 'UNAVAILABLE' || liveStatus === 'ERROR') {
 					const nextAlreadyConnected = liveStatus === 'READY' || liveStatus === 'CONNECTING';
 					if (candidate.status !== liveStatus || candidate.alreadyConnected !== nextAlreadyConnected) {
 						candidate.status = liveStatus;
@@ -1417,7 +1423,7 @@ ${codiconsLinkTag}
 
 		function renderTransportIndicator(brick) {
 			const status = String(brick.status || '').toLowerCase();
-			const statusClass = status === 'ready' || status === 'connecting' || status === 'unavailable' || status === 'error'
+			const statusClass = status === 'available' || status === 'ready' || status === 'connecting' || status === 'unavailable' || status === 'error'
 				? 'status-' + status
 				: 'status-unknown';
 			return '<span class="transport-indicator ' + statusClass + '">' + renderTransportIcon(brick.transport) + '</span>';
@@ -1429,7 +1435,8 @@ ${codiconsLinkTag}
 			const statusClass = (candidate.candidateId === connectingDiscoveryCandidateId)
 				? 'status-connecting'
 				: (
-					normalizedStatus === 'ready'
+					normalizedStatus === 'available'
+					|| normalizedStatus === 'ready'
 					|| normalizedStatus === 'connecting'
 					|| normalizedStatus === 'unavailable'
 					|| normalizedStatus === 'error'
@@ -1449,7 +1456,8 @@ ${codiconsLinkTag}
 			}
 			const normalizedStatus = String(candidate.status || '').toLowerCase();
 			if (
-				normalizedStatus === 'ready'
+				normalizedStatus === 'available'
+				|| normalizedStatus === 'ready'
 				|| normalizedStatus === 'connecting'
 				|| normalizedStatus === 'unavailable'
 				|| normalizedStatus === 'error'

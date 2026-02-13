@@ -3,7 +3,7 @@ import type { RemoteFsService } from '../fs/remoteFsService';
 import type { TransportMode } from '../transport/transportFactory';
 
 export type BrickRole = 'master' | 'standalone' | 'unknown';
-export type BrickStatus = 'CONNECTING' | 'READY' | 'UNAVAILABLE' | 'ERROR';
+export type BrickStatus = 'AVAILABLE' | 'CONNECTING' | 'READY' | 'UNAVAILABLE' | 'ERROR';
 
 export interface BrickIdentity {
 	brickId: string;
@@ -71,6 +71,45 @@ export class BrickRegistry {
 
 	private normalizeDisplayName(value: string): string {
 		return value.trim();
+	}
+
+	public upsertAvailable(identity: BrickIdentity): BrickSnapshot {
+		const existing = this.records.get(identity.brickId);
+		if (existing && existing.status !== 'AVAILABLE') {
+			const updated: BrickRuntimeRecord = {
+				...existing,
+				displayName: identity.displayName,
+				transport: identity.transport,
+				lastSeenAtIso: new Date().toISOString()
+			};
+			this.records.set(identity.brickId, updated);
+			return cloneSnapshot(updated);
+		}
+		this.upsertRecord({
+			...identity,
+			status: 'AVAILABLE',
+			isActive: false,
+			lastSeenAtIso: new Date().toISOString(),
+			lastError: undefined,
+			lastOperation: 'Discovered',
+			lastOperationAtIso: new Date().toISOString(),
+			busyCommandCount: 0,
+			schedulerState: undefined,
+			fsService: undefined,
+			controlService: undefined
+		});
+		return this.getSnapshotOrThrow(identity.brickId);
+	}
+
+	public removeStale(activeIds: Set<string>): string[] {
+		const removed: string[] = [];
+		for (const [brickId, record] of this.records.entries()) {
+			if (record.status === 'AVAILABLE' && !activeIds.has(brickId)) {
+				this.records.delete(brickId);
+				removed.push(brickId);
+			}
+		}
+		return removed;
 	}
 
 	public upsertConnecting(identity: BrickIdentity): BrickSnapshot {

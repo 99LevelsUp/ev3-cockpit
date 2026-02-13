@@ -411,7 +411,8 @@ export function activate(context: vscode.ExtensionContext) {
 			return fallback;
 		}
 		if (
-			snapshot.status === 'READY'
+			snapshot.status === 'AVAILABLE'
+			|| snapshot.status === 'READY'
 			|| snapshot.status === 'CONNECTING'
 			|| snapshot.status === 'UNAVAILABLE'
 			|| snapshot.status === 'ERROR'

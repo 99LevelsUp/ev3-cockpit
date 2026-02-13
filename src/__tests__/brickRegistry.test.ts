@@ -215,3 +215,92 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 	assert.equal(registry.getSnapshot('tcp-a')?.displayName, 'Renamed');
 	assert.equal(registry.getSnapshot('bt-a')?.displayName, 'Other');
 });
+
+test('BrickRegistry.upsertAvailable creates AVAILABLE record', () => {
+	const registry = new BrickRegistry();
+	const snapshot = registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(snapshot.status, 'AVAILABLE');
+	assert.equal(snapshot.isActive, false);
+	assert.equal(snapshot.displayName, 'EV3 USB');
+});
+
+test('BrickRegistry.upsertAvailable does not overwrite READY brick', () => {
+	const registry = new BrickRegistry();
+	registry.upsertReady({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB',
+		role: 'standalone',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+	const snapshot = registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB Renamed',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(snapshot.status, 'READY');
+	assert.equal(snapshot.displayName, 'EV3 USB Renamed');
+});
+
+test('BrickRegistry.upsertAvailable updates existing AVAILABLE', () => {
+	const registry = new BrickRegistry();
+	registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	const snapshot = registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB Renamed',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	assert.equal(snapshot.status, 'AVAILABLE');
+	assert.equal(snapshot.displayName, 'EV3 USB Renamed');
+});
+
+test('BrickRegistry.removeStale removes AVAILABLE bricks not in active set', () => {
+	const registry = new BrickRegistry();
+	registry.upsertAvailable({
+		brickId: 'usb-001',
+		displayName: 'EV3 USB 1',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	registry.upsertAvailable({
+		brickId: 'usb-002',
+		displayName: 'EV3 USB 2',
+		role: 'unknown',
+		transport: 'usb',
+		rootPath: '/home/root/lms2012/prjs/'
+	});
+	registry.upsertReady({
+		brickId: 'tcp-001',
+		displayName: 'EV3 TCP',
+		role: 'standalone',
+		transport: 'tcp',
+		rootPath: '/home/root/lms2012/prjs/',
+		fsService: mockFs,
+		controlService: mockControl
+	});
+
+	const removed = registry.removeStale(new Set(['usb-001']));
+	assert.deepEqual(removed, ['usb-002']);
+	assert.ok(registry.getSnapshot('usb-001'));
+	assert.equal(registry.getSnapshot('usb-002'), undefined);
+	assert.ok(registry.getSnapshot('tcp-001'));
+});
