@@ -17,6 +17,8 @@ import {
 import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
 import { BrickSettingsService } from './device/brickSettingsService';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
+import { applyDisplayNameAcrossProfiles } from './device/brickNameResolver';
+import { isUsbReconnectCandidateAvailable } from './device/brickReconnect';
 import { Logger, OutputChannelLogger } from './diagnostics/logger';
 import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
 import { Ev3FileSystemProvider, FsAvailabilityError } from './fs/ev3FileSystemProvider';
@@ -347,110 +349,8 @@ export function activate(context: vscode.ExtensionContext) {
 		return { showMockBricks, tcpDiscoveryPort: discoveryPort, tcpDiscoveryTimeoutMs: discoveryTimeoutMs, preferredBluetoothPort, defaultRootPath };
 	};
 
-	const normalizeDisplayName = (value: string | undefined): string => {
-		return typeof value === 'string' ? value.trim() : '';
-	};
-
-	const hasSameDisplayName = (left: string | undefined, right: string | undefined): boolean => {
-		const leftName = normalizeDisplayName(left).toLowerCase();
-		const rightName = normalizeDisplayName(right).toLowerCase();
-		return leftName.length > 0 && leftName === rightName;
-	};
-
-	const applyDisplayNameAcrossProfiles = async (
-		primaryBrickId: string,
-		previousDisplayName: string,
-		nextDisplayName: string
-	): Promise<string[]> => {
-		const updated = new Set<string>();
-		const normalizedNext = normalizeDisplayName(nextDisplayName);
-		if (!normalizedNext) {
-			return [];
-		}
-
-		const updatedPrimary = brickRegistry.updateDisplayName(primaryBrickId, normalizedNext);
-		if (updatedPrimary) {
-			updated.add(primaryBrickId);
-		}
-		for (const brickId of brickRegistry.updateDisplayNameForMatching(previousDisplayName, normalizedNext)) {
-			updated.add(brickId);
-		}
-
-		const nowIso = new Date().toISOString();
-		for (const profile of profileStore.list()) {
-			if (
-				profile.brickId === primaryBrickId
-				|| updated.has(profile.brickId)
-				|| hasSameDisplayName(profile.displayName, previousDisplayName)
-			) {
-				await profileStore.upsert({
-					...profile,
-					displayName: normalizedNext,
-					savedAtIso: nowIso
-				});
-				updated.add(profile.brickId);
-			}
-		}
-
-		for (const [brickId, profile] of discoveryService.listDiscoveredProfiles().entries()) {
-			if (
-				brickId === primaryBrickId
-				|| updated.has(brickId)
-				|| hasSameDisplayName(profile.displayName, previousDisplayName)
-			) {
-				discoveryService.updateDiscoveredProfile(brickId, {
-					...profile,
-					displayName: normalizedNext,
-					savedAtIso: nowIso
-				});
-				updated.add(brickId);
-			}
-		}
-
-		return Array.from(updated);
-	};
-
-	const isUsbReconnectCandidateAvailable = async (brickId: string): Promise<boolean> => {
-		const snapshot = brickRegistry.getSnapshot(brickId);
-		if (!snapshot || snapshot.transport !== 'usb') {
-			return false;
-		}
-		const profile = profileStore.get(brickId);
-		if (!profile || profile.transport.mode !== 'usb') {
-			return false;
-		}
-		const usbCandidates = await listUsbHidCandidates();
-		if (usbCandidates.length === 0) {
-			return false;
-		}
-		const configuredPath = profile.transport.usbPath?.trim() || '';
-		let selectedPath =
-			configuredPath
-				? usbCandidates
-					.map((candidate) => candidate.path.trim())
-					.find((path) => path === configuredPath)
-				: undefined;
-		if (!selectedPath) {
-			if (usbCandidates.length !== 1) {
-				return false;
-			}
-			selectedPath = usbCandidates[0]?.path.trim();
-		}
-		if (!selectedPath) {
-			return false;
-		}
-		if (selectedPath !== configuredPath) {
-			await profileStore.upsert({
-				...profile,
-				savedAtIso: new Date().toISOString(),
-				transport: {
-					...profile.transport,
-					usbPath: selectedPath
-				}
-			});
-		}
-		return true;
-	};
+	const nameDeps = { brickRegistry, profileStore, discoveryService };
+	const usbReconnectDeps = { brickRegistry, profileStore, listUsbHidCandidates };
 
 	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
 		return discoveryService.scan(readDiscoveryConfig());
@@ -665,7 +565,7 @@ export function activate(context: vscode.ExtensionContext) {
 				logger
 			});
 			await settingsService.setBrickName(normalizedName);
-			const relatedBrickIds = await applyDisplayNameAcrossProfiles(brickId, previousDisplayName, normalizedName);
+			const relatedBrickIds = await applyDisplayNameAcrossProfiles(nameDeps, brickId, previousDisplayName, normalizedName);
 			treeProvider.refreshThrottled();
 			return {
 				brickName: normalizedName,
@@ -677,6 +577,10 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}, brickPanelConfig);
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
+	brickRegistry.onStatusChange(() => {
+		treeProvider.refreshThrottled();
+		brickPanelProvider.refresh();
+	});
 	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(
 		BrickPanelProvider.viewType,
 		brickPanelProvider
@@ -702,7 +606,7 @@ export function activate(context: vscode.ExtensionContext) {
 							return;
 						}
 						if (profile.transport.mode === 'usb') {
-							const usbReady = await isUsbReconnectCandidateAvailable(brickId);
+							const usbReady = await isUsbReconnectCandidateAvailable(usbReconnectDeps, brickId);
 							if (!usbReady) {
 								return;
 							}
