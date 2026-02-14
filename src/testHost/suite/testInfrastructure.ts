@@ -255,12 +255,20 @@ export async function withTemporaryWorkspaceFolder<T>(
 export const CASE_TIMEOUT_MS = 30_000;
 
 export async function runCase(name: string, fn: () => Promise<void>): Promise<boolean> {
+	return runCaseWithTimeout(name, fn, CASE_TIMEOUT_MS);
+}
+
+export async function runCaseWithTimeout(
+	name: string,
+	fn: () => Promise<void>,
+	timeoutMs: number
+): Promise<boolean> {
 	const start = Date.now();
 	try {
 		await Promise.race([
 			fn(),
 			new Promise<never>((_, reject) =>
-				setTimeout(() => reject(new Error(`Test case timeout after ${CASE_TIMEOUT_MS}ms`)), CASE_TIMEOUT_MS)
+				setTimeout(() => reject(new Error(`Test case timeout after ${timeoutMs}ms`)), timeoutMs)
 			)
 		]);
 		const elapsed = (Date.now() - start).toFixed(1);

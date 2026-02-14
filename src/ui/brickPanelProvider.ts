@@ -65,6 +65,7 @@ type MessageFromWebview =
 
 interface WebviewSensorInfo {
 	port: number;
+	layer?: number;
 	typeName: string;
 	mode: number;
 	connected: boolean;
@@ -72,6 +73,7 @@ interface WebviewSensorInfo {
 
 interface WebviewMotorInfo {
 	port: string;
+	layer?: number;
 	speed: number;
 	running: boolean;
 }
@@ -208,6 +210,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (sensorData) {
 				sensors = sensorData.map((s) => ({
 					port: s.port,
+					layer: s.layer,
 					typeName: s.typeName,
 					mode: s.mode,
 					connected: s.connected
@@ -220,6 +223,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (motorData) {
 				motors = motorData.map((m) => ({
 					port: m.port,
+					layer: m.layer,
 					speed: m.speed,
 					running: m.running
 				}));

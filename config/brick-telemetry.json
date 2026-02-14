@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "fastDeviceIntervalMs": 500,
+  "fastValuesIntervalMs": 500,
+  "mediumIntervalMs": 2000,
+  "slowIntervalMs": 15000,
+  "extraSlowIntervalMs": 60000,
+  "staticIntervalMs": 0,
+  "fsDepth": 1,
+  "fsMaxEntries": 250,
+  "fsBatchSize": 25,
+  "queueLimitSlow": 3,
+  "queueLimitMedium": 6,
+  "queueLimitInactiveFast": 4
+}

@@ -4,6 +4,7 @@ import type { BrickConnectionProfileStore } from '../device/brickConnectionProfi
 export interface MockCommandRegistrations {
 	mockReset: vscode.Disposable;
 	mockShowState: vscode.Disposable;
+	mockToggleDiscovery: vscode.Disposable;
 	clearBrickProfiles: vscode.Disposable;
 }
 
@@ -39,6 +40,12 @@ export function registerMockCommands(deps: MockCommandDeps): MockCommandRegistra
 			language: 'plaintext'
 		});
 		await vscode.window.showTextDocument(doc, { preview: true });
+	});
+
+	const mockToggleDiscovery = vscode.commands.registerCommand('ev3-cockpit.mock.toggleDiscovery', async () => {
+		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+		const current = cfg.get<boolean>('mock', false);
+		await cfg.update('mock', !current, vscode.ConfigurationTarget.Workspace);
 	});
 
 	const clearBrickProfiles = vscode.commands.registerCommand('ev3-cockpit.clearBrickProfiles', async () => {
@@ -84,5 +91,5 @@ export function registerMockCommands(deps: MockCommandDeps): MockCommandRegistra
 		vscode.window.showInformationMessage(`Deleted ${deleted} brick profile(s).`);
 	});
 
-	return { mockReset, mockShowState, clearBrickProfiles };
+	return { mockReset, mockShowState, mockToggleDiscovery, clearBrickProfiles };
 }

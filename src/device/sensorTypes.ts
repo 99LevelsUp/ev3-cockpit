@@ -70,6 +70,7 @@ export type SensorMode = number;
  */
 export interface SensorInfo {
 	port: SensorPort;
+	layer?: number;
 	typeCode: number;
 	mode: SensorMode;
 	connected: boolean;

@@ -49,6 +49,7 @@ export class LedService {
 	private readonly defaultTimeoutMs: number;
 	private readonly logger: Logger;
 	private requestSeq = 0;
+	private lastPattern?: LedPattern;
 
 	public constructor(options: LedServiceOptions) {
 		this.commandClient = options.commandClient;
@@ -85,7 +86,12 @@ export class LedService {
 			throw new Error(`LED set failed: DIRECT_REPLY_ERROR`);
 		}
 
+		this.lastPattern = pattern;
 		this.logger.info('LED pattern set', { pattern, requestId });
+	}
+
+	public getLastPattern(): LedPattern | undefined {
+		return this.lastPattern;
 	}
 
 	private nextSeq(): number {

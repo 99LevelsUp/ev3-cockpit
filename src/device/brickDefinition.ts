@@ -148,17 +148,22 @@ export interface BrickSensorInfo {
 	mode?: number;
 	connected?: boolean;
 	typeName?: string;
+	connection?: number;
+	siValue?: number;
 }
 
 export interface BrickMotorInfo {
 	port: string;
 	typeCode?: number;
 	tachoPosition?: number;
+	connection?: number;
 }
 
 export interface BrickPortsSnapshot {
 	sensors?: BrickSensorInfo[];
 	motors?: BrickMotorInfo[];
+	deviceTypes?: number[];
+	deviceTypesChanged?: number;
 }
 
 export interface BrickFilesystemFile {

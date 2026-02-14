@@ -212,6 +212,28 @@ export class BrickRegistry {
 		return this.getSnapshotOrThrow(input.brickId);
 	}
 
+	public upsertReadyPassive(input: BrickRuntimeReadyInput): BrickSnapshot {
+		const oldStatus = this.records.get(input.brickId)?.status;
+		this.upsertRecord({
+			...input,
+			status: 'READY',
+			isActive: false,
+			lastSeenAtIso: new Date().toISOString(),
+			lastError: undefined,
+			lastOperation: 'Connected',
+			lastOperationAtIso: new Date().toISOString(),
+			busyCommandCount: 0,
+			schedulerState: 'idle',
+			fsService: input.fsService,
+			controlService: input.controlService
+		});
+		this.syncActiveFlags();
+		if (oldStatus !== 'READY') {
+			this.fireStatusChange(input.brickId, oldStatus, 'READY');
+		}
+		return this.getSnapshotOrThrow(input.brickId);
+	}
+
 	public markActiveUnavailable(reason?: string): BrickSnapshot | undefined {
 		if (!this.activeBrickId) {
 			return undefined;
@@ -459,6 +481,54 @@ export class BrickRegistry {
 			return undefined;
 		}
 		return this.records.get(targetBrickId)?.controlService;
+	}
+
+	public resolveSensorService(brickId: string): SensorService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.sensorService;
+	}
+
+	public resolveMotorService(brickId: string): MotorService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.motorService;
+	}
+
+	public resolveLedService(brickId: string): LedService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.ledService;
+	}
+
+	public resolveSoundService(brickId: string): SoundService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.soundService;
+	}
+
+	public resolveButtonService(brickId: string): ButtonService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.buttonService;
+	}
+
+	public resolveSettingsService(brickId: string): BrickSettingsService | undefined {
+		const targetBrickId = brickId === 'active' ? this.activeBrickId : brickId;
+		if (!targetBrickId) {
+			return undefined;
+		}
+		return this.records.get(targetBrickId)?.settingsService;
 	}
 
 	private upsertRecord(record: BrickRuntimeRecord): void {

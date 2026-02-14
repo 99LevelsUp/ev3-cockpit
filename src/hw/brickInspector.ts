@@ -33,6 +33,10 @@ const DEFAULT_FS_MAX_ENTRIES = 5000;
 const DEFAULT_SAFE_ROOTS = ['/home/root/lms2012/prjs/', '/media/card/'];
 const DEFAULT_FS_MODE = 'full';
 const DEFAULT_DAISY_ENABLED = true;
+const DEFAULT_BT_DAISY_ENABLED = true;
+const DEFAULT_BT_DAISY_MAX_LAYERS = 7;
+const DEFAULT_CONNECTION_PROBE = true;
+const DEFAULT_OUTPUT_PROBE = false;
 const DISPLAY_INFO = {
 	width: 178,
 	height: 128,
@@ -42,10 +46,14 @@ const DISPLAY_INFO = {
 
 const OP_UI_READ = 0x81;
 const OP_MEMORY_USAGE = 0xc5;
+const OP_INPUT_DEVICE_LIST = 0x98;
 const OP_INPUT_DEVICE = 0x99;
 const OP_OUTPUT_GET_COUNT = 0xb3;
+const OUTPUT_PORT_OFFSET = 16;
 const INPUT_DEVICE_SUB = {
-	GET_TYPEMODE: 0x05
+	GET_TYPEMODE: 0x05,
+	GET_CONNECTION: 0x0c,
+	READY_SI: 0x1d
 } as const;
 
 const UI_READ_SUB = {
@@ -291,12 +299,129 @@ async function probeLayerMultiple(
 	};
 }
 
+async function probeAndAttachLayers(options: {
+	candidates: BrickCandidate[];
+	brickId: string;
+	displayName: string;
+	transport: TransportKind;
+	detail: string;
+	maxLayers: number;
+	timeoutMs: number;
+	createProbeAdapter: () => UsbHidAdapter | BluetoothSppAdapter | TcpAdapter;
+	createLayerAdapter: (layer: number) => UsbHidAdapter | BluetoothSppAdapter | TcpAdapter;
+}): Promise<void> {
+	const {
+		candidates,
+		brickId,
+		displayName,
+		transport,
+		detail,
+		maxLayers,
+		timeoutMs,
+		createProbeAdapter,
+		createLayerAdapter
+	} = options;
+
+	if (maxLayers <= 0) {
+		return;
+	}
+
+	const scheduler = new CommandScheduler({ defaultTimeoutMs: timeoutMs });
+	const client = new Ev3CommandClient({
+		scheduler,
+		transport: createProbeAdapter()
+	});
+
+	try {
+		await client.open();
+		console.log(
+			`[INSPECT] Probing for layers (${transport}, auto-detect with multi-sampling, max ${maxLayers})...`
+		);
+
+		const probeResults: LayerProbeResult[] = [];
+		for (let layer = 1; layer <= maxLayers; layer += 1) {
+			const result = await probeLayerMultiple(client, layer, timeoutMs, 5);
+			if (!result.present) {
+				console.log(`[INSPECT] Layer ${layer} not detected, stopping probe.`);
+				break;
+			}
+			probeResults.push(result);
+		}
+
+		const acceptedLayers: number[] = [];
+
+		if (probeResults.length === 0) {
+			console.log(`[INSPECT] No layers detected.`);
+		} else {
+			const allIdentical = probeResults.every(
+				(r) => r.typeCode === probeResults[0].typeCode && r.mode === probeResults[0].mode
+			);
+
+			const avgLatencies = probeResults.map((r) => r.avgLatency);
+			let increasingTrend = true;
+			let decreasingCount = 0;
+
+			for (let i = 1; i < avgLatencies.length; i++) {
+				const diff = avgLatencies[i] - avgLatencies[i - 1];
+				if (diff < -0.5) {
+					decreasingCount++;
+					increasingTrend = false;
+				}
+			}
+
+			console.log(
+				`[INSPECT] Analysis: allIdentical=${allIdentical}, increasingTrend=${increasingTrend}, decreasingCount=${decreasingCount}`
+			);
+
+			if (!allIdentical) {
+				console.log(`[INSPECT] Responses differ across layers - accepting all as real bricks.`);
+				for (let i = 0; i < probeResults.length; i++) {
+					acceptedLayers.push(i + 1);
+				}
+			} else if (decreasingCount >= 2) {
+				console.log(
+					`[INSPECT] Strongly decreasing latencies (${decreasingCount} drops) with identical responses - likely phantoms.`
+				);
+				console.log(`[INSPECT] However, EV3 firmware always responds to layer probes. Accepting all layers.`);
+				for (let i = 0; i < probeResults.length; i++) {
+					acceptedLayers.push(i + 1);
+				}
+			} else {
+				console.log(
+					`[INSPECT] Latency trend acceptable (${increasingTrend ? 'increasing' : 'flat'}) - accepting all layers.`
+				);
+				for (let i = 0; i < probeResults.length; i++) {
+					acceptedLayers.push(i + 1);
+				}
+			}
+		}
+
+		console.log(`[INSPECT] Accepted layers: ${acceptedLayers.length > 0 ? acceptedLayers.join(', ') : 'none'}`);
+
+		for (const layer of acceptedLayers) {
+			candidates.push({
+				brickId: `${brickId}-layer-${layer}`,
+				displayName: `${displayName} (Layer ${layer})`,
+				transport,
+				detail: `${detail} layer ${layer}`,
+				layer,
+				createAdapter: () => createLayerAdapter(layer)
+			});
+		}
+	} catch (error) {
+		console.log(`[INSPECT] Layer probe failed: ${error instanceof Error ? error.message : String(error)}`);
+	} finally {
+		await client.close().catch(() => undefined);
+		scheduler.dispose();
+	}
+}
+
 async function probeSensorLayer(
 	client: Ev3CommandClient,
 	layer: number,
 	port: number,
 	timeoutMs: number
-): Promise<{ port: number; typeCode: number; mode: number; connected: boolean }> {
+): Promise<{ port: number; typeCode: number; mode: number; connected: boolean; connection?: number; siValue?: number }> {
 	const payload = concatBytes(
 		uint16le(2),
 		new Uint8Array([OP_INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
@@ -319,12 +444,129 @@ async function probeSensorLayer(
 	const payloadBytes = result.reply.payload;
 	const typeCode = payloadBytes.length >= 1 ? payloadBytes[0] : 0;
 	const mode = payloadBytes.length >= 2 ? payloadBytes[1] : 0;
+	let connection: number | undefined;
+	if (envBoolean('EV3_COCKPIT_INSPECT_CONNECTION_PROBE', DEFAULT_CONNECTION_PROBE)) {
+		try {
+			connection = await probeConnectionLayer(client, layer, port, timeoutMs);
+		} catch {
+			connection = undefined;
+		}
+	}
+	let siValue: number | undefined;
+	if (envBoolean('EV3_COCKPIT_INSPECT_READY_SI', false)) {
+		try {
+			siValue = await readReadySiLayer(client, layer, port, timeoutMs);
+		} catch {
+			siValue = undefined;
+		}
+	}
 	return {
 		port,
 		typeCode,
 		mode,
-		connected: typeCode !== 0
+		connected: typeCode !== 0,
+		connection,
+		siValue
 	};
+}
+
+async function readReadySiLayer(
+	client: Ev3CommandClient,
+	layer: number,
+	port: number,
+	timeoutMs: number
+): Promise<number> {
+	const payload = concatBytes(
+		uint16le(4),
+		new Uint8Array([OP_INPUT_DEVICE, INPUT_DEVICE_SUB.READY_SI]),
+		new Uint8Array([layer & 0xff]),
+		new Uint8Array([port & 0xff]),
+		new Uint8Array([0x00]), // type
+		new Uint8Array([0x00]), // mode
+		new Uint8Array([0x01]), // datasets
+		gv0(0)
+	);
+	const result = await client.send({
+		id: `inspect-ready-si-${layer}-${port}`,
+		lane: 'normal',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload
+	});
+	if (result.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+		throw new Error(`READY_SI failed (layer=${layer}, port=${port}).`);
+	}
+	const payloadBytes = result.reply.payload;
+	if (payloadBytes.length < 4) {
+		throw new Error(`READY_SI reply too short (layer=${layer}, port=${port}).`);
+	}
+	return new DataView(payloadBytes.buffer, payloadBytes.byteOffset, payloadBytes.byteLength).getFloat32(0, true);
+}
+
+async function probeConnectionLayer(
+	client: Ev3CommandClient,
+	layer: number,
+	port: number,
+	timeoutMs: number
+): Promise<number> {
+	const payload = concatBytes(
+		uint16le(1),
+		new Uint8Array([OP_INPUT_DEVICE, INPUT_DEVICE_SUB.GET_CONNECTION]),
+		new Uint8Array([layer & 0xff]),
+		new Uint8Array([port & 0xff]),
+		gv0(0)
+	);
+	const result = await client.send({
+		id: `inspect-connection-${layer}-${port}`,
+		lane: 'normal',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload
+	});
+	if (result.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+		throw new Error(`Connection probe failed (layer=${layer}, port=${port}).`);
+	}
+	return result.reply.payload.length >= 1 ? result.reply.payload[0] : 0;
+}
+
+async function probeOutputLayer(
+	client: Ev3CommandClient,
+	layer: number,
+	portIndex: number,
+	timeoutMs: number
+): Promise<{ typeCode: number; mode: number; connection?: number }> {
+	const port = OUTPUT_PORT_OFFSET + portIndex;
+	const payload = concatBytes(
+		uint16le(2),
+		new Uint8Array([OP_INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
+		new Uint8Array([layer & 0xff]),
+		new Uint8Array([port & 0xff]),
+		gv0(0),
+		gv0(1)
+	);
+	const result = await client.send({
+		id: `inspect-output-${layer}-${portIndex}`,
+		lane: 'normal',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload
+	});
+	if (result.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+		throw new Error(`Output probe failed (layer=${layer}, port=${portIndex}).`);
+	}
+	const payloadBytes = result.reply.payload;
+	const typeCode = payloadBytes.length >= 1 ? payloadBytes[0] : 0;
+	const mode = payloadBytes.length >= 2 ? payloadBytes[1] : 0;
+	let connection: number | undefined;
+	try {
+		connection = await probeConnectionLayer(client, layer, port, timeoutMs);
+	} catch {
+		connection = undefined;
+	}
+	return { typeCode, mode, connection };
 }
 
 async function readTachoLayer(
@@ -356,6 +598,40 @@ async function readTachoLayer(
 		return 0;
 	}
 	return new DataView(payloadBytes.buffer, payloadBytes.byteOffset, payloadBytes.byteLength).getInt32(0, true);
+}
+
+async function readInputDeviceList(
+	client: Ev3CommandClient,
+	length: number,
+	timeoutMs: number
+): Promise<{ types: number[]; changed: number }> {
+	const bounded = Math.max(1, Math.min(31, Math.floor(length)));
+	const replySize = bounded + 1;
+	const payload = concatBytes(
+		uint16le(replySize),
+		new Uint8Array([OP_INPUT_DEVICE_LIST]),
+		new Uint8Array([bounded & 0xff]),
+		gv0(0),
+		gv0(bounded)
+	);
+	const result = await client.send({
+		id: 'inspect-input-device-list',
+		lane: 'normal',
+		idempotent: true,
+		timeoutMs,
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload
+	});
+	if (result.reply.type !== EV3_REPLY.DIRECT_REPLY) {
+		throw new Error('INPUT_DEVICE_LIST unexpected reply type.');
+	}
+	const payloadBytes = result.reply.payload;
+	if (payloadBytes.length < replySize) {
+		throw new Error('INPUT_DEVICE_LIST reply too short.');
+	}
+	const types = Array.from(payloadBytes.slice(0, bounded));
+	const changed = payloadBytes[bounded] ?? 0;
+	return { types, changed };
 }
 
 async function listFilesystemTree(
@@ -554,6 +830,20 @@ async function inspectBrick(candidate: BrickCandidate, timeoutMs: number): Promi
 				errors.push(`memoryUsage: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
+		let deviceTypes: number[] | undefined;
+		let deviceTypesChanged: number | undefined;
+		if (!isLayered) {
+			try {
+				const list = await readInputDeviceList(client, 32, timeoutMs);
+				deviceTypes = list.types;
+				deviceTypesChanged = list.changed;
+			} catch (error) {
+				errors.push(`deviceList: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+
+		const connectionProbeEnabled = envBoolean('EV3_COCKPIT_INSPECT_CONNECTION_PROBE', DEFAULT_CONNECTION_PROBE);
+		const outputProbeEnabled = envBoolean('EV3_COCKPIT_INSPECT_OUTPUT_PROBE', DEFAULT_OUTPUT_PROBE);
 
 		const sensors = await (isLayered
 			? Promise.all([0, 1, 2, 3].map((port) => probeSensorLayer(client, candidate.layer ?? 0, port, timeoutMs)))
@@ -562,16 +852,42 @@ async function inspectBrick(candidate: BrickCandidate, timeoutMs: number): Promi
 			errors.push(`sensors: ${error instanceof Error ? error.message : String(error)}`);
 			return [];
 		});
+		let sensorConnections: Array<{ port: number; connection?: number }> = [];
+		if (!isLayered && connectionProbeEnabled) {
+			sensorConnections = await Promise.all(
+				[0, 1, 2, 3].map(async (port) => {
+					try {
+						const connection = await probeConnectionLayer(client, 0, port, timeoutMs);
+						return { port, connection };
+					} catch {
+						return { port };
+					}
+				})
+			);
+		}
 
 		const motors = await Promise.all(
 			['A', 'B', 'C', 'D'].map(async (port, index) => {
 				try {
+					const outputProbe = outputProbeEnabled
+						? await probeOutputLayer(client, candidate.layer ?? 0, index, timeoutMs)
+						: undefined;
 					if (isLayered) {
 						const position = await readTachoLayer(client, candidate.layer ?? 0, index, timeoutMs);
-						return { port, tachoPosition: position };
+						return {
+							port,
+							tachoPosition: position,
+							typeCode: outputProbe?.typeCode,
+							connection: outputProbe?.connection
+						};
 					}
 					const reading = await motorService.readTacho(port as 'A' | 'B' | 'C' | 'D');
-					return { port, tachoPosition: reading.position };
+					return {
+						port,
+						tachoPosition: reading.position,
+						typeCode: outputProbe?.typeCode,
+						connection: outputProbe?.connection
+					};
 				} catch (error) {
 					errors.push(`motor-${port}: ${error instanceof Error ? error.message : String(error)}`);
 					return { port };
@@ -641,15 +957,29 @@ async function inspectBrick(candidate: BrickCandidate, timeoutMs: number): Promi
 						'typeName' in sensor && typeof sensor.typeName === 'string'
 							? sensor.typeName
 							: undefined;
+					let connection: number | undefined = undefined;
+					if ('connection' in sensor && typeof sensor.connection === 'number') {
+						connection = sensor.connection;
+					} else if (!isLayered) {
+						connection = sensorConnections.find((entry) => entry.port === sensor.port)?.connection;
+					}
+					const siValue =
+						'siValue' in sensor && typeof sensor.siValue === 'number'
+							? sensor.siValue
+							: undefined;
 					return {
 						port: sensor.port,
 						typeCode: sensor.typeCode,
 						mode: sensor.mode,
 						connected: sensor.connected,
-						typeName
+						typeName,
+						connection,
+						siValue
 					};
 				}),
-				motors
+				motors,
+				deviceTypes,
+				deviceTypesChanged
 			},
 			filesystem: filesystemRoots.length > 0 ? { roots: filesystemRoots } : undefined,
 			errors: errors.length > 0 ? errors : undefined
@@ -663,6 +993,7 @@ async function inspectBrick(candidate: BrickCandidate, timeoutMs: number): Promi
 async function collectCandidates(): Promise<BrickCandidate[]> {
 	const timeoutMs = envNumber('EV3_COCKPIT_INSPECT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 50);
 	const daisyEnabled = envBoolean('EV3_COCKPIT_INSPECT_USB_DAISY', DEFAULT_DAISY_ENABLED);
+	const btDaisyEnabled = envBoolean('EV3_COCKPIT_INSPECT_BT_DAISY', DEFAULT_BT_DAISY_ENABLED);
 	const usbCandidates = await listUsbHidCandidates();
 	const serialCandidates = await listSerialCandidates();
 	const tcpCandidates = await listTcpDiscoveryCandidates(
@@ -691,113 +1022,17 @@ async function collectCandidates(): Promise<BrickCandidate[]> {
 		});
 		if (daisyEnabled) {
 			const maxLayers = envNumber('EV3_COCKPIT_INSPECT_USB_DAISY_MAX_LAYERS', 3, 0);
-			const scheduler = new CommandScheduler({ defaultTimeoutMs: timeoutMs });
-			const client = new Ev3CommandClient({
-				scheduler,
-				transport: new UsbHidAdapter({ path: usbPath })
+			await probeAndAttachLayers({
+				candidates,
+				brickId,
+				displayName,
+				transport: 'usb',
+				detail: usbPath,
+				maxLayers,
+				timeoutMs,
+				createProbeAdapter: () => new UsbHidAdapter({ path: usbPath }),
+				createLayerAdapter: () => new UsbHidAdapter({ path: usbPath })
 			});
-			try {
-				await client.open();
-				console.log(`[INSPECT] Probing for daisy chain layers (auto-detect with multi-sampling, max ${maxLayers})...`);
-
-				// Probe all layers with multiple samples for better accuracy
-				const probeResults: LayerProbeResult[] = [];
-				for (let layer = 1; layer <= maxLayers; layer += 1) {
-					const result = await probeLayerMultiple(client, layer, timeoutMs, 5);
-					if (!result.present) {
-						console.log(`[INSPECT] Layer ${layer} not detected, stopping probe.`);
-						break;
-					}
-					probeResults.push(result);
-				}
-
-				// Smart filtering: detect phantom layers
-				// Strategy: Use averaged latencies and check for clear increasing trend
-				// Real daisy-chain bricks should have progressively increasing latency
-				const acceptedLayers: number[] = [];
-
-				if (probeResults.length === 0) {
-					console.log(`[INSPECT] No layers detected.`);
-				} else {
-					// Check if all responses are identical
-					const allIdentical = probeResults.every(
-						(r) => r.typeCode === probeResults[0].typeCode && r.mode === probeResults[0].mode
-					);
-
-					// Calculate latency trend: are average latencies increasing?
-					const avgLatencies = probeResults.map((r) => r.avgLatency);
-					let increasingTrend = true;
-					let decreasingCount = 0;
-
-					for (let i = 1; i < avgLatencies.length; i++) {
-						const diff = avgLatencies[i] - avgLatencies[i - 1];
-						if (diff < -0.5) {
-							// Latency decreased by more than 0.5ms
-							decreasingCount++;
-							increasingTrend = false;
-						}
-					}
-
-					console.log(
-						`[INSPECT] Analysis: allIdentical=${allIdentical}, increasingTrend=${increasingTrend}, decreasingCount=${decreasingCount}`
-					);
-
-					// Decision logic:
-					// If responses differ (sensors/motors detected), accept all layers
-					// If all identical:
-					//   - If clear increasing trend, accept all
-					//   - If flat/noisy trend, accept all (could be real empty bricks)
-					//   - If strongly decreasing trend (2+ decreases), be suspicious
-
-					if (!allIdentical) {
-						// Different responses = strong evidence of real bricks
-						console.log(`[INSPECT] Responses differ across layers - accepting all as real bricks.`);
-						for (let i = 0; i < probeResults.length; i++) {
-							acceptedLayers.push(i + 1);
-						}
-					} else if (decreasingCount >= 2) {
-						// Multiple decreasing latencies with identical responses = likely phantoms
-						console.log(
-							`[INSPECT] Strongly decreasing latencies (${decreasingCount} drops) with identical responses - likely phantoms.`
-						);
-						console.log(
-							`[INSPECT] However, EV3 firmware always responds to layer probes. Accepting all layers.`
-						);
-						// Accept all anyway - we can't reliably distinguish without sensors/motors
-						for (let i = 0; i < probeResults.length; i++) {
-							acceptedLayers.push(i + 1);
-						}
-					} else {
-						// Flat or slightly increasing trend - accept as real bricks
-						console.log(
-							`[INSPECT] Latency trend acceptable (${increasingTrend ? 'increasing' : 'flat'}) - accepting all layers.`
-						);
-						for (let i = 0; i < probeResults.length; i++) {
-							acceptedLayers.push(i + 1);
-						}
-					}
-				}
-
-				console.log(`[INSPECT] Accepted layers: ${acceptedLayers.length > 0 ? acceptedLayers.join(', ') : 'none'}`);
-
-				// Add accepted layers as candidates
-				for (const layer of acceptedLayers) {
-					candidates.push({
-						brickId: `${brickId}-layer-${layer}`,
-						displayName: `${displayName} (Layer ${layer})`,
-						transport: 'usb',
-						detail: `${usbPath} layer ${layer}`,
-						layer,
-						createAdapter: () =>
-							new UsbHidAdapter({
-								path: usbPath
-							})
-					});
-				}
-			} finally {
-				await client.close().catch(() => undefined);
-				scheduler.dispose();
-			}
 		}
 	}
 
@@ -827,6 +1062,30 @@ async function collectCandidates(): Promise<BrickCandidate[]> {
 					dtr
 				})
 		});
+		if (btDaisyEnabled) {
+			const maxLayers = envNumber('EV3_COCKPIT_INSPECT_BT_DAISY_MAX_LAYERS', DEFAULT_BT_DAISY_MAX_LAYERS, 0);
+			await probeAndAttachLayers({
+				candidates,
+				brickId,
+				displayName,
+				transport: 'bt',
+				detail: port,
+				maxLayers,
+				timeoutMs,
+				createProbeAdapter: () =>
+					new BluetoothSppAdapter({
+						port,
+						baudRate,
+						dtr
+					}),
+				createLayerAdapter: () =>
+					new BluetoothSppAdapter({
+						port,
+						baudRate,
+						dtr
+					})
+			});
+		}
 	}
 
 	for (const tcp of tcpCandidates) {

@@ -1451,8 +1451,11 @@ __CODICONS_LINK_TAG__
 				html += '<div class="sensor-section"><h3>Sensors</h3>';
 				for (const s of sensors) {
 					const cls = s.connected ? 'sensor-port' : 'sensor-port disconnected';
+					const label = (typeof s.layer === 'number' && s.layer > 0)
+						? ('L' + s.layer + ' Port ' + (s.port + 1))
+						: ('Port ' + (s.port + 1));
 					html += '<div class="' + cls + '">'
-						+ '<span class="sensor-port-label">Port ' + (s.port + 1) + '</span>'
+						+ '<span class="sensor-port-label">' + label + '</span>'
 						+ '<span>' + s.typeName + (s.connected ? ' (mode ' + s.mode + ')' : '') + '</span>'
 						+ '</div>';
 				}
@@ -1463,8 +1466,11 @@ __CODICONS_LINK_TAG__
 				html += '<div class="motor-section"><h3>Motors</h3>';
 				for (const m of motors) {
 					const cls = m.running ? 'motor-port' : 'motor-port stopped';
+					const label = (typeof m.layer === 'number' && m.layer > 0)
+						? ('L' + m.layer + ' Port ' + m.port)
+						: ('Port ' + m.port);
 					html += '<div class="' + cls + '">'
-						+ '<span class="motor-port-label">Port ' + m.port + '</span>'
+						+ '<span class="motor-port-label">' + label + '</span>'
 						+ '<span>' + (m.running ? 'Speed ' + m.speed + '%' : 'Stopped') + '</span>'
 						+ '</div>';
 				}

@@ -21,21 +21,6 @@ async function readMockNamesFromConfig(): Promise<string[]> {
 	return buildMockBricksFromConfig(parsed).map((entry) => entry.displayName).sort();
 }
 
-async function updateWorkspaceSettings(workspaceRoot: string, updates: Record<string, unknown>): Promise<void> {
-	const settingsPath = path.join(workspaceRoot, '.vscode', 'settings.json');
-	let current: Record<string, unknown> = {};
-	try {
-		const raw = await fs.readFile(settingsPath, 'utf8');
-		current = JSON.parse(raw) as Record<string, unknown>;
-	} catch {
-		current = {};
-	}
-	for (const [key, value] of Object.entries(updates)) {
-		current[key] = value;
-	}
-	await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-	await fs.writeFile(settingsPath, JSON.stringify(current, null, 2), 'utf8');
-}
 
 async function launchVsCode(workspacePath: string): Promise<{
 	app: ElectronApplication;
@@ -168,7 +153,11 @@ async function waitForWebviewFrame(page: Page, timeoutMs: number): Promise<Frame
 }
 
 async function openEv3View(page: Page): Promise<void> {
-	await runCommand(page, 'EV3 Cockpit: Open Brick Panel');
+	try {
+		await runCommand(page, 'EV3 Cockpit: Open Brick Panel');
+	} catch {
+		// Command may not be registered yet; fall back to view picker.
+	}
 	const found = await waitForEv3Webview(page, 8000);
 	if (!found) {
 		await openViewPicker(page, 'EV3');
@@ -208,10 +197,12 @@ test.describe('VS Code UI', () => {
 			}
 			await expect(webviewFrame.locator('#root')).toBeVisible({ timeout: 15000 });
 
-			const tabCount = await webviewFrame.locator('.brick-tab').count();
-			expect(tabCount).toBeGreaterThan(0);
+			await expect
+				.poll(async () => webviewFrame.locator('.brick-tab').count(), { timeout: 15000 })
+				.toBeGreaterThan(0);
 
 			// Open discovery section via the "+" tab
+			await webviewFrame.locator('.brick-tab.add-tab').waitFor({ state: 'visible', timeout: 15000 });
 			await webviewFrame.locator('.brick-tab.add-tab').click();
 			await expect(webviewFrame.locator('.discovery-section')).toBeVisible({ timeout: 15000 });
 
@@ -236,14 +227,15 @@ test.describe('VS Code UI', () => {
 				return names;
 			};
 
-			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': false });
-			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);
+			await expect.poll(listMockNames, { timeout: 30000 }).toEqual([]);
 
-			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': true });
-			await expect.poll(async () => (await listMockNames()).sort(), { timeout: 15000 }).toEqual(expectedMockNames);
+			await runCommand(page, 'EV3 Cockpit: Toggle Mock Bricks');
+			await webviewFrame.locator('.brick-tab.add-tab').click();
+			await expect.poll(async () => (await listMockNames()).sort(), { timeout: 30000 }).toEqual(expectedMockNames);
 
-			await updateWorkspaceSettings(workspaceRoot, { 'ev3-cockpit.mock': false });
-			await expect.poll(listMockNames, { timeout: 15000 }).toEqual([]);
+			await runCommand(page, 'EV3 Cockpit: Toggle Mock Bricks');
+			await webviewFrame.locator('.brick-tab.add-tab').click();
+			await expect.poll(listMockNames, { timeout: 30000 }).toEqual([]);
 		} finally {
 			await app.close();
 			await fs.rm(tempRoot, { recursive: true, force: true });

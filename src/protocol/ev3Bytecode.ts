@@ -61,6 +61,13 @@ export function gv0(offset: number): Uint8Array {
 	return new Uint8Array([0x60 | offset]);
 }
 
+export function gv1(offset: number): Uint8Array {
+	if (!Number.isInteger(offset) || offset < 0 || offset > 255) {
+		throw new Error(`GV1 offset out of range: ${offset}`);
+	}
+	return new Uint8Array([0xe1, offset & 0xff]);
+}
+
 export function readUint32le(bytes: Uint8Array, offset: number): number {
 	if (bytes.length < offset + 4) {
 		throw new Error('Expected 4-byte little-endian integer in system command payload.');

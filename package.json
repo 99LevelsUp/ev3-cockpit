@@ -192,6 +192,10 @@
         "title": "EV3 Cockpit: Show Mock State"
       },
       {
+        "command": "ev3-cockpit.mock.toggleDiscovery",
+        "title": "EV3 Cockpit: Toggle Mock Bricks"
+      },
+      {
         "command": "ev3-cockpit.clearBrickProfiles",
         "title": "EV3 Cockpit: Clear Saved Brick Profiles"
       },

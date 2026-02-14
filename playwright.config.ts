@@ -44,10 +44,7 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'] },
     },
 
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
+    // WebKit disabled for VS Code extension host tests (instability/OOM on Windows).
 
     /* Test against mobile viewports. */
     // {

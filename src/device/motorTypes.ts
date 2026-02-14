@@ -44,6 +44,7 @@ export interface TachoReading {
  */
 export interface MotorState {
 	port: MotorPort;
+	layer?: number;
 	speed: number;
 	running: boolean;
 }

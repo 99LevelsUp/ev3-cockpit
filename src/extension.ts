@@ -8,6 +8,7 @@ import { registerProgramControlCommands } from './commands/programControlCommand
 import { registerTransportCommands } from './commands/transportCommands';
 import { readFeatureConfig } from './config/featureConfig';
 import { readBrickPanelDiscoveryConfig } from './config/brickPanelDiscoveryConfig';
+import { readBrickTelemetryConfig } from './config/brickTelemetryConfig';
 import { readSchedulerConfig } from './config/schedulerConfig';
 import {
 	BrickConnectionProfile,
@@ -15,6 +16,8 @@ import {
 	captureConnectionProfileFromWorkspace
 } from './device/brickConnectionProfiles';
 import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
+import { BrickTelemetryPoller } from './device/brickTelemetryPoller';
+import { BrickTelemetryStore } from './device/brickTelemetryStore';
 import { BrickSettingsService } from './device/brickSettingsService';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { applyDisplayNameAcrossProfiles } from './device/brickNameResolver';
@@ -45,6 +48,7 @@ import { createTreeStatePersistence } from './ui/treeStatePersistence';
 import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
+import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
 import { BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	BrickDiscoveryService,
@@ -203,6 +207,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const sessionManager = new BrickSessionManager<CommandScheduler, Ev3CommandClient, BrickConnectionProfile>(
 		createBrickSession
 	);
+	const telemetryStore = new BrickTelemetryStore();
+	const telemetryConfig = readBrickTelemetryConfig(context.extensionPath, perfLogger);
 
 	const closeBrickSession = async (brickId: string): Promise<void> => {
 		await sessionManager.closeSession(brickId);
@@ -380,6 +386,7 @@ export function activate(context: vscode.ExtensionContext) {
 		);
 	};
 
+
 	// --- Register command modules ---
 
 	const { connect, disconnect, reconnect } = registerConnectCommands({
@@ -504,6 +511,29 @@ export function activate(context: vscode.ExtensionContext) {
 		brickRegistry, sessionManager, treeProvider, brickUiStateStore
 	);
 	const brickPanelConfig = readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger);
+	const usbAutoConnect = createUsbAutoConnectPoller({
+		listUsbHidCandidates,
+		brickRegistry,
+		profileStore,
+		logger: perfLogger,
+		intervalMs: Math.max(500, brickPanelConfig.discoveryRefreshFastMs),
+		resolveDefaultRootPath: () =>
+			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
+		toSafeIdentifier,
+		connectBrick: async (brickId) =>
+			vscode.commands.executeCommand('ev3-cockpit.connectEV3', { brickId, silent: true }) as Promise<void>,
+		disconnectBrick: async (brickId, reason) => {
+			clearProgramSession('usb-auto-disconnect', brickId);
+			await closeBrickSession(brickId);
+			brickRegistry.markUnavailable(brickId, reason);
+			treeProvider.refreshBrick(brickId);
+			brickPanelProvider.refresh();
+		},
+		isUsbMode: () => {
+			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
+			return mode === 'usb' || mode === 'auto' || mode === undefined;
+		}
+	});
 
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
@@ -582,9 +612,27 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 		discardPendingConfigChanges: async (brickId) => {
 			logger.info('Brick panel requested staged configuration discard.', { brickId });
-		}
+		},
+		getSensorInfo: (brickId) => telemetryStore.getSensorInfo(brickId),
+		getMotorInfo: (brickId) => telemetryStore.getMotorInfo(brickId),
+		getButtonState: (brickId) => telemetryStore.getButtonState(brickId),
+		getLedPattern: (brickId) => telemetryStore.getLedPattern(brickId)
 	}, brickPanelConfig);
 	brickPanelProvider.setOnDidChangeActive(() => treeProvider.refresh());
+	const telemetryPoller = new BrickTelemetryPoller({
+		brickRegistry,
+		sessionManager,
+		telemetryStore,
+		config: telemetryConfig,
+		defaultTimeoutMs: readSchedulerConfig().timeoutMs,
+		onTelemetryChange: (brickId) => {
+			if (brickRegistry.getActiveBrickId() === brickId) {
+				brickPanelProvider.refresh();
+			}
+		},
+		logger: perfLogger
+	});
+	telemetryPoller.start();
 	brickRegistry.onStatusChange(() => {
 		treeProvider.refreshThrottled();
 		brickPanelProvider.refresh();
@@ -708,7 +756,10 @@ export function activate(context: vscode.ExtensionContext) {
 		openBrickPanel,
 		mockRegistrations.mockReset,
 		mockRegistrations.mockShowState,
+		mockRegistrations.mockToggleDiscovery,
 		mockRegistrations.clearBrickProfiles,
+		usbAutoConnect,
+		telemetryPoller,
 		configWatcher,
 		fsDisposable,
 		brickTreeView,
