@@ -7,6 +7,10 @@ const DEFAULT_DISCOVERY_REFRESH_FAST_MS = 2_500;
 const DEFAULT_DISCOVERY_REFRESH_SLOW_MS = 15_000;
 const MIN_DISCOVERY_REFRESH_FAST_MS = 500;
 const MIN_DISCOVERY_REFRESH_SLOW_MS = 1_000;
+const DEFAULT_BT_PRESENCE_FAST_MS = 3_000;
+const DEFAULT_BT_PRESENCE_SLOW_MS = 10_000;
+const MIN_BT_PRESENCE_FAST_MS = 1_000;
+const MIN_BT_PRESENCE_SLOW_MS = 3_000;
 const DEFAULT_CONNECTION_HEALTH_ACTIVE_MS = 500;
 const DEFAULT_CONNECTION_HEALTH_IDLE_MS = 2_000;
 const DEFAULT_CONNECTION_HEALTH_PROBE_TIMEOUT_MS = 700;
@@ -18,6 +22,8 @@ const RELATIVE_DISCOVERY_CONFIG_PATH = path.join('config', 'brick-panel.scan.jso
 interface BrickPanelDiscoveryConfigJson {
 	discoveryRefreshFastMs?: unknown;
 	discoveryRefreshSlowMs?: unknown;
+	btPresenceFastMs?: unknown;
+	btPresenceSlowMs?: unknown;
 	connectionHealthActiveMs?: unknown;
 	connectionHealthIdleMs?: unknown;
 	connectionHealthProbeTimeoutMs?: unknown;
@@ -26,6 +32,8 @@ interface BrickPanelDiscoveryConfigJson {
 export interface BrickPanelDiscoveryConfigSnapshot {
 	discoveryRefreshFastMs: number;
 	discoveryRefreshSlowMs: number;
+	btPresenceFastMs: number;
+	btPresenceSlowMs: number;
 	connectionHealthActiveMs: number;
 	connectionHealthIdleMs: number;
 	connectionHealthProbeTimeoutMs: number;
@@ -43,6 +51,16 @@ function normalizeDiscoveryConfig(
 		raw.discoveryRefreshSlowMs,
 		DEFAULT_DISCOVERY_REFRESH_SLOW_MS,
 		Math.max(MIN_DISCOVERY_REFRESH_SLOW_MS, discoveryRefreshFastMs)
+	);
+	const btPresenceFastMs = sanitizeNumber(
+		raw.btPresenceFastMs,
+		DEFAULT_BT_PRESENCE_FAST_MS,
+		MIN_BT_PRESENCE_FAST_MS
+	);
+	const btPresenceSlowMs = sanitizeNumber(
+		raw.btPresenceSlowMs,
+		DEFAULT_BT_PRESENCE_SLOW_MS,
+		Math.max(MIN_BT_PRESENCE_SLOW_MS, btPresenceFastMs)
 	);
 	const connectionHealthActiveMs = sanitizeNumber(
 		raw.connectionHealthActiveMs,
@@ -62,6 +80,8 @@ function normalizeDiscoveryConfig(
 	return {
 		discoveryRefreshFastMs,
 		discoveryRefreshSlowMs,
+		btPresenceFastMs,
+		btPresenceSlowMs,
 		connectionHealthActiveMs,
 		connectionHealthIdleMs,
 		connectionHealthProbeTimeoutMs
@@ -89,6 +109,8 @@ export function readBrickPanelDiscoveryConfig(
 		return {
 			discoveryRefreshFastMs: DEFAULT_DISCOVERY_REFRESH_FAST_MS,
 			discoveryRefreshSlowMs: DEFAULT_DISCOVERY_REFRESH_SLOW_MS,
+			btPresenceFastMs: DEFAULT_BT_PRESENCE_FAST_MS,
+			btPresenceSlowMs: DEFAULT_BT_PRESENCE_SLOW_MS,
 			connectionHealthActiveMs: DEFAULT_CONNECTION_HEALTH_ACTIVE_MS,
 			connectionHealthIdleMs: DEFAULT_CONNECTION_HEALTH_IDLE_MS,
 			connectionHealthProbeTimeoutMs: DEFAULT_CONNECTION_HEALTH_PROBE_TIMEOUT_MS

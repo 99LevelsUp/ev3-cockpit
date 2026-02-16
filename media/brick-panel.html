@@ -170,6 +170,16 @@ __CODICONS_LINK_TAG__
 		opacity: 1;
 		background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
 	}
+	.brick-tab.brick-tab-available {
+		opacity: 0.7;
+		border-style: dashed;
+	}
+	.brick-tab.brick-tab-available:hover {
+		opacity: 1;
+	}
+	.brick-tab.brick-tab-available .brick-tab-label {
+		font-style: italic;
+	}
 	.brick-tab-config-group {
 		position: relative;
 		display: inline-flex;
@@ -1354,15 +1364,22 @@ __CODICONS_LINK_TAG__
 			const activeBrick = bricks.find(b => b.isActive);
 			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-scroller"><div class="brick-tabs-main"><div class="brick-tabs-track">';
 			for (const brick of bricks) {
-				const isActiveTab = !discoveryOpen && brick.isActive;
+				const isAvailable = String(brick.status || '').toUpperCase() === 'AVAILABLE';
+				const isActiveTab = !discoveryOpen && brick.isActive && !isAvailable;
 				const activeClass = isActiveTab ? ' active' : '';
-				const closeMarkup = shouldShowTabClose(brick)
+				const availableClass = isAvailable ? ' brick-tab-available' : '';
+				const closeMarkup = (!isAvailable && shouldShowTabClose(brick))
 					? '<span class="brick-tab-action brick-tab-close" data-close-brick-id="' + brick.brickId + '" title="Disconnect EV3 Brick" aria-label="Disconnect EV3 Brick" role="button">' + renderTabCloseIcon() + '</span>'
 					: '';
-				html += '<button class="brick-tab' + activeClass + '" data-brick-id="' + brick.brickId + '" title="' + escapeHtml(brick.displayName) + '">'
+				const tabTitle = isAvailable
+					? 'Click to connect ' + escapeHtml(brick.displayName)
+					: escapeHtml(brick.displayName);
+				html += '<button class="brick-tab' + activeClass + availableClass + '" data-brick-id="' + brick.brickId + '"'
+					+ (isAvailable ? ' data-brick-available="true"' : '')
+					+ ' title="' + tabTitle + '">'
 					+ renderTransportIndicator(brick)
 					+ '<span class="brick-tab-label">' + escapeHtml(brick.displayName) + '</span>'
-					+ renderTabConfigControls(brick, isActiveTab)
+					+ (isAvailable ? '' : renderTabConfigControls(brick, isActiveTab))
 					+ closeMarkup
 					+ '</button>';
 			}
@@ -1709,6 +1726,14 @@ __CODICONS_LINK_TAG__
 					}
 					const nextBrickId = tab.dataset.brickId || '';
 					if (!nextBrickId) {
+						return;
+					}
+					if (tab.dataset.brickAvailable === 'true') {
+						// AVAILABLE brick: trigger connection
+						connectingDiscoveryCandidateId = nextBrickId;
+						ensureBrickVisibleFromCandidate(nextBrickId, 'CONNECTING');
+						render();
+						vscode.postMessage({ type: 'connectScannedBrick', candidateId: nextBrickId });
 						return;
 					}
 					bricks = bricks.map((brick) => ({

@@ -19,6 +19,8 @@ test('readBrickPanelDiscoveryConfig reads configured values from JSON file', () 
 			JSON.stringify({
 				discoveryRefreshFastMs: 3200,
 				discoveryRefreshSlowMs: 17000,
+				btPresenceFastMs: 4000,
+				btPresenceSlowMs: 12000,
 				connectionHealthActiveMs: 420,
 				connectionHealthIdleMs: 2400,
 				connectionHealthProbeTimeoutMs: 900
@@ -28,6 +30,8 @@ test('readBrickPanelDiscoveryConfig reads configured values from JSON file', () 
 		const config = readBrickPanelDiscoveryConfig(root);
 		assert.equal(config.discoveryRefreshFastMs, 3200);
 		assert.equal(config.discoveryRefreshSlowMs, 17000);
+		assert.equal(config.btPresenceFastMs, 4000);
+		assert.equal(config.btPresenceSlowMs, 12000);
 		assert.equal(config.connectionHealthActiveMs, 420);
 		assert.equal(config.connectionHealthIdleMs, 2400);
 		assert.equal(config.connectionHealthProbeTimeoutMs, 900);
@@ -42,6 +46,8 @@ test('readBrickPanelDiscoveryConfig falls back to defaults when file is missing'
 		const config = readBrickPanelDiscoveryConfig(root);
 		assert.equal(config.discoveryRefreshFastMs, 2500);
 		assert.equal(config.discoveryRefreshSlowMs, 15000);
+		assert.equal(config.btPresenceFastMs, 3000);
+		assert.equal(config.btPresenceSlowMs, 10000);
 		assert.equal(config.connectionHealthActiveMs, 500);
 		assert.equal(config.connectionHealthIdleMs, 2000);
 		assert.equal(config.connectionHealthProbeTimeoutMs, 700);

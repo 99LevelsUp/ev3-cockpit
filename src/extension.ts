@@ -49,6 +49,7 @@ import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
 import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
+import { createBtPresenceScanner } from './activation/btPresenceScanner';
 import { BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	BrickDiscoveryService,
@@ -535,6 +536,34 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
+	const btPresenceScanner = createBtPresenceScanner({
+		listSerialCandidates,
+		brickRegistry,
+		profileStore,
+		discoveryService,
+		logger: perfLogger,
+		fastIntervalMs: brickPanelConfig.btPresenceFastMs,
+		slowIntervalMs: brickPanelConfig.btPresenceSlowMs,
+		resolveDefaultRootPath: () =>
+			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
+		resolvePreferredBluetoothPort: () => {
+			const raw = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.bluetooth.port');
+			return typeof raw === 'string' && raw.trim().length > 0
+				? raw.trim().toUpperCase()
+				: undefined;
+		},
+		toSafeIdentifier,
+		isBtScanEnabled: () => {
+			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
+			return mode === 'bt' || mode === 'auto' || mode === undefined;
+		},
+		onPresenceChange: () => {
+			treeProvider.refreshThrottled();
+			// brickPanelProvider is created below; safe because onPresenceChange is called async
+			brickPanelProvider?.refresh();
+		}
+	});
+
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
 	);
@@ -552,6 +581,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const snapshots = brickRegistry.listSnapshots().filter((snapshot) => (
 				snapshot.status === 'READY'
 				|| snapshot.status === 'CONNECTING'
+				|| (snapshot.status === 'AVAILABLE' && snapshot.transport === 'bt')
 				|| (
 					snapshot.status === 'UNAVAILABLE'
 					&& snapshot.lastError !== 'Disconnected by user.'
@@ -759,6 +789,7 @@ export function activate(context: vscode.ExtensionContext) {
 		mockRegistrations.mockToggleDiscovery,
 		mockRegistrations.clearBrickProfiles,
 		usbAutoConnect,
+		btPresenceScanner,
 		telemetryPoller,
 		configWatcher,
 		fsDisposable,

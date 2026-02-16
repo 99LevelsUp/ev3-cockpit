@@ -45,7 +45,7 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 	return trimmed;
 }
 
-function isLikelyEv3SerialCandidate(
+export function isLikelyEv3SerialCandidate(
 	candidate: SerialCandidate,
 	preferredPort?: string
 ): boolean {
