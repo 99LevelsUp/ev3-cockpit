@@ -42,6 +42,11 @@ export interface BrickPanelDiscoveryCandidate {
 	alreadyConnected?: boolean;
 }
 
+export interface BrickPanelActiveState {
+	mode: 'discovery' | 'brick' | 'unknown';
+	brickId?: string;
+}
+
 interface WebviewBrickInfo {
 	brickId: string;
 	displayName: string;
@@ -61,6 +66,7 @@ type MessageFromWebview =
 	| { type: 'setMockConnection'; candidateId: string; connected: boolean }
 	| { type: 'applyConfigChanges'; brickId: string; brickName: string }
 	| { type: 'discardConfigChanges'; brickId: string }
+	| { type: 'panelActiveChanged'; mode: 'discovery' | 'brick'; brickId?: string }
 	| { type: 'ready' };
 
 interface WebviewSensorInfo {
@@ -117,8 +123,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'ev3-cockpit.brick';
 
 	private view?: vscode.WebviewView;
-	private onDidChangeActive?: () => void;
+	private onDidChangeActive?: (state: BrickPanelActiveState) => void;
 	private pollingTimer?: ReturnType<typeof setTimeout>;
+	private panelActiveState: BrickPanelActiveState = { mode: 'unknown' };
 	private readonly activeIntervalMs: number;
 	private readonly idleIntervalMs: number;
 	private readonly discoveryRefreshFastMs: number;
@@ -157,7 +164,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			if (message.type === 'selectBrick') {
 				const changed = this.dataSource.setActiveBrick(message.brickId);
 				if (changed && this.onDidChangeActive) {
-					this.onDidChangeActive();
+					this.onDidChangeActive(this.panelActiveState);
 				}
 				this.refresh();
 			} else if (message.type === 'scanBricks') {
@@ -172,12 +179,24 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				void this.applyConfigChanges(message.brickId, message.brickName);
 			} else if (message.type === 'discardConfigChanges') {
 				void this.discardConfigChanges(message.brickId);
+			} else if (message.type === 'panelActiveChanged') {
+				this.panelActiveState = {
+					mode: message.mode,
+					brickId: message.mode === 'brick' ? message.brickId?.trim() || undefined : undefined
+				};
+				if (this.onDidChangeActive) {
+					this.onDidChangeActive(this.panelActiveState);
+				}
 			} else if (message.type === 'ready') {
 				this.refresh();
 			}
 		});
 
 		webviewView.onDidDispose(() => {
+			this.panelActiveState = { mode: 'unknown' };
+			if (this.onDidChangeActive) {
+				this.onDidChangeActive(this.panelActiveState);
+			}
 			this.stopPolling();
 			this.view = undefined;
 		});
@@ -185,8 +204,12 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		this.startPolling();
 	}
 
-	public setOnDidChangeActive(callback: () => void): void {
+	public setOnDidChangeActive(callback: (state: BrickPanelActiveState) => void): void {
 		this.onDidChangeActive = callback;
+	}
+
+	public getActiveState(): BrickPanelActiveState {
+		return this.panelActiveState;
 	}
 
 	public refresh(): void {
@@ -355,7 +378,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		if (normalizedBrickId) {
 			const changed = this.dataSource.setActiveBrick(normalizedBrickId);
 			if (changed && this.onDidChangeActive) {
-				this.onDidChangeActive();
+				this.onDidChangeActive(this.panelActiveState);
 			}
 		}
 		try {
@@ -389,7 +412,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		if (normalizedBrickId) {
 			const changed = this.dataSource.setActiveBrick(normalizedBrickId);
 			if (changed && this.onDidChangeActive) {
-				this.onDidChangeActive();
+				this.onDidChangeActive(this.panelActiveState);
 			}
 		}
 		try {

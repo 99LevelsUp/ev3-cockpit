@@ -642,6 +642,7 @@ __CODICONS_LINK_TAG__
 		let scanLoopTimer = null;
 		let scanLoopMode = '';
 		let lastScanBackground = false;
+		let lastPostedPanelActiveKey = '';
 		let nextBrickOrder = 0;
 		const brickOrderById = new Map();
 		const DISCOVERY_REFRESH_FAST_MS = __DISCOVERY_REFRESH_FAST_MS__;
@@ -651,6 +652,23 @@ __CODICONS_LINK_TAG__
 
 		function isPlusTabActive() {
 			return discoveryOpen || bricks.length === 0;
+		}
+
+		function postPanelActiveStateIfChanged() {
+			const mode = isPlusTabActive() ? 'discovery' : 'brick';
+			const activeBrickId = mode === 'brick'
+				? (bricks.find((brick) => brick.isActive)?.brickId || '')
+				: '';
+			const stateKey = mode + ':' + activeBrickId;
+			if (stateKey === lastPostedPanelActiveKey) {
+				return;
+			}
+			lastPostedPanelActiveKey = stateKey;
+			vscode.postMessage({
+				type: 'panelActiveChanged',
+				mode,
+				brickId: activeBrickId || undefined
+			});
 		}
 
 		function stopScanLoop() {
@@ -1814,6 +1832,7 @@ __CODICONS_LINK_TAG__
 					}
 				});
 			}
+			postPanelActiveStateIfChanged();
 		}
 
 		window.addEventListener('message', (event) => {
