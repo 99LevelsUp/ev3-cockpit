@@ -31,6 +31,7 @@ export interface BrickDiscoveryServiceDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
 	scanners: DiscoveryTransportScanners;
+	probeBtCandidatePresence?: (port: string) => Promise<boolean>;
 	logger: Logger;
 	toSafeIdentifier: (value: string) => string;
 }
@@ -212,6 +213,28 @@ export class BrickDiscoveryService {
 			const btPort = rawPath.toUpperCase();
 			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
 			const snapshot = brickRegistry.getSnapshot(brickId);
+			const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
+			if (!alreadyConnected && this.deps.probeBtCandidatePresence) {
+				let present = false;
+				try {
+					present = await this.deps.probeBtCandidatePresence(btPort);
+				} catch (error) {
+					logger.debug('Bluetooth discovery probe failed', {
+						port: btPort,
+						brickId,
+						error: error instanceof Error ? error.message : String(error)
+					});
+				}
+				if (!present) {
+					logger.debug('Bluetooth discovery probe rejected candidate', {
+						port: btPort,
+						brickId,
+						pnpId: serialCandidate.pnpId,
+						manufacturer: serialCandidate.manufacturer
+					});
+					continue;
+				}
+			}
 			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
 			const portProfile = profileStore.list().find((profile) => (
 				profile.transport.mode === 'bt'
@@ -239,7 +262,7 @@ export class BrickDiscoveryService {
 				transport: TransportMode.BT,
 				detail,
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
-				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+				alreadyConnected
 			}, profile);
 		}
 

@@ -1205,3 +1205,87 @@ test('BrickDiscoveryService.scan uses preferredBluetoothPort config', async () =
 	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-com9');
 });
+
+test('BrickDiscoveryService.scan skips Bluetooth candidate when presence probe rejects it', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM4', manufacturer: 'LEGO', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653ABCDEF_...' }],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => false,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const config = createDefaultConfig();
+
+	const candidates = await service.scan(config);
+
+	assert.equal(candidates.length, 0);
+});
+
+test('BrickDiscoveryService.scan includes Bluetooth candidate when presence probe confirms it', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM4', manufacturer: 'LEGO', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653ABCDEF_...' }],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => true,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const config = createDefaultConfig();
+
+	const candidates = await service.scan(config);
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+});
+
+test('BrickDiscoveryService.scan does not probe already connected Bluetooth candidate', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM4', manufacturer: 'LEGO', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653ABCDEF_...' }],
+		[]
+	);
+	let probeCalls = 0;
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry([
+			{
+				brickId: 'bt-001653abcdef',
+				displayName: 'EV3 BT',
+				role: 'unknown',
+				transport: TransportMode.BT,
+				rootPath: '/home/root/lms2012/prjs/',
+				status: 'READY',
+				isActive: false,
+				lastSeenAtIso: '2026-02-17T00:00:00.000Z'
+			}
+		]),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => {
+			probeCalls += 1;
+			return false;
+		},
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const config = createDefaultConfig();
+
+	const candidates = await service.scan(config);
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+	assert.equal(probeCalls, 0);
+});

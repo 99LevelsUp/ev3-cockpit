@@ -174,7 +174,7 @@ async function probeBtPort(port: string, dtr: boolean): Promise<boolean> {
 	}
 }
 
-async function probeBtCandidatePresence(port: string): Promise<boolean> {
+export async function probeBtCandidatePresence(port: string): Promise<boolean> {
 	// Most EV3 SPP stacks work with dtr=false, but try both to avoid false negatives.
 	return (await probeBtPort(port, false)) || (await probeBtPort(port, true));
 }

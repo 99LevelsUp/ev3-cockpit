@@ -50,7 +50,7 @@ import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
 import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
-import { createBtPresenceScanner } from './activation/btPresenceScanner';
+import { createBtPresenceScanner, probeBtCandidatePresence } from './activation/btPresenceScanner';
 import { BrickPanelActiveState, BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	BrickDiscoveryService,
@@ -93,6 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
 			listSerialCandidates,
 			listTcpDiscoveryCandidates
 		},
+		probeBtCandidatePresence,
 		logger: perfLogger,
 		toSafeIdentifier
 	});
