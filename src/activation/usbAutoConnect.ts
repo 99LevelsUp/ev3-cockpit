@@ -17,9 +17,9 @@ export interface UsbAutoConnectOptions {
 	intervalMs: number;
 	resolveDefaultRootPath: () => string;
 	toSafeIdentifier: (value: string) => string;
-	connectBrick: (brickId: string) => Promise<void>;
+	resolveActivateOnConnect: () => boolean;
+	connectBrick: (brickId: string, activateOnSuccess: boolean) => Promise<void>;
 	disconnectBrick: (brickId: string, reason: string) => Promise<void>;
-	isUsbMode: () => boolean;
 }
 
 export function createUsbAutoConnectPoller(options: UsbAutoConnectOptions): vscode.Disposable {
@@ -31,9 +31,9 @@ export function createUsbAutoConnectPoller(options: UsbAutoConnectOptions): vsco
 		intervalMs,
 		resolveDefaultRootPath,
 		toSafeIdentifier,
+		resolveActivateOnConnect,
 		connectBrick,
-		disconnectBrick,
-		isUsbMode
+		disconnectBrick
 	} = options;
 
 	let disposed = false;
@@ -41,10 +41,6 @@ export function createUsbAutoConnectPoller(options: UsbAutoConnectOptions): vsco
 
 	const tick = async (): Promise<void> => {
 		if (disposed) {
-			return;
-		}
-		if (!isUsbMode()) {
-			scheduleNext();
 			return;
 		}
 
@@ -89,7 +85,8 @@ export function createUsbAutoConnectPoller(options: UsbAutoConnectOptions): vsco
 				}
 			});
 			logger.info('USB auto-connect: connecting detected brick', { brickId, usbPath });
-			await connectBrick(brickId);
+			const activateOnSuccess = resolveActivateOnConnect();
+			await connectBrick(brickId, activateOnSuccess);
 		}
 
 		for (const snapshot of brickRegistry.listSnapshots()) {

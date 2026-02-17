@@ -59,23 +59,28 @@ export interface ConnectCommandRegistrations {
 interface ConnectCommandArg {
 	brickId?: string;
 	silent?: boolean;
+	activateOnSuccess?: boolean;
 }
 
-function parseConnectCommandArg(arg: unknown): { brickIdArg: unknown; silent: boolean } {
+function parseConnectCommandArg(arg: unknown): { brickIdArg: unknown; silent: boolean; activateOnSuccess: boolean } {
 	if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
-		return { brickIdArg: arg, silent: false };
+		return { brickIdArg: arg, silent: false, activateOnSuccess: true };
 	}
 	const candidate = arg as ConnectCommandArg;
-	if (candidate.silent !== true) {
-		return { brickIdArg: arg, silent: false };
-	}
+	const silent = candidate.silent === true;
+	const activateOnSuccess = candidate.activateOnSuccess !== false;
 	if (typeof candidate.brickId === 'string' && candidate.brickId.trim().length > 0) {
 		return {
 			brickIdArg: candidate.brickId.trim(),
-			silent: true
+			silent,
+			activateOnSuccess
 		};
 	}
-	return { brickIdArg: arg, silent: true };
+	return {
+		brickIdArg: arg,
+		silent,
+		activateOnSuccess
+	};
 }
 
 function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
@@ -97,6 +102,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
 		const parsedArg = parseConnectCommandArg(arg);
 		const silent = parsedArg.silent;
+		const activateOnSuccess = parsedArg.activateOnSuccess;
 		if (!silent) {
 			vscode.window.showInformationMessage('Connecting to EV3 Brick...');
 		}
@@ -273,7 +279,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				...baseDescriptor,
 				displayName: detectedBrickName ?? rememberedName ?? baseDescriptor.displayName
 			};
-			brickRegistry.upsertReady({
+			const readyInput = {
 				...brickDescriptor,
 				fsService: connectedFsService,
 				controlService: connectedControlService,
@@ -283,7 +289,12 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				soundService: new SoundService(serviceOpts),
 				buttonService: new ButtonService(serviceOpts),
 				settingsService: new BrickSettingsService(serviceOpts)
-			});
+			};
+			if (activateOnSuccess) {
+				brickRegistry.upsertReady(readyInput);
+			} else {
+				brickRegistry.upsertReadyPassive(readyInput);
+			}
 			options.onBrickOperation(brickDescriptor.brickId, 'Connect probe completed');
 			const connectionProfile = options.captureConnectionProfile(
 				brickDescriptor.brickId,
