@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -78,7 +79,7 @@ test('treeStatePersistence restores saved expansion and selection on tree refres
 			brickId: 'brick-1',
 			displayName: 'EV3 A',
 			role: 'standalone',
-			transport: 'tcp',
+			transport: TransportMode.TCP,
 			status: 'READY',
 			isActive: true,
 			rootPath: '/home/root/lms2012/prjs/'

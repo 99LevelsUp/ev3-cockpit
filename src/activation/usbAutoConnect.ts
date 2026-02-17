@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import * as vscode from 'vscode';
 import type { BrickConnectionProfileStore } from '../device/brickConnectionProfiles';
 import type { BrickRegistry } from '../device/brickRegistry';
@@ -83,7 +84,7 @@ export function createUsbAutoConnectPoller(options: UsbAutoConnectOptions): vsco
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
 				transport: {
-					mode: 'usb',
+					mode: TransportMode.USB,
 					usbPath
 				}
 			});

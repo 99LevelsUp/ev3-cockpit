@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isUsbReconnectCandidateAvailable } from '../device/brickReconnect';
@@ -11,7 +12,7 @@ function makeSnapshot(overrides: Partial<BrickSnapshot> = {}): BrickSnapshot {
 		brickId: 'brick-1',
 		displayName: 'EV3',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/',
 		status: 'UNAVAILABLE',
 		isActive: false,
@@ -25,7 +26,7 @@ function makeProfile(overrides: Partial<BrickConnectionProfile> = {}): BrickConn
 		displayName: 'EV3',
 		savedAtIso: new Date().toISOString(),
 		rootPath: '/home/root/',
-		transport: { mode: 'usb', usbPath: '/dev/usb0' },
+		transport: { mode: TransportMode.USB, usbPath: '/dev/usb0' },
 		...overrides
 	};
 }
@@ -56,7 +57,7 @@ test('returns false if snapshot is missing', async () => {
 
 test('returns false if transport is not usb', async () => {
 	const deps = makeDeps({
-		snapshot: makeSnapshot({ transport: 'tcp' }),
+		snapshot: makeSnapshot({ transport: TransportMode.TCP }),
 		profile: makeProfile()
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
@@ -70,7 +71,7 @@ test('returns false if profile is missing', async () => {
 test('returns false if profile transport mode is not usb', async () => {
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: 'bt' } })
+		profile: makeProfile({ transport: { mode: TransportMode.BT } })
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
 });
@@ -87,7 +88,7 @@ test('returns false if no USB candidates', async () => {
 test('returns true if configured path matches a candidate', async () => {
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: 'usb', usbPath: '/dev/usb0' } }),
+		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '/dev/usb0' } }),
 		candidates: [{ path: '/dev/usb0' }, { path: '/dev/usb1' }]
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), true);
@@ -97,7 +98,7 @@ test('returns true if no configured path and exactly 1 candidate, updates profil
 	const upsertCalls: BrickConnectionProfile[] = [];
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: 'usb', usbPath: '' } }),
+		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '' } }),
 		candidates: [{ path: '/dev/usb99' }],
 		upsertCalls
 	});
@@ -109,7 +110,7 @@ test('returns true if no configured path and exactly 1 candidate, updates profil
 test('returns false if no configured path and multiple candidates', async () => {
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: 'usb', usbPath: '' } }),
+		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '' } }),
 		candidates: [{ path: '/dev/usb0' }, { path: '/dev/usb1' }]
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);

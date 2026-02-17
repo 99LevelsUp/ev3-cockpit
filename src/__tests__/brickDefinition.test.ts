@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
@@ -12,7 +13,7 @@ test('BrickSnapshot satisfies BrickDefinitionNode', () => {
 	const snapshot: BrickSnapshot = {
 		brickId: 'ev3-001',
 		displayName: 'My EV3',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		capturedAtIso: new Date().toISOString()
 	};
 	const node: BrickDefinitionNode = snapshot;
@@ -23,7 +24,7 @@ test('minimal BrickSnapshot has brickId', () => {
 	const snapshot: BrickSnapshot = {
 		brickId: 'ev3-002',
 		displayName: 'Test Brick',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		capturedAtIso: '2025-01-01T00:00:00Z'
 	};
 	assert.equal(snapshot.brickId, 'ev3-002');

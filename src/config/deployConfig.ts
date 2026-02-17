@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { sanitizeBoolean, sanitizeEnum, sanitizeGlobList, sanitizeNumber, sanitizeStringList } from './sanitizers';
+import { sanitizeBoolean, sanitizeGlobList, sanitizeNumber, sanitizeStringList } from './sanitizers';
+import { DeployVerifyMode, DeployConflictPolicy, DeployConflictAskFallback } from '../types/enums';
 
-export type DeployVerifyMode = 'none' | 'size' | 'md5';
-export type DeployConflictPolicy = 'overwrite' | 'skip' | 'ask';
-export type DeployConflictAskFallback = 'prompt' | 'skip' | 'overwrite';
+// Re-export for backward compatibility
+export { DeployVerifyMode, DeployConflictPolicy, DeployConflictAskFallback };
 
 export interface DeployResilienceConfigSnapshot {
 	enabled: boolean;
@@ -39,9 +39,9 @@ export const DEFAULT_DEPLOY_CLEANUP_ENABLED = false;
 export const DEFAULT_DEPLOY_CLEANUP_CONFIRM_BEFORE_DELETE = true;
 export const DEFAULT_DEPLOY_CLEANUP_DRY_RUN = false;
 export const DEFAULT_DEPLOY_ATOMIC_ENABLED = false;
-export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = 'none';
-export const DEFAULT_DEPLOY_CONFLICT_POLICY: DeployConflictPolicy = 'overwrite';
-export const DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK: DeployConflictAskFallback = 'prompt';
+export const DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD: DeployVerifyMode = DeployVerifyMode.NONE;
+export const DEFAULT_DEPLOY_CONFLICT_POLICY: DeployConflictPolicy = DeployConflictPolicy.OVERWRITE;
+export const DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK: DeployConflictAskFallback = DeployConflictAskFallback.PROMPT;
 export const DEFAULT_DEPLOY_RESILIENCE_ENABLED = true;
 export const DEFAULT_DEPLOY_RESILIENCE_MAX_RETRIES = 1;
 export const DEFAULT_DEPLOY_RESILIENCE_RETRY_DELAY_MS = 300;
@@ -103,15 +103,27 @@ export function sanitizeDeployAtomicEnabled(value: unknown): boolean {
 }
 
 export function sanitizeDeployVerifyAfterUpload(value: unknown): DeployVerifyMode {
-	return sanitizeEnum(value, ['none', 'size', 'md5'] as const, DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD);
+	// Accept both enum values and string literals for backward compatibility
+	if (value === DeployVerifyMode.NONE || value === 'none') return DeployVerifyMode.NONE;
+	if (value === DeployVerifyMode.SIZE || value === 'size') return DeployVerifyMode.SIZE;
+	if (value === DeployVerifyMode.MD5 || value === 'md5') return DeployVerifyMode.MD5;
+	return DEFAULT_DEPLOY_VERIFY_AFTER_UPLOAD;
 }
 
 export function sanitizeDeployConflictPolicy(value: unknown): DeployConflictPolicy {
-	return sanitizeEnum(value, ['overwrite', 'skip', 'ask'] as const, DEFAULT_DEPLOY_CONFLICT_POLICY);
+	// Accept both enum values and string literals for backward compatibility
+	if (value === DeployConflictPolicy.OVERWRITE || value === 'overwrite') return DeployConflictPolicy.OVERWRITE;
+	if (value === DeployConflictPolicy.SKIP || value === 'skip') return DeployConflictPolicy.SKIP;
+	if (value === DeployConflictPolicy.ASK || value === 'ask') return DeployConflictPolicy.ASK;
+	return DEFAULT_DEPLOY_CONFLICT_POLICY;
 }
 
 export function sanitizeDeployConflictAskFallback(value: unknown): DeployConflictAskFallback {
-	return sanitizeEnum(value, ['prompt', 'skip', 'overwrite'] as const, DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK);
+	// Accept both enum values and string literals for backward compatibility
+	if (value === DeployConflictAskFallback.PROMPT || value === 'prompt') return DeployConflictAskFallback.PROMPT;
+	if (value === DeployConflictAskFallback.SKIP || value === 'skip') return DeployConflictAskFallback.SKIP;
+	if (value === DeployConflictAskFallback.OVERWRITE || value === 'overwrite') return DeployConflictAskFallback.OVERWRITE;
+	return DEFAULT_DEPLOY_CONFLICT_ASK_FALLBACK;
 }
 
 export function sanitizeDeployResilienceEnabled(value: unknown): boolean {

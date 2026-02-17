@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -58,7 +59,7 @@ test('connectionHealthPoller marks Brick unavailable when probe fails', async ()
 			brickId: 'usb-1',
 			displayName: 'EV3 USB',
 			role: 'standalone',
-			transport: 'usb',
+			transport: TransportMode.USB,
 			rootPath: '/home/root/lms2012/prjs/',
 			fsService: mockFs,
 			controlService: mockControl
@@ -120,7 +121,7 @@ test('connectionHealthPoller requests reconnect for recoverable unavailable Bric
 			brickId: 'usb-2',
 			displayName: 'EV3 USB 2',
 			role: 'standalone',
-			transport: 'usb',
+			transport: TransportMode.USB,
 			rootPath: '/home/root/lms2012/prjs/',
 			fsService: mockFs,
 			controlService: mockControl
@@ -149,7 +150,7 @@ test('connectionHealthPoller requests reconnect for recoverable unavailable Bric
 						brickId,
 						displayName: 'EV3 USB 2',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						rootPath: '/home/root/lms2012/prjs/',
 						fsService: mockFs,
 						controlService: mockControl
@@ -173,7 +174,7 @@ test('connectionHealthPoller does not request reconnect for user-disconnected Br
 			brickId: 'usb-3',
 			displayName: 'EV3 USB 3',
 			role: 'standalone',
-			transport: 'usb',
+			transport: TransportMode.USB,
 			rootPath: '/home/root/lms2012/prjs/',
 			fsService: mockFs,
 			controlService: mockControl

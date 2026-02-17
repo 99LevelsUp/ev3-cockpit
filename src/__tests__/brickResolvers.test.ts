@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -54,7 +55,7 @@ interface BrickResolversModule {
 			rootPath: string,
 			profile?: {
 				displayName?: string;
-				transport: { mode: 'usb' | 'bt' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string };
+				transport: { mode: TransportMode.USB | 'bt' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string };
 				rootPath?: string;
 			}
 		) => { brickId: string; displayName: string; transport: string; rootPath: string };
@@ -109,7 +110,7 @@ function createScaffold(options: ScaffoldOptions): {
 	const logger = createLoggerMock();
 	const brickRegistry = createBrickRegistryMock(options);
 	const configValues: Record<string, unknown> = {
-		'transport.mode': 'usb',
+		'transport.mode': TransportMode.USB,
 		'transport.bluetooth.probeTimeoutMs': 8_000,
 		'fs.mode': 'safe',
 		'fs.fullMode.confirmationRequired': true,
@@ -335,7 +336,7 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 	await withMockedBrickResolvers(
 		{
 			configValues: {
-				'transport.mode': 'tcp',
+				'transport.mode': TransportMode.TCP,
 				'transport.tcp.host': '192.168.0.10',
 				'transport.tcp.port': 5566
 			}
@@ -349,7 +350,7 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 			assert.match(tcp.displayName, /192\.168\.0\.10:5566/);
 
 			const bt = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
-				transport: { mode: 'bt', btPort: 'COM9' },
+				transport: { mode: TransportMode.BT, btPort: 'COM9' },
 				rootPath: '/media/card/'
 			});
 			assert.equal(bt.transport, 'bt');
@@ -357,13 +358,13 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 			assert.match(bt.brickId, /^bt-/);
 
 			const usb = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
-				transport: { mode: 'usb', usbPath: 'hid#ev3' }
+				transport: { mode: TransportMode.USB, usbPath: 'hid#ev3' }
 			});
 			assert.equal(usb.transport, 'usb');
 			assert.match(usb.brickId, /^usb-/);
 
 			const mock = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
-				transport: { mode: 'mock' }
+				transport: { mode: TransportMode.MOCK }
 			});
 			assert.equal(mock.transport, 'mock');
 			assert.equal(mock.brickId, 'mock');
@@ -375,7 +376,7 @@ test('brickResolvers uses remembered Brick name as descriptor displayName', asyn
 	await withMockedBrickResolvers(
 		{
 			configValues: {
-				'transport.mode': 'usb',
+				'transport.mode': TransportMode.USB,
 				'transport.usb.path': 'hid#main'
 			}
 		},
@@ -383,7 +384,7 @@ test('brickResolvers uses remembered Brick name as descriptor displayName', asyn
 			const resolvers = module.createBrickResolvers(deps);
 			const descriptor = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
 				displayName: 'MyBrick',
-				transport: { mode: 'usb', usbPath: 'hid#main' }
+				transport: { mode: TransportMode.USB, usbPath: 'hid#main' }
 			});
 			assert.equal(descriptor.displayName, 'MyBrick');
 		}
@@ -557,7 +558,7 @@ test('brickResolvers resolveBrickIdFromCommandArg returns active for non-matchin
 
 test('brickResolvers resolveCurrentTransportMode returns configured mode', async () => {
 	await withMockedBrickResolvers(
-		{ configValues: { 'transport.mode': 'usb' } },
+		{ configValues: { 'transport.mode': TransportMode.USB } },
 		async ({ module, deps }) => {
 			const resolvers = module.createBrickResolvers(deps);
 			assert.equal(resolvers.resolveCurrentTransportMode(), 'usb');
@@ -579,7 +580,7 @@ test('brickResolvers resolveProbeTimeoutMs uses bluetooth probe for bluetooth mo
 	await withMockedBrickResolvers(
 		{
 			configValues: {
-				'transport.mode': 'bt',
+				'transport.mode': TransportMode.BT,
 				'transport.bluetooth.probeTimeoutMs': 12_000
 			},
 			schedulerTimeoutMs: 2_000
@@ -594,7 +595,7 @@ test('brickResolvers resolveProbeTimeoutMs uses bluetooth probe for bluetooth mo
 test('brickResolvers resolveProbeTimeoutMs uses base timeout for non-bluetooth mode', async () => {
 	await withMockedBrickResolvers(
 		{
-			configValues: { 'transport.mode': 'usb' },
+			configValues: { 'transport.mode': TransportMode.USB },
 			schedulerTimeoutMs: 3_000
 		},
 		async ({ module, deps }) => {

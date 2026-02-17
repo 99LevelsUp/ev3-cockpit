@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -64,7 +65,7 @@ test('BrickPanelProvider polls at active interval when bricks exist', async () =
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
 		let refreshCount = 0;
 		const bricks = [
-			{ brickId: 'b1', displayName: 'EV3', status: 'READY', transport: 'usb', role: 'standalone', isActive: true }
+			{ brickId: 'b1', displayName: 'EV3', status: 'READY', transport: TransportMode.USB, role: 'standalone', isActive: true }
 		];
 
 		const provider = new BrickPanelProvider(
@@ -140,7 +141,7 @@ test('BrickPanelProvider polls at idle interval when no bricks', async () => {
 test('BrickPanelProvider.refresh sends updateBricks message', async () => {
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
 		const bricks = [
-			{ brickId: 'b1', displayName: 'EV3', status: 'READY', transport: 'usb', role: 'standalone', isActive: true }
+			{ brickId: 'b1', displayName: 'EV3', status: 'READY', transport: TransportMode.USB, role: 'standalone', isActive: true }
 		];
 
 		const provider = new BrickPanelProvider(
@@ -181,7 +182,7 @@ test('BrickPanelProvider.refresh includes lastError and lastOperation in payload
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
 		const bricks = [
 			{
-				brickId: 'b1', displayName: 'EV3', status: 'ERROR', transport: 'usb',
+				brickId: 'b1', displayName: 'EV3', status: 'ERROR', transport: TransportMode.USB,
 				role: 'standalone', isActive: true, lastError: 'Connection lost', lastOperation: 'Deploy'
 			}
 		];
@@ -225,7 +226,7 @@ test('BrickPanelProvider.refresh includes motor info for active brick', async ()
 	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
 		const bricks = [
 			{
-				brickId: 'b1', displayName: 'EV3', status: 'READY', transport: 'usb',
+				brickId: 'b1', displayName: 'EV3', status: 'READY', transport: TransportMode.USB,
 				role: 'standalone', isActive: true
 			}
 		];
@@ -389,14 +390,14 @@ test('BrickPanelProvider setMockConnection delegates to data source', async () =
 		);
 
 		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
-		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock', connected: false });
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: TransportMode.MOCK, connected: false });
 		await sleep(0);
-		view.receiveHandler?.({ type: 'setMockConnection', candidateId: 'mock', connected: true });
+		view.receiveHandler?.({ type: 'setMockConnection', candidateId: TransportMode.MOCK, connected: true });
 		await sleep(0);
 
 		assert.deepEqual(calls, [
-			{ candidateId: 'mock', connected: false },
-			{ candidateId: 'mock', connected: true }
+			{ candidateId: TransportMode.MOCK, connected: false },
+			{ candidateId: TransportMode.MOCK, connected: true }
 		]);
 		view.disposeHandler?.();
 	});

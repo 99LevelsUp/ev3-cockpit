@@ -1,4 +1,8 @@
 import * as dgram from 'node:dgram';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export interface UsbHidCandidate {
 	path: string;
@@ -13,6 +17,7 @@ export interface SerialCandidate {
 	manufacturer?: string;
 	serialNumber?: string;
 	pnpId?: string;
+	friendlyName?: string;
 }
 
 export interface TcpDiscoveryCandidate {
@@ -55,10 +60,75 @@ export async function listSerialCandidates(): Promise<SerialCandidate[]> {
 		if (!mod.SerialPort || typeof mod.SerialPort.list !== 'function') {
 			return [];
 		}
-
-		return mod.SerialPort.list();
+		const candidates = await mod.SerialPort.list();
+		const btNames = await resolveWindowsBluetoothNameMap();
+		if (btNames.size > 0) {
+			for (const candidate of candidates) {
+				const pnpId = candidate.pnpId ?? '';
+				const macMatch = pnpId.match(/_([0-9A-F]{12})/i);
+				if (!macMatch) {
+					continue;
+				}
+				const mac = macMatch[1].toUpperCase();
+				const name = btNames.get(mac);
+				if (!name) {
+					continue;
+				}
+				candidate.friendlyName = name;
+			}
+		}
+		return candidates;
 	} catch {
 		return [];
+	}
+}
+
+let cachedBtNames: { ts: number; map: Map<string, string> } | undefined;
+
+async function resolveWindowsBluetoothNameMap(): Promise<Map<string, string>> {
+	if (process.platform !== 'win32') {
+		return new Map();
+	}
+	const now = Date.now();
+	if (cachedBtNames && now - cachedBtNames.ts < 10_000) {
+		return cachedBtNames.map;
+	}
+	try {
+		const { stdout } = await execFileAsync('pwsh', [
+			'-NoProfile',
+			'-Command',
+			[
+				'Get-ChildItem',
+				'\'HKLM:\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\BTHPORT\\\\Parameters\\\\Devices\'',
+				'| ForEach-Object {',
+				'$mac = $_.PSChildName.ToUpper();',
+				'$nameBytes = (Get-ItemProperty $_.PsPath -Name Name -ErrorAction SilentlyContinue).Name;',
+				'if ($nameBytes) {',
+				'$name = [System.Text.Encoding]::UTF8.GetString($nameBytes);',
+				'[PSCustomObject]@{ Mac = $mac; Name = $name }',
+				'}',
+				'} | ConvertTo-Json -Compress'
+			].join(' ')
+		]);
+		const raw = stdout.trim();
+		if (!raw) {
+			return new Map();
+		}
+		const parsed = JSON.parse(raw) as { Mac?: string; Name?: string } | Array<{ Mac?: string; Name?: string }>;
+		const entries = Array.isArray(parsed) ? parsed : [parsed];
+		const map = new Map<string, string>();
+		for (const entry of entries) {
+			const friendlyName = entry.Name?.replace(/\u0000/g, '').trim() ?? '';
+			const mac = entry.Mac?.replace(/[^0-9A-F]/gi, '').toUpperCase() ?? '';
+			if (!mac || mac.length !== 12 || !friendlyName) {
+				continue;
+			}
+			map.set(mac, friendlyName.trim());
+		}
+		cachedBtNames = { ts: now, map };
+		return map;
+	} catch {
+		return new Map();
 	}
 }
 

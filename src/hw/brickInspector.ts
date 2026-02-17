@@ -271,7 +271,7 @@ async function probeLayerMultiple(
 				typeCode = result.reply.payload[0] ?? 0;
 				mode = result.reply.payload[1] ?? 0;
 			}
-		} catch (error) {
+		} catch {
 			const latencyMs = performance.now() - startMs;
 			latencies.push(latencyMs);
 			if (i === 0) {

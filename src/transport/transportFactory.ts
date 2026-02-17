@@ -15,8 +15,10 @@ import {
 } from './bluetoothFailure';
 import { UsbHidAdapter } from './usbHidAdapter';
 import { listSerialCandidates, listUsbHidCandidates } from './discovery';
+import { TransportMode } from '../types/enums';
 
-export type TransportMode = 'usb' | 'bt' | 'tcp' | 'mock';
+// Re-export for backward compatibility
+export { TransportMode };
 
 interface ConfigurationReader {
 	get<T>(section: string, defaultValue?: T): T;
@@ -277,11 +279,16 @@ function sanitizeNumber(value: unknown, fallback: number, min: number): number {
 }
 
 function sanitizeTransportMode(value: unknown): TransportMode {
-	if (value === 'usb' || value === 'bt' || value === 'tcp' || value === 'mock') {
+	if (value === TransportMode.USB || value === TransportMode.BT || value === TransportMode.TCP || value === TransportMode.MOCK) {
 		return value;
 	}
+	// Also handle string values for backward compatibility
+	if (value === 'usb') return TransportMode.USB;
+	if (value === 'bt') return TransportMode.BT;
+	if (value === 'tcp') return TransportMode.TCP;
+	if (value === 'mock') return TransportMode.MOCK;
 
-	return 'usb';
+	return TransportMode.USB;
 }
 
 function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAdapter {
@@ -418,27 +425,27 @@ export function createProbeTransportForMode(
 	modeRaw: unknown
 ): TransportAdapter {
 	const mode = sanitizeTransportMode(modeRaw);
-	if (mode === 'mock') {
+	if (mode === TransportMode.MOCK) {
 		logger.info('Using mock transport for connect probe (ev3-cockpit.transport.mode=mock).');
 		return createMockProbeTransport(logger);
 	}
 
-	if (mode === 'usb') {
+	if (mode === TransportMode.USB) {
 		logger.info('Using USB transport for connect probe (ev3-cockpit.transport.mode=usb).');
 		return createUsbTransport(cfg);
 	}
 
-	if (mode === 'bt') {
+	if (mode === TransportMode.BT) {
 		logger.info('Using Bluetooth transport for connect probe (ev3-cockpit.transport.mode=bt).');
 		return createBluetoothTransport(cfg, logger);
 	}
 
-	if (mode === 'tcp') {
+	if (mode === TransportMode.TCP) {
 		logger.info('Using TCP transport for connect probe (ev3-cockpit.transport.mode=tcp).');
 		return createTcpTransport(cfg, timeoutMs);
 	}
 
-	// Fallback to USB when mode is unrecognized (sanitizeTransportMode already defaults to 'usb').
+	// Fallback to USB when mode is unrecognized (sanitizeTransportMode already defaults to USB).
 	logger.info('Using USB transport for connect probe (fallback).');
 	return createUsbTransport(cfg);
 }

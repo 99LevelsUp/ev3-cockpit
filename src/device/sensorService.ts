@@ -1,9 +1,9 @@
-import { Logger, NoopLogger } from '../diagnostics/logger';
+import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le, gv0 } from '../protocol/ev3Bytecode';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import type { SensorPort, SensorInfo, SensorReading, SensorMode } from './sensorTypes';
 import { SENSOR_PORTS, sensorTypeName, isSensorConnected } from './sensorTypes';
+import { DeviceCommandHelper } from './deviceCommandHelper';
 
 const OP = {
 	INPUT_DEVICE: 0x99,
@@ -26,15 +26,15 @@ interface SensorServiceOptions {
 const DEFAULT_SENSOR_TIMEOUT_MS = 2000;
 
 export class SensorService {
-	private readonly commandClient: Ev3CommandSendLike;
-	private readonly defaultTimeoutMs: number;
-	private readonly logger: Logger;
-	private requestSeq = 0;
+	private readonly helper: DeviceCommandHelper;
 
 	public constructor(options: SensorServiceOptions) {
-		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_SENSOR_TIMEOUT_MS;
-		this.logger = options.logger ?? new NoopLogger();
+		this.helper = new DeviceCommandHelper({
+			commandClient: options.commandClient,
+			defaultTimeoutMs: options.defaultTimeoutMs ?? DEFAULT_SENSOR_TIMEOUT_MS,
+			logger: options.logger,
+			servicePrefix: 'sensor'
+		});
 	}
 
 	/**
@@ -53,32 +53,28 @@ export class SensorService {
 			gv0(1)
 		);
 
-		const requestId = `sensor-probe-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
-			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
-		});
+		try {
+			const result = await this.helper.sendCommand({
+				payload,
+				lane: 'normal',
+				idempotent: true
+			});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			this.logger.warn('Sensor probe failed with DIRECT_REPLY_ERROR', { port, requestId });
+			const replyPayload = result.reply.payload;
+			const typeCode = replyPayload.length >= 1 ? replyPayload[0] : 0;
+			const mode = replyPayload.length >= 2 ? replyPayload[1] : 0;
+
+			return {
+				port,
+				typeCode,
+				mode,
+				connected: isSensorConnected(typeCode),
+				typeName: sensorTypeName(typeCode)
+			};
+		} catch {
+			this.helper.getLogger().warn('Sensor probe failed with DIRECT_REPLY_ERROR', { port });
 			return { port, typeCode: 0, mode: 0, connected: false, typeName: 'NONE' };
 		}
-
-		const replyPayload = result.reply.payload;
-		const typeCode = replyPayload.length >= 1 ? replyPayload[0] : 0;
-		const mode = replyPayload.length >= 2 ? replyPayload[1] : 0;
-
-		return {
-			port,
-			typeCode,
-			mode,
-			connected: isSensorConnected(typeCode),
-			typeName: sensorTypeName(typeCode)
-		};
 	}
 
 	/**
@@ -109,19 +105,11 @@ export class SensorService {
 			gv0(0)
 		);
 
-		const requestId = `sensor-read-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		const result = await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: true
 		});
-
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Sensor read failed on port ${port + 1}: DIRECT_REPLY_ERROR`);
-		}
 
 		const replyPayload = result.reply.payload;
 		let value = 0;
@@ -153,25 +141,12 @@ export class SensorService {
 			lc0(mode > 31 ? 0 : mode)
 		);
 
-		const requestId = `sensor-setmode-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: false,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: false
 		});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Set sensor mode failed on port ${port + 1}: DIRECT_REPLY_ERROR`);
-		}
-
-		this.logger.info('Sensor mode set', { port: port + 1, typeCode, mode, requestId });
-	}
-
-	private nextSeq(): number {
-		this.requestSeq += 1;
-		return this.requestSeq;
+		this.helper.getLogger().info('Sensor mode set', { port: port + 1, typeCode, mode });
 	}
 }

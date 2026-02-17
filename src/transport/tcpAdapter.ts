@@ -57,8 +57,8 @@ export class TcpAdapter implements TransportAdapter {
 	private openPromise?: Promise<void>;
 	private closing = false;
 	private opened = false;
-	private receiveBuffer = Buffer.alloc(0);
-	private handshakeBuffer = Buffer.alloc(0);
+	private receiveBuffer: Buffer = Buffer.alloc(0);
+	private handshakeBuffer: Buffer = Buffer.alloc(0);
 	private pendingReply?: PendingReply;
 	private pendingHandshake?: PendingHandshake;
 

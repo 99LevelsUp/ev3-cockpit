@@ -5,6 +5,7 @@ import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
 import type { SerialCandidate } from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
+import { TransportMode } from '../types/enums';
 
 export interface DiscoveryTransportScanners {
 	listUsbHidCandidates: () => Promise<Array<{ path: string; serialNumber?: string }>>;
@@ -54,7 +55,42 @@ export function isLikelyEv3SerialCandidate(
 		return true;
 	}
 	const fingerprint = `${candidate.manufacturer ?? ''} ${candidate.serialNumber ?? ''} ${candidate.pnpId ?? ''}`.toUpperCase();
-	return /EV3|LEGO|MINDSTORMS|_005D/.test(fingerprint);
+	if (/EV3|LEGO|MINDSTORMS|_005D/.test(fingerprint)) {
+		return true;
+	}
+	// Windows Bluetooth SPP ports for EV3 typically report LOCALMFG&005D and a LEGO MAC prefix 00:16:53.
+	// Example pnpId: BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\...\\001653XXXXXX_...
+	const isBluetoothSpp = /BTHENUM\\\{00001101-0000-1000-8000-00805F9B34FB\}/.test(fingerprint);
+	if (!isBluetoothSpp) {
+		return false;
+	}
+	// Accept EV3-specific hints when present.
+	if (/LOCALMFG&005D/.test(fingerprint) || /\\001653[0-9A-F]{6}_/i.test(candidate.pnpId ?? '')) {
+		return true;
+	}
+	// Fallback: treat any Bluetooth SPP serial port as a potential EV3 brick.
+	return true;
+}
+
+function resolveBtAddress(candidate: SerialCandidate): string | undefined {
+	const pnpId = candidate.pnpId ?? '';
+	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
+	if (!macMatch) {
+		return undefined;
+	}
+	const mac = macMatch[1].toUpperCase();
+	if (mac === '000000000000') {
+		return undefined;
+	}
+	return mac;
+}
+
+function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (value: string) => string): string {
+	const mac = resolveBtAddress(candidate);
+	if (mac) {
+		return `bt-${safeId(mac)}`;
+	}
+	return `bt-${safeId(btPort)}`;
 }
 
 export class BrickDiscoveryService {
@@ -152,12 +188,12 @@ export class BrickDiscoveryService {
 				displayName,
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
-				transport: { mode: 'usb', usbPath }
+				transport: { mode: TransportMode.USB, usbPath }
 			};
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
-				transport: 'usb',
+				transport: TransportMode.USB,
 				detail: usbPath,
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
@@ -174,11 +210,19 @@ export class BrickDiscoveryService {
 				continue;
 			}
 			const btPort = rawPath.toUpperCase();
-			const brickId = `bt-${toSafeIdentifier(btPort)}`;
+			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
 			const snapshot = brickRegistry.getSnapshot(brickId);
-			const manufacturer = serialCandidate.manufacturer?.trim();
 			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
-			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
+			const portProfile = profileStore.list().find((profile) => (
+				profile.transport.mode === 'bt'
+				&& profile.transport.btPort?.trim().toUpperCase() === btPort
+			));
+			const displayName = resolvePreferredDisplayName(
+				brickId,
+				fallbackDisplayName,
+				portProfile?.displayName
+			);
+			const manufacturer = serialCandidate.manufacturer?.trim();
 			const detail = manufacturer
 				? `${manufacturer} | ${btPort}`
 				: btPort;
@@ -187,12 +231,12 @@ export class BrickDiscoveryService {
 				displayName,
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
-				transport: { mode: 'bt', btPort }
+				transport: { mode: TransportMode.BT, btPort }
 			};
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
-				transport: 'bt',
+				transport: TransportMode.BT,
 				detail,
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
@@ -215,7 +259,7 @@ export class BrickDiscoveryService {
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
 				transport: {
-					mode: 'tcp',
+					mode: TransportMode.TCP,
 					tcpHost: tcpCandidate.ip,
 					tcpPort: tcpCandidate.port,
 					tcpUseDiscovery: false,
@@ -225,7 +269,7 @@ export class BrickDiscoveryService {
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
-				transport: 'tcp',
+				transport: TransportMode.TCP,
 				detail,
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
@@ -281,7 +325,7 @@ export class BrickDiscoveryService {
 					displayName,
 					savedAtIso: nowIso,
 					rootPath: defaultRoot,
-					transport: { mode: 'mock' }
+					transport: { mode: TransportMode.MOCK }
 				};
 				const detail = mock.role === 'master'
 					? 'Mock | master'
@@ -291,7 +335,7 @@ export class BrickDiscoveryService {
 				registerCandidate({
 					candidateId: mock.brickId,
 					displayName,
-					transport: 'mock',
+					transport: TransportMode.MOCK,
 					detail,
 					status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
@@ -362,20 +406,20 @@ export function resolveDiscoveryTransport(
 	profile?: BrickConnectionProfile
 ): BrickPanelDiscoveryCandidate['transport'] {
 	const mode = profile?.transport.mode;
-	if (mode === 'usb' || mode === 'bt' || mode === 'tcp' || mode === 'mock') {
+	if (mode === TransportMode.USB || mode === TransportMode.BT || mode === TransportMode.TCP || mode === TransportMode.MOCK) {
 		return mode;
 	}
 	if (brickId.startsWith('usb-')) {
-		return 'usb';
+		return TransportMode.USB;
 	}
 	if (brickId.startsWith('bt-')) {
-		return 'bt';
+		return TransportMode.BT;
 	}
 	if (brickId.startsWith('tcp-')) {
-		return 'tcp';
+		return TransportMode.TCP;
 	}
 	if (brickId.startsWith('mock-')) {
-		return 'mock';
+		return TransportMode.MOCK;
 	}
 	return 'unknown';
 }
@@ -385,13 +429,13 @@ export function resolveDiscoveryDetail(profile?: BrickConnectionProfile): string
 		return undefined;
 	}
 	const transport = profile.transport;
-	if (transport.mode === 'usb') {
+	if (transport.mode === TransportMode.USB) {
 		return transport.usbPath?.trim() || undefined;
 	}
-	if (transport.mode === 'bt') {
+	if (transport.mode === TransportMode.BT) {
 		return transport.btPort?.trim() || undefined;
 	}
-	if (transport.mode === 'tcp') {
+	if (transport.mode === TransportMode.TCP) {
 		const host = transport.tcpHost?.trim() || '';
 		const port =
 			typeof transport.tcpPort === 'number' && Number.isFinite(transport.tcpPort)

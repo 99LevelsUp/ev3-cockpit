@@ -57,16 +57,18 @@ export function createBrickResolvers(deps: {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const modeRaw = cfg.get('transport.mode');
 		const mode: TransportMode =
-			modeRaw === 'usb' || modeRaw === 'bt' || modeRaw === 'tcp' || modeRaw === 'mock'
-				? modeRaw
-				: 'usb';
+			modeRaw === TransportMode.USB || modeRaw === 'usb' ? TransportMode.USB :
+			modeRaw === TransportMode.BT || modeRaw === 'bt' ? TransportMode.BT :
+			modeRaw === TransportMode.TCP || modeRaw === 'tcp' ? TransportMode.TCP :
+			modeRaw === TransportMode.MOCK || modeRaw === 'mock' ? TransportMode.MOCK :
+			TransportMode.USB;
 
 		const base = readSchedulerConfig().timeoutMs;
 		const btProbeRaw = cfg.get('transport.bluetooth.probeTimeoutMs');
 		const btProbe =
 			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : DEFAULT_BT_PROBE_TIMEOUT_MS;
 
-		if (mode === 'bt') {
+		if (mode === TransportMode.BT) {
 			return Math.max(base, btProbe);
 		}
 
@@ -128,9 +130,11 @@ export function createBrickResolvers(deps: {
 	const resolveCurrentTransportMode = (): TransportMode | 'unknown' => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const mode = cfg.get('transport.mode');
-		return mode === 'usb' || mode === 'bt' || mode === 'tcp' || mode === 'mock'
-			? mode
-			: 'unknown';
+		if (mode === TransportMode.USB || mode === 'usb') return TransportMode.USB;
+		if (mode === TransportMode.BT || mode === 'bt') return TransportMode.BT;
+		if (mode === TransportMode.TCP || mode === 'tcp') return TransportMode.TCP;
+		if (mode === TransportMode.MOCK || mode === 'mock') return TransportMode.MOCK;
+		return 'unknown';
 	};
 
 	const resolveConnectedBrickDescriptor = (rootPath: string, profile?: BrickConnectionProfile): ConnectedBrickDescriptor => {
@@ -140,7 +144,7 @@ export function createBrickResolvers(deps: {
 		let role: BrickRole = 'standalone';
 		const profileDisplayName = normalizeBrickNameCandidate(profile?.displayName);
 
-		if (transport === 'tcp') {
+		if (transport === TransportMode.TCP) {
 			const hostRaw = profile?.transport.tcpHost ?? cfg.get('transport.tcp.host');
 			const host = typeof hostRaw === 'string' && hostRaw.trim().length > 0 ? hostRaw.trim() : 'active';
 			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
@@ -156,7 +160,7 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
-		if (transport === 'bt') {
+		if (transport === TransportMode.BT) {
 			const portRaw = profile?.transport.btPort ?? cfg.get('transport.bluetooth.port');
 			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
 			const fallbackDisplayName = `EV3 Bluetooth (${port})`;
@@ -169,7 +173,7 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
-		if (transport === 'usb') {
+		if (transport === TransportMode.USB) {
 			const pathRaw = profile?.transport.usbPath ?? cfg.get('transport.usb.path');
 			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
 			const fallbackDisplayName = `EV3 USB (${usbPath})`;
@@ -182,7 +186,7 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
-		if (transport === 'mock') {
+		if (transport === TransportMode.MOCK) {
 			const mockBrickId = profile?.brickId?.startsWith('mock-') ? profile.brickId : 'mock';
 			role = resolveMockRole(mockBrickId);
 			return {

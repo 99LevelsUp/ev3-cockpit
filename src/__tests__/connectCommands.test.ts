@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -64,7 +65,7 @@ test('BrickConnectionProfileStore ignores upsert with empty brickId', async () =
 			displayName: 'Ghost',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/home/',
-			transport: { mode: 'usb' }
+			transport: { mode: TransportMode.USB }
 		});
 		assert.equal(store.list().length, 0);
 	});
@@ -96,7 +97,7 @@ test('BrickConnectionProfileStore normalizes rootPath with missing slashes', asy
 			displayName: 'EV3 B',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: 'home/root',
-			transport: { mode: 'usb' }
+			transport: { mode: TransportMode.USB }
 		});
 		const profile = store.get('brick-2');
 		assert.ok(profile);
@@ -113,7 +114,7 @@ test('BrickConnectionProfileStore clamps negative tcpPort to 1', async () => {
 			displayName: 'EV3 C',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/',
-			transport: { mode: 'tcp', tcpPort: -5 }
+			transport: { mode: TransportMode.TCP, tcpPort: -5 }
 		});
 		const profile = store.get('brick-3');
 		assert.ok(profile);
@@ -130,14 +131,14 @@ test('BrickConnectionProfileStore list returns sorted by displayName', async () 
 			displayName: 'Zeta Brick',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/',
-			transport: { mode: 'usb' }
+			transport: { mode: TransportMode.USB }
 		});
 		await store.upsert({
 			brickId: 'a-brick',
 			displayName: 'Alpha Brick',
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/',
-			transport: { mode: 'usb' }
+			transport: { mode: TransportMode.USB }
 		});
 		const list = store.list();
 		assert.equal(list.length, 2);
@@ -156,7 +157,7 @@ test('BrickConnectionProfileStore trims string fields in transport', async () =>
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/home/',
 			transport: {
-				mode: 'bt',
+				mode: TransportMode.BT,
 				btPort: '  COM5  ',
 				usbPath: '  /dev/hidraw0  ',
 				tcpHost: '  192.168.1.1  ',

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { DEPLOY_PROFILE_PRESETS } from '../config/deployProfiles';
+import { DeployConflictPolicy, DeployConflictAskFallback } from '../types/enums';
 import { readFeatureConfig } from '../config/featureConfig';
 import {
 	buildRemoteDeployPath,
@@ -251,8 +252,8 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			const verifyAfterUpload = flow.verifyAfterUpload;
 			const conflictPolicy = featureConfig.deploy.conflictPolicy;
 			const conflictAskFallback = featureConfig.deploy.conflictAskFallback;
-			const effectiveConflictPolicy = deployOptions.previewOnly ? 'overwrite' : conflictPolicy;
-			if (effectiveConflictPolicy === 'ask' && conflictAskFallback !== 'prompt') {
+			const effectiveConflictPolicy = deployOptions.previewOnly ? DeployConflictPolicy.OVERWRITE : conflictPolicy;
+			if (effectiveConflictPolicy === DeployConflictPolicy.ASK && conflictAskFallback !== DeployConflictAskFallback.PROMPT) {
 				logger.info('Project deploy ask conflict fallback is active.', {
 					conflictAskFallback
 				});

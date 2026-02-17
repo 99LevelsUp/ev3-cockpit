@@ -24,6 +24,7 @@ import { applyDisplayNameAcrossProfiles } from './device/brickNameResolver';
 import { isUsbReconnectCandidateAvailable } from './device/brickReconnect';
 import { Logger, OutputChannelLogger } from './diagnostics/logger';
 import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
+import { performance } from 'node:perf_hooks';
 import { Ev3FileSystemProvider, FsAvailabilityError } from './fs/ev3FileSystemProvider';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
 import { CommandScheduler } from './scheduler/commandScheduler';
@@ -70,6 +71,7 @@ import {
 } from './activation/extensionCommands';
 
 export function activate(context: vscode.ExtensionContext) {
+	const activationStart = performance.now();
 	const output = vscode.window.createOutputChannel('EV3 Cockpit');
 	let logger: OutputChannelLogger;
 	const perfLogger: Logger = {
@@ -390,6 +392,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// --- Register command modules ---
 
+	const commandRegStart = performance.now();
 	const { connect, disconnect, reconnect } = registerConnectCommands({
 		getLogger: () => logger,
 		getBrickRegistry: () => brickRegistry,
@@ -479,8 +482,13 @@ export function activate(context: vscode.ExtensionContext) {
 	const openBrickPanel = registerOpenBrickPanel();
 	const mockRegistrations = registerMockCommands({ profileStore });
 
+	perfLogger.info('[perf] activate.command-registrations', {
+		durationMs: Number((performance.now() - commandRegStart).toFixed(1))
+	});
+
 	// --- FS provider, tree view ---
 
+	const uiRegStart = performance.now();
 	const fsDisposable = vscode.workspace.registerFileSystemProvider('ev3', fsProvider, {
 		isCaseSensitive: true,
 		isReadonly: false
@@ -508,6 +516,8 @@ export function activate(context: vscode.ExtensionContext) {
 		brickTreeView
 	});
 	void vscode.commands.executeCommand('setContext', 'ev3-cockpit.bricksFilterActive', false);
+
+	const pollerStartTime = performance.now();
 	const busyIndicatorSubscription = createBusyIndicatorPoller(
 		brickRegistry, sessionManager, treeProvider, brickUiStateStore
 	);
@@ -581,7 +591,6 @@ export function activate(context: vscode.ExtensionContext) {
 			const snapshots = brickRegistry.listSnapshots().filter((snapshot) => (
 				snapshot.status === 'READY'
 				|| snapshot.status === 'CONNECTING'
-				|| (snapshot.status === 'AVAILABLE' && snapshot.transport === 'bt')
 				|| (
 					snapshot.status === 'UNAVAILABLE'
 					&& snapshot.lastError !== 'Disconnected by user.'
@@ -663,6 +672,11 @@ export function activate(context: vscode.ExtensionContext) {
 		logger: perfLogger
 	});
 	telemetryPoller.start();
+
+	perfLogger.info('[perf] activate.background-pollers', {
+		durationMs: Number((performance.now() - pollerStartTime).toFixed(1))
+	});
+
 	brickRegistry.onStatusChange(() => {
 		treeProvider.refreshThrottled();
 		brickPanelProvider.refresh();
@@ -671,6 +685,11 @@ export function activate(context: vscode.ExtensionContext) {
 		BrickPanelProvider.viewType,
 		brickPanelProvider
 	);
+
+	perfLogger.info('[perf] activate.ui-provider-registration', {
+		durationMs: Number((performance.now() - uiRegStart).toFixed(1))
+	});
+
 	const purgeMockBricks = async (reason: string): Promise<void> => {
 		const mockSnapshots = brickRegistry.listSnapshots().filter((snapshot) => isMockBrickId(snapshot.brickId));
 		if (mockSnapshots.length === 0) {
@@ -817,6 +836,10 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 		}
 	);
+
+	perfLogger.info('[perf] activate.total', {
+		durationMs: Number((performance.now() - activationStart).toFixed(1))
+	});
 }
 
 export function deactivate() {}

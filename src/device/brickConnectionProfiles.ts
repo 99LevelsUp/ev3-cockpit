@@ -16,10 +16,12 @@ interface ProfileStoreShape {
 }
 
 function sanitizeTransportMode(value: unknown): TransportMode {
-	if (value === 'usb' || value === 'bt' || value === 'tcp' || value === 'mock') {
-		return value;
-	}
-	return 'usb';
+	// Accept both enum values and string literals for backward compatibility
+	if (value === TransportMode.USB || value === 'usb') return TransportMode.USB;
+	if (value === TransportMode.BT || value === 'bt') return TransportMode.BT;
+	if (value === TransportMode.TCP || value === 'tcp') return TransportMode.TCP;
+	if (value === TransportMode.MOCK || value === 'mock') return TransportMode.MOCK;
+	return TransportMode.USB;
 }
 
 function normalizeRootPath(path: string): string {

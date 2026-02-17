@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BrickRegistry, BrickStatusChangeEvent } from '../device/brickRegistry';
@@ -11,7 +12,7 @@ test('BrickRegistry tracks active brick and active alias resolution', () => {
 		brickId: 'usb-auto',
 		displayName: 'EV3 USB',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -37,7 +38,7 @@ test('BrickRegistry preserves known bricks and sorts active first', () => {
 		brickId: 'tcp-active',
 		displayName: 'EV3 TCP',
 		role: 'standalone',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -47,7 +48,7 @@ test('BrickRegistry preserves known bricks and sorts active first', () => {
 		brickId: 'usb-auto',
 		displayName: 'EV3 USB',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -67,7 +68,7 @@ test('BrickRegistry updates runtime metrics for tree busy indicators', () => {
 		brickId: 'tcp-active',
 		displayName: 'EV3 TCP',
 		role: 'standalone',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -93,7 +94,7 @@ test('BrickRegistry stores last operation metadata', () => {
 		brickId: 'usb-auto',
 		displayName: 'EV3 USB',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -111,7 +112,7 @@ test('BrickRegistry.setActiveBrick switches active brick', () => {
 		brickId: 'brick-a',
 		displayName: 'EV3 A',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -120,7 +121,7 @@ test('BrickRegistry.setActiveBrick switches active brick', () => {
 		brickId: 'brick-b',
 		displayName: 'EV3 B',
 		role: 'standalone',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -150,7 +151,7 @@ test('BrickRegistry.setActiveBrick returns false for unknown brick', () => {
 		brickId: 'brick-a',
 		displayName: 'EV3 A',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -168,7 +169,7 @@ test('BrickRegistry.updateDisplayName updates a single brick label', () => {
 		brickId: 'brick-a',
 		displayName: 'EV3 A',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -185,7 +186,7 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 		brickId: 'usb-a',
 		displayName: 'Shared',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -194,7 +195,7 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 		brickId: 'tcp-a',
 		displayName: 'Shared',
 		role: 'standalone',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -203,7 +204,7 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 		brickId: 'bt-a',
 		displayName: 'Other',
 		role: 'standalone',
-		transport: 'bt',
+		transport: TransportMode.BT,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -222,7 +223,7 @@ test('BrickRegistry.upsertAvailable creates AVAILABLE record', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3 USB',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(snapshot.status, 'AVAILABLE');
@@ -236,7 +237,7 @@ test('BrickRegistry.upsertAvailable does not overwrite READY brick', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3 USB',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -245,7 +246,7 @@ test('BrickRegistry.upsertAvailable does not overwrite READY brick', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3 USB Renamed',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(snapshot.status, 'READY');
@@ -258,14 +259,14 @@ test('BrickRegistry.upsertAvailable updates existing AVAILABLE', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3 USB',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	const snapshot = registry.upsertAvailable({
 		brickId: 'usb-001',
 		displayName: 'EV3 USB Renamed',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(snapshot.status, 'AVAILABLE');
@@ -278,21 +279,21 @@ test('BrickRegistry.removeStale removes AVAILABLE bricks not in active set', () 
 		brickId: 'usb-001',
 		displayName: 'EV3 USB 1',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	registry.upsertAvailable({
 		brickId: 'usb-002',
 		displayName: 'EV3 USB 2',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	registry.upsertReady({
 		brickId: 'tcp-001',
 		displayName: 'EV3 TCP',
 		role: 'standalone',
-		transport: 'tcp',
+		transport: TransportMode.TCP,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -314,7 +315,7 @@ test('BrickRegistry.onStatusChange fires on status transitions', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(events.length, 1);
@@ -325,7 +326,7 @@ test('BrickRegistry.onStatusChange fires on status transitions', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(events.length, 2);
@@ -336,7 +337,7 @@ test('BrickRegistry.onStatusChange fires on status transitions', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -358,7 +359,7 @@ test('BrickRegistry.onStatusChange unsubscribe works', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3',
 		role: 'unknown',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(events.length, 1);
@@ -368,7 +369,7 @@ test('BrickRegistry.onStatusChange unsubscribe works', () => {
 		brickId: 'usb-001',
 		displayName: 'EV3',
 		role: 'standalone',
-		transport: 'usb',
+		transport: TransportMode.USB,
 		rootPath: '/home/root/lms2012/prjs/'
 	});
 	assert.equal(events.length, 1);

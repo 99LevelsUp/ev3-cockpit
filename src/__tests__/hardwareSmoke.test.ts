@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -173,9 +174,9 @@ test('hardware smoke report builder computes summary counters', () => {
 			bluetoothStrictModeEnabled: true,
 			warning: undefined,
 			results: [
-				{ transport: 'usb', status: 'PASS', reason: 'ok' },
-				{ transport: 'tcp', status: 'SKIP', reason: 'unavailable' },
-				{ transport: 'bt', status: 'FAIL', reason: 'error' }
+				{ transport: TransportMode.USB, status: 'PASS', reason: 'ok' },
+				{ transport: TransportMode.TCP, status: 'SKIP', reason: 'unavailable' },
+				{ transport: TransportMode.BT, status: 'FAIL', reason: 'error' }
 			]
 		},
 		1

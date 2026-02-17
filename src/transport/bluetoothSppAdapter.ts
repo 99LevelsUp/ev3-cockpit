@@ -60,7 +60,7 @@ export class BluetoothSppAdapter implements TransportAdapter {
 	private opening?: Promise<void>;
 	private opened = false;
 	private closing = false;
-	private receiveBuffer = Buffer.alloc(0);
+	private receiveBuffer: Buffer = Buffer.alloc(0);
 	private pendingReply?: PendingReply;
 
 	public constructor(options: BluetoothSppAdapterOptions) {

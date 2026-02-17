@@ -1,7 +1,7 @@
-import { Logger, NoopLogger } from '../diagnostics/logger';
+import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc2, lcs, uint16le } from '../protocol/ev3Bytecode';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
+import { DeviceCommandHelper } from './deviceCommandHelper';
 
 const OP = {
 	SOUND: 0x94
@@ -21,15 +21,15 @@ interface SoundServiceOptions {
 const DEFAULT_SOUND_TIMEOUT_MS = 3000;
 
 export class SoundService {
-	private readonly commandClient: Ev3CommandSendLike;
-	private readonly defaultTimeoutMs: number;
-	private readonly logger: Logger;
-	private requestSeq = 0;
+	private readonly helper: DeviceCommandHelper;
 
 	public constructor(options: SoundServiceOptions) {
-		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_SOUND_TIMEOUT_MS;
-		this.logger = options.logger ?? new NoopLogger();
+		this.helper = new DeviceCommandHelper({
+			commandClient: options.commandClient,
+			defaultTimeoutMs: options.defaultTimeoutMs ?? DEFAULT_SOUND_TIMEOUT_MS,
+			logger: options.logger,
+			servicePrefix: 'sound'
+		});
 	}
 
 	/**
@@ -50,21 +50,13 @@ export class SoundService {
 			lc2(dur)
 		);
 
-		const requestId = `sound-tone-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: false,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: false
 		});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Play tone failed: DIRECT_REPLY_ERROR`);
-		}
-
-		this.logger.info('Tone played', { volume: vol, frequencyHz: freq, durationMs: dur, requestId });
+		this.helper.getLogger().info('Tone played', { volume: vol, frequencyHz: freq, durationMs: dur });
 	}
 
 	/**
@@ -82,25 +74,12 @@ export class SoundService {
 			lcs(filePath)
 		);
 
-		const requestId = `sound-file-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: false,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: false
 		});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Play sound file failed: DIRECT_REPLY_ERROR (file: ${filePath})`);
-		}
-
-		this.logger.info('Sound file played', { volume: vol, filePath, requestId });
-	}
-
-	private nextSeq(): number {
-		this.requestSeq += 1;
-		return this.requestSeq;
+		this.helper.getLogger().info('Sound file played', { volume: vol, filePath });
 	}
 }

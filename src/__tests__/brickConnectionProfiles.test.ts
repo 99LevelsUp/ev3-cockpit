@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -63,7 +64,7 @@ test('BrickConnectionProfileStore upsert persists and normalizes values', async 
 			savedAtIso: '2026-02-09T00:00:00.000Z',
 			rootPath: 'home/root/lms2012/prjs',
 			transport: {
-				mode: 'tcp',
+				mode: TransportMode.TCP,
 				tcpHost: ' 127.0.0.1 ',
 				tcpPort: 5555.7,
 				tcpUseDiscovery: true
@@ -91,7 +92,7 @@ test('BrickConnectionProfileStore loads only valid entries from storage', async 
 						displayName: 'EV3 USB',
 						savedAtIso: '2026-02-09T00:00:00.000Z',
 						rootPath: '/home/root/lms2012/prjs/',
-						transport: { mode: 'usb', usbPath: 'auto' }
+						transport: { mode: TransportMode.USB, usbPath: 'auto' }
 					},
 					{
 						invalid: true

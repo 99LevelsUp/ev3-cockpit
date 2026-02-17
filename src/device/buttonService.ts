@@ -1,7 +1,7 @@
-import { Logger, NoopLogger } from '../diagnostics/logger';
+import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le, gv0 } from '../protocol/ev3Bytecode';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
+import { DeviceCommandHelper } from './deviceCommandHelper';
 
 const OP = {
 	UI_READ: 0x81
@@ -52,15 +52,15 @@ interface ButtonServiceOptions {
 const DEFAULT_BUTTON_TIMEOUT_MS = 2000;
 
 export class ButtonService {
-	private readonly commandClient: Ev3CommandSendLike;
-	private readonly defaultTimeoutMs: number;
-	private readonly logger: Logger;
-	private requestSeq = 0;
+	private readonly helper: DeviceCommandHelper;
 
 	public constructor(options: ButtonServiceOptions) {
-		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_BUTTON_TIMEOUT_MS;
-		this.logger = options.logger ?? new NoopLogger();
+		this.helper = new DeviceCommandHelper({
+			commandClient: options.commandClient,
+			defaultTimeoutMs: options.defaultTimeoutMs ?? DEFAULT_BUTTON_TIMEOUT_MS,
+			logger: options.logger,
+			servicePrefix: 'button'
+		});
 	}
 
 	/**
@@ -77,19 +77,7 @@ export class ButtonService {
 			gv0(0)  // result → global var 0
 		);
 
-		const requestId = `button-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
-			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
-		});
-
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error('Button read failed: DIRECT_REPLY_ERROR');
-		}
+		const result = await this.helper.sendCommand({ payload });
 
 		const replyPayload = result.reply.payload;
 		const pressedButton = replyPayload.length >= 1 ? replyPayload[0] : 0;
@@ -100,10 +88,5 @@ export class ButtonService {
 			buttonName,
 			timestampMs: Date.now()
 		};
-	}
-
-	private nextSeq(): number {
-		this.requestSeq += 1;
-		return this.requestSeq;
 	}
 }

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
+import { DeployVerifyMode } from '../types/enums';
 import test from 'node:test';
-import { DeployVerifyMode } from '../config/deployConfig';
 import { resolveDeployFlow } from '../commands/deployFlow';
 
 const BOOLS = [false, true] as const;
-const VERIFY_MODES: readonly DeployVerifyMode[] = ['none', 'size', 'md5'];
+const VERIFY_MODES: readonly DeployVerifyMode[] = [DeployVerifyMode.NONE, DeployVerifyMode.SIZE, DeployVerifyMode.MD5];
 
 for (const incrementalEnabled of BOOLS) {
 	for (const cleanupEnabled of BOOLS) {

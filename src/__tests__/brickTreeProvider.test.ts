@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
@@ -63,7 +64,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -72,7 +73,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 						brickId: 'tcp-active',
 						displayName: 'EV3 TCP',
 						role: 'standalone',
-						transport: 'tcp',
+						transport: TransportMode.TCP,
 						status: 'UNAVAILABLE',
 						isActive: false,
 						rootPath: '/home/root/lms2012/prjs/',
@@ -85,7 +86,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 								brickId: 'usb-auto',
 								displayName: 'EV3 USB',
 								role: 'standalone',
-								transport: 'usb',
+								transport: TransportMode.USB,
 								status: 'READY',
 								isActive: true,
 								rootPath: '/home/root/lms2012/prjs/'
@@ -94,7 +95,7 @@ test('BrickTreeProvider exposes brick roots and directory children', async () =>
 								brickId: 'tcp-active',
 								displayName: 'EV3 TCP',
 								role: 'standalone',
-								transport: 'tcp',
+								transport: TransportMode.TCP,
 								status: 'UNAVAILABLE',
 								isActive: false,
 								rootPath: '/home/root/lms2012/prjs/',
@@ -147,7 +148,7 @@ test('BrickTreeProvider filters roots and descendants by query', async () => {
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -157,7 +158,7 @@ test('BrickTreeProvider filters roots and descendants by query', async () => {
 					brickId: 'usb-auto',
 					displayName: 'EV3 USB',
 					role: 'standalone',
-					transport: 'usb',
+					transport: TransportMode.USB,
 					status: 'READY',
 					isActive: true,
 					rootPath: '/home/root/lms2012/prjs/'
@@ -238,7 +239,7 @@ test('BrickTreeProvider returns unavailable message for expanded directory after
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: unavailable ? 'UNAVAILABLE' : 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/',
@@ -249,7 +250,7 @@ test('BrickTreeProvider returns unavailable message for expanded directory after
 					brickId: 'usb-auto',
 					displayName: 'EV3 USB',
 					role: 'standalone',
-					transport: 'usb',
+					transport: TransportMode.USB,
 					status: unavailable ? 'UNAVAILABLE' : 'READY',
 					isActive: true,
 					rootPath: '/home/root/lms2012/prjs/',
@@ -288,7 +289,7 @@ test('BrickTreeProvider exposes retry action for directory listing errors', asyn
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -298,7 +299,7 @@ test('BrickTreeProvider exposes retry action for directory listing errors', asyn
 					brickId: 'usb-auto',
 					displayName: 'EV3 USB',
 					role: 'standalone',
-					transport: 'usb',
+					transport: TransportMode.USB,
 					status: 'READY',
 					isActive: true,
 					rootPath: '/home/root/lms2012/prjs/'
@@ -330,7 +331,7 @@ test('BrickTreeProvider renders empty-folder message for empty listing', async (
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -340,7 +341,7 @@ test('BrickTreeProvider renders empty-folder message for empty listing', async (
 					brickId: 'usb-auto',
 					displayName: 'EV3 USB',
 					role: 'standalone',
-					transport: 'usb',
+					transport: TransportMode.USB,
 					status: 'READY',
 					isActive: true,
 					rootPath: '/home/root/lms2012/prjs/'
@@ -373,7 +374,7 @@ test('BrickTreeProvider maps root status to context and action', async () => {
 						brickId: 'connecting-1',
 						displayName: 'Connecting EV3',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'CONNECTING',
 						isActive: false,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -382,7 +383,7 @@ test('BrickTreeProvider maps root status to context and action', async () => {
 						brickId: 'error-1',
 						displayName: 'Error EV3',
 						role: 'standalone',
-						transport: 'tcp',
+						transport: TransportMode.TCP,
 						status: 'ERROR',
 						isActive: false,
 						rootPath: '/home/root/lms2012/prjs/',
@@ -425,7 +426,7 @@ test('BrickTreeProvider caches directory listing and refreshDirectory invalidate
 						brickId: 'usb-auto',
 						displayName: 'EV3 USB',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'
@@ -435,7 +436,7 @@ test('BrickTreeProvider caches directory listing and refreshDirectory invalidate
 					brickId: 'usb-auto',
 					displayName: 'EV3 USB',
 					role: 'standalone',
-					transport: 'usb',
+					transport: TransportMode.USB,
 					status: 'READY',
 					isActive: true,
 					rootPath: '/home/root/lms2012/prjs/'
@@ -474,7 +475,7 @@ test('BrickTreeProvider renders busy counter in root description when runtime is
 						brickId: 'tcp-busy',
 						displayName: 'EV3 TCP Busy',
 						role: 'standalone',
-						transport: 'tcp',
+						transport: TransportMode.TCP,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/',
@@ -508,7 +509,7 @@ test('BrickTreeProvider renders PIN badge when brick is marked as favorite', asy
 						brickId: 'usb-fav',
 						displayName: 'EV3 Favorite',
 						role: 'standalone',
-						transport: 'usb',
+						transport: TransportMode.USB,
 						status: 'READY',
 						isActive: true,
 						rootPath: '/home/root/lms2012/prjs/'

@@ -1,3 +1,4 @@
+import { TransportMode } from '../types/enums';
 import * as vscode from 'vscode';
 import type { BrickConnectionProfile, BrickConnectionProfileStore } from '../device/brickConnectionProfiles';
 import type { BrickRegistry } from '../device/brickRegistry';
@@ -21,12 +22,106 @@ export interface BtPresenceScannerOptions {
 	onPresenceChange: () => void;
 }
 
-function normalizeBtBrickName(candidate: SerialCandidate): string | undefined {
-	const raw = candidate.manufacturer?.trim();
-	if (!raw || raw.length > 12) {
+const GENERIC_BT_TOKENS = new Set([
+	'STANDARDNI',
+	'STANDARDN',
+	'SERIAL',
+	'SERIOVA',
+	'SERIOV',
+	'LINKA',
+	'LINK',
+	'POMOCI',
+	'POMOC',
+	'BLUETOOTH',
+	'PROTOKOLU',
+	'PROTOCOL',
+	'PORT',
+	'COM',
+	'SPP',
+	'RFCOMM',
+	'MICROSOFT'
+]);
+
+function resolveBtAddress(candidate: SerialCandidate): string | undefined {
+	const pnpId = candidate.pnpId ?? '';
+	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
+	if (!macMatch) {
 		return undefined;
 	}
-	return raw;
+	const mac = macMatch[1].toUpperCase();
+	if (mac === '000000000000') {
+		return undefined;
+	}
+	return mac;
+}
+
+function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (value: string) => string): string {
+	const mac = resolveBtAddress(candidate);
+	if (mac) {
+		return `bt-${safeId(mac)}`;
+	}
+	return `bt-${safeId(btPort)}`;
+}
+
+function extractNameFromFriendlyName(value: string): string | undefined {
+	const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+	const cleaned = normalized.replace(/\(COM\d+\)/i, '').replace(/[()]/g, ' ').trim();
+	if (!cleaned) {
+		return undefined;
+	}
+	const tokens = cleaned.split(/[^A-Za-z0-9_-]+/).filter((token) => token.length > 0);
+	for (const token of tokens) {
+		const upper = token.toUpperCase();
+		if (token.length < 3 || token.length > 12) {
+			continue;
+		}
+		if (/^COM\d+$/i.test(token)) {
+			continue;
+		}
+		if (/^\d+$/.test(token)) {
+			continue;
+		}
+		if (GENERIC_BT_TOKENS.has(upper)) {
+			continue;
+		}
+		return token;
+	}
+	return undefined;
+}
+
+function normalizeBtBrickName(candidate: SerialCandidate): string | undefined {
+	const friendly = candidate.friendlyName?.trim();
+	if (friendly) {
+		const extracted = extractNameFromFriendlyName(friendly);
+		if (extracted) {
+			return extracted;
+		}
+		const upper = friendly.toUpperCase();
+		if (friendly.length <= 12 && (!/BLUETOOTH/.test(upper) || /EV3|LEGO|MINDSTORMS/.test(upper))) {
+			return friendly;
+		}
+	}
+	const raw = candidate.manufacturer?.trim();
+	if (raw && raw.length <= 12 && !/MICROSOFT/i.test(raw)) {
+		return raw;
+	}
+	const pnpId = candidate.pnpId ?? '';
+	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
+	if (macMatch && macMatch[1] !== '000000000000') {
+		const suffix = macMatch[1].slice(-4).toUpperCase();
+		return `EV3-${suffix}`;
+	}
+	const tailMatch = pnpId.match(/_([0-9A-F]{8})$/i);
+	if (tailMatch) {
+		const suffix = tailMatch[1].slice(-4).toUpperCase();
+		return `EV3-${suffix}`;
+	}
+	return undefined;
+}
+
+function isGenericBtDisplayName(value: string): boolean {
+	const trimmed = value.trim();
+	return /^EV3 Bluetooth \\(COM\\d+\\)$/i.test(trimmed) || /Bluetooth/i.test(trimmed);
 }
 
 export function createBtPresenceScanner(options: BtPresenceScannerOptions): vscode.Disposable {
@@ -83,7 +178,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 				continue;
 			}
 			const btPort = rawPath.toUpperCase();
-			const brickId = `bt-${safeId(btPort)}`;
+			const brickId = resolveBtBrickId(candidate, btPort, safeId);
 			activeBtBrickIds.add(brickId);
 
 			const snapshot = brickRegistry.getSnapshot(brickId);
@@ -92,18 +187,40 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			}
 
 			const manufacturer = normalizeBtBrickName(candidate);
-			const rememberedProfile = profileStore.get(brickId);
-			const displayName = rememberedProfile?.displayName?.trim()
-				|| manufacturer
-				|| `EV3 Bluetooth (${btPort})`;
+			let rememberedProfile = profileStore.get(brickId);
+			if (!rememberedProfile) {
+				const matching = profileStore.list().find((profile) => (
+					profile.transport.mode === 'bt'
+					&& profile.transport.btPort?.trim().toUpperCase() === btPort
+				));
+				if (matching) {
+					rememberedProfile = matching;
+				}
+			}
+			const rememberedName = rememberedProfile?.displayName?.trim();
+			const displayName = (rememberedName && !isGenericBtDisplayName(rememberedName))
+				? rememberedName
+				: (manufacturer || `EV3 Bluetooth (${btPort})`);
 
-			const profile: BrickConnectionProfile = rememberedProfile ?? {
-				brickId,
-				displayName,
-				savedAtIso: nowIso,
-				rootPath: defaultRoot,
-				transport: { mode: 'bt', btPort }
-			};
+			const profile: BrickConnectionProfile = rememberedProfile
+				? {
+					...rememberedProfile,
+					brickId,
+					displayName,
+					rootPath: rememberedProfile.rootPath || defaultRoot,
+					transport: {
+						...rememberedProfile.transport,
+						mode: TransportMode.BT,
+						btPort
+					}
+				}
+				: {
+					brickId,
+					displayName,
+					savedAtIso: nowIso,
+					rootPath: defaultRoot,
+					transport: { mode: TransportMode.BT, btPort }
+				};
 
 			// Ensure profile is stored so connectDiscoveredBrick can find it
 			void profileStore.upsert(profile);
@@ -113,7 +230,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 				brickId,
 				displayName,
 				role: 'unknown',
-				transport: 'bt',
+				transport: TransportMode.BT,
 				rootPath: defaultRoot
 			});
 		}

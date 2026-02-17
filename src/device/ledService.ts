@@ -1,7 +1,7 @@
-import { Logger, NoopLogger } from '../diagnostics/logger';
+import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le } from '../protocol/ev3Bytecode';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
+import { DeviceCommandHelper } from './deviceCommandHelper';
 
 const OP = {
 	UI_WRITE: 0x82
@@ -45,16 +45,16 @@ interface LedServiceOptions {
 const DEFAULT_LED_TIMEOUT_MS = 2000;
 
 export class LedService {
-	private readonly commandClient: Ev3CommandSendLike;
-	private readonly defaultTimeoutMs: number;
-	private readonly logger: Logger;
-	private requestSeq = 0;
+	private readonly helper: DeviceCommandHelper;
 	private lastPattern?: LedPattern;
 
 	public constructor(options: LedServiceOptions) {
-		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_LED_TIMEOUT_MS;
-		this.logger = options.logger ?? new NoopLogger();
+		this.helper = new DeviceCommandHelper({
+			commandClient: options.commandClient,
+			defaultTimeoutMs: options.defaultTimeoutMs ?? DEFAULT_LED_TIMEOUT_MS,
+			logger: options.logger,
+			servicePrefix: 'led'
+		});
 	}
 
 	/**
@@ -72,30 +72,13 @@ export class LedService {
 			lc0(pattern)
 		);
 
-		const requestId = `led-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
-			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
-		});
-
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`LED set failed: DIRECT_REPLY_ERROR`);
-		}
+		await this.helper.sendCommand({ payload });
 
 		this.lastPattern = pattern;
-		this.logger.info('LED pattern set', { pattern, requestId });
+		this.helper.getLogger().info('LED pattern set', { pattern });
 	}
 
 	public getLastPattern(): LedPattern | undefined {
 		return this.lastPattern;
-	}
-
-	private nextSeq(): number {
-		this.requestSeq += 1;
-		return this.requestSeq;
 	}
 }

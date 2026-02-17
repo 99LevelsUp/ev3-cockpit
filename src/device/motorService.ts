@@ -1,9 +1,9 @@
-import { Logger, NoopLogger } from '../diagnostics/logger';
+import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, lc1, uint16le, gv0 } from '../protocol/ev3Bytecode';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import type { MotorPort, MotorStopMode, TachoReading } from './motorTypes';
 import { MOTOR_PORT_MASK } from './motorTypes';
+import { DeviceCommandHelper } from './deviceCommandHelper';
 
 const OP = {
 	OUTPUT_SPEED: 0xa5,
@@ -24,15 +24,15 @@ interface MotorServiceOptions {
 const DEFAULT_MOTOR_TIMEOUT_MS = 2000;
 
 export class MotorService {
-	private readonly commandClient: Ev3CommandSendLike;
-	private readonly defaultTimeoutMs: number;
-	private readonly logger: Logger;
-	private requestSeq = 0;
+	private readonly helper: DeviceCommandHelper;
 
 	public constructor(options: MotorServiceOptions) {
-		this.commandClient = options.commandClient;
-		this.defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_MOTOR_TIMEOUT_MS;
-		this.logger = options.logger ?? new NoopLogger();
+		this.helper = new DeviceCommandHelper({
+			commandClient: options.commandClient,
+			defaultTimeoutMs: options.defaultTimeoutMs ?? DEFAULT_MOTOR_TIMEOUT_MS,
+			logger: options.logger,
+			servicePrefix: 'motor'
+		});
 	}
 
 	/**
@@ -55,21 +55,13 @@ export class MotorService {
 			lc0(portMask)
 		);
 
-		const requestId = `motor-start-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'high',
-			idempotent: false,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: false
 		});
 
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Motor start failed on port ${port}: DIRECT_REPLY_ERROR`);
-		}
-
-		this.logger.info('Motor started', { port, speed: clampedSpeed, requestId });
+		this.helper.getLogger().info('Motor started', { port, speed: clampedSpeed });
 	}
 
 	/**
@@ -87,19 +79,11 @@ export class MotorService {
 			lc0(brakeFlag)
 		);
 
-		const requestId = `motor-stop-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'high',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: true
 		});
-
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Motor stop failed on port ${port}: DIRECT_REPLY_ERROR`);
-		}
 	}
 
 	/**
@@ -115,14 +99,10 @@ export class MotorService {
 			lc0(portMask)
 		);
 
-		const requestId = `motor-reset-${port}-${this.nextSeq()}`;
-		await this.commandClient.send({
-			id: requestId,
+		await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: true
 		});
 	}
 
@@ -142,19 +122,11 @@ export class MotorService {
 			gv0(0)
 		);
 
-		const requestId = `motor-tacho-${port}-${this.nextSeq()}`;
-		const result = await this.commandClient.send({
-			id: requestId,
+		const result = await this.helper.sendCommand({
+			payload,
 			lane: 'normal',
-			idempotent: true,
-			timeoutMs: this.defaultTimeoutMs,
-			type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
-			payload
+			idempotent: true
 		});
-
-		if (result.reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-			throw new Error(`Tacho read failed on port ${port}: DIRECT_REPLY_ERROR`);
-		}
 
 		const replyPayload = result.reply.payload;
 		let position = 0;
@@ -168,10 +140,5 @@ export class MotorService {
 			position,
 			timestampMs: Date.now()
 		};
-	}
-
-	private nextSeq(): number {
-		this.requestSeq += 1;
-		return this.requestSeq;
 	}
 }
