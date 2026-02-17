@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 import { buildMockBricksFromConfig } from '../src/mock/mockCatalog';
+import { acquireVsCodeLaunchLock } from './vscodeLaunchLock';
 const EXTENSION_DEV_PATH = path.resolve(__dirname, '..');
 const MOCK_CONFIG_PATH = path.resolve(EXTENSION_DEV_PATH, 'config', 'mock-bricks.json');
 
@@ -28,6 +29,7 @@ async function launchVsCode(workspacePath: string): Promise<{
 	userDataDir: string;
 	extensionsDir: string;
 }> {
+	const releaseLaunchLock = await acquireVsCodeLaunchLock();
 	const vscodeVersion = process.env.VSCODE_TEST_VERSION?.trim() || '1.109.0';
 	const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
 	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-playwright-'));
@@ -36,24 +38,27 @@ async function launchVsCode(workspacePath: string): Promise<{
 	await fs.mkdir(userDataDir, { recursive: true });
 	await fs.mkdir(extensionsDir, { recursive: true });
 
-	const app = await electron.launch({
-		executablePath: vscodeExecutablePath,
-		args: [
-			workspacePath,
-			'--disable-updates',
-			'--skip-release-notes',
-			'--skip-welcome',
-			'--disable-workspace-trust',
-			'--user-data-dir',
-			userDataDir,
-			'--extensions-dir',
-			extensionsDir,
-			'--extensionDevelopmentPath',
-			EXTENSION_DEV_PATH
-		]
-	});
-
-	return { app, tempRoot, userDataDir, extensionsDir };
+	try {
+		const app = await electron.launch({
+			executablePath: vscodeExecutablePath,
+			args: [
+				workspacePath,
+				'--disable-updates',
+				'--skip-release-notes',
+				'--skip-welcome',
+				'--disable-workspace-trust',
+				'--user-data-dir',
+				userDataDir,
+				'--extensions-dir',
+				extensionsDir,
+				'--extensionDevelopmentPath',
+				EXTENSION_DEV_PATH
+			]
+		});
+		return { app, tempRoot, userDataDir, extensionsDir };
+	} finally {
+		await releaseLaunchLock();
+	}
 }
 
 async function openCommandPalette(page: Page): Promise<{ input: ReturnType<Page['locator']>; prefix: string }> {

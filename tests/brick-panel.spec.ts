@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { acquireVsCodeLaunchLock } from './vscodeLaunchLock';
 
 const EXTENSION_DEV_PATH = path.resolve(__dirname, '..');
 
@@ -15,6 +16,7 @@ async function createWorkspace(settings: Record<string, unknown>): Promise<strin
 }
 
 async function launchVsCode(workspacePath: string) {
+	const releaseLaunchLock = await acquireVsCodeLaunchLock();
 	const vscodeVersion = process.env.VSCODE_TEST_VERSION?.trim() || '1.109.0';
 	const vscodeExecutablePath = await downloadAndUnzipVSCode(vscodeVersion);
 	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ev3-cockpit-playwright-'));
@@ -23,24 +25,27 @@ async function launchVsCode(workspacePath: string) {
 	await fs.mkdir(userDataDir, { recursive: true });
 	await fs.mkdir(extensionsDir, { recursive: true });
 
-	const app = await electron.launch({
-		executablePath: vscodeExecutablePath,
-		args: [
-			workspacePath,
-			'--disable-updates',
-			'--skip-release-notes',
-			'--skip-welcome',
-			'--disable-workspace-trust',
-			'--user-data-dir',
-			userDataDir,
-			'--extensions-dir',
-			extensionsDir,
-			'--extensionDevelopmentPath',
-			EXTENSION_DEV_PATH
-		]
-	});
-
-	return { app, tempRoot, userDataDir, extensionsDir };
+	try {
+		const app = await electron.launch({
+			executablePath: vscodeExecutablePath,
+			args: [
+				workspacePath,
+				'--disable-updates',
+				'--skip-release-notes',
+				'--skip-welcome',
+				'--disable-workspace-trust',
+				'--user-data-dir',
+				userDataDir,
+				'--extensions-dir',
+				extensionsDir,
+				'--extensionDevelopmentPath',
+				EXTENSION_DEV_PATH
+			]
+		});
+		return { app, tempRoot, userDataDir, extensionsDir };
+	} finally {
+		await releaseLaunchLock();
+	}
 }
 
 async function openCommandPalette(page: Page) {
