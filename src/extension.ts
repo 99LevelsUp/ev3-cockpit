@@ -35,6 +35,7 @@ import {
 import {
 	isWindowsBluetoothDevicePresent,
 	listWindowsBluetoothLiveDevices,
+	listWindowsBluetoothPairedDevices,
 	listSerialCandidates,
 	listTcpDiscoveryCandidates,
 	listUsbHidCandidates
@@ -98,6 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
 		probeBtCandidatePresence,
 		isBtAddressPresent: isWindowsBluetoothDevicePresent,
 		listBtLiveDevices: listWindowsBluetoothLiveDevices,
+		listBtPairedDevices: listWindowsBluetoothPairedDevices,
 		logger: perfLogger,
 		toSafeIdentifier
 	});

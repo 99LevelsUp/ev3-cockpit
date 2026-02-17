@@ -4,6 +4,7 @@ import type { BrickRegistry } from './brickRegistry';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
 import {
 	extractBluetoothAddressFromPnpId,
+	type WindowsBluetoothPairedDevice,
 	type SerialCandidate,
 	type WindowsBluetoothLiveDevice
 } from '../transport/discovery';
@@ -38,6 +39,7 @@ export interface BrickDiscoveryServiceDeps {
 	probeBtCandidatePresence?: (port: string) => Promise<boolean>;
 	isBtAddressPresent?: (address: string) => Promise<boolean>;
 	listBtLiveDevices?: () => Promise<WindowsBluetoothLiveDevice[]>;
+	listBtPairedDevices?: () => Promise<WindowsBluetoothPairedDevice[]>;
 	logger: Logger;
 	toSafeIdentifier: (value: string) => string;
 }
@@ -177,17 +179,21 @@ export class BrickDiscoveryService {
 		const resolvePreferredDisplayName = (
 			brickId: string,
 			fallbackDisplayName: string,
-			discoveredName?: string
+			discoveredName?: string,
+			preferDiscoveredOverRemembered = false
 		): string => {
 			const connectedName = normalizeBrickNameCandidate(brickRegistry.getSnapshot(brickId)?.displayName);
 			if (connectedName) {
 				return connectedName;
 			}
+			const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
+			if (preferDiscoveredOverRemembered && liveDiscoveredName) {
+				return liveDiscoveredName;
+			}
 			const rememberedName = normalizeBrickNameCandidate(profileStore.get(brickId)?.displayName);
 			if (rememberedName) {
 				return rememberedName;
 			}
-			const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
 			if (liveDiscoveredName) {
 				return liveDiscoveredName;
 			}
@@ -291,7 +297,8 @@ export class BrickDiscoveryService {
 			const displayName = resolvePreferredDisplayName(
 				brickId,
 				fallbackDisplayName,
-				resolveBluetoothFriendlyDisplayName(serialCandidate) ?? portProfile?.displayName
+				resolveBluetoothFriendlyDisplayName(serialCandidate) ?? portProfile?.displayName,
+				true
 			);
 			const manufacturer = serialCandidate.manufacturer?.trim();
 			const detail = manufacturer
@@ -339,7 +346,7 @@ export class BrickDiscoveryService {
 					? rememberedProfile.transport.btPort?.trim().toUpperCase()
 					: undefined;
 				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
-				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName);
+				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
 				const detail = rememberedPort
 					? `${device.displayName ?? address} | ${rememberedPort}`
 					: `${device.displayName ?? address} | no COM`;
@@ -355,6 +362,39 @@ export class BrickDiscoveryService {
 					status: resolveCandidateStatus(snapshot, rememberedPort ? 'UNKNOWN' : 'UNAVAILABLE'),
 					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 				}, rememberedProfile, nonConnectableReason);
+			}
+		}
+
+		// Paired EV3 devices from Windows registry (fallback visibility)
+		if (this.deps.listBtPairedDevices) {
+			let pairedDevices: WindowsBluetoothPairedDevice[] = [];
+			try {
+				pairedDevices = await this.deps.listBtPairedDevices();
+			} catch (error) {
+				logger.debug('Bluetooth paired-device scan failed', {
+					error: error instanceof Error ? error.message : String(error)
+				});
+			}
+			for (const device of pairedDevices) {
+				const address = device.address.trim().toUpperCase();
+				if (!address || !address.startsWith('001653')) {
+					continue;
+				}
+				const brickId = `bt-${toSafeIdentifier(address)}`;
+				if (seenCandidateIds.has(brickId)) {
+					continue;
+				}
+				const snapshot = brickRegistry.getSnapshot(brickId);
+				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
+				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
+				registerCandidate({
+					candidateId: brickId,
+					displayName,
+					transport: TransportMode.BT,
+					detail: `${device.displayName ?? address} | paired only`,
+					status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+				}, undefined, 'Brick is paired in Windows, but not currently reported as present by Bluetooth stack.');
 			}
 		}
 

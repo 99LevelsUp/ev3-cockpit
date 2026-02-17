@@ -345,6 +345,15 @@ test('BrickDiscoveryService.scan discovers Bluetooth candidates', async () => {
 });
 
 test('BrickDiscoveryService.scan prefers Bluetooth friendlyName for displayName', async () => {
+	const storedProfiles: BrickConnectionProfile[] = [
+		{
+			brickId: 'bt-001653518739',
+			displayName: 'OldName',
+			savedAtIso: '2026-02-16T00:00:00.000Z',
+			rootPath: '/home/root/lms2012/prjs/',
+			transport: { mode: TransportMode.BT, btPort: 'COM4' }
+		}
+	];
 	const scanners = createMockScanners(
 		[],
 		[{
@@ -357,7 +366,7 @@ test('BrickDiscoveryService.scan prefers Bluetooth friendlyName for displayName'
 	);
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
-		profileStore: createMockProfileStore(),
+		profileStore: createMockProfileStore(storedProfiles),
 		scanners,
 		probeBtCandidatePresence: async () => true,
 		logger: createMockLogger(),
@@ -1371,6 +1380,32 @@ test('BrickDiscoveryService.connectDiscoveredBrick explains missing COM for live
 		},
 		/error.+COM port|SPP COM port/i
 	);
+});
+
+test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not live', async () => {
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [],
+		listBtPairedDevices: async () => [
+			{
+				address: '0016535D7E2D',
+				displayName: 'Szalinka'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-0016535d7e2d');
+	assert.equal(candidates[0].displayName, 'Szalinka');
+	assert.equal(candidates[0].status, 'UNAVAILABLE');
+	assert.match(candidates[0].detail ?? '', /paired only/i);
 });
 
 test('BrickDiscoveryService.scan does not probe already connected Bluetooth candidate', async () => {

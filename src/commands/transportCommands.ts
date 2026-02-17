@@ -12,6 +12,7 @@ import {
 	extractBluetoothAddressFromPnpId,
 	listSerialCandidates,
 	listUsbHidCandidates,
+	listWindowsBluetoothPairedDevices,
 	listWindowsBluetoothLiveDevices
 } from '../transport/discovery';
 import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
@@ -223,6 +224,12 @@ function formatBtDiagnosticsReport(params: {
 		displayName?: string;
 		hasComMapping: boolean;
 	}>;
+	pairedDevices: Array<{
+		address: string;
+		displayName?: string;
+		isLive: boolean;
+		hasComMapping: boolean;
+	}>;
 }): string {
 	const lines: string[] = [];
 	lines.push('EV3 Cockpit BT Detection Diagnostics');
@@ -235,6 +242,15 @@ function formatBtDiagnosticsReport(params: {
 		for (const device of params.liveDevices) {
 			lines.push(
 				`  ${device.address} | name=${device.displayName ?? '(unknown)'} | comMapping=${device.hasComMapping ? 'yes' : 'no'}`
+			);
+		}
+		lines.push('');
+	}
+	if (params.pairedDevices.length > 0) {
+		lines.push('Paired Bluetooth devices (registry):');
+		for (const device of params.pairedDevices) {
+			lines.push(
+				`  ${device.address} | name=${device.displayName ?? '(unknown)'} | live=${device.isLive ? 'yes' : 'no'} | comMapping=${device.hasComMapping ? 'yes' : 'no'}`
 			);
 		}
 		lines.push('');
@@ -342,6 +358,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 
 		const serialCandidates = await listSerialCandidates();
 		const liveDevices = await listWindowsBluetoothLiveDevices();
+		const pairedDevices = await listWindowsBluetoothPairedDevices();
 		const comCandidates = serialCandidates
 			.filter((candidate) => /^COM\d+$/i.test(candidate.path.trim()))
 			.map((candidate) => ({
@@ -361,6 +378,15 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 			.map((device) => ({
 				address: device.address,
 				displayName: device.displayName,
+				hasComMapping: mappedAddresses.has(device.address)
+			}));
+		const liveSet = new Set(liveDeviceRows.map((device) => device.address));
+		const pairedDeviceRows = pairedDevices
+			.filter((device) => device.address.startsWith('001653'))
+			.map((device) => ({
+				address: device.address,
+				displayName: device.displayName,
+				isLive: liveSet.has(device.address),
 				hasComMapping: mappedAddresses.has(device.address)
 			}));
 
@@ -387,13 +413,15 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 			configuredMode,
 			preferredPort,
 			entries,
-			liveDevices: liveDeviceRows
+			liveDevices: liveDeviceRows,
+			pairedDevices: pairedDeviceRows
 		});
 		logger.info('BT detection diagnostics report', {
 			configuredMode,
 			preferredPort,
 			entries,
-			liveDevices: liveDeviceRows
+			liveDevices: liveDeviceRows,
+			pairedDevices: pairedDeviceRows
 		});
 
 		const doc = await vscode.workspace.openTextDocument({

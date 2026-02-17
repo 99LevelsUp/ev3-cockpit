@@ -33,6 +33,11 @@ export interface WindowsBluetoothLiveDevice {
 	displayName?: string;
 }
 
+export interface WindowsBluetoothPairedDevice {
+	address: string;
+	displayName?: string;
+}
+
 /** Default EV3 UDP discovery broadcast port. */
 const DEFAULT_TCP_DISCOVERY_PORT = 3015;
 /** Discovery window for collecting EV3 UDP beacons in UI scans. */
@@ -230,6 +235,21 @@ export async function listWindowsBluetoothLiveDevices(): Promise<WindowsBluetoot
 	} catch {
 		return [];
 	}
+}
+
+export async function listWindowsBluetoothPairedDevices(): Promise<WindowsBluetoothPairedDevice[]> {
+	if (process.platform !== 'win32') {
+		return [];
+	}
+	const names = await resolveWindowsBluetoothNameMap();
+	const devices: WindowsBluetoothPairedDevice[] = [];
+	for (const [address, displayName] of names.entries()) {
+		devices.push({
+			address,
+			displayName
+		});
+	}
+	return devices.sort((left, right) => left.address.localeCompare(right.address));
 }
 
 async function resolveWindowsBluetoothPresentAddressSet(): Promise<Set<string>> {
