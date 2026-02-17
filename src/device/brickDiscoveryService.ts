@@ -68,8 +68,8 @@ export function isLikelyEv3SerialCandidate(
 	if (/LOCALMFG&005D/.test(fingerprint) || /\\001653[0-9A-F]{6}_/i.test(candidate.pnpId ?? '')) {
 		return true;
 	}
-	// Fallback: treat any Bluetooth SPP serial port as a potential EV3 brick.
-	return true;
+	// Reject generic Bluetooth SPP ports (for example LOCALMFG&0000) that have no EV3 hint.
+	return false;
 }
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {

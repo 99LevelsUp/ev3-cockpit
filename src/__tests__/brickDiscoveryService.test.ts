@@ -122,12 +122,12 @@ test('isLikelyEv3SerialCandidate returns true for Bluetooth SPP with LEGO MAC', 
 	assert.equal(isLikelyEv3SerialCandidate(candidate), true);
 });
 
-test('isLikelyEv3SerialCandidate returns true for any Bluetooth SPP port (fallback)', () => {
+test('isLikelyEv3SerialCandidate returns false for generic Bluetooth SPP port without EV3 hints', () => {
 	const candidate: SerialCandidate = {
 		path: 'COM5',
 		pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_OTHER'
 	};
-	assert.equal(isLikelyEv3SerialCandidate(candidate), true);
+	assert.equal(isLikelyEv3SerialCandidate(candidate), false);
 });
 
 test('isLikelyEv3SerialCandidate returns false for non-EV3 serial port', () => {

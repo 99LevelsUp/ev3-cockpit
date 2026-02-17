@@ -6,6 +6,8 @@ import type { BrickDiscoveryService } from '../device/brickDiscoveryService';
 import { isLikelyEv3SerialCandidate } from '../device/brickDiscoveryService';
 import type { SerialCandidate } from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
+import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
+import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 
 export interface BtPresenceScannerOptions {
 	listSerialCandidates: () => Promise<SerialCandidate[]>;
@@ -41,6 +43,11 @@ const GENERIC_BT_TOKENS = new Set([
 	'RFCOMM',
 	'MICROSOFT'
 ]);
+
+const BT_PROBE_OPCODE = 0x9d;
+const BT_PROBE_TIMEOUT_MS = 1500;
+const BT_POST_OPEN_DELAY_MS = 120;
+const BT_BAUD_RATE = 115200;
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {
 	const pnpId = candidate.pnpId ?? '';
@@ -121,7 +128,51 @@ function normalizeBtBrickName(candidate: SerialCandidate): string | undefined {
 
 function isGenericBtDisplayName(value: string): boolean {
 	const trimmed = value.trim();
-	return /^EV3 Bluetooth \\(COM\\d+\\)$/i.test(trimmed) || /Bluetooth/i.test(trimmed);
+	return /^EV3 Bluetooth \(COM\d+\)$/i.test(trimmed) || /Bluetooth/i.test(trimmed);
+}
+
+async function sleep(ms: number): Promise<void> {
+	if (ms <= 0) {
+		return;
+	}
+	await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeBtPort(port: string, dtr: boolean): Promise<boolean> {
+	const adapter = new BluetoothSppAdapter({
+		port,
+		baudRate: BT_BAUD_RATE,
+		dtr
+	});
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), BT_PROBE_TIMEOUT_MS);
+	try {
+		await adapter.open();
+		await sleep(BT_POST_OPEN_DELAY_MS);
+		const probePacket = encodeEv3Packet(0, EV3_COMMAND.SYSTEM_COMMAND_REPLY, new Uint8Array([BT_PROBE_OPCODE]));
+		const replyBytes = await adapter.send(probePacket, {
+			timeoutMs: BT_PROBE_TIMEOUT_MS,
+			signal: controller.signal
+		});
+		const reply = decodeEv3Packet(replyBytes);
+		if (reply.type !== EV3_REPLY.SYSTEM_REPLY && reply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
+			return false;
+		}
+		if (reply.payload.length < 2) {
+			return false;
+		}
+		return reply.payload[0] === BT_PROBE_OPCODE && reply.payload[1] === 0x00;
+	} catch {
+		return false;
+	} finally {
+		clearTimeout(timeout);
+		await adapter.close().catch(() => undefined);
+	}
+}
+
+async function probeBtCandidatePresence(port: string): Promise<boolean> {
+	// Most EV3 SPP stacks work with dtr=false, but try both to avoid false negatives.
+	return (await probeBtPort(port, false)) || (await probeBtPort(port, true));
 }
 
 export function createBtPresenceScanner(options: BtPresenceScannerOptions): vscode.Disposable {
@@ -179,12 +230,23 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			}
 			const btPort = rawPath.toUpperCase();
 			const brickId = resolveBtBrickId(candidate, btPort, safeId);
-			activeBtBrickIds.add(brickId);
 
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			if (snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING') {
+				activeBtBrickIds.add(brickId);
 				continue;
 			}
+			const present = await probeBtCandidatePresence(btPort);
+			if (!present) {
+				logger.debug('BT presence probe rejected candidate', {
+					port: btPort,
+					brickId,
+					pnpId: candidate.pnpId,
+					manufacturer: candidate.manufacturer
+				});
+				continue;
+			}
+			activeBtBrickIds.add(brickId);
 
 			const manufacturer = normalizeBtBrickName(candidate);
 			let rememberedProfile = profileStore.get(brickId);

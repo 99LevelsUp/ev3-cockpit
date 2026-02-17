@@ -27,6 +27,16 @@ test('isLikelyEv3SerialCandidate returns false for unrelated device', () => {
 	assert.ok(!isLikelyEv3SerialCandidate(candidate));
 });
 
+test('isLikelyEv3SerialCandidate returns false for generic Bluetooth SPP without EV3 hints', () => {
+	const candidate = {
+		path: 'COM11',
+		manufacturer: 'Microsoft',
+		serialNumber: '',
+		pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&0000\\8&XXX&0&000000000000_00000009'
+	};
+	assert.ok(!isLikelyEv3SerialCandidate(candidate));
+});
+
 test('isLikelyEv3SerialCandidate returns true for preferred port even if no fingerprint', () => {
 	const candidate = { path: 'COM8', manufacturer: '', serialNumber: '', pnpId: '' };
 	assert.ok(isLikelyEv3SerialCandidate(candidate, 'COM8'));
