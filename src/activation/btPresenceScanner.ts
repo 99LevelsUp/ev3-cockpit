@@ -47,11 +47,13 @@ const GENERIC_BT_TOKENS = new Set([
 ]);
 
 const BT_PROBE_OPCODE = 0x9d;
-const BT_PROBE_TIMEOUT_MS = 2500;
+const BT_PROBE_TIMEOUT_MS = 4_000;
 const BT_POST_OPEN_DELAY_MS = 120;
 const BT_BAUD_RATE = 115200;
 const BT_PROBE_SUCCESS_CACHE_MS = 5_000;
 const BT_PROBE_FAILURE_CACHE_MS = 750;
+const BT_PROBE_ATTEMPTS = 2;
+const BT_PROBE_RETRY_DELAY_MS = 100;
 
 type BtPresenceScanMode = 'discovery-fast' | 'connected-fast' | 'slow';
 
@@ -153,28 +155,45 @@ async function probeBtPort(port: string, dtr: boolean): Promise<boolean> {
 		baudRate: BT_BAUD_RATE,
 		dtr
 	});
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), BT_PROBE_TIMEOUT_MS);
 	try {
 		await adapter.open();
 		await sleep(BT_POST_OPEN_DELAY_MS);
-		const probePacket = encodeEv3Packet(0, EV3_COMMAND.SYSTEM_COMMAND_REPLY, new Uint8Array([BT_PROBE_OPCODE]));
-		const replyBytes = await adapter.send(probePacket, {
-			timeoutMs: BT_PROBE_TIMEOUT_MS,
-			signal: controller.signal
-		});
-		const reply = decodeEv3Packet(replyBytes);
-		if (reply.type !== EV3_REPLY.SYSTEM_REPLY && reply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
-			return false;
+		for (let attempt = 0; attempt < BT_PROBE_ATTEMPTS; attempt += 1) {
+			const messageCounter = attempt;
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), BT_PROBE_TIMEOUT_MS);
+			try {
+				const probePacket = encodeEv3Packet(
+					messageCounter,
+					EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+					new Uint8Array([BT_PROBE_OPCODE])
+				);
+				const replyBytes = await adapter.send(probePacket, {
+					timeoutMs: BT_PROBE_TIMEOUT_MS,
+					signal: controller.signal,
+					expectedMessageCounter: messageCounter
+				});
+				const reply = decodeEv3Packet(replyBytes);
+				if (reply.type !== EV3_REPLY.SYSTEM_REPLY && reply.type !== EV3_REPLY.SYSTEM_REPLY_ERROR) {
+					continue;
+				}
+				if (reply.payload.length < 2) {
+					continue;
+				}
+				if (reply.payload[0] === BT_PROBE_OPCODE && reply.payload[1] === 0x00) {
+					return true;
+				}
+			} finally {
+				clearTimeout(timeout);
+			}
+			if (attempt + 1 < BT_PROBE_ATTEMPTS) {
+				await sleep(BT_PROBE_RETRY_DELAY_MS);
+			}
 		}
-		if (reply.payload.length < 2) {
-			return false;
-		}
-		return reply.payload[0] === BT_PROBE_OPCODE && reply.payload[1] === 0x00;
+		return false;
 	} catch {
 		return false;
 	} finally {
-		clearTimeout(timeout);
 		await adapter.close().catch(() => undefined);
 	}
 }
