@@ -47,11 +47,16 @@ const GENERIC_BT_TOKENS = new Set([
 ]);
 
 const BT_PROBE_OPCODE = 0x9d;
-const BT_PROBE_TIMEOUT_MS = 1500;
+const BT_PROBE_TIMEOUT_MS = 2500;
 const BT_POST_OPEN_DELAY_MS = 120;
 const BT_BAUD_RATE = 115200;
+const BT_PROBE_SUCCESS_CACHE_MS = 5_000;
+const BT_PROBE_FAILURE_CACHE_MS = 750;
 
 type BtPresenceScanMode = 'discovery-fast' | 'connected-fast' | 'slow';
+
+const btProbeInFlight = new Map<string, Promise<boolean>>();
+const btProbeCache = new Map<string, { present: boolean; at: number }>();
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {
 	const pnpId = candidate.pnpId ?? '';
@@ -175,8 +180,33 @@ async function probeBtPort(port: string, dtr: boolean): Promise<boolean> {
 }
 
 export async function probeBtCandidatePresence(port: string): Promise<boolean> {
+	const normalizedPort = port.trim().toUpperCase();
+	if (!/^COM\d+$/i.test(normalizedPort)) {
+		return false;
+	}
+	const cached = btProbeCache.get(normalizedPort);
+	if (cached) {
+		const ageMs = Date.now() - cached.at;
+		const ttlMs = cached.present ? BT_PROBE_SUCCESS_CACHE_MS : BT_PROBE_FAILURE_CACHE_MS;
+		if (ageMs >= 0 && ageMs <= ttlMs) {
+			return cached.present;
+		}
+		btProbeCache.delete(normalizedPort);
+	}
+	const inFlight = btProbeInFlight.get(normalizedPort);
+	if (inFlight) {
+		return inFlight;
+	}
+	const runProbe = (async () => {
 	// Most EV3 SPP stacks work with dtr=false, but try both to avoid false negatives.
-	return (await probeBtPort(port, false)) || (await probeBtPort(port, true));
+		const present = (await probeBtPort(normalizedPort, false)) || (await probeBtPort(normalizedPort, true));
+		btProbeCache.set(normalizedPort, { present, at: Date.now() });
+		return present;
+	})().finally(() => {
+		btProbeInFlight.delete(normalizedPort);
+	});
+	btProbeInFlight.set(normalizedPort, runProbe);
+	return runProbe;
 }
 
 export function createBtPresenceScanner(options: BtPresenceScannerOptions): vscode.Disposable {
