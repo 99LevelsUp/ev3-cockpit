@@ -370,7 +370,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 
 			const manufacturer = normalizeBtBrickName(candidate);
 			let rememberedProfile = profileStore.get(brickId);
-			if (!rememberedProfile) {
+			if (!rememberedProfile && !resolveBtAddress(candidate)) {
 				const matching = profileStore.list().find((profile) => (
 					profile.transport.mode === 'bt'
 					&& profile.transport.btPort?.trim().toUpperCase() === btPort

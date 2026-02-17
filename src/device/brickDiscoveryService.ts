@@ -2,7 +2,11 @@ import type { BrickConnectionProfile } from './brickConnectionProfiles';
 import type { BrickConnectionProfileStore } from './brickConnectionProfiles';
 import type { BrickRegistry } from './brickRegistry';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
-import { extractBluetoothAddressFromPnpId, type SerialCandidate } from '../transport/discovery';
+import {
+	extractBluetoothAddressFromPnpId,
+	type SerialCandidate,
+	type WindowsBluetoothLiveDevice
+} from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
@@ -33,6 +37,7 @@ export interface BrickDiscoveryServiceDeps {
 	scanners: DiscoveryTransportScanners;
 	probeBtCandidatePresence?: (port: string) => Promise<boolean>;
 	isBtAddressPresent?: (address: string) => Promise<boolean>;
+	listBtLiveDevices?: () => Promise<WindowsBluetoothLiveDevice[]>;
 	logger: Logger;
 	toSafeIdentifier: (value: string) => string;
 }
@@ -46,6 +51,24 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 		return undefined;
 	}
 	return trimmed;
+}
+
+function resolveBluetoothFriendlyDisplayName(candidate: SerialCandidate): string | undefined {
+	const raw = candidate.friendlyName?.trim();
+	if (!raw) {
+		return undefined;
+	}
+	const normalized = raw.replace(/\u0000/g, '').replace(/\(COM\d+\)/i, '').trim();
+	if (!normalized) {
+		return undefined;
+	}
+	if (
+		/BLUETOOTH|SERIOVA|SERI[ÁA]LN[IÍ]|PROTOKOL|PORT|COM\d+/i.test(normalized)
+		&& !/EV3|LEGO|MINDSTORMS/i.test(normalized)
+	) {
+		return undefined;
+	}
+	return normalizeBrickNameCandidate(normalized);
 }
 
 export function isLikelyEv3SerialCandidate(
@@ -90,6 +113,7 @@ function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (v
 export class BrickDiscoveryService {
 	private readonly deps: BrickDiscoveryServiceDeps;
 	private readonly discoveredProfiles = new Map<string, BrickConnectionProfile>();
+	private readonly nonConnectableCandidates = new Map<string, string>();
 
 	constructor(deps: BrickDiscoveryServiceDeps) {
 		this.deps = deps;
@@ -121,12 +145,14 @@ export class BrickDiscoveryService {
 		]);
 
 		this.discoveredProfiles.clear();
+		this.nonConnectableCandidates.clear();
 		const candidates: BrickPanelDiscoveryCandidate[] = [];
 		const seenCandidateIds = new Set<string>();
 
 		const registerCandidate = (
 			candidate: BrickPanelDiscoveryCandidate,
-			profile?: BrickConnectionProfile
+			profile?: BrickConnectionProfile,
+			nonConnectableReason?: string
 		): void => {
 			if (!config.showMockBricks && isMockBrickId(candidate.candidateId)) {
 				return;
@@ -141,6 +167,9 @@ export class BrickDiscoveryService {
 			seenCandidateIds.add(candidate.candidateId);
 			if (profile) {
 				this.discoveredProfiles.set(profile.brickId, profile);
+			}
+			if (nonConnectableReason) {
+				this.nonConnectableCandidates.set(candidate.candidateId, nonConnectableReason);
 			}
 			candidates.push(candidate);
 		};
@@ -252,14 +281,17 @@ export class BrickDiscoveryService {
 				continue;
 			}
 			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
-			const portProfile = profileStore.list().find((profile) => (
-				profile.transport.mode === 'bt'
-				&& profile.transport.btPort?.trim().toUpperCase() === btPort
-			));
+			const btAddress = resolveBtAddress(serialCandidate);
+			const portProfile = !btAddress
+				? profileStore.list().find((profile) => (
+					profile.transport.mode === 'bt'
+					&& profile.transport.btPort?.trim().toUpperCase() === btPort
+				))
+				: undefined;
 			const displayName = resolvePreferredDisplayName(
 				brickId,
 				fallbackDisplayName,
-				portProfile?.displayName
+				resolveBluetoothFriendlyDisplayName(serialCandidate) ?? portProfile?.displayName
 			);
 			const manufacturer = serialCandidate.manufacturer?.trim();
 			const detail = manufacturer
@@ -280,6 +312,50 @@ export class BrickDiscoveryService {
 				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
 				alreadyConnected
 			}, profile);
+		}
+
+		// Bluetooth live devices without COM mapping
+		if (this.deps.listBtLiveDevices) {
+			let liveDevices: WindowsBluetoothLiveDevice[] = [];
+			try {
+				liveDevices = await this.deps.listBtLiveDevices();
+			} catch (error) {
+				logger.debug('Bluetooth live-device scan failed', {
+					error: error instanceof Error ? error.message : String(error)
+				});
+			}
+			for (const device of liveDevices) {
+				const address = device.address.trim().toUpperCase();
+				if (!address || !address.startsWith('001653')) {
+					continue;
+				}
+				const brickId = `bt-${toSafeIdentifier(address)}`;
+				if (seenCandidateIds.has(brickId)) {
+					continue;
+				}
+				const snapshot = brickRegistry.getSnapshot(brickId);
+				const rememberedProfile = profileStore.get(brickId);
+				const rememberedPort = rememberedProfile?.transport.mode === 'bt'
+					? rememberedProfile.transport.btPort?.trim().toUpperCase()
+					: undefined;
+				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
+				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName);
+				const detail = rememberedPort
+					? `${device.displayName ?? address} | ${rememberedPort}`
+					: `${device.displayName ?? address} | no COM`;
+				const nonConnectableReason = rememberedPort
+					? undefined
+					: 'Brick is visible over Bluetooth, but Windows did not expose an SPP COM port. Pair or enable Serial Port service first.';
+
+				registerCandidate({
+					candidateId: brickId,
+					displayName,
+					transport: TransportMode.BT,
+					detail,
+					status: resolveCandidateStatus(snapshot, rememberedPort ? 'UNKNOWN' : 'UNAVAILABLE'),
+					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+				}, rememberedProfile, nonConnectableReason);
+			}
 		}
 
 		// TCP
@@ -412,6 +488,10 @@ export class BrickDiscoveryService {
 		profileStore: BrickConnectionProfileStore,
 		executeConnect: (brickId: string) => Promise<void>
 	): Promise<void> {
+		const blockedReason = this.nonConnectableCandidates.get(candidateId);
+		if (blockedReason) {
+			throw new Error(blockedReason);
+		}
 		const profile = this.discoveredProfiles.get(candidateId) ?? profileStore.get(candidateId);
 		if (!profile) {
 			throw new Error('Selected Brick is no longer available. Scan again.');

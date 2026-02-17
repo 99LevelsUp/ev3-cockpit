@@ -344,6 +344,33 @@ test('BrickDiscoveryService.scan discovers Bluetooth candidates', async () => {
 	assert.equal(candidates[0].status, 'UNKNOWN');
 });
 
+test('BrickDiscoveryService.scan prefers Bluetooth friendlyName for displayName', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{
+			path: 'COM4',
+			manufacturer: 'Microsoft',
+			friendlyName: 'BUMBLBEE',
+			pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\8&2E3EE818&0&001653518739_C00000000'
+		}],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => true,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].displayName, 'BUMBLBEE');
+});
+
 test('BrickDiscoveryService.scan resolves Bluetooth MAC from ampersand-form pnpId', async () => {
 	const scanners = createMockScanners(
 		[],
@@ -1171,7 +1198,7 @@ test('BrickDiscoveryService.scan handles empty scans gracefully', async () => {
 	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.scan resolves Bluetooth port from stored profile', async () => {
+test('BrickDiscoveryService.scan does not reuse port-matched profile name when MAC differs', async () => {
 	const storedProfiles: BrickConnectionProfile[] = [
 		{
 			brickId: 'bt-other',
@@ -1198,13 +1225,10 @@ test('BrickDiscoveryService.scan resolves Bluetooth port from stored profile', a
 
 	const candidates = await service.scan(config);
 
-	// Should use stored profile name (from port match) as discovered name for the BT candidate
-	// The BT candidate also gets registered, so we have both
+	// Discovered MAC candidate should keep its own fallback name, and unrelated stored profile stays separate.
 	assert.equal(candidates.length, 2);
-	// First is discovered BT (by MAC address)
 	assert.equal(candidates[0].candidateId, 'bt-001653aabbcc');
-	assert.equal(candidates[0].displayName, 'StoredBT');
-	// Second is stored profile that wasn't seen in scan
+	assert.equal(candidates[0].displayName, 'EV3 Bluetooth (COM5)');
 	assert.equal(candidates[1].candidateId, 'bt-other');
 	assert.equal(candidates[1].displayName, 'StoredBT');
 });
@@ -1297,6 +1321,56 @@ test('BrickDiscoveryService.scan falls back to live BT address presence when pro
 
 	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+});
+
+test('BrickDiscoveryService.scan includes live BT device without COM as non-connectable candidate', async () => {
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [
+			{
+				address: '001653ABCDEF',
+				displayName: 'TRZTINA'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+	assert.equal(candidates[0].displayName, 'TRZTINA');
+	assert.equal(candidates[0].status, 'UNAVAILABLE');
+	assert.match(candidates[0].detail ?? '', /no COM/i);
+});
+
+test('BrickDiscoveryService.connectDiscoveredBrick explains missing COM for live BT candidate', async () => {
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [
+			{
+				address: '001653ABCDEF',
+				displayName: 'TRZTINA'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	await service.scan(createDefaultConfig());
+
+	await assert.rejects(
+		async () => {
+			await service.connectDiscoveredBrick('bt-001653abcdef', createMockProfileStore(), async () => undefined);
+		},
+		/error.+COM port|SPP COM port/i
+	);
 });
 
 test('BrickDiscoveryService.scan does not probe already connected Bluetooth candidate', async () => {

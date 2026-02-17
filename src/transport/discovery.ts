@@ -28,6 +28,11 @@ export interface TcpDiscoveryCandidate {
 	name: string;
 }
 
+export interface WindowsBluetoothLiveDevice {
+	address: string;
+	displayName?: string;
+}
+
 /** Default EV3 UDP discovery broadcast port. */
 const DEFAULT_TCP_DISCOVERY_PORT = 3015;
 /** Discovery window for collecting EV3 UDP beacons in UI scans. */
@@ -83,9 +88,11 @@ export async function listSerialCandidates(): Promise<SerialCandidate[]> {
 
 let cachedBtNames: { ts: number; map: Map<string, string> } | undefined;
 let cachedBtPresentAddresses: { ts: number; set: Set<string> } | undefined;
+let cachedBtLiveDevices: { ts: number; devices: WindowsBluetoothLiveDevice[] } | undefined;
 
 const BT_NAME_CACHE_MS = 10_000;
 const BT_PRESENT_CACHE_MS = 2_000;
+const BT_LIVE_CACHE_MS = 2_000;
 
 export function extractBluetoothAddressFromPnpId(pnpId?: string): string | undefined {
 	const normalized = (pnpId ?? '').toUpperCase();
@@ -167,6 +174,62 @@ export async function isWindowsBluetoothDevicePresent(address: string): Promise<
 	}
 	const present = await resolveWindowsBluetoothPresentAddressSet();
 	return present.has(normalizedAddress);
+}
+
+export async function listWindowsBluetoothLiveDevices(): Promise<WindowsBluetoothLiveDevice[]> {
+	if (process.platform !== 'win32') {
+		return [];
+	}
+	const now = Date.now();
+	if (cachedBtLiveDevices && now - cachedBtLiveDevices.ts < BT_LIVE_CACHE_MS) {
+		return cachedBtLiveDevices.devices;
+	}
+	try {
+		const { stdout } = await execFileAsync('pwsh', [
+			'-NoProfile',
+			'-Command',
+			[
+				'Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue',
+				'| ForEach-Object {',
+				'$instance = $_.InstanceId;',
+				'if ($instance -match \'DEV_([0-9A-F]{12})\') {',
+				'[PSCustomObject]@{ Mac = $Matches[1].ToUpper(); Status = $_.Status; FriendlyName = $_.FriendlyName }',
+				'}',
+				'} | ConvertTo-Json -Compress'
+			].join(' ')
+		]);
+		const raw = stdout.trim();
+		if (!raw) {
+			return [];
+		}
+		const parsed = JSON.parse(raw) as
+			| { Mac?: string; Status?: string; FriendlyName?: string }
+			| Array<{ Mac?: string; Status?: string; FriendlyName?: string }>;
+		const entries = Array.isArray(parsed) ? parsed : [parsed];
+		const names = await resolveWindowsBluetoothNameMap();
+		const byAddress = new Map<string, WindowsBluetoothLiveDevice>();
+		for (const entry of entries) {
+			const address = entry.Mac?.replace(/[^0-9A-F]/gi, '').toUpperCase() ?? '';
+			const status = entry.Status?.trim().toUpperCase() ?? '';
+			if (!address || address.length !== 12 || address === '000000000000') {
+				continue;
+			}
+			if (status && status !== 'OK') {
+				continue;
+			}
+			const pnpName = entry.FriendlyName?.trim() || undefined;
+			const registryName = names.get(address);
+			byAddress.set(address, {
+				address,
+				displayName: registryName || pnpName
+			});
+		}
+		const devices = [...byAddress.values()].sort((left, right) => left.address.localeCompare(right.address));
+		cachedBtLiveDevices = { ts: now, devices };
+		return devices;
+	} catch {
+		return [];
+	}
 }
 
 async function resolveWindowsBluetoothPresentAddressSet(): Promise<Set<string>> {

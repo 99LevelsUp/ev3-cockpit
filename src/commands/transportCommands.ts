@@ -8,7 +8,12 @@ import { CommandScheduler } from '../scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
 import { isLikelyEv3SerialCandidate } from '../device/brickDiscoveryService';
 import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
-import { listSerialCandidates, listUsbHidCandidates } from '../transport/discovery';
+import {
+	extractBluetoothAddressFromPnpId,
+	listSerialCandidates,
+	listUsbHidCandidates,
+	listWindowsBluetoothLiveDevices
+} from '../transport/discovery';
 import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
@@ -213,6 +218,11 @@ function formatBtDiagnosticsReport(params: {
 		present: boolean;
 		attempts: Array<{ dtr: boolean; ok: boolean; message: string }>;
 	}>;
+	liveDevices: Array<{
+		address: string;
+		displayName?: string;
+		hasComMapping: boolean;
+	}>;
 }): string {
 	const lines: string[] = [];
 	lines.push('EV3 Cockpit BT Detection Diagnostics');
@@ -220,6 +230,15 @@ function formatBtDiagnosticsReport(params: {
 	lines.push(`transport.mode: ${String(params.configuredMode ?? 'undefined')}`);
 	lines.push(`preferred BT port: ${params.preferredPort ?? '(none)'}`);
 	lines.push('');
+	if (params.liveDevices.length > 0) {
+		lines.push('Live Bluetooth devices (PnP):');
+		for (const device of params.liveDevices) {
+			lines.push(
+				`  ${device.address} | name=${device.displayName ?? '(unknown)'} | comMapping=${device.hasComMapping ? 'yes' : 'no'}`
+			);
+		}
+		lines.push('');
+	}
 
 	if (params.entries.length === 0) {
 		lines.push('No COM serial candidates found.');
@@ -322,6 +341,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		const timeoutMs = Math.max(1_500, options.resolveProbeTimeoutMs());
 
 		const serialCandidates = await listSerialCandidates();
+		const liveDevices = await listWindowsBluetoothLiveDevices();
 		const comCandidates = serialCandidates
 			.filter((candidate) => /^COM\d+$/i.test(candidate.path.trim()))
 			.map((candidate) => ({
@@ -330,6 +350,18 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 				pnpId: candidate.pnpId,
 				friendlyName: candidate.friendlyName?.trim(),
 				likelyEv3: isLikelyEv3SerialCandidate(candidate, preferredPort)
+			}));
+		const mappedAddresses = new Set(
+			comCandidates
+				.map((candidate) => extractBluetoothAddressFromPnpId(candidate.pnpId))
+				.filter((value): value is string => typeof value === 'string')
+		);
+		const liveDeviceRows = liveDevices
+			.filter((device) => device.address.startsWith('001653'))
+			.map((device) => ({
+				address: device.address,
+				displayName: device.displayName,
+				hasComMapping: mappedAddresses.has(device.address)
 			}));
 
 		const entries: Array<{
@@ -354,12 +386,14 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		const report = formatBtDiagnosticsReport({
 			configuredMode,
 			preferredPort,
-			entries
+			entries,
+			liveDevices: liveDeviceRows
 		});
 		logger.info('BT detection diagnostics report', {
 			configuredMode,
 			preferredPort,
-			entries
+			entries,
+			liveDevices: liveDeviceRows
 		});
 
 		const doc = await vscode.workspace.openTextDocument({

@@ -34,6 +34,7 @@ import {
 } from './transport/transportFactory';
 import {
 	isWindowsBluetoothDevicePresent,
+	listWindowsBluetoothLiveDevices,
 	listSerialCandidates,
 	listTcpDiscoveryCandidates,
 	listUsbHidCandidates
@@ -96,6 +97,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 		probeBtCandidatePresence,
 		isBtAddressPresent: isWindowsBluetoothDevicePresent,
+		listBtLiveDevices: listWindowsBluetoothLiveDevices,
 		logger: perfLogger,
 		toSafeIdentifier
 	});
