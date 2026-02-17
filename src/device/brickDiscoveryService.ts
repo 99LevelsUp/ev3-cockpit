@@ -12,6 +12,8 @@ import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
 
+const BT_PAIRED_FALLBACK_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+
 export interface DiscoveryTransportScanners {
 	listUsbHidCandidates: () => Promise<Array<{ path: string; serialNumber?: string }>>;
 	listSerialCandidates: () => Promise<SerialCandidate[]>;
@@ -389,6 +391,14 @@ export class BrickDiscoveryService {
 				if (!address || !address.startsWith('001653')) {
 					continue;
 				}
+				if (!isPairedFallbackRecent(device, Date.now())) {
+					logger.debug('Skipping stale paired Bluetooth fallback candidate', {
+						address,
+						lastSeenAtIso: device.lastSeenAtIso,
+						lastConnectedAtIso: device.lastConnectedAtIso
+					});
+					continue;
+				}
 				const brickId = `bt-${toSafeIdentifier(address)}`;
 				if (seenCandidateIds.has(brickId)) {
 					continue;
@@ -603,6 +613,27 @@ function resolveUnavailableUnlessConnected(
 function isLegacyBluetoothBrickId(brickId: string): boolean {
 	const normalized = brickId.trim().toLowerCase();
 	return normalized.startsWith('bt-') && !/^bt-[0-9a-f]{12}$/i.test(normalized);
+}
+
+function isPairedFallbackRecent(device: WindowsBluetoothPairedDevice, nowMs: number): boolean {
+	const timestamps = [device.lastSeenAtIso, device.lastConnectedAtIso]
+		.filter((value): value is string => typeof value === 'string');
+	if (timestamps.length === 0) {
+		return true;
+	}
+	let youngestAgeMs = Number.POSITIVE_INFINITY;
+	for (const timestamp of timestamps) {
+		const tsMs = Date.parse(timestamp);
+		if (!Number.isFinite(tsMs) || tsMs <= 0) {
+			continue;
+		}
+		const ageMs = Math.max(0, nowMs - tsMs);
+		youngestAgeMs = Math.min(youngestAgeMs, ageMs);
+	}
+	if (!Number.isFinite(youngestAgeMs)) {
+		return true;
+	}
+	return youngestAgeMs <= BT_PAIRED_FALLBACK_MAX_AGE_MS;
 }
 
 export function resolveDiscoveryTransport(

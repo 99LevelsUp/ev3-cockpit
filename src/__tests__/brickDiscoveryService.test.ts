@@ -1486,6 +1486,30 @@ test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not
 	assert.match(candidates[0].detail ?? '', /paired only/i);
 });
 
+test('BrickDiscoveryService.scan skips stale paired EV3 fallback candidates', async () => {
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [],
+		listBtPairedDevices: async () => [
+			{
+				address: '00165342D9F2',
+				displayName: 'TRZTINA',
+				lastSeenAtIso: '2024-03-22T19:11:36.415Z',
+				lastConnectedAtIso: '2024-03-22T19:11:36.415Z'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 0);
+});
+
 test('BrickDiscoveryService.scan keeps paired-only candidate unavailable even with stale AVAILABLE snapshot', async () => {
 	const snapshots: BrickSnapshot[] = [
 		{

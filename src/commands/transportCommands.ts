@@ -229,6 +229,8 @@ function formatBtDiagnosticsReport(params: {
 		displayName?: string;
 		isLive: boolean;
 		hasComMapping: boolean;
+		lastSeenAtIso?: string;
+		lastConnectedAtIso?: string;
 	}>;
 }): string {
 	const lines: string[] = [];
@@ -249,8 +251,10 @@ function formatBtDiagnosticsReport(params: {
 	if (params.pairedDevices.length > 0) {
 		lines.push('Paired Bluetooth devices (registry):');
 		for (const device of params.pairedDevices) {
+			const lastSeen = device.lastSeenAtIso ?? '(unknown)';
+			const lastConnected = device.lastConnectedAtIso ?? '(unknown)';
 			lines.push(
-				`  ${device.address} | name=${device.displayName ?? '(unknown)'} | live=${device.isLive ? 'yes' : 'no'} | comMapping=${device.hasComMapping ? 'yes' : 'no'}`
+				`  ${device.address} | name=${device.displayName ?? '(unknown)'} | live=${device.isLive ? 'yes' : 'no'} | comMapping=${device.hasComMapping ? 'yes' : 'no'} | lastSeen=${lastSeen} | lastConnected=${lastConnected}`
 			);
 		}
 		lines.push('');
@@ -387,7 +391,9 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 				address: device.address,
 				displayName: device.displayName,
 				isLive: liveSet.has(device.address),
-				hasComMapping: mappedAddresses.has(device.address)
+				hasComMapping: mappedAddresses.has(device.address),
+				lastSeenAtIso: device.lastSeenAtIso,
+				lastConnectedAtIso: device.lastConnectedAtIso
 			}));
 
 		const entries: Array<{

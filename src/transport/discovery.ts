@@ -36,6 +36,8 @@ export interface WindowsBluetoothLiveDevice {
 export interface WindowsBluetoothPairedDevice {
 	address: string;
 	displayName?: string;
+	lastSeenAtIso?: string;
+	lastConnectedAtIso?: string;
 }
 
 /** Default EV3 UDP discovery broadcast port. */
@@ -241,15 +243,74 @@ export async function listWindowsBluetoothPairedDevices(): Promise<WindowsBlueto
 	if (process.platform !== 'win32') {
 		return [];
 	}
-	const names = await resolveWindowsBluetoothNameMap();
-	const devices: WindowsBluetoothPairedDevice[] = [];
-	for (const [address, displayName] of names.entries()) {
-		devices.push({
-			address,
-			displayName
-		});
+	try {
+		const { stdout } = await execFileAsync('pwsh', [
+			'-NoProfile',
+			'-Command',
+			[
+				'Get-ChildItem',
+				'\'HKLM:\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\BTHPORT\\\\Parameters\\\\Devices\'',
+				'| ForEach-Object {',
+				'$mac = $_.PSChildName.ToUpper();',
+				'$props = Get-ItemProperty $_.PsPath;',
+				'$nameBytes = $props.Name;',
+				'$name = if ($nameBytes) { [System.Text.Encoding]::UTF8.GetString($nameBytes) } else { $null };',
+				'$lastSeen = if ($null -ne $props.LastSeen) { [string]$props.LastSeen } else { $null };',
+				'$lastConnected = if ($null -ne $props.LastConnected) { [string]$props.LastConnected } else { $null };',
+				'[PSCustomObject]@{ Mac = $mac; Name = $name; LastSeen = $lastSeen; LastConnected = $lastConnected }',
+				'} | ConvertTo-Json -Compress'
+			].join(' ')
+		]);
+		const raw = stdout.trim();
+		if (!raw) {
+			return [];
+		}
+		const parsed = JSON.parse(raw) as
+			| { Mac?: string; Name?: string; LastSeen?: string; LastConnected?: string }
+			| Array<{ Mac?: string; Name?: string; LastSeen?: string; LastConnected?: string }>;
+		const entries = Array.isArray(parsed) ? parsed : [parsed];
+		const devices: WindowsBluetoothPairedDevice[] = [];
+		for (const entry of entries) {
+			const address = entry.Mac?.replace(/[^0-9A-F]/gi, '').toUpperCase() ?? '';
+			if (!address || address.length !== 12 || address === '000000000000') {
+				continue;
+			}
+			const displayName = entry.Name?.replace(/\u0000/g, '').trim() || undefined;
+			devices.push({
+				address,
+				displayName,
+				lastSeenAtIso: parseWindowsFileTimeToIso(entry.LastSeen),
+				lastConnectedAtIso: parseWindowsFileTimeToIso(entry.LastConnected)
+			});
+		}
+		return devices.sort((left, right) => left.address.localeCompare(right.address));
+	} catch {
+		return [];
 	}
-	return devices.sort((left, right) => left.address.localeCompare(right.address));
+}
+
+function parseWindowsFileTimeToIso(rawValue: string | undefined): string | undefined {
+	if (typeof rawValue !== 'string') {
+		return undefined;
+	}
+	const trimmed = rawValue.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	try {
+		const fileTime = BigInt(trimmed);
+		if (fileTime <= 0n) {
+			return undefined;
+		}
+		const unixMsBigInt = (fileTime - 116444736000000000n) / 10000n;
+		const unixMs = Number(unixMsBigInt);
+		if (!Number.isFinite(unixMs) || unixMs <= 0) {
+			return undefined;
+		}
+		return new Date(unixMs).toISOString();
+	} catch {
+		return undefined;
+	}
 }
 
 async function resolveWindowsBluetoothPresentAddressSet(): Promise<Set<string>> {
