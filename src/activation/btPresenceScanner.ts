@@ -21,6 +21,8 @@ export interface BtPresenceScannerOptions {
 	resolvePreferredBluetoothPort: () => string | undefined;
 	toSafeIdentifier: (value: string) => string;
 	isBtScanEnabled: () => boolean;
+	isDiscoveryTabActive: () => boolean;
+	hasConnectedBtOrTcp: () => boolean;
 	onPresenceChange: () => void;
 }
 
@@ -48,6 +50,8 @@ const BT_PROBE_OPCODE = 0x9d;
 const BT_PROBE_TIMEOUT_MS = 1500;
 const BT_POST_OPEN_DELAY_MS = 120;
 const BT_BAUD_RATE = 115200;
+
+type BtPresenceScanMode = 'discovery-fast' | 'connected-fast' | 'slow';
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {
 	const pnpId = candidate.pnpId ?? '';
@@ -188,12 +192,24 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 		resolvePreferredBluetoothPort,
 		toSafeIdentifier: safeId,
 		isBtScanEnabled,
+		isDiscoveryTabActive,
+		hasConnectedBtOrTcp,
 		onPresenceChange
 	} = options;
 
 	let disposed = false;
 	let timer: NodeJS.Timeout | undefined;
 	let previousBtBrickIds = new Set<string>();
+
+	const resolveScanMode = (): BtPresenceScanMode => {
+		if (isDiscoveryTabActive()) {
+			return 'discovery-fast';
+		}
+		if (hasConnectedBtOrTcp()) {
+			return 'connected-fast';
+		}
+		return 'slow';
+	};
 
 	const tick = async (): Promise<void> => {
 		if (disposed) {
@@ -203,6 +219,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			scheduleNext();
 			return;
 		}
+		const scanMode = resolveScanMode();
 
 		let serialCandidates: SerialCandidate[] = [];
 		try {
@@ -219,6 +236,14 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 		const defaultRoot = resolveDefaultRootPath();
 		const nowIso = new Date().toISOString();
 		const activeBtBrickIds = new Set<string>();
+		const connectedBtBrickIds = new Set(
+			brickRegistry.listSnapshots()
+				.filter((snapshot) => (
+					snapshot.transport === TransportMode.BT
+					&& (snapshot.status === 'READY' || snapshot.status === 'CONNECTING')
+				))
+				.map((snapshot) => snapshot.brickId)
+		);
 
 		for (const candidate of serialCandidates) {
 			const rawPath = candidate.path.trim();
@@ -230,10 +255,16 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			}
 			const btPort = rawPath.toUpperCase();
 			const brickId = resolveBtBrickId(candidate, btPort, safeId);
+			if (scanMode === 'connected-fast' && !connectedBtBrickIds.has(brickId)) {
+				continue;
+			}
 
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			if (snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING') {
 				activeBtBrickIds.add(brickId);
+				continue;
+			}
+			if (scanMode === 'connected-fast') {
 				continue;
 			}
 			const present = await probeBtCandidatePresence(btPort);
@@ -297,6 +328,17 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			});
 		}
 
+		if (scanMode === 'connected-fast') {
+			const missingConnectedBt = [...connectedBtBrickIds].filter((brickId) => !activeBtBrickIds.has(brickId));
+			if (missingConnectedBt.length > 0) {
+				logger.debug('BT connected-fast scan did not resolve currently connected IDs.', {
+					missingConnectedBt
+				});
+			}
+			scheduleNext();
+			return;
+		}
+
 		// Remove stale AVAILABLE BT bricks that are no longer present
 		const removed = brickRegistry.removeStale(activeBtBrickIds);
 		const btRemoved = removed.filter((id) => id.startsWith('bt-'));
@@ -322,8 +364,8 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 		if (disposed) {
 			return;
 		}
-		const hasBtBricks = previousBtBrickIds.size > 0;
-		const delay = hasBtBricks ? fastIntervalMs : slowIntervalMs;
+		const mode = resolveScanMode();
+		const delay = mode === 'slow' ? slowIntervalMs : fastIntervalMs;
 		timer = setTimeout(() => {
 			void tick();
 		}, delay);

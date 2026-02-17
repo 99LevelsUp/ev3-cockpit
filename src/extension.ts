@@ -578,6 +578,13 @@ export function activate(context: vscode.ExtensionContext) {
 			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
 			return mode === 'bt' || mode === 'auto' || mode === undefined;
 		},
+		isDiscoveryTabActive: () => panelActiveState.mode === 'discovery',
+		hasConnectedBtOrTcp: () => brickRegistry
+			.listSnapshots()
+			.some((snapshot) => (
+				(snapshot.status === 'READY' || snapshot.status === 'CONNECTING')
+				&& (snapshot.transport === 'bt' || snapshot.transport === 'tcp')
+			)),
 		onPresenceChange: () => {
 			treeProvider.refreshThrottled();
 			// brickPanelProvider is created below; safe because onPresenceChange is called async
