@@ -1486,7 +1486,7 @@ test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not
 	assert.match(candidates[0].detail ?? '', /paired only/i);
 });
 
-test('BrickDiscoveryService.scan skips stale paired EV3 fallback candidates', async () => {
+test('BrickDiscoveryService.scan keeps paired EV3 fallback candidate even with old timestamps', async () => {
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
 		profileStore: createMockProfileStore(),
@@ -1498,6 +1498,40 @@ test('BrickDiscoveryService.scan skips stale paired EV3 fallback candidates', as
 				displayName: 'TRZTINA',
 				lastSeenAtIso: '2024-03-22T19:11:36.415Z',
 				lastConnectedAtIso: '2024-03-22T19:11:36.415Z'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-00165342d9f2');
+	assert.equal(candidates[0].status, 'UNAVAILABLE');
+});
+
+test('BrickDiscoveryService.scan skips paired fallback when mapped COM probe fails', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{
+			path: 'COM4',
+			manufacturer: 'Microsoft',
+			pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\8&2E3EE818&0&001653518739_C00000000'
+		}],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => false,
+		listBtLiveDevices: async () => [],
+		listBtPairedDevices: async () => [
+			{
+				address: '001653518739',
+				displayName: 'BUMBLBEE'
 			}
 		],
 		logger: createMockLogger(),

@@ -12,8 +12,6 @@ import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
 
-const BT_PAIRED_FALLBACK_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
-
 export interface DiscoveryTransportScanners {
 	listUsbHidCandidates: () => Promise<Array<{ path: string; serialNumber?: string }>>;
 	listSerialCandidates: () => Promise<SerialCandidate[]>;
@@ -153,6 +151,8 @@ export class BrickDiscoveryService {
 		const candidates: BrickPanelDiscoveryCandidate[] = [];
 		const seenCandidateIds = new Set<string>();
 		const seenBtPorts = new Set<string>();
+		const btProbeByAddress = new Map<string, boolean>();
+		const btComPortByAddress = new Map<string, string>();
 
 		const registerCandidate = (
 			candidate: BrickPanelDiscoveryCandidate,
@@ -241,9 +241,16 @@ export class BrickDiscoveryService {
 			const likelyEv3Candidate = isLikelyEv3SerialCandidate(serialCandidate, config.preferredBluetoothPort);
 			const btPort = rawPath.toUpperCase();
 			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
+			const btAddress = resolveBtAddress(serialCandidate);
+			if (btAddress) {
+				btComPortByAddress.set(btAddress, btPort);
+			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
 			let btPresenceConfirmed = alreadyConnected;
+			if (alreadyConnected && btAddress) {
+				btProbeByAddress.set(btAddress, true);
+			}
 			if (!alreadyConnected && this.deps.probeBtCandidatePresence) {
 				let present = false;
 				try {
@@ -254,6 +261,9 @@ export class BrickDiscoveryService {
 						brickId,
 						error: error instanceof Error ? error.message : String(error)
 					});
+				}
+				if (btAddress) {
+					btProbeByAddress.set(btAddress, present);
 				}
 				if (!present) {
 					logger.debug('Bluetooth discovery probe rejected candidate', {
@@ -270,7 +280,6 @@ export class BrickDiscoveryService {
 				continue;
 			}
 			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
-			const btAddress = resolveBtAddress(serialCandidate);
 			const portProfile = !btAddress
 				? profileStore.list().find((profile) => (
 					profile.transport.mode === 'bt'
@@ -329,34 +338,26 @@ export class BrickDiscoveryService {
 				const rememberedPort = rememberedProfile?.transport.mode === 'bt'
 					? rememberedProfile.transport.btPort?.trim().toUpperCase()
 					: undefined;
+				const mappedPort = btComPortByAddress.get(address);
+				const effectivePort = rememberedPort ?? mappedPort;
 				const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
-				let rememberedPortConfirmed = alreadyConnected;
-				if (rememberedPort && !alreadyConnected && this.deps.probeBtCandidatePresence) {
-					try {
-						rememberedPortConfirmed = await this.deps.probeBtCandidatePresence(rememberedPort);
-					} catch (error) {
-						logger.debug('Bluetooth live-device remembered-port probe failed', {
-							brickId,
-							address,
-							rememberedPort,
-							error: error instanceof Error ? error.message : String(error)
-						});
-					}
-					if (!rememberedPortConfirmed) {
-						logger.debug('Bluetooth live-device candidate ignored because remembered COM probe failed', {
-							brickId,
-							address,
-							rememberedPort
-						});
-						continue;
-					}
+				const rememberedPortConfirmed = effectivePort
+					? (btProbeByAddress.get(address) ?? alreadyConnected)
+					: false;
+				if (effectivePort && !rememberedPortConfirmed && !alreadyConnected) {
+					logger.debug('Bluetooth live-device candidate ignored because mapped COM probe failed', {
+						brickId,
+						address,
+						effectivePort
+					});
+					continue;
 				}
-				const hasConnectablePort = Boolean(rememberedPort)
+				const hasConnectablePort = Boolean(effectivePort)
 					&& (!this.deps.probeBtCandidatePresence || rememberedPortConfirmed);
 				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
 				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
-				const detail = hasConnectablePort && rememberedPort
-					? `${device.displayName ?? address} | ${rememberedPort}`
+				const detail = hasConnectablePort && effectivePort
+					? `${device.displayName ?? address} | ${effectivePort}`
 					: `${device.displayName ?? address} | no COM`;
 				const nonConnectableReason = hasConnectablePort
 					? undefined
@@ -370,8 +371,8 @@ export class BrickDiscoveryService {
 					status: resolveCandidateStatus(snapshot, hasConnectablePort && rememberedPortConfirmed ? 'AVAILABLE' : 'UNAVAILABLE'),
 					alreadyConnected
 				}, rememberedProfile, nonConnectableReason);
-				if (hasConnectablePort && rememberedPort) {
-					seenBtPorts.add(rememberedPort);
+				if (hasConnectablePort && effectivePort) {
+					seenBtPorts.add(effectivePort);
 				}
 			}
 		}
@@ -391,11 +392,14 @@ export class BrickDiscoveryService {
 				if (!address || !address.startsWith('001653')) {
 					continue;
 				}
-				if (!isPairedFallbackRecent(device, Date.now())) {
-					logger.debug('Skipping stale paired Bluetooth fallback candidate', {
+				const mappedPort = btComPortByAddress.get(address);
+				const probeOutcome = btProbeByAddress.get(address);
+				const pairedSnapshot = brickRegistry.getSnapshot(`bt-${toSafeIdentifier(address)}`);
+				const alreadyConnected = pairedSnapshot?.status === 'READY' || pairedSnapshot?.status === 'CONNECTING';
+				if (mappedPort && probeOutcome === false && !alreadyConnected) {
+					logger.debug('Skipping paired fallback candidate because mapped COM probe failed', {
 						address,
-						lastSeenAtIso: device.lastSeenAtIso,
-						lastConnectedAtIso: device.lastConnectedAtIso
+						mappedPort
 					});
 					continue;
 				}
@@ -613,27 +617,6 @@ function resolveUnavailableUnlessConnected(
 function isLegacyBluetoothBrickId(brickId: string): boolean {
 	const normalized = brickId.trim().toLowerCase();
 	return normalized.startsWith('bt-') && !/^bt-[0-9a-f]{12}$/i.test(normalized);
-}
-
-function isPairedFallbackRecent(device: WindowsBluetoothPairedDevice, nowMs: number): boolean {
-	const timestamps = [device.lastSeenAtIso, device.lastConnectedAtIso]
-		.filter((value): value is string => typeof value === 'string');
-	if (timestamps.length === 0) {
-		return true;
-	}
-	let youngestAgeMs = Number.POSITIVE_INFINITY;
-	for (const timestamp of timestamps) {
-		const tsMs = Date.parse(timestamp);
-		if (!Number.isFinite(tsMs) || tsMs <= 0) {
-			continue;
-		}
-		const ageMs = Math.max(0, nowMs - tsMs);
-		youngestAgeMs = Math.min(youngestAgeMs, ageMs);
-	}
-	if (!Number.isFinite(youngestAgeMs)) {
-		return true;
-	}
-	return youngestAgeMs <= BT_PAIRED_FALLBACK_MAX_AGE_MS;
 }
 
 export function resolveDiscoveryTransport(
