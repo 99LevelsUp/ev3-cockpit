@@ -150,6 +150,7 @@ export class BrickDiscoveryService {
 		this.nonConnectableCandidates.clear();
 		const candidates: BrickPanelDiscoveryCandidate[] = [];
 		const seenCandidateIds = new Set<string>();
+		const seenBtPorts = new Set<string>();
 
 		const registerCandidate = (
 			candidate: BrickPanelDiscoveryCandidate,
@@ -240,6 +241,7 @@ export class BrickDiscoveryService {
 			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
+			let btPresenceConfirmed = alreadyConnected;
 			if (!alreadyConnected && this.deps.probeBtCandidatePresence) {
 				let present = false;
 				try {
@@ -282,6 +284,7 @@ export class BrickDiscoveryService {
 					});
 					continue;
 				}
+				btPresenceConfirmed = present;
 			} else if (!alreadyConnected && !likelyEv3Candidate) {
 				// Without active probe capability, keep strict fingerprint gating to avoid false positives.
 				continue;
@@ -316,9 +319,10 @@ export class BrickDiscoveryService {
 				displayName,
 				transport: TransportMode.BT,
 				detail,
-				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
+				status: resolveCandidateStatus(snapshot, btPresenceConfirmed ? 'AVAILABLE' : 'UNKNOWN'),
 				alreadyConnected
 			}, profile);
+			seenBtPorts.add(btPort);
 		}
 
 		// Bluetooth live devices without COM mapping
@@ -359,9 +363,12 @@ export class BrickDiscoveryService {
 					displayName,
 					transport: TransportMode.BT,
 					detail,
-					status: resolveCandidateStatus(snapshot, rememberedPort ? 'UNKNOWN' : 'UNAVAILABLE'),
+					status: resolveCandidateStatus(snapshot, rememberedPort ? 'AVAILABLE' : 'UNAVAILABLE'),
 					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 				}, rememberedProfile, nonConnectableReason);
+				if (rememberedPort) {
+					seenBtPorts.add(rememberedPort);
+				}
 			}
 		}
 
@@ -392,7 +399,7 @@ export class BrickDiscoveryService {
 					displayName,
 					transport: TransportMode.BT,
 					detail: `${device.displayName ?? address} | paired only`,
-					status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+					status: resolveUnavailableUnlessConnected(snapshot),
 					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 				}, undefined, 'Brick is paired in Windows, but not currently reported as present by Bluetooth stack.');
 			}
@@ -437,6 +444,16 @@ export class BrickDiscoveryService {
 			if (!brickId || seenCandidateIds.has(brickId)) {
 				continue;
 			}
+			if (
+				profile.transport.mode === TransportMode.BT
+				&& isLegacyBluetoothBrickId(brickId)
+			) {
+				const btPort = profile.transport.btPort?.trim().toUpperCase();
+				if (btPort && seenBtPorts.has(btPort)) {
+					// Legacy bt-comX profile collides with a MAC-based BT candidate on the same port.
+					continue;
+				}
+			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
@@ -455,14 +472,26 @@ export class BrickDiscoveryService {
 			if (seenCandidateIds.has(snapshot.brickId)) {
 				continue;
 			}
+			const rememberedProfile = profileStore.get(snapshot.brickId);
+			const transport = resolveDiscoveryTransport(snapshot.brickId, rememberedProfile);
+			const isConnected = snapshot.status === 'READY' || snapshot.status === 'CONNECTING';
+			if (transport === TransportMode.BT && isLegacyBluetoothBrickId(snapshot.brickId) && !isConnected) {
+				const btPort = rememberedProfile?.transport.mode === TransportMode.BT
+					? rememberedProfile.transport.btPort?.trim().toUpperCase()
+					: undefined;
+				if (!btPort || seenBtPorts.has(btPort)) {
+					// Drop stale legacy BT snapshot that is superseded by MAC-based discovery.
+					continue;
+				}
+			}
 			registerCandidate({
 				candidateId: snapshot.brickId,
 				displayName: resolvePreferredDisplayName(snapshot.brickId, snapshot.displayName),
-				transport: resolveDiscoveryTransport(snapshot.brickId, profileStore.get(snapshot.brickId)),
-				detail: resolveDiscoveryDetail(profileStore.get(snapshot.brickId)),
+				transport,
+				detail: resolveDiscoveryDetail(rememberedProfile),
 				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
-				alreadyConnected: snapshot.status === 'READY' || snapshot.status === 'CONNECTING'
-			}, profileStore.get(snapshot.brickId));
+				alreadyConnected: isConnected
+			}, rememberedProfile);
 		}
 
 		// Mock brick
@@ -543,7 +572,7 @@ export class BrickDiscoveryService {
 
 function resolveCandidateStatus(
 	snapshot: { status: string } | undefined,
-	fallback: 'UNKNOWN' | 'UNAVAILABLE'
+	fallback: 'AVAILABLE' | 'UNKNOWN' | 'UNAVAILABLE'
 ): NonNullable<BrickPanelDiscoveryCandidate['status']> {
 	if (!snapshot) {
 		return fallback;
@@ -558,6 +587,20 @@ function resolveCandidateStatus(
 		return snapshot.status;
 	}
 	return 'UNKNOWN';
+}
+
+function resolveUnavailableUnlessConnected(
+	snapshot: { status: string } | undefined
+): NonNullable<BrickPanelDiscoveryCandidate['status']> {
+	if (snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING') {
+		return snapshot.status;
+	}
+	return 'UNAVAILABLE';
+}
+
+function isLegacyBluetoothBrickId(brickId: string): boolean {
+	const normalized = brickId.trim().toLowerCase();
+	return normalized.startsWith('bt-') && !/^bt-[0-9a-f]{12}$/i.test(normalized);
 }
 
 export function resolveDiscoveryTransport(

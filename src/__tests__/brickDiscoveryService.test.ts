@@ -901,6 +901,53 @@ test('BrickDiscoveryService.scan includes active registry entries', async () => 
 	assert.equal(candidates[0].displayName, 'Registry EV3');
 });
 
+test('BrickDiscoveryService.scan drops stale legacy BT snapshot when superseded by MAC candidate on same COM', async () => {
+	const snapshots: BrickSnapshot[] = [
+		{
+			brickId: 'bt-com4',
+			displayName: 'Legacy COM4',
+			status: 'AVAILABLE',
+			isActive: false,
+			role: 'standalone',
+			transport: TransportMode.BT,
+			rootPath: '/home/root/lms2012/prjs/'
+		}
+	];
+	const storedProfiles: BrickConnectionProfile[] = [
+		{
+			brickId: 'bt-com4',
+			displayName: 'Legacy COM4',
+			savedAtIso: '2026-02-16T00:00:00.000Z',
+			rootPath: '/home/root/lms2012/prjs/',
+			transport: { mode: TransportMode.BT, btPort: 'COM4' }
+		}
+	];
+	const scanners = createMockScanners(
+		[],
+		[{
+			path: 'COM4',
+			manufacturer: 'LEGO',
+			pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653518739_...'
+		}],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(snapshots),
+		profileStore: createMockProfileStore(storedProfiles),
+		scanners,
+		probeBtCandidatePresence: async () => true,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653518739');
+	assert.equal(candidates[0].status, 'AVAILABLE');
+});
+
 test('BrickDiscoveryService.scan caches discovered profiles', async () => {
 	const scanners = createMockScanners(
 		[{ path: 'auto' }],
@@ -1207,7 +1254,7 @@ test('BrickDiscoveryService.scan handles empty scans gracefully', async () => {
 	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.scan does not reuse port-matched profile name when MAC differs', async () => {
+test('BrickDiscoveryService.scan skips legacy BT profile duplicate when MAC candidate is present on same port', async () => {
 	const storedProfiles: BrickConnectionProfile[] = [
 		{
 			brickId: 'bt-other',
@@ -1234,12 +1281,10 @@ test('BrickDiscoveryService.scan does not reuse port-matched profile name when M
 
 	const candidates = await service.scan(config);
 
-	// Discovered MAC candidate should keep its own fallback name, and unrelated stored profile stays separate.
-	assert.equal(candidates.length, 2);
+	// Legacy bt-* profile on the same COM port should not duplicate the MAC-based candidate.
+	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-001653aabbcc');
 	assert.equal(candidates[0].displayName, 'EV3 Bluetooth (COM5)');
-	assert.equal(candidates[1].candidateId, 'bt-other');
-	assert.equal(candidates[1].displayName, 'StoredBT');
 });
 
 test('BrickDiscoveryService.scan uses preferredBluetoothPort config', async () => {
@@ -1308,6 +1353,7 @@ test('BrickDiscoveryService.scan includes Bluetooth candidate when presence prob
 
 	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+	assert.equal(candidates[0].status, 'AVAILABLE');
 });
 
 test('BrickDiscoveryService.scan falls back to live BT address presence when probe fails', async () => {
@@ -1330,6 +1376,7 @@ test('BrickDiscoveryService.scan falls back to live BT address presence when pro
 
 	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+	assert.equal(candidates[0].status, 'AVAILABLE');
 });
 
 test('BrickDiscoveryService.scan includes live BT device without COM as non-connectable candidate', async () => {
@@ -1406,6 +1453,41 @@ test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not
 	assert.equal(candidates[0].displayName, 'Szalinka');
 	assert.equal(candidates[0].status, 'UNAVAILABLE');
 	assert.match(candidates[0].detail ?? '', /paired only/i);
+});
+
+test('BrickDiscoveryService.scan keeps paired-only candidate unavailable even with stale AVAILABLE snapshot', async () => {
+	const snapshots: BrickSnapshot[] = [
+		{
+			brickId: 'bt-0016535d7e2d',
+			displayName: 'Szalinka',
+			status: 'AVAILABLE',
+			isActive: false,
+			role: 'standalone',
+			transport: TransportMode.BT,
+			rootPath: '/home/root/lms2012/prjs/'
+		}
+	];
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(snapshots),
+		profileStore: createMockProfileStore(),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [],
+		listBtPairedDevices: async () => [
+			{
+				address: '0016535D7E2D',
+				displayName: 'Szalinka'
+			}
+		],
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-0016535d7e2d');
+	assert.equal(candidates[0].status, 'UNAVAILABLE');
 });
 
 test('BrickDiscoveryService.scan does not probe already connected Bluetooth candidate', async () => {
