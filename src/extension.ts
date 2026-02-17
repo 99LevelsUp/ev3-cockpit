@@ -585,7 +585,6 @@ export function activate(context: vscode.ExtensionContext) {
 			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
 			return mode === 'bt' || mode === 'auto' || mode === undefined;
 		},
-		isBtAddressPresent: isWindowsBluetoothDevicePresent,
 		isDiscoveryTabActive: () => panelActiveState.mode === 'discovery',
 		hasConnectedBtOrTcp: () => brickRegistry
 			.listSnapshots()

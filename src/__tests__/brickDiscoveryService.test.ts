@@ -1356,7 +1356,7 @@ test('BrickDiscoveryService.scan includes Bluetooth candidate when presence prob
 	assert.equal(candidates[0].status, 'AVAILABLE');
 });
 
-test('BrickDiscoveryService.scan falls back to live BT address presence when probe fails', async () => {
+test('BrickDiscoveryService.scan does not accept serial candidate from address-only fallback when probe fails', async () => {
 	const scanners = createMockScanners(
 		[],
 		[{ path: 'COM4', manufacturer: 'LEGO', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653ABCDEF_...' }],
@@ -1374,9 +1374,7 @@ test('BrickDiscoveryService.scan falls back to live BT address presence when pro
 	const service = new BrickDiscoveryService(deps);
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
-	assert.equal(candidates[0].status, 'AVAILABLE');
+	assert.equal(candidates.length, 0);
 });
 
 test('BrickDiscoveryService.scan includes live BT device without COM as non-connectable candidate', async () => {
@@ -1402,6 +1400,39 @@ test('BrickDiscoveryService.scan includes live BT device without COM as non-conn
 	assert.equal(candidates[0].displayName, 'TRZTINA');
 	assert.equal(candidates[0].status, 'UNAVAILABLE');
 	assert.match(candidates[0].detail ?? '', /no COM/i);
+});
+
+test('BrickDiscoveryService.scan ignores live BT device with remembered COM when probe fails', async () => {
+	const storedProfiles: BrickConnectionProfile[] = [
+		{
+			brickId: 'bt-001653abcdef',
+			displayName: 'TRZTINA',
+			savedAtIso: '2026-02-16T00:00:00.000Z',
+			rootPath: '/home/root/lms2012/prjs/',
+			transport: { mode: TransportMode.BT, btPort: 'COM4' }
+		}
+	];
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(storedProfiles),
+		scanners: createMockScanners([], [], []),
+		listBtLiveDevices: async () => [
+			{
+				address: '001653ABCDEF',
+				displayName: 'TRZTINA'
+			}
+		],
+		probeBtCandidatePresence: async () => false,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+	assert.equal(candidates[0].status, 'UNAVAILABLE');
 });
 
 test('BrickDiscoveryService.connectDiscoveredBrick explains missing COM for live BT candidate', async () => {

@@ -6,7 +6,6 @@ import type { BrickDiscoveryService } from '../device/brickDiscoveryService';
 import { isLikelyEv3SerialCandidate } from '../device/brickDiscoveryService';
 import {
 	extractBluetoothAddressFromPnpId,
-	isWindowsBluetoothDevicePresent,
 	type SerialCandidate
 } from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
@@ -25,7 +24,6 @@ export interface BtPresenceScannerOptions {
 	resolvePreferredBluetoothPort: () => string | undefined;
 	toSafeIdentifier: (value: string) => string;
 	isBtScanEnabled: () => boolean;
-	isBtAddressPresent?: (address: string) => Promise<boolean>;
 	isDiscoveryTabActive: () => boolean;
 	hasConnectedBtOrTcp: () => boolean;
 	onPresenceChange: () => void;
@@ -251,7 +249,6 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 		resolvePreferredBluetoothPort,
 		toSafeIdentifier: safeId,
 		isBtScanEnabled,
-		isBtAddressPresent = isWindowsBluetoothDevicePresent,
 		isDiscoveryTabActive,
 		hasConnectedBtOrTcp,
 		onPresenceChange
@@ -335,28 +332,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 					pnpId: candidate.pnpId
 				});
 			}
-			let present = await probeBtCandidatePresence(btPort);
-			if (!present) {
-				const btAddress = resolveBtAddress(candidate);
-				if (btAddress) {
-					try {
-						present = await isBtAddressPresent(btAddress);
-					} catch (error) {
-						logger.debug('BT live-address check failed', {
-							port: btPort,
-							address: btAddress,
-							error: error instanceof Error ? error.message : String(error)
-						});
-					}
-					if (present) {
-						logger.info('BT candidate accepted via live Bluetooth address fallback', {
-							port: btPort,
-							address: btAddress,
-							brickId
-						});
-					}
-				}
-			}
+			const present = await probeBtCandidatePresence(btPort);
 			if (!present) {
 				logger.debug('BT presence probe rejected candidate', {
 					port: btPort,

@@ -253,28 +253,6 @@ export class BrickDiscoveryService {
 						error: error instanceof Error ? error.message : String(error)
 					});
 				}
-				if (!present && this.deps.isBtAddressPresent) {
-					const btAddress = resolveBtAddress(serialCandidate);
-					if (btAddress) {
-						try {
-							present = await this.deps.isBtAddressPresent(btAddress);
-						} catch (error) {
-							logger.debug('Bluetooth live-address check failed', {
-								port: btPort,
-								brickId,
-								address: btAddress,
-								error: error instanceof Error ? error.message : String(error)
-							});
-						}
-						if (present) {
-							logger.info('Bluetooth candidate accepted via live Bluetooth address fallback', {
-								port: btPort,
-								brickId,
-								address: btAddress
-							});
-						}
-					}
-				}
 				if (!present) {
 					logger.debug('Bluetooth discovery probe rejected candidate', {
 						port: btPort,
@@ -349,12 +327,36 @@ export class BrickDiscoveryService {
 				const rememberedPort = rememberedProfile?.transport.mode === 'bt'
 					? rememberedProfile.transport.btPort?.trim().toUpperCase()
 					: undefined;
+				const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
+				let rememberedPortConfirmed = alreadyConnected;
+				if (rememberedPort && !alreadyConnected && this.deps.probeBtCandidatePresence) {
+					try {
+						rememberedPortConfirmed = await this.deps.probeBtCandidatePresence(rememberedPort);
+					} catch (error) {
+						logger.debug('Bluetooth live-device remembered-port probe failed', {
+							brickId,
+							address,
+							rememberedPort,
+							error: error instanceof Error ? error.message : String(error)
+						});
+					}
+					if (!rememberedPortConfirmed) {
+						logger.debug('Bluetooth live-device candidate ignored because remembered COM probe failed', {
+							brickId,
+							address,
+							rememberedPort
+						});
+						continue;
+					}
+				}
+				const hasConnectablePort = Boolean(rememberedPort)
+					&& (!this.deps.probeBtCandidatePresence || rememberedPortConfirmed);
 				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
 				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
-				const detail = rememberedPort
+				const detail = hasConnectablePort && rememberedPort
 					? `${device.displayName ?? address} | ${rememberedPort}`
 					: `${device.displayName ?? address} | no COM`;
-				const nonConnectableReason = rememberedPort
+				const nonConnectableReason = hasConnectablePort
 					? undefined
 					: 'Brick is visible over Bluetooth, but Windows did not expose an SPP COM port. Pair or enable Serial Port service first.';
 
@@ -363,10 +365,10 @@ export class BrickDiscoveryService {
 					displayName,
 					transport: TransportMode.BT,
 					detail,
-					status: resolveCandidateStatus(snapshot, rememberedPort ? 'AVAILABLE' : 'UNAVAILABLE'),
-					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+					status: resolveCandidateStatus(snapshot, hasConnectablePort && rememberedPortConfirmed ? 'AVAILABLE' : 'UNAVAILABLE'),
+					alreadyConnected
 				}, rememberedProfile, nonConnectableReason);
-				if (rememberedPort) {
+				if (hasConnectablePort && rememberedPort) {
 					seenBtPorts.add(rememberedPort);
 				}
 			}
