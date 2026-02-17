@@ -207,9 +207,7 @@ export class BrickDiscoveryService {
 			if (!rawPath || !/^COM\d+$/i.test(rawPath)) {
 				continue;
 			}
-			if (!isLikelyEv3SerialCandidate(serialCandidate, config.preferredBluetoothPort)) {
-				continue;
-			}
+			const likelyEv3Candidate = isLikelyEv3SerialCandidate(serialCandidate, config.preferredBluetoothPort);
 			const btPort = rawPath.toUpperCase();
 			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
 			const snapshot = brickRegistry.getSnapshot(brickId);
@@ -234,6 +232,9 @@ export class BrickDiscoveryService {
 					});
 					continue;
 				}
+			} else if (!alreadyConnected && !likelyEv3Candidate) {
+				// Without active probe capability, keep strict fingerprint gating to avoid false positives.
+				continue;
 			}
 			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
 			const portProfile = profileStore.list().find((profile) => (

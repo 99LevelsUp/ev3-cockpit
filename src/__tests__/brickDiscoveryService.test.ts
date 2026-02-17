@@ -1289,3 +1289,44 @@ test('BrickDiscoveryService.scan does not probe already connected Bluetooth cand
 	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
 	assert.equal(probeCalls, 0);
 });
+
+test('BrickDiscoveryService.scan includes generic Bluetooth COM candidate when probe confirms presence', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM9', manufacturer: 'Microsoft', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&0000\\...' }],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => true,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-com9');
+});
+
+test('BrickDiscoveryService.scan excludes generic Bluetooth COM candidate when probe rejects presence', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM9', manufacturer: 'Microsoft', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&0000\\...' }],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => false,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 0);
+});
