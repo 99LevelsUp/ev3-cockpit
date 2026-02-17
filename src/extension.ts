@@ -33,6 +33,7 @@ import {
 	TransportConfigOverrides
 } from './transport/transportFactory';
 import {
+	isWindowsBluetoothDevicePresent,
 	listSerialCandidates,
 	listTcpDiscoveryCandidates,
 	listUsbHidCandidates
@@ -94,6 +95,7 @@ export function activate(context: vscode.ExtensionContext) {
 			listTcpDiscoveryCandidates
 		},
 		probeBtCandidatePresence,
+		isBtAddressPresent: isWindowsBluetoothDevicePresent,
 		logger: perfLogger,
 		toSafeIdentifier
 	});
@@ -456,7 +458,7 @@ export function activate(context: vscode.ExtensionContext) {
 		onBrickOperation: noteBrickOperation
 	});
 
-	const { inspectTransports, transportHealthReport } = registerTransportCommands({
+	const { inspectTransports, transportHealthReport, btDetectionDiagnostics } = registerTransportCommands({
 		getLogger: () => logger,
 		resolveProbeTimeoutMs
 	});
@@ -579,6 +581,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
 			return mode === 'bt' || mode === 'auto' || mode === undefined;
 		},
+		isBtAddressPresent: isWindowsBluetoothDevicePresent,
 		isDiscoveryTabActive: () => panelActiveState.mode === 'discovery',
 		hasConnectedBtOrTcp: () => brickRegistry
 			.listSnapshots()
@@ -809,6 +812,7 @@ export function activate(context: vscode.ExtensionContext) {
 		emergencyStop,
 		inspectTransports,
 		transportHealthReport,
+		btDetectionDiagnostics,
 		inspectBrickSessions,
 		revealInBricksTree,
 		browseRegistrations.browseRemoteFs,

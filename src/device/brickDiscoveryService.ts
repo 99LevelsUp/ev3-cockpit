@@ -2,7 +2,7 @@ import type { BrickConnectionProfile } from './brickConnectionProfiles';
 import type { BrickConnectionProfileStore } from './brickConnectionProfiles';
 import type { BrickRegistry } from './brickRegistry';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
-import type { SerialCandidate } from '../transport/discovery';
+import { extractBluetoothAddressFromPnpId, type SerialCandidate } from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
@@ -32,6 +32,7 @@ export interface BrickDiscoveryServiceDeps {
 	profileStore: BrickConnectionProfileStore;
 	scanners: DiscoveryTransportScanners;
 	probeBtCandidatePresence?: (port: string) => Promise<boolean>;
+	isBtAddressPresent?: (address: string) => Promise<boolean>;
 	logger: Logger;
 	toSafeIdentifier: (value: string) => string;
 }
@@ -66,7 +67,8 @@ export function isLikelyEv3SerialCandidate(
 		return false;
 	}
 	// Accept EV3-specific hints when present.
-	if (/LOCALMFG&005D/.test(fingerprint) || /\\001653[0-9A-F]{6}_/i.test(candidate.pnpId ?? '')) {
+	const btAddress = extractBluetoothAddressFromPnpId(candidate.pnpId);
+	if (/LOCALMFG&005D/.test(fingerprint) || btAddress?.startsWith('001653')) {
 		return true;
 	}
 	// Reject generic Bluetooth SPP ports (for example LOCALMFG&0000) that have no EV3 hint.
@@ -74,16 +76,7 @@ export function isLikelyEv3SerialCandidate(
 }
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {
-	const pnpId = candidate.pnpId ?? '';
-	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
-	if (!macMatch) {
-		return undefined;
-	}
-	const mac = macMatch[1].toUpperCase();
-	if (mac === '000000000000') {
-		return undefined;
-	}
-	return mac;
+	return extractBluetoothAddressFromPnpId(candidate.pnpId);
 }
 
 function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (value: string) => string): string {
@@ -222,6 +215,28 @@ export class BrickDiscoveryService {
 						brickId,
 						error: error instanceof Error ? error.message : String(error)
 					});
+				}
+				if (!present && this.deps.isBtAddressPresent) {
+					const btAddress = resolveBtAddress(serialCandidate);
+					if (btAddress) {
+						try {
+							present = await this.deps.isBtAddressPresent(btAddress);
+						} catch (error) {
+							logger.debug('Bluetooth live-address check failed', {
+								port: btPort,
+								brickId,
+								address: btAddress,
+								error: error instanceof Error ? error.message : String(error)
+							});
+						}
+						if (present) {
+							logger.info('Bluetooth candidate accepted via live Bluetooth address fallback', {
+								port: btPort,
+								brickId,
+								address: btAddress
+							});
+						}
+					}
 				}
 				if (!present) {
 					logger.debug('Bluetooth discovery probe rejected candidate', {

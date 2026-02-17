@@ -64,12 +64,10 @@ export async function listSerialCandidates(): Promise<SerialCandidate[]> {
 		const btNames = await resolveWindowsBluetoothNameMap();
 		if (btNames.size > 0) {
 			for (const candidate of candidates) {
-				const pnpId = candidate.pnpId ?? '';
-				const macMatch = pnpId.match(/_([0-9A-F]{12})/i);
-				if (!macMatch) {
+				const mac = extractBluetoothAddressFromPnpId(candidate.pnpId);
+				if (!mac) {
 					continue;
 				}
-				const mac = macMatch[1].toUpperCase();
 				const name = btNames.get(mac);
 				if (!name) {
 					continue;
@@ -84,13 +82,40 @@ export async function listSerialCandidates(): Promise<SerialCandidate[]> {
 }
 
 let cachedBtNames: { ts: number; map: Map<string, string> } | undefined;
+let cachedBtPresentAddresses: { ts: number; set: Set<string> } | undefined;
+
+const BT_NAME_CACHE_MS = 10_000;
+const BT_PRESENT_CACHE_MS = 2_000;
+
+export function extractBluetoothAddressFromPnpId(pnpId?: string): string | undefined {
+	const normalized = (pnpId ?? '').toUpperCase();
+	if (!normalized) {
+		return undefined;
+	}
+	const patterns = [
+		/(?:^|[^0-9A-F])(001653[0-9A-F]{6})(?=$|[^0-9A-F])/i,
+		/(?:^|[\\&_])([0-9A-F]{12})(?=$|[\\&_])/i
+	];
+	for (const pattern of patterns) {
+		const match = normalized.match(pattern);
+		if (!match) {
+			continue;
+		}
+		const mac = match[1].toUpperCase();
+		if (mac === '000000000000') {
+			continue;
+		}
+		return mac;
+	}
+	return undefined;
+}
 
 async function resolveWindowsBluetoothNameMap(): Promise<Map<string, string>> {
 	if (process.platform !== 'win32') {
 		return new Map();
 	}
 	const now = Date.now();
-	if (cachedBtNames && now - cachedBtNames.ts < 10_000) {
+	if (cachedBtNames && now - cachedBtNames.ts < BT_NAME_CACHE_MS) {
 		return cachedBtNames.map;
 	}
 	try {
@@ -129,6 +154,65 @@ async function resolveWindowsBluetoothNameMap(): Promise<Map<string, string>> {
 		return map;
 	} catch {
 		return new Map();
+	}
+}
+
+export async function isWindowsBluetoothDevicePresent(address: string): Promise<boolean> {
+	if (process.platform !== 'win32') {
+		return false;
+	}
+	const normalizedAddress = address.replace(/[^0-9A-F]/gi, '').toUpperCase();
+	if (normalizedAddress.length !== 12) {
+		return false;
+	}
+	const present = await resolveWindowsBluetoothPresentAddressSet();
+	return present.has(normalizedAddress);
+}
+
+async function resolveWindowsBluetoothPresentAddressSet(): Promise<Set<string>> {
+	if (process.platform !== 'win32') {
+		return new Set();
+	}
+	const now = Date.now();
+	if (cachedBtPresentAddresses && now - cachedBtPresentAddresses.ts < BT_PRESENT_CACHE_MS) {
+		return cachedBtPresentAddresses.set;
+	}
+	try {
+		const { stdout } = await execFileAsync('pwsh', [
+			'-NoProfile',
+			'-Command',
+			[
+				'Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue',
+				'| ForEach-Object {',
+				'$instance = $_.InstanceId;',
+				'if ($instance -match \'DEV_([0-9A-F]{12})\') {',
+				'[PSCustomObject]@{ Mac = $Matches[1].ToUpper(); Status = $_.Status }',
+				'}',
+				'} | ConvertTo-Json -Compress'
+			].join(' ')
+		]);
+		const raw = stdout.trim();
+		if (!raw) {
+			return new Set();
+		}
+		const parsed = JSON.parse(raw) as { Mac?: string; Status?: string } | Array<{ Mac?: string; Status?: string }>;
+		const entries = Array.isArray(parsed) ? parsed : [parsed];
+		const set = new Set<string>();
+		for (const entry of entries) {
+			const mac = entry.Mac?.replace(/[^0-9A-F]/gi, '').toUpperCase() ?? '';
+			const status = entry.Status?.trim().toUpperCase() ?? '';
+			if (!mac || mac.length !== 12) {
+				continue;
+			}
+			if (status && status !== 'OK') {
+				continue;
+			}
+			set.add(mac);
+		}
+		cachedBtPresentAddresses = { ts: now, set };
+		return set;
+	} catch {
+		return new Set();
 	}
 }
 

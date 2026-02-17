@@ -4,7 +4,11 @@ import type { BrickConnectionProfile, BrickConnectionProfileStore } from '../dev
 import type { BrickRegistry } from '../device/brickRegistry';
 import type { BrickDiscoveryService } from '../device/brickDiscoveryService';
 import { isLikelyEv3SerialCandidate } from '../device/brickDiscoveryService';
-import type { SerialCandidate } from '../transport/discovery';
+import {
+	extractBluetoothAddressFromPnpId,
+	isWindowsBluetoothDevicePresent,
+	type SerialCandidate
+} from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
 import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
@@ -21,6 +25,7 @@ export interface BtPresenceScannerOptions {
 	resolvePreferredBluetoothPort: () => string | undefined;
 	toSafeIdentifier: (value: string) => string;
 	isBtScanEnabled: () => boolean;
+	isBtAddressPresent?: (address: string) => Promise<boolean>;
 	isDiscoveryTabActive: () => boolean;
 	hasConnectedBtOrTcp: () => boolean;
 	onPresenceChange: () => void;
@@ -59,18 +64,14 @@ type BtPresenceScanMode = 'discovery-fast' | 'connected-fast' | 'slow';
 
 const btProbeInFlight = new Map<string, Promise<boolean>>();
 const btProbeCache = new Map<string, { present: boolean; at: number }>();
+let btProbeQueue: Promise<void> = Promise.resolve();
+
+function isBluetoothSppSerialCandidate(candidate: SerialCandidate): boolean {
+	return /BTHENUM\\\{00001101-0000-1000-8000-00805F9B34FB\}/i.test(candidate.pnpId ?? '');
+}
 
 function resolveBtAddress(candidate: SerialCandidate): string | undefined {
-	const pnpId = candidate.pnpId ?? '';
-	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
-	if (!macMatch) {
-		return undefined;
-	}
-	const mac = macMatch[1].toUpperCase();
-	if (mac === '000000000000') {
-		return undefined;
-	}
-	return mac;
+	return extractBluetoothAddressFromPnpId(candidate.pnpId);
 }
 
 function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (value: string) => string): string {
@@ -123,12 +124,12 @@ function normalizeBtBrickName(candidate: SerialCandidate): string | undefined {
 	if (raw && raw.length <= 12 && !/MICROSOFT/i.test(raw)) {
 		return raw;
 	}
-	const pnpId = candidate.pnpId ?? '';
-	const macMatch = pnpId.match(/\\([0-9A-F]{12})_/i);
-	if (macMatch && macMatch[1] !== '000000000000') {
-		const suffix = macMatch[1].slice(-4).toUpperCase();
+	const btAddress = resolveBtAddress(candidate);
+	if (btAddress) {
+		const suffix = btAddress.slice(-4).toUpperCase();
 		return `EV3-${suffix}`;
 	}
+	const pnpId = candidate.pnpId ?? '';
 	const tailMatch = pnpId.match(/_([0-9A-F]{8})$/i);
 	if (tailMatch) {
 		const suffix = tailMatch[1].slice(-4).toUpperCase();
@@ -147,6 +148,15 @@ async function sleep(ms: number): Promise<void> {
 		return;
 	}
 	await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function enqueueBtProbe<T>(probe: () => Promise<T>): Promise<T> {
+	const run = btProbeQueue.then(probe, probe);
+	btProbeQueue = run.then(
+		() => undefined,
+		() => undefined
+	);
+	return run;
 }
 
 async function probeBtPort(port: string, dtr: boolean): Promise<boolean> {
@@ -216,12 +226,12 @@ export async function probeBtCandidatePresence(port: string): Promise<boolean> {
 	if (inFlight) {
 		return inFlight;
 	}
-	const runProbe = (async () => {
-	// Most EV3 SPP stacks work with dtr=false, but try both to avoid false negatives.
+	const runProbe = enqueueBtProbe(async () => {
+		// Most EV3 SPP stacks work with dtr=false, but try both to avoid false negatives.
 		const present = (await probeBtPort(normalizedPort, false)) || (await probeBtPort(normalizedPort, true));
 		btProbeCache.set(normalizedPort, { present, at: Date.now() });
 		return present;
-	})().finally(() => {
+	}).finally(() => {
 		btProbeInFlight.delete(normalizedPort);
 	});
 	btProbeInFlight.set(normalizedPort, runProbe);
@@ -241,6 +251,7 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 		resolvePreferredBluetoothPort,
 		toSafeIdentifier: safeId,
 		isBtScanEnabled,
+		isBtAddressPresent = isWindowsBluetoothDevicePresent,
 		isDiscoveryTabActive,
 		hasConnectedBtOrTcp,
 		onPresenceChange
@@ -299,7 +310,8 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			if (!rawPath || !/^COM\d+$/i.test(rawPath)) {
 				continue;
 			}
-			if (!isLikelyEv3SerialCandidate(candidate, preferredPort)) {
+			const likelyEv3Candidate = isLikelyEv3SerialCandidate(candidate, preferredPort);
+			if (!likelyEv3Candidate && !isBluetoothSppSerialCandidate(candidate)) {
 				continue;
 			}
 			const btPort = rawPath.toUpperCase();
@@ -316,7 +328,35 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			if (scanMode === 'connected-fast') {
 				continue;
 			}
-			const present = await probeBtCandidatePresence(btPort);
+			if (!likelyEv3Candidate) {
+				logger.trace('BT presence scanner probing generic SPP candidate', {
+					port: btPort,
+					brickId,
+					pnpId: candidate.pnpId
+				});
+			}
+			let present = await probeBtCandidatePresence(btPort);
+			if (!present) {
+				const btAddress = resolveBtAddress(candidate);
+				if (btAddress) {
+					try {
+						present = await isBtAddressPresent(btAddress);
+					} catch (error) {
+						logger.debug('BT live-address check failed', {
+							port: btPort,
+							address: btAddress,
+							error: error instanceof Error ? error.message : String(error)
+						});
+					}
+					if (present) {
+						logger.info('BT candidate accepted via live Bluetooth address fallback', {
+							port: btPort,
+							address: btAddress,
+							brickId
+						});
+					}
+				}
+			}
 			if (!present) {
 				logger.debug('BT presence probe rejected candidate', {
 					port: btPort,

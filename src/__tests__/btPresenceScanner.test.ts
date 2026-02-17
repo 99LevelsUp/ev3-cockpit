@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isLikelyEv3SerialCandidate } from '../device/brickDiscoveryService';
+import { extractBluetoothAddressFromPnpId } from '../transport/discovery';
 
 test('isLikelyEv3SerialCandidate returns true for EV3 fingerprint in pnpId', () => {
 	const candidate = { path: 'COM5', manufacturer: '', serialNumber: '', pnpId: 'USB\\VID_0694&PID_005D' };
@@ -51,4 +52,14 @@ test('isLikelyEv3SerialCandidate is case insensitive for preferred port', () => 
 test('isLikelyEv3SerialCandidate returns false when preferred port does not match and no fingerprint', () => {
 	const candidate = { path: 'COM10', manufacturer: '', serialNumber: '', pnpId: '' };
 	assert.ok(!isLikelyEv3SerialCandidate(candidate, 'COM99'));
+});
+
+test('extractBluetoothAddressFromPnpId parses EV3 address from legacy separator format', () => {
+	const pnpId = 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\8&2E3EE818&0&001653ABCDEF_C00000000';
+	assert.equal(extractBluetoothAddressFromPnpId(pnpId), '001653ABCDEF');
+});
+
+test('extractBluetoothAddressFromPnpId parses EV3 address from backslash format', () => {
+	const pnpId = 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653123456_...';
+	assert.equal(extractBluetoothAddressFromPnpId(pnpId), '001653123456');
 });

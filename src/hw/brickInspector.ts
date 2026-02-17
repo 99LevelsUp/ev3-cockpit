@@ -16,7 +16,12 @@ import { concatBytes, gv0, uint16le } from '../protocol/ev3Bytecode';
 import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
-import { listSerialCandidates, listTcpDiscoveryCandidates, listUsbHidCandidates } from '../transport/discovery';
+import {
+	extractBluetoothAddressFromPnpId,
+	listSerialCandidates,
+	listTcpDiscoveryCandidates,
+	listUsbHidCandidates
+} from '../transport/discovery';
 import { TcpAdapter } from '../transport/tcpAdapter';
 import { UsbHidAdapter } from '../transport/usbHidAdapter';
 
@@ -92,7 +97,11 @@ function isLikelyEv3SerialCandidate(
 		return preferredPorts.includes(port);
 	}
 	const fingerprint = `${candidate.manufacturer ?? ''} ${candidate.serialNumber ?? ''} ${candidate.pnpId ?? ''}`.toUpperCase();
-	return /EV3|LEGO|MINDSTORMS|_005D/.test(fingerprint);
+	if (/EV3|LEGO|MINDSTORMS|_005D|&005D/.test(fingerprint)) {
+		return true;
+	}
+	const btAddress = extractBluetoothAddressFromPnpId(candidate.pnpId);
+	return btAddress?.startsWith('001653') === true;
 }
 
 function envNumber(name: string, fallback: number, min: number): number {
@@ -1041,7 +1050,7 @@ async function collectCandidates(): Promise<BrickCandidate[]> {
 	const dtr = envBoolean('EV3_COCKPIT_INSPECT_BT_DTR', DEFAULT_BT_DTR);
 	for (const serial of serialCandidates) {
 		const rawPath = serial.path?.trim();
-		if (!rawPath || !/^COM\\d+$/i.test(rawPath)) {
+		if (!rawPath || !/^COM\d+$/i.test(rawPath)) {
 			continue;
 		}
 		const port = rawPath.toUpperCase();

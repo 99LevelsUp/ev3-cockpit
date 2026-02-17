@@ -344,6 +344,32 @@ test('BrickDiscoveryService.scan discovers Bluetooth candidates', async () => {
 	assert.equal(candidates[0].status, 'UNKNOWN');
 });
 
+test('BrickDiscoveryService.scan resolves Bluetooth MAC from ampersand-form pnpId', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{
+			path: 'COM4',
+			manufacturer: 'Microsoft',
+			pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\8&2E3EE818&0&001653518739_C00000000'
+		}],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => true,
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+
+	const candidates = await service.scan(createDefaultConfig());
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653518739');
+});
+
 test('BrickDiscoveryService.scan filters non-EV3 serial ports', async () => {
 	const scanners = createMockScanners(
 		[],
@@ -1246,6 +1272,28 @@ test('BrickDiscoveryService.scan includes Bluetooth candidate when presence prob
 	const config = createDefaultConfig();
 
 	const candidates = await service.scan(config);
+
+	assert.equal(candidates.length, 1);
+	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
+});
+
+test('BrickDiscoveryService.scan falls back to live BT address presence when probe fails', async () => {
+	const scanners = createMockScanners(
+		[],
+		[{ path: 'COM4', manufacturer: 'LEGO', pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\001653ABCDEF_...' }],
+		[]
+	);
+	const deps: BrickDiscoveryServiceDeps = {
+		brickRegistry: createMockBrickRegistry(),
+		profileStore: createMockProfileStore(),
+		scanners,
+		probeBtCandidatePresence: async () => false,
+		isBtAddressPresent: async (address) => address === '001653ABCDEF',
+		logger: createMockLogger(),
+		toSafeIdentifier
+	};
+	const service = new BrickDiscoveryService(deps);
+	const candidates = await service.scan(createDefaultConfig());
 
 	assert.equal(candidates.length, 1);
 	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
