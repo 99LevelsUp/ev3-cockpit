@@ -314,7 +314,7 @@ export class BrickDiscoveryService {
 			seenBtPorts.add(btPort);
 		}
 
-		// Bluetooth live devices without COM mapping
+		// Bluetooth live devices with connectable COM mapping
 		if (this.deps.listBtLiveDevices) {
 			let liveDevices: WindowsBluetoothLiveDevice[] = [];
 			try {
@@ -344,6 +344,13 @@ export class BrickDiscoveryService {
 				const rememberedPortConfirmed = effectivePort
 					? (btProbeByAddress.get(address) ?? alreadyConnected)
 					: false;
+				if (!effectivePort && !alreadyConnected) {
+					logger.debug('Bluetooth live-device candidate ignored because no SPP COM mapping was found', {
+						brickId,
+						address
+					});
+					continue;
+				}
 				if (effectivePort && !rememberedPortConfirmed && !alreadyConnected) {
 					logger.debug('Bluetooth live-device candidate ignored because mapped COM probe failed', {
 						brickId,
@@ -358,66 +365,19 @@ export class BrickDiscoveryService {
 				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
 				const detail = hasConnectablePort && effectivePort
 					? `${device.displayName ?? address} | ${effectivePort}`
-					: `${device.displayName ?? address} | no COM`;
-				const nonConnectableReason = hasConnectablePort
-					? undefined
-					: 'Brick is visible over Bluetooth, but Windows did not expose an SPP COM port. Pair or enable Serial Port service first.';
+					: (device.displayName ?? address);
 
 				registerCandidate({
 					candidateId: brickId,
 					displayName,
 					transport: TransportMode.BT,
 					detail,
-					status: resolveCandidateStatus(snapshot, hasConnectablePort && rememberedPortConfirmed ? 'AVAILABLE' : 'UNAVAILABLE'),
+					status: resolveCandidateStatus(snapshot, hasConnectablePort && rememberedPortConfirmed ? 'AVAILABLE' : 'UNKNOWN'),
 					alreadyConnected
-				}, rememberedProfile, nonConnectableReason);
+				}, rememberedProfile);
 				if (hasConnectablePort && effectivePort) {
 					seenBtPorts.add(effectivePort);
 				}
-			}
-		}
-
-		// Paired EV3 devices from Windows registry (fallback visibility)
-		if (this.deps.listBtPairedDevices) {
-			let pairedDevices: WindowsBluetoothPairedDevice[] = [];
-			try {
-				pairedDevices = await this.deps.listBtPairedDevices();
-			} catch (error) {
-				logger.debug('Bluetooth paired-device scan failed', {
-					error: error instanceof Error ? error.message : String(error)
-				});
-			}
-			for (const device of pairedDevices) {
-				const address = device.address.trim().toUpperCase();
-				if (!address || !address.startsWith('001653')) {
-					continue;
-				}
-				const mappedPort = btComPortByAddress.get(address);
-				const probeOutcome = btProbeByAddress.get(address);
-				const pairedSnapshot = brickRegistry.getSnapshot(`bt-${toSafeIdentifier(address)}`);
-				const alreadyConnected = pairedSnapshot?.status === 'READY' || pairedSnapshot?.status === 'CONNECTING';
-				if (mappedPort && probeOutcome === false && !alreadyConnected) {
-					logger.debug('Skipping paired fallback candidate because mapped COM probe failed', {
-						address,
-						mappedPort
-					});
-					continue;
-				}
-				const brickId = `bt-${toSafeIdentifier(address)}`;
-				if (seenCandidateIds.has(brickId)) {
-					continue;
-				}
-				const snapshot = brickRegistry.getSnapshot(brickId);
-				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
-				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
-				registerCandidate({
-					candidateId: brickId,
-					displayName,
-					transport: TransportMode.BT,
-					detail: `${device.displayName ?? address} | paired only`,
-					status: resolveUnavailableUnlessConnected(snapshot),
-					alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-				}, undefined, 'Brick is paired in Windows, but not currently reported as present by Bluetooth stack.');
 			}
 		}
 
@@ -460,6 +420,12 @@ export class BrickDiscoveryService {
 			if (!brickId || seenCandidateIds.has(brickId)) {
 				continue;
 			}
+			const snapshot = brickRegistry.getSnapshot(brickId);
+			const isConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
+			if (profile.transport.mode === TransportMode.BT && !isConnected) {
+				// Avoid showing stale remembered Bluetooth devices when they are not currently detected.
+				continue;
+			}
 			if (
 				profile.transport.mode === TransportMode.BT
 				&& isLegacyBluetoothBrickId(brickId)
@@ -470,7 +436,6 @@ export class BrickDiscoveryService {
 					continue;
 				}
 			}
-			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
 			registerCandidate({
@@ -491,14 +456,9 @@ export class BrickDiscoveryService {
 			const rememberedProfile = profileStore.get(snapshot.brickId);
 			const transport = resolveDiscoveryTransport(snapshot.brickId, rememberedProfile);
 			const isConnected = snapshot.status === 'READY' || snapshot.status === 'CONNECTING';
-			if (transport === TransportMode.BT && isLegacyBluetoothBrickId(snapshot.brickId) && !isConnected) {
-				const btPort = rememberedProfile?.transport.mode === TransportMode.BT
-					? rememberedProfile.transport.btPort?.trim().toUpperCase()
-					: undefined;
-				if (!btPort || seenBtPorts.has(btPort)) {
-					// Drop stale legacy BT snapshot that is superseded by MAC-based discovery.
-					continue;
-				}
+			if (transport === TransportMode.BT && !isConnected) {
+				// Avoid surfacing stale Bluetooth snapshots that are not currently connected.
+				continue;
 			}
 			registerCandidate({
 				candidateId: snapshot.brickId,
@@ -603,15 +563,6 @@ function resolveCandidateStatus(
 		return snapshot.status;
 	}
 	return 'UNKNOWN';
-}
-
-function resolveUnavailableUnlessConnected(
-	snapshot: { status: string } | undefined
-): NonNullable<BrickPanelDiscoveryCandidate['status']> {
-	if (snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING') {
-		return snapshot.status;
-	}
-	return 'UNAVAILABLE';
 }
 
 function isLegacyBluetoothBrickId(brickId: string): boolean {

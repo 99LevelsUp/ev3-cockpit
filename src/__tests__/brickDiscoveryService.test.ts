@@ -1377,7 +1377,7 @@ test('BrickDiscoveryService.scan does not accept serial candidate from address-o
 	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.scan includes live BT device without COM as non-connectable candidate', async () => {
+test('BrickDiscoveryService.scan ignores live BT device without COM mapping', async () => {
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
 		profileStore: createMockProfileStore(),
@@ -1395,11 +1395,7 @@ test('BrickDiscoveryService.scan includes live BT device without COM as non-conn
 
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
-	assert.equal(candidates[0].displayName, 'TRZTINA');
-	assert.equal(candidates[0].status, 'UNAVAILABLE');
-	assert.match(candidates[0].detail ?? '', /no COM/i);
+	assert.equal(candidates.length, 0);
 });
 
 test('BrickDiscoveryService.scan ignores live BT device with remembered COM when probe fails', async () => {
@@ -1430,12 +1426,10 @@ test('BrickDiscoveryService.scan ignores live BT device with remembered COM when
 
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-001653abcdef');
-	assert.equal(candidates[0].status, 'UNAVAILABLE');
+	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.connectDiscoveredBrick explains missing COM for live BT candidate', async () => {
+test('BrickDiscoveryService.connectDiscoveredBrick rejects BT candidate without COM mapping', async () => {
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
 		profileStore: createMockProfileStore(),
@@ -1456,11 +1450,11 @@ test('BrickDiscoveryService.connectDiscoveredBrick explains missing COM for live
 		async () => {
 			await service.connectDiscoveredBrick('bt-001653abcdef', createMockProfileStore(), async () => undefined);
 		},
-		/error.+COM port|SPP COM port/i
+		{ message: 'Selected Brick is no longer available. Scan again.' }
 	);
 });
 
-test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not live', async () => {
+test('BrickDiscoveryService.scan ignores paired EV3 fallback candidate when not live', async () => {
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
 		profileStore: createMockProfileStore(),
@@ -1479,14 +1473,10 @@ test('BrickDiscoveryService.scan includes paired EV3 fallback candidate when not
 
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-0016535d7e2d');
-	assert.equal(candidates[0].displayName, 'Szalinka');
-	assert.equal(candidates[0].status, 'UNAVAILABLE');
-	assert.match(candidates[0].detail ?? '', /paired only/i);
+	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.scan keeps paired EV3 fallback candidate even with old timestamps', async () => {
+test('BrickDiscoveryService.scan ignores paired EV3 fallback candidate even with old timestamps', async () => {
 	const deps: BrickDiscoveryServiceDeps = {
 		brickRegistry: createMockBrickRegistry(),
 		profileStore: createMockProfileStore(),
@@ -1507,9 +1497,7 @@ test('BrickDiscoveryService.scan keeps paired EV3 fallback candidate even with o
 
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-00165342d9f2');
-	assert.equal(candidates[0].status, 'UNAVAILABLE');
+	assert.equal(candidates.length, 0);
 });
 
 test('BrickDiscoveryService.scan skips paired fallback when mapped COM probe fails', async () => {
@@ -1544,7 +1532,7 @@ test('BrickDiscoveryService.scan skips paired fallback when mapped COM probe fai
 	assert.equal(candidates.length, 0);
 });
 
-test('BrickDiscoveryService.scan keeps paired-only candidate unavailable even with stale AVAILABLE snapshot', async () => {
+test('BrickDiscoveryService.scan ignores stale BT snapshot when only paired fallback exists', async () => {
 	const snapshots: BrickSnapshot[] = [
 		{
 			brickId: 'bt-0016535d7e2d',
@@ -1574,9 +1562,7 @@ test('BrickDiscoveryService.scan keeps paired-only candidate unavailable even wi
 
 	const candidates = await service.scan(createDefaultConfig());
 
-	assert.equal(candidates.length, 1);
-	assert.equal(candidates[0].candidateId, 'bt-0016535d7e2d');
-	assert.equal(candidates[0].status, 'UNAVAILABLE');
+	assert.equal(candidates.length, 0);
 });
 
 test('BrickDiscoveryService.scan does not probe already connected Bluetooth candidate', async () => {
