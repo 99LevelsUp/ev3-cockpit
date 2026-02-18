@@ -176,7 +176,8 @@ export function activate(context: vscode.ExtensionContext) {
 			tcpHost: profile.transport.tcpHost,
 			tcpPort: profile.transport.tcpPort,
 			tcpUseDiscovery: profile.transport.tcpUseDiscovery,
-			tcpSerialNumber: profile.transport.tcpSerialNumber
+			tcpSerialNumber: profile.transport.tcpSerialNumber,
+			btPortPath: profile.transport.btPortPath
 		};
 	};
 

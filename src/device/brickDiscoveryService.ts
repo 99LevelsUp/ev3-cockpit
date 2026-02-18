@@ -254,9 +254,10 @@ export class BrickDiscoveryService {
 
 		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
 			usb: 0,
-			tcp: 1,
-			mock: 2,
-			unknown: 3
+			bt: 1,
+			tcp: 2,
+			mock: 3,
+			unknown: 4
 		};
 		candidates.sort((left, right) => {
 			const rank = transportRank[left.transport] - transportRank[right.transport];
@@ -316,7 +317,7 @@ export function resolveDiscoveryTransport(
 	profile?: BrickConnectionProfile
 ): BrickPanelDiscoveryCandidate['transport'] {
 	const mode = profile?.transport.mode;
-	if (mode === TransportMode.USB || mode === TransportMode.TCP || mode === TransportMode.MOCK) {
+	if (mode === TransportMode.USB || mode === TransportMode.TCP || mode === TransportMode.BT || mode === TransportMode.MOCK) {
 		return mode;
 	}
 	if (brickId.startsWith('usb-')) {
@@ -324,6 +325,9 @@ export function resolveDiscoveryTransport(
 	}
 	if (brickId.startsWith('tcp-')) {
 		return TransportMode.TCP;
+	}
+	if (brickId.startsWith('bt-')) {
+		return TransportMode.BT;
 	}
 	if (brickId.startsWith('mock-')) {
 		return TransportMode.MOCK;
@@ -347,6 +351,9 @@ export function resolveDiscoveryDetail(profile?: BrickConnectionProfile): string
 				: undefined;
 		const endpoint = host && port ? `${host}:${port}` : host || (port ? String(port) : '');
 		return endpoint || transport.tcpSerialNumber?.trim() || undefined;
+	}
+	if (transport.mode === TransportMode.BT) {
+		return transport.btPortPath?.trim() || undefined;
 	}
 	return undefined;
 }

@@ -19,6 +19,7 @@ function sanitizeTransportMode(value: unknown): TransportMode {
 	// Accept both enum values and string literals for backward compatibility
 	if (value === TransportMode.USB || value === 'usb') return TransportMode.USB;
 	if (value === TransportMode.TCP || value === 'tcp') return TransportMode.TCP;
+	if (value === TransportMode.BT || value === 'bt') return TransportMode.BT;
 	if (value === TransportMode.MOCK || value === 'mock') return TransportMode.MOCK;
 	return TransportMode.USB;
 }
@@ -46,7 +47,8 @@ function sanitizeProfile(input: BrickConnectionProfile): BrickConnectionProfile 
 			tcpHost: input.transport.tcpHost?.trim(),
 			tcpPort: typeof input.transport.tcpPort === 'number' ? Math.max(1, Math.floor(input.transport.tcpPort)) : undefined,
 			tcpUseDiscovery: input.transport.tcpUseDiscovery === true,
-			tcpSerialNumber: input.transport.tcpSerialNumber?.trim()
+			tcpSerialNumber: input.transport.tcpSerialNumber?.trim(),
+			btPortPath: input.transport.btPortPath?.trim()
 		}
 	};
 }

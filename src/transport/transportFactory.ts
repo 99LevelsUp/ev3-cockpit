@@ -22,6 +22,7 @@ export interface TransportConfigOverrides {
 	tcpPort?: number;
 	tcpUseDiscovery?: boolean;
 	tcpSerialNumber?: string;
+	btPortPath?: string;
 }
 
 /** Default EV3 USB HID report size (1-byte report ID + 1024-byte payload). */
@@ -45,6 +46,7 @@ function sanitizeNumber(value: unknown, fallback: number, min: number): number {
 function sanitizeTransportMode(value: unknown): TransportMode {
 	if (value === TransportMode.USB || value === 'usb') return TransportMode.USB;
 	if (value === TransportMode.TCP || value === 'tcp') return TransportMode.TCP;
+	if (value === TransportMode.BT || value === 'bt') return TransportMode.BT;
 	if (value === TransportMode.MOCK || value === 'mock') return TransportMode.MOCK;
 	return TransportMode.USB;
 }
@@ -138,6 +140,17 @@ export function createProbeTransportForMode(
 		return createTcpTransport(cfg, timeoutMs);
 	}
 
+	if (mode === TransportMode.BT) {
+		logger.info('Using BT transport for connect probe (ev3-cockpit.transport.mode=bt).');
+		const rawPort = cfg.get('transport.bt.portPath');
+		const portPath = typeof rawPort === 'string' && rawPort.trim().length > 0 ? rawPort.trim() : undefined;
+		if (!portPath) {
+			throw new Error('BT transport requires setting ev3-cockpit.transport.bt.portPath (e.g. COM5).');
+		}
+		const { BluetoothSppAdapter } = require('./bluetoothSppAdapter') as typeof import('./bluetoothSppAdapter');
+		return new BluetoothSppAdapter({ portPath });
+	}
+
 	logger.info('Using USB transport for connect probe (fallback).');
 	return createUsbTransport(cfg);
 }
@@ -159,14 +172,16 @@ export function createProbeTransportFromWorkspace(
 					| 'tcphost'
 					| 'tcpport'
 					| 'tcpusediscovery'
-					| 'tcpserialnumber';
+					| 'tcpserialnumber'
+					| 'btportpath';
 				const overrideMap: Partial<Record<typeof mappedKey, unknown>> = {
 					mode: overrides.mode,
 					usbpath: overrides.usbPath,
 					tcphost: overrides.tcpHost,
 					tcpport: overrides.tcpPort,
 					tcpusediscovery: overrides.tcpUseDiscovery,
-					tcpserialnumber: overrides.tcpSerialNumber
+					tcpserialnumber: overrides.tcpSerialNumber,
+					btportpath: overrides.btPortPath
 				};
 				if (overrideMap[mappedKey] !== undefined) {
 					return overrideMap[mappedKey] as T;

@@ -37,7 +37,7 @@ export interface BrickPanelConfigApplyResult {
 export interface BrickPanelDiscoveryCandidate {
 	candidateId: string;
 	displayName: string;
-	transport: 'usb' | 'tcp' | 'mock' | 'unknown';
+	transport: 'usb' | 'tcp' | 'bt' | 'mock' | 'unknown';
 	status?: 'AVAILABLE' | 'READY' | 'CONNECTING' | 'UNAVAILABLE' | 'ERROR' | 'UNKNOWN';
 	detail?: string;
 	alreadyConnected?: boolean;

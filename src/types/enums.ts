@@ -9,6 +9,7 @@
 export enum TransportMode {
 	USB = 'usb',
 	TCP = 'tcp',
+	BT = 'bt',
 	MOCK = 'mock'
 }
 
