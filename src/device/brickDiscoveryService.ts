@@ -14,6 +14,12 @@ export interface DiscoveryTransportScanners {
 		name?: string;
 		serialNumber?: string;
 	}>>;
+	listBluetoothCandidates?: () => Promise<Array<{
+		path: string;
+		mac?: string;
+		displayName?: string;
+		hasLegoPrefix: boolean;
+	}>>;
 }
 
 export interface DiscoveryConfig {
@@ -71,9 +77,10 @@ export class BrickDiscoveryService {
 		const nowIso = new Date().toISOString();
 		const defaultRoot = config.defaultRootPath;
 		const storedProfiles = profileStore.list();
-		const [usbCandidates, tcpCandidates] = await Promise.all([
+		const [usbCandidates, tcpCandidates, btCandidates] = await Promise.all([
 			scanners.listUsbHidCandidates(),
-			scanners.listTcpDiscoveryCandidates(config.tcpDiscoveryPort, config.tcpDiscoveryTimeoutMs)
+			scanners.listTcpDiscoveryCandidates(config.tcpDiscoveryPort, config.tcpDiscoveryTimeoutMs),
+			scanners.listBluetoothCandidates?.() ?? Promise.resolve([])
 		]);
 
 		this.discoveredProfiles.clear();
@@ -186,6 +193,40 @@ export class BrickDiscoveryService {
 			}, profile);
 		}
 
+		for (const btCandidate of btCandidates) {
+			const comPath = btCandidate.path.trim();
+			if (!comPath) {
+				continue;
+			}
+			const idSuffix = btCandidate.mac ?? toSafeIdentifier(comPath);
+			const brickId = `bt-${idSuffix}`;
+			if (seenCandidateIds.has(brickId)) {
+				continue;
+			}
+			const snapshot = brickRegistry.getSnapshot(brickId);
+			const fallbackDisplayName = btCandidate.displayName
+				?? (btCandidate.mac ? `EV3 BT (${btCandidate.mac.slice(-4).toUpperCase()})` : `EV3 BT (${comPath})`);
+			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, btCandidate.displayName);
+			const detail = btCandidate.mac
+				? `${comPath} | ${btCandidate.mac.toUpperCase()}`
+				: comPath;
+			const profile: BrickConnectionProfile = {
+				brickId,
+				displayName,
+				savedAtIso: nowIso,
+				rootPath: defaultRoot,
+				transport: { mode: TransportMode.BT, btPortPath: comPath }
+			};
+			registerCandidate({
+				candidateId: brickId,
+				displayName,
+				transport: TransportMode.BT,
+				detail,
+				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
+				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
+			}, profile);
+		}
+
 		for (const profile of storedProfiles) {
 			const brickId = profile.brickId;
 			if (!brickId || seenCandidateIds.has(brickId)) {
@@ -270,6 +311,7 @@ export class BrickDiscoveryService {
 		logger.info('Brick panel scan completed', {
 			usbCandidates: usbCandidates.length,
 			tcpCandidates: tcpCandidates.length,
+			btCandidates: btCandidates.length,
 			discovered: candidates.length
 		});
 		return candidates;

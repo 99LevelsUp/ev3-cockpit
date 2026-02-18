@@ -1,4 +1,6 @@
 import * as dgram from 'node:dgram';
+import { execFile } from 'node:child_process';
+import { isBtSerialCandidate, extractMacFromPnpId, hasLegoMacPrefix } from './bluetoothPortSelection';
 
 export interface UsbHidCandidate {
 	path: string;
@@ -153,5 +155,161 @@ export async function listTcpDiscoveryCandidates(
 			timer = setTimeout(finish, effectiveTimeoutMs);
 			timer.unref?.();
 		});
+	});
+}
+
+// ── Bluetooth discovery ─────────────────────────────────────────────
+
+/** A BT COM port candidate enriched with MAC and display name. */
+export interface BluetoothCandidate {
+	path: string;
+	mac?: string;
+	displayName?: string;
+	pnpId?: string;
+	hasLegoPrefix: boolean;
+}
+
+/** Generic tokens stripped from BT friendly names. */
+const GENERIC_BT_TOKENS = new Set([
+	'bluetooth', 'serial', 'protocol', 'port', 'com', 'spp',
+	'standard', 'device', 'service', 'rfcomm', 'incoming',
+	'outgoing', 'dev', 'b', 'profile'
+]);
+
+/**
+ * Enumerate BT COM port candidates from `listSerialCandidates()`,
+ * filter for BT ports, extract MAC addresses, and resolve friendly names
+ * from the Windows BT registry.
+ */
+export async function listBluetoothCandidates(): Promise<BluetoothCandidate[]> {
+	const [serial, nameMap] = await Promise.all([
+		listSerialCandidates(),
+		resolveWindowsBluetoothNameMap()
+	]);
+
+	return serial
+		.filter(isBtSerialCandidate)
+		.map((c) => {
+			const mac = extractMacFromPnpId(c.pnpId);
+			const registryName = mac ? nameMap.get(mac) : undefined;
+			const displayName = normalizeBtBrickName(registryName, c.friendlyName, c.manufacturer, mac);
+			return {
+				path: c.path,
+				mac,
+				displayName,
+				pnpId: c.pnpId,
+				hasLegoPrefix: hasLegoMacPrefix(c.pnpId),
+			};
+		});
+}
+
+/** Cache for registry name map (TTL 10 s). */
+let nameMapCache: { map: Map<string, string>; ts: number } | undefined;
+const NAME_MAP_CACHE_TTL_MS = 10_000;
+
+/**
+ * Query the Windows Bluetooth registry for paired device friendly names.
+ * Returns a Map of lowercase MAC (12 hex chars) → friendly name.
+ * Cached for 10 seconds. Returns empty map on non-Windows or errors.
+ */
+export async function resolveWindowsBluetoothNameMap(): Promise<Map<string, string>> {
+	if (nameMapCache && Date.now() - nameMapCache.ts < NAME_MAP_CACHE_TTL_MS) {
+		return nameMapCache.map;
+	}
+
+	if (process.platform !== 'win32') {
+		const empty = new Map<string, string>();
+		nameMapCache = { map: empty, ts: Date.now() };
+		return empty;
+	}
+
+	try {
+		const json = await runPowershell(
+			`Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices' -ErrorAction SilentlyContinue | ForEach-Object { $name = (Get-ItemProperty $_.PSPath -Name 'Name' -ErrorAction SilentlyContinue).Name; if ($name) { [PSCustomObject]@{ Mac = $_.PSChildName; Name = [System.Text.Encoding]::UTF8.GetString($name).TrimEnd([char]0) } } } | ConvertTo-Json -Compress`
+		);
+
+		const map = new Map<string, string>();
+		const parsed = JSON.parse(json);
+		const entries = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+		for (const entry of entries) {
+			if (entry?.Mac && entry?.Name) {
+				map.set(String(entry.Mac).toLowerCase(), String(entry.Name));
+			}
+		}
+		nameMapCache = { map, ts: Date.now() };
+		return map;
+	} catch {
+		const empty = new Map<string, string>();
+		nameMapCache = { map: empty, ts: Date.now() };
+		return empty;
+	}
+}
+
+/** @internal Exposed for testing — invalidate the name map cache. */
+export function clearBluetoothNameMapCache(): void {
+	nameMapCache = undefined;
+}
+
+/**
+ * Resolve a display name for a BT candidate using the priority chain:
+ * 1. Registry friendly name (cleaned)
+ * 2. Manufacturer field (if short and not "Microsoft")
+ * 3. MAC address suffix (EV3-XXYY)
+ */
+function normalizeBtBrickName(
+	registryName: string | undefined,
+	friendlyName: string | undefined,
+	manufacturer: string | undefined,
+	mac: string | undefined
+): string | undefined {
+	const cleaned = cleanBtName(registryName) ?? cleanBtName(friendlyName);
+	if (cleaned) {
+		return cleaned;
+	}
+
+	if (manufacturer && manufacturer.length <= 12 && !/^microsoft$/i.test(manufacturer)) {
+		return manufacturer;
+	}
+
+	if (mac && mac.length >= 4) {
+		return `EV3-${mac.slice(-4).toUpperCase()}`;
+	}
+
+	return undefined;
+}
+
+/** Remove generic BT tokens and `(COMx)` from a friendly name. */
+function cleanBtName(raw: string | undefined): string | undefined {
+	if (!raw) {
+		return undefined;
+	}
+	let name = raw
+		.replace(/\(COM\d+\)/gi, '')
+		.replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+		.trim();
+
+	const tokens = name.split(/\s+/).filter((t) => !GENERIC_BT_TOKENS.has(t.toLowerCase()));
+	name = tokens.join(' ').trim();
+
+	if (!name || name.length > 24) {
+		return undefined;
+	}
+	return name;
+}
+
+function runPowershell(script: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile(
+			'powershell.exe',
+			['-NoProfile', '-NonInteractive', '-Command', script],
+			{ timeout: 5000, maxBuffer: 512 * 1024, windowsHide: true },
+			(error, stdout) => {
+				if (error) {
+					reject(error);
+					return;
+				}
+				resolve(stdout.trim());
+			}
+		);
 	});
 }

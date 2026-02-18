@@ -34,7 +34,8 @@ import {
 } from './transport/transportFactory';
 import {
 	listTcpDiscoveryCandidates,
-	listUsbHidCandidates
+	listUsbHidCandidates,
+	listBluetoothCandidates
 } from './transport/discovery';
 import {
 	BrickTreeProvider
@@ -88,7 +89,8 @@ export function activate(context: vscode.ExtensionContext) {
 		profileStore,
 		scanners: {
 			listUsbHidCandidates,
-			listTcpDiscoveryCandidates
+			listTcpDiscoveryCandidates,
+			listBluetoothCandidates
 		},
 		logger: perfLogger,
 		toSafeIdentifier
