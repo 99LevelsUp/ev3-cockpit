@@ -144,11 +144,13 @@ export function createProbeTransportForMode(
 		logger.info('Using BT transport for connect probe (ev3-cockpit.transport.mode=bt).');
 		const rawPort = cfg.get('transport.bt.portPath');
 		const portPath = typeof rawPort === 'string' && rawPort.trim().length > 0 ? rawPort.trim() : undefined;
-		if (!portPath) {
-			throw new Error('BT transport requires setting ev3-cockpit.transport.bt.portPath (e.g. COM5).');
+		if (portPath) {
+			const { BluetoothSppAdapter } = require('./bluetoothSppAdapter') as typeof import('./bluetoothSppAdapter');
+			return new BluetoothSppAdapter({ portPath });
 		}
-		const { BluetoothSppAdapter } = require('./bluetoothSppAdapter') as typeof import('./bluetoothSppAdapter');
-		return new BluetoothSppAdapter({ portPath });
+		// No explicit port — use auto-port discovery
+		const { BluetoothAutoPortAdapter } = require('./bluetoothAutoPortAdapter') as typeof import('./bluetoothAutoPortAdapter');
+		return new BluetoothAutoPortAdapter({ probeTimeoutMs: timeoutMs });
 	}
 
 	logger.info('Using USB transport for connect probe (fallback).');
