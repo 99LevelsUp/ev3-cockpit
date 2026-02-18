@@ -29,10 +29,10 @@ test('TransportError includes transport type', () => {
 	const error = new TransportError({
 		code: TransportErrorCode.DEVICE_DISCONNECTED,
 		message: 'Device disconnected',
-		transportType: 'bt'
+		transportType: 'tcp'
 	});
 
-	assert.equal(error.transportType, 'bt');
+	assert.equal(error.transportType, 'tcp');
 });
 
 test('TransportError includes device ID when provided', () => {
@@ -152,20 +152,10 @@ test('TransportError handles USB transport type', () => {
 	assert.equal(error.transportType, 'usb');
 });
 
-test('TransportError handles BT transport type', () => {
-	const error = new TransportError({
-		code: TransportErrorCode.CONNECT_FAILED,
-		message: 'BT connect failed',
-		transportType: 'bt'
-	});
-
-	assert.equal(error.transportType, 'bt');
-});
-
 test('TransportError handles TCP transport type', () => {
 	const error = new TransportError({
-		code: TransportErrorCode.TIMEOUT,
-		message: 'TCP timeout',
+		code: TransportErrorCode.CONNECT_FAILED,
+		message: 'TCP connect failed',
 		transportType: 'tcp'
 	});
 

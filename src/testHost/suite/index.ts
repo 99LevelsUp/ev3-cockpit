@@ -63,7 +63,6 @@ async function testCommandsRegistration(): Promise<void> {
 	assert.ok(commands.includes('ev3-cockpit.emergencyStop'));
 	assert.ok(commands.includes('ev3-cockpit.inspectTransports'));
 	assert.ok(commands.includes('ev3-cockpit.transportHealthReport'));
-	assert.ok(commands.includes('ev3-cockpit.btDetectionDiagnostics'));
 	assert.ok(commands.includes('ev3-cockpit.inspectBrickSessions'));
 	assert.ok(commands.includes('ev3-cockpit.revealInBricksTree'));
 	assert.ok(commands.includes('ev3-cockpit.browseRemoteFs'));
@@ -859,7 +858,6 @@ async function testCommandsWithoutHardware(): Promise<void> {
 			await vscode.commands.executeCommand('ev3-cockpit.emergencyStop');
 			await vscode.commands.executeCommand('ev3-cockpit.inspectTransports');
 			await vscode.commands.executeCommand('ev3-cockpit.transportHealthReport');
-			await vscode.commands.executeCommand('ev3-cockpit.btDetectionDiagnostics');
 			await vscode.commands.executeCommand('ev3-cockpit.inspectBrickSessions');
 			await vscode.commands.executeCommand('ev3-cockpit.revealInBricksTree');
 			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];

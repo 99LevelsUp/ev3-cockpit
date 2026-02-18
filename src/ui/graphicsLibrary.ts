@@ -5,7 +5,6 @@ export type BrickTransportVisual = BrickSnapshot['transport'] | 'unknown';
 
 const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
 	usb: 'plug',
-	bt: 'plug',
 	tcp: 'broadcast',
 	mock: 'beaker',
 	unknown: 'question'
@@ -13,10 +12,6 @@ const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
 
 const TRANSPORT_WEBVIEW_ICON_SVG: Record<BrickTransportVisual, string> = {
 	usb: 'codicon:plug',
-	bt: '<svg viewBox="0 0 16 16" class="transport-icon-svg" aria-hidden="true">'
-		+ '<path d="M7 2l4 3-4 3 4 3-4 3V2z" />'
-		+ '<path d="M4 4l6 4-6 4" />'
-		+ '</svg>',
 	tcp: 'codicon:broadcast',
 	mock: '<svg viewBox="-12 -12 24 24" class="transport-icon-svg" aria-hidden="true">'
 		+ '<path d="M 3,2 V -2 A 1,1 45 0 0 2,-3 h -4 a 1,1 135 0 0 -1,1 v 4 a 1,1 45 0 0 1,1 H 2 A 1,1 135 0 0 3,2 Z" />'
@@ -42,7 +37,6 @@ const TAB_ACTION_WEBVIEW_ICON_SVG: Record<'close' | 'add' | 'settings' | 'apply'
 
 function isBrickTransportVisual(value: string): value is BrickTransportVisual {
 	return value === 'usb'
-		|| value === 'bt'
 		|| value === 'tcp'
 		|| value === 'mock'
 		|| value === 'unknown';

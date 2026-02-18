@@ -55,7 +55,7 @@ interface BrickResolversModule {
 			rootPath: string,
 			profile?: {
 				displayName?: string;
-				transport: { mode: TransportMode.USB | 'bt' | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string };
+				transport: { mode: TransportMode.USB | 'tcp' | 'mock'; tcpHost?: string; tcpPort?: number; usbPath?: string };
 				rootPath?: string;
 			}
 		) => { brickId: string; displayName: string; transport: string; rootPath: string };
@@ -111,12 +111,10 @@ function createScaffold(options: ScaffoldOptions): {
 	const brickRegistry = createBrickRegistryMock(options);
 	const configValues: Record<string, unknown> = {
 		'transport.mode': TransportMode.USB,
-		'transport.bluetooth.probeTimeoutMs': 8_000,
 		'fs.mode': 'safe',
 		'fs.fullMode.confirmationRequired': true,
 		'transport.tcp.host': '',
 		'transport.tcp.port': 5555,
-		'transport.bluetooth.port': '',
 		'transport.usb.path': '',
 		...(options.configValues ?? {})
 	};
@@ -349,14 +347,6 @@ test('brickResolvers resolves connected descriptor by transport mode', async () 
 			assert.match(tcp.brickId, /^tcp-/);
 			assert.match(tcp.displayName, /192\.168\.0\.10:5566/);
 
-			const bt = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
-				transport: { mode: TransportMode.BT, btPort: 'COM9' },
-				rootPath: '/media/card/'
-			});
-			assert.equal(bt.transport, 'bt');
-			assert.equal(bt.rootPath, '/media/card/');
-			assert.match(bt.brickId, /^bt-/);
-
 			const usb = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/', {
 				transport: { mode: TransportMode.USB, usbPath: 'hid#ev3' }
 			});
@@ -576,23 +566,22 @@ test('brickResolvers resolveCurrentTransportMode returns unknown for invalid val
 	);
 });
 
-test('brickResolvers resolveProbeTimeoutMs uses bluetooth probe for bluetooth mode', async () => {
+test('brickResolvers resolveProbeTimeoutMs uses scheduler base timeout for tcp mode', async () => {
 	await withMockedBrickResolvers(
 		{
 			configValues: {
-				'transport.mode': TransportMode.BT,
-				'transport.bluetooth.probeTimeoutMs': 12_000
+				'transport.mode': TransportMode.TCP
 			},
 			schedulerTimeoutMs: 2_000
 		},
 		async ({ module, deps }) => {
 			const resolvers = module.createBrickResolvers(deps);
-			assert.equal(resolvers.resolveProbeTimeoutMs(), 12_000);
+			assert.equal(resolvers.resolveProbeTimeoutMs(), 2_000);
 		}
 	);
 });
 
-test('brickResolvers resolveProbeTimeoutMs uses base timeout for non-bluetooth mode', async () => {
+test('brickResolvers resolveProbeTimeoutMs uses base timeout for usb mode', async () => {
 	await withMockedBrickResolvers(
 		{
 			configValues: { 'transport.mode': TransportMode.USB },

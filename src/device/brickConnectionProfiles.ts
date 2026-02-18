@@ -18,7 +18,6 @@ interface ProfileStoreShape {
 function sanitizeTransportMode(value: unknown): TransportMode {
 	// Accept both enum values and string literals for backward compatibility
 	if (value === TransportMode.USB || value === 'usb') return TransportMode.USB;
-	if (value === TransportMode.BT || value === 'bt') return TransportMode.BT;
 	if (value === TransportMode.TCP || value === 'tcp') return TransportMode.TCP;
 	if (value === TransportMode.MOCK || value === 'mock') return TransportMode.MOCK;
 	return TransportMode.USB;
@@ -44,7 +43,6 @@ function sanitizeProfile(input: BrickConnectionProfile): BrickConnectionProfile 
 		transport: {
 			mode: sanitizeTransportMode(input.transport.mode),
 			usbPath: input.transport.usbPath?.trim(),
-			btPort: input.transport.btPort?.trim(),
 			tcpHost: input.transport.tcpHost?.trim(),
 			tcpPort: typeof input.transport.tcpPort === 'number' ? Math.max(1, Math.floor(input.transport.tcpPort)) : undefined,
 			tcpUseDiscovery: input.transport.tcpUseDiscovery === true,
@@ -78,7 +76,6 @@ export function captureConnectionProfileFromWorkspace(
 	const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 	const transportMode = sanitizeTransportMode(cfg.get('transport.mode'));
 	const usbPathRaw = cfg.get('transport.usb.path');
-	const btPortRaw = cfg.get('transport.bluetooth.port');
 	const tcpHostRaw = cfg.get('transport.tcp.host');
 	const tcpPortRaw = cfg.get('transport.tcp.port');
 	const tcpSerialRaw = cfg.get('transport.tcp.serialNumber');
@@ -91,7 +88,6 @@ export function captureConnectionProfileFromWorkspace(
 		transport: {
 			mode: transportMode,
 			usbPath: typeof usbPathRaw === 'string' ? usbPathRaw : undefined,
-			btPort: typeof btPortRaw === 'string' ? btPortRaw : undefined,
 			tcpHost: typeof tcpHostRaw === 'string' ? tcpHostRaw : undefined,
 			tcpPort: typeof tcpPortRaw === 'number' && Number.isFinite(tcpPortRaw) ? tcpPortRaw : undefined,
 			tcpUseDiscovery: cfg.get('transport.tcp.useDiscovery') === true,

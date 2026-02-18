@@ -3,7 +3,7 @@
  *
  * Error hierarchy:
  * - ExtensionError (base class for all extension errors)
- *   - TransportError (USB, Bluetooth, TCP, Serial communication errors)
+ *   - TransportError (USB, TCP, Serial communication errors)
  *   - ProtocolError (EV3 protocol violations and malformed packets)
  *   - SchedulerError (Command scheduling and queuing errors)
  *   - FilesystemError (File operations on the brick)

@@ -8,7 +8,6 @@ import { toErrorMessage } from '../commands/commandUtils';
 export const RUNTIME_RECONNECT_CONFIG_KEYS = [
 	'ev3-cockpit.transport.mode',
 	'ev3-cockpit.transport.usb.path',
-	'ev3-cockpit.transport.bluetooth.port',
 	'ev3-cockpit.transport.tcp.host',
 	'ev3-cockpit.transport.tcp.port',
 	'ev3-cockpit.compat.profile'

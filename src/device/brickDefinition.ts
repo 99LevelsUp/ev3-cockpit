@@ -30,13 +30,6 @@ export interface BrickSpec {
 		client?: string;
 		host?: string;
 	};
-	bluetooth?: {
-		version?: string;
-		module?: string;
-		profile?: string;
-		rangeMeters?: number;
-		maxConnections?: number;
-	};
 	wifi?: {
 		support?: string;
 		dongle?: string;
@@ -79,7 +72,6 @@ export interface BrickSpec {
 export interface BrickIdentity {
 	name?: string;
 	serialNumber?: string;
-	bluetoothMac?: string;
 	wifiMac?: string;
 }
 
@@ -106,13 +98,6 @@ export interface BrickStorage {
 }
 
 export interface BrickComms {
-	bluetooth?: {
-		on?: boolean;
-		visible?: boolean;
-		pin?: string;
-		paired?: string[];
-		discovered?: string[];
-	};
 	wifi?: {
 		on?: boolean;
 		present?: boolean;

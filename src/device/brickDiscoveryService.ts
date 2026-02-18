@@ -2,19 +2,12 @@ import type { BrickConnectionProfile } from './brickConnectionProfiles';
 import type { BrickConnectionProfileStore } from './brickConnectionProfiles';
 import type { BrickRegistry } from './brickRegistry';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
-import {
-	extractBluetoothAddressFromPnpId,
-	type WindowsBluetoothPairedDevice,
-	type SerialCandidate,
-	type WindowsBluetoothLiveDevice
-} from '../transport/discovery';
 import type { Logger } from '../diagnostics/logger';
 import { isMockBrickId, type MockBrickDefinition } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
 
 export interface DiscoveryTransportScanners {
 	listUsbHidCandidates: () => Promise<Array<{ path: string; serialNumber?: string }>>;
-	listSerialCandidates: () => Promise<SerialCandidate[]>;
 	listTcpDiscoveryCandidates: (port: number, timeoutMs: number) => Promise<Array<{
 		ip: string;
 		port: number;
@@ -28,7 +21,6 @@ export interface DiscoveryConfig {
 	mockBricks: MockBrickDefinition[];
 	tcpDiscoveryPort: number;
 	tcpDiscoveryTimeoutMs: number;
-	preferredBluetoothPort?: string;
 	defaultRootPath: string;
 }
 
@@ -36,10 +28,6 @@ export interface BrickDiscoveryServiceDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
 	scanners: DiscoveryTransportScanners;
-	probeBtCandidatePresence?: (port: string) => Promise<boolean>;
-	isBtAddressPresent?: (address: string) => Promise<boolean>;
-	listBtLiveDevices?: () => Promise<WindowsBluetoothLiveDevice[]>;
-	listBtPairedDevices?: () => Promise<WindowsBluetoothPairedDevice[]>;
 	logger: Logger;
 	toSafeIdentifier: (value: string) => string;
 }
@@ -53,63 +41,6 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 		return undefined;
 	}
 	return trimmed;
-}
-
-function resolveBluetoothFriendlyDisplayName(candidate: SerialCandidate): string | undefined {
-	const raw = candidate.friendlyName?.trim();
-	if (!raw) {
-		return undefined;
-	}
-	const normalized = raw.replace(/\u0000/g, '').replace(/\(COM\d+\)/i, '').trim();
-	if (!normalized) {
-		return undefined;
-	}
-	if (
-		/BLUETOOTH|SERIOVA|SERI[ÁA]LN[IÍ]|PROTOKOL|PORT|COM\d+/i.test(normalized)
-		&& !/EV3|LEGO|MINDSTORMS/i.test(normalized)
-	) {
-		return undefined;
-	}
-	return normalizeBrickNameCandidate(normalized);
-}
-
-export function isLikelyEv3SerialCandidate(
-	candidate: SerialCandidate,
-	preferredPort?: string
-): boolean {
-	const normalizedPath = candidate.path.trim().toUpperCase();
-	if (preferredPort && normalizedPath === preferredPort) {
-		return true;
-	}
-	const fingerprint = `${candidate.manufacturer ?? ''} ${candidate.serialNumber ?? ''} ${candidate.pnpId ?? ''}`.toUpperCase();
-	if (/EV3|LEGO|MINDSTORMS|_005D/.test(fingerprint)) {
-		return true;
-	}
-	// Windows Bluetooth SPP ports for EV3 typically report LOCALMFG&005D and a LEGO MAC prefix 00:16:53.
-	// Example pnpId: BTHENUM\\{00001101-0000-1000-8000-00805F9B34FB}_LOCALMFG&005D\\...\\001653XXXXXX_...
-	const isBluetoothSpp = /BTHENUM\\\{00001101-0000-1000-8000-00805F9B34FB\}/.test(fingerprint);
-	if (!isBluetoothSpp) {
-		return false;
-	}
-	// Accept EV3-specific hints when present.
-	const btAddress = extractBluetoothAddressFromPnpId(candidate.pnpId);
-	if (/LOCALMFG&005D/.test(fingerprint) || btAddress?.startsWith('001653')) {
-		return true;
-	}
-	// Reject generic Bluetooth SPP ports (for example LOCALMFG&0000) that have no EV3 hint.
-	return false;
-}
-
-function resolveBtAddress(candidate: SerialCandidate): string | undefined {
-	return extractBluetoothAddressFromPnpId(candidate.pnpId);
-}
-
-function resolveBtBrickId(candidate: SerialCandidate, btPort: string, safeId: (value: string) => string): string {
-	const mac = resolveBtAddress(candidate);
-	if (mac) {
-		return `bt-${safeId(mac)}`;
-	}
-	return `bt-${safeId(btPort)}`;
 }
 
 export class BrickDiscoveryService {
@@ -139,10 +70,9 @@ export class BrickDiscoveryService {
 		const { brickRegistry, profileStore, scanners, logger, toSafeIdentifier } = this.deps;
 		const nowIso = new Date().toISOString();
 		const defaultRoot = config.defaultRootPath;
-
-		const [usbCandidates, serialCandidates, tcpCandidates] = await Promise.all([
+		const storedProfiles = profileStore.list();
+		const [usbCandidates, tcpCandidates] = await Promise.all([
 			scanners.listUsbHidCandidates(),
-			scanners.listSerialCandidates(),
 			scanners.listTcpDiscoveryCandidates(config.tcpDiscoveryPort, config.tcpDiscoveryTimeoutMs)
 		]);
 
@@ -150,9 +80,6 @@ export class BrickDiscoveryService {
 		this.nonConnectableCandidates.clear();
 		const candidates: BrickPanelDiscoveryCandidate[] = [];
 		const seenCandidateIds = new Set<string>();
-		const seenBtPorts = new Set<string>();
-		const btProbeByAddress = new Map<string, boolean>();
-		const btComPortByAddress = new Map<string, string>();
 
 		const registerCandidate = (
 			candidate: BrickPanelDiscoveryCandidate,
@@ -182,28 +109,23 @@ export class BrickDiscoveryService {
 		const resolvePreferredDisplayName = (
 			brickId: string,
 			fallbackDisplayName: string,
-			discoveredName?: string,
-			preferDiscoveredOverRemembered = false
+			discoveredName?: string
 		): string => {
 			const connectedName = normalizeBrickNameCandidate(brickRegistry.getSnapshot(brickId)?.displayName);
 			if (connectedName) {
 				return connectedName;
 			}
-			const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
-			if (preferDiscoveredOverRemembered && liveDiscoveredName) {
-				return liveDiscoveredName;
-			}
 			const rememberedName = normalizeBrickNameCandidate(profileStore.get(brickId)?.displayName);
 			if (rememberedName) {
 				return rememberedName;
 			}
+			const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
 			if (liveDiscoveredName) {
 				return liveDiscoveredName;
 			}
 			return fallbackDisplayName;
 		};
 
-		// USB
 		for (const usbCandidate of usbCandidates) {
 			const usbPath = usbCandidate.path.trim();
 			if (!usbPath) {
@@ -232,156 +154,6 @@ export class BrickDiscoveryService {
 			}, profile);
 		}
 
-		// Bluetooth serial
-		for (const serialCandidate of serialCandidates) {
-			const rawPath = serialCandidate.path.trim();
-			if (!rawPath || !/^COM\d+$/i.test(rawPath)) {
-				continue;
-			}
-			const likelyEv3Candidate = isLikelyEv3SerialCandidate(serialCandidate, config.preferredBluetoothPort);
-			const btPort = rawPath.toUpperCase();
-			const brickId = resolveBtBrickId(serialCandidate, btPort, toSafeIdentifier);
-			const btAddress = resolveBtAddress(serialCandidate);
-			if (btAddress) {
-				btComPortByAddress.set(btAddress, btPort);
-			}
-			const snapshot = brickRegistry.getSnapshot(brickId);
-			const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
-			let btPresenceConfirmed = alreadyConnected;
-			if (alreadyConnected && btAddress) {
-				btProbeByAddress.set(btAddress, true);
-			}
-			if (!alreadyConnected && this.deps.probeBtCandidatePresence) {
-				let present = false;
-				try {
-					present = await this.deps.probeBtCandidatePresence(btPort);
-				} catch (error) {
-					logger.debug('Bluetooth discovery probe failed', {
-						port: btPort,
-						brickId,
-						error: error instanceof Error ? error.message : String(error)
-					});
-				}
-				if (btAddress) {
-					btProbeByAddress.set(btAddress, present);
-				}
-				if (!present) {
-					logger.debug('Bluetooth discovery probe rejected candidate', {
-						port: btPort,
-						brickId,
-						pnpId: serialCandidate.pnpId,
-						manufacturer: serialCandidate.manufacturer
-					});
-					continue;
-				}
-				btPresenceConfirmed = present;
-			} else if (!alreadyConnected && !likelyEv3Candidate) {
-				// Without active probe capability, keep strict fingerprint gating to avoid false positives.
-				continue;
-			}
-			const fallbackDisplayName = `EV3 Bluetooth (${btPort})`;
-			const portProfile = !btAddress
-				? profileStore.list().find((profile) => (
-					profile.transport.mode === 'bt'
-					&& profile.transport.btPort?.trim().toUpperCase() === btPort
-				))
-				: undefined;
-			const displayName = resolvePreferredDisplayName(
-				brickId,
-				fallbackDisplayName,
-				resolveBluetoothFriendlyDisplayName(serialCandidate) ?? portProfile?.displayName,
-				true
-			);
-			const manufacturer = serialCandidate.manufacturer?.trim();
-			const detail = manufacturer
-				? `${manufacturer} | ${btPort}`
-				: btPort;
-			const profile: BrickConnectionProfile = {
-				brickId,
-				displayName,
-				savedAtIso: nowIso,
-				rootPath: defaultRoot,
-				transport: { mode: TransportMode.BT, btPort }
-			};
-			registerCandidate({
-				candidateId: brickId,
-				displayName,
-				transport: TransportMode.BT,
-				detail,
-				status: resolveCandidateStatus(snapshot, btPresenceConfirmed ? 'AVAILABLE' : 'UNKNOWN'),
-				alreadyConnected
-			}, profile);
-			seenBtPorts.add(btPort);
-		}
-
-		// Bluetooth live devices with connectable COM mapping
-		if (this.deps.listBtLiveDevices) {
-			let liveDevices: WindowsBluetoothLiveDevice[] = [];
-			try {
-				liveDevices = await this.deps.listBtLiveDevices();
-			} catch (error) {
-				logger.debug('Bluetooth live-device scan failed', {
-					error: error instanceof Error ? error.message : String(error)
-				});
-			}
-			for (const device of liveDevices) {
-				const address = device.address.trim().toUpperCase();
-				if (!address || !address.startsWith('001653')) {
-					continue;
-				}
-				const brickId = `bt-${toSafeIdentifier(address)}`;
-				if (seenCandidateIds.has(brickId)) {
-					continue;
-				}
-				const snapshot = brickRegistry.getSnapshot(brickId);
-				const rememberedProfile = profileStore.get(brickId);
-				const rememberedPort = rememberedProfile?.transport.mode === 'bt'
-					? rememberedProfile.transport.btPort?.trim().toUpperCase()
-					: undefined;
-				const mappedPort = btComPortByAddress.get(address);
-				const effectivePort = rememberedPort ?? mappedPort;
-				const alreadyConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
-				const rememberedPortConfirmed = effectivePort
-					? (btProbeByAddress.get(address) ?? alreadyConnected)
-					: false;
-				if (!effectivePort && !alreadyConnected) {
-					logger.debug('Bluetooth live-device candidate ignored because no SPP COM mapping was found', {
-						brickId,
-						address
-					});
-					continue;
-				}
-				if (effectivePort && !rememberedPortConfirmed && !alreadyConnected) {
-					logger.debug('Bluetooth live-device candidate ignored because mapped COM probe failed', {
-						brickId,
-						address,
-						effectivePort
-					});
-					continue;
-				}
-				const hasConnectablePort = Boolean(effectivePort)
-					&& (!this.deps.probeBtCandidatePresence || rememberedPortConfirmed);
-				const fallbackDisplayName = `EV3 Bluetooth (${address.slice(-4)})`;
-				const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, device.displayName, true);
-				const detail = hasConnectablePort && effectivePort
-					? `${device.displayName ?? address} | ${effectivePort}`
-					: (device.displayName ?? address);
-
-				registerCandidate({
-					candidateId: brickId,
-					displayName,
-					transport: TransportMode.BT,
-					detail,
-					status: resolveCandidateStatus(snapshot, hasConnectablePort && rememberedPortConfirmed ? 'AVAILABLE' : 'UNKNOWN'),
-					alreadyConnected
-				}, rememberedProfile);
-				if (hasConnectablePort && effectivePort) {
-					seenBtPorts.add(effectivePort);
-				}
-			}
-		}
-
-		// TCP
 		for (const tcpCandidate of tcpCandidates) {
 			const endpoint = `${tcpCandidate.ip}:${tcpCandidate.port}`;
 			const brickId = `tcp-${toSafeIdentifier(endpoint)}`;
@@ -414,28 +186,12 @@ export class BrickDiscoveryService {
 			}, profile);
 		}
 
-		// Stored profiles
-		for (const profile of profileStore.list()) {
+		for (const profile of storedProfiles) {
 			const brickId = profile.brickId;
 			if (!brickId || seenCandidateIds.has(brickId)) {
 				continue;
 			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
-			const isConnected = snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING';
-			if (profile.transport.mode === TransportMode.BT && !isConnected) {
-				// Avoid showing stale remembered Bluetooth devices when they are not currently detected.
-				continue;
-			}
-			if (
-				profile.transport.mode === TransportMode.BT
-				&& isLegacyBluetoothBrickId(brickId)
-			) {
-				const btPort = profile.transport.btPort?.trim().toUpperCase();
-				if (btPort && seenBtPorts.has(btPort)) {
-					// Legacy bt-comX profile collides with a MAC-based BT candidate on the same port.
-					continue;
-				}
-			}
 			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
 			registerCandidate({
@@ -448,29 +204,22 @@ export class BrickDiscoveryService {
 			}, profile);
 		}
 
-		// Active registry entries
 		for (const snapshot of brickRegistry.listSnapshots()) {
 			if (seenCandidateIds.has(snapshot.brickId)) {
 				continue;
 			}
 			const rememberedProfile = profileStore.get(snapshot.brickId);
 			const transport = resolveDiscoveryTransport(snapshot.brickId, rememberedProfile);
-			const isConnected = snapshot.status === 'READY' || snapshot.status === 'CONNECTING';
-			if (transport === TransportMode.BT && !isConnected) {
-				// Avoid surfacing stale Bluetooth snapshots that are not currently connected.
-				continue;
-			}
 			registerCandidate({
 				candidateId: snapshot.brickId,
 				displayName: resolvePreferredDisplayName(snapshot.brickId, snapshot.displayName),
 				transport,
 				detail: resolveDiscoveryDetail(rememberedProfile),
 				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
-				alreadyConnected: isConnected
+				alreadyConnected: snapshot.status === 'READY' || snapshot.status === 'CONNECTING'
 			}, rememberedProfile);
 		}
 
-		// Mock brick
 		if (config.showMockBricks) {
 			for (const mock of config.mockBricks) {
 				if (seenCandidateIds.has(mock.brickId)) {
@@ -503,13 +252,11 @@ export class BrickDiscoveryService {
 			}
 		}
 
-		// Sort
 		const transportRank: Record<BrickPanelDiscoveryCandidate['transport'], number> = {
 			usb: 0,
-			bt: 1,
-			tcp: 2,
-			mock: 3,
-			unknown: 4
+			tcp: 1,
+			mock: 2,
+			unknown: 3
 		};
 		candidates.sort((left, right) => {
 			const rank = transportRank[left.transport] - transportRank[right.transport];
@@ -521,7 +268,6 @@ export class BrickDiscoveryService {
 
 		logger.info('Brick panel scan completed', {
 			usbCandidates: usbCandidates.length,
-			serialCandidates: serialCandidates.length,
 			tcpCandidates: tcpCandidates.length,
 			discovered: candidates.length
 		});
@@ -565,24 +311,16 @@ function resolveCandidateStatus(
 	return 'UNKNOWN';
 }
 
-function isLegacyBluetoothBrickId(brickId: string): boolean {
-	const normalized = brickId.trim().toLowerCase();
-	return normalized.startsWith('bt-') && !/^bt-[0-9a-f]{12}$/i.test(normalized);
-}
-
 export function resolveDiscoveryTransport(
 	brickId: string,
 	profile?: BrickConnectionProfile
 ): BrickPanelDiscoveryCandidate['transport'] {
 	const mode = profile?.transport.mode;
-	if (mode === TransportMode.USB || mode === TransportMode.BT || mode === TransportMode.TCP || mode === TransportMode.MOCK) {
+	if (mode === TransportMode.USB || mode === TransportMode.TCP || mode === TransportMode.MOCK) {
 		return mode;
 	}
 	if (brickId.startsWith('usb-')) {
 		return TransportMode.USB;
-	}
-	if (brickId.startsWith('bt-')) {
-		return TransportMode.BT;
 	}
 	if (brickId.startsWith('tcp-')) {
 		return TransportMode.TCP;
@@ -600,9 +338,6 @@ export function resolveDiscoveryDetail(profile?: BrickConnectionProfile): string
 	const transport = profile.transport;
 	if (transport.mode === TransportMode.USB) {
 		return transport.usbPath?.trim() || undefined;
-	}
-	if (transport.mode === TransportMode.BT) {
-		return transport.btPort?.trim() || undefined;
 	}
 	if (transport.mode === TransportMode.TCP) {
 		const host = transport.tcpHost?.trim() || '';

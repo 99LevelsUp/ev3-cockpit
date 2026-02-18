@@ -5,7 +5,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import test from 'node:test';
 import {
-	resolveBluetoothStrictModeFromEnv,
 	resolveEmergencyStopCheckFromEnv,
 	resolveReconnectDriverDropCheckFromEnv,
 	resolveReconnectGlitchCheckFromEnv,
@@ -31,14 +30,6 @@ test('hardware smoke classifies unavailable TCP errors', () => {
 	assert.equal(isLikelyUnavailableError('tcp', new Error('Request execution failed: TCP transport is not open.')), true);
 	assert.equal(isLikelyUnavailableError('tcp', new Error('Request execution failed: TCP adapter is not open.')), true);
 	assert.equal(isLikelyUnavailableError('tcp', new Error('Unexpected capability reply type.')), false);
-});
-
-test('hardware smoke classifies unavailable Bluetooth errors', () => {
-	assert.equal(isLikelyUnavailableError('bt', new Error('Opening COM4: Unknown error code 121')), true);
-	assert.equal(isLikelyUnavailableError('bt', new Error('COM4 attempt 1: Opening COM4: Access denied')), true);
-	assert.equal(isLikelyUnavailableError('bt', new Error('COM4 attempt 2: Opening COM4: Unknown error code 1167')), true);
-	assert.equal(isLikelyUnavailableError('bt', new Error('Request execution failed: Bluetooth transport is not open.')), true);
-	assert.equal(isLikelyUnavailableError('bt', new Error('Probe reply returned status 0x2.')), false);
 });
 
 test('hardware smoke resolves remote run-program spec from ev3:// URI', () => {
@@ -86,7 +77,7 @@ test('hardware smoke resolves fixture-upload auto fixture', () => {
 
 test('hardware smoke transport selection defaults to all in fixed order', () => {
 	const selection = resolveHardwareTransportsFromEnv({});
-	assert.deepEqual(selection.transports, ['usb', 'tcp', 'bt']);
+	assert.deepEqual(selection.transports, ['usb', 'tcp']);
 	assert.equal(selection.warning, undefined);
 });
 
@@ -142,15 +133,6 @@ test('hardware smoke reconnect driver-drop check can be enabled by env', () => {
 	assert.equal(resolveReconnectDriverDropCheckFromEnv({ EV3_COCKPIT_HW_RECONNECT_DRIVER_DROP_CHECK: 'true' }), true);
 });
 
-test('hardware smoke bluetooth strict mode is disabled by default', () => {
-	assert.equal(resolveBluetoothStrictModeFromEnv({}), false);
-});
-
-test('hardware smoke bluetooth strict mode can be enabled by env', () => {
-	assert.equal(resolveBluetoothStrictModeFromEnv({ EV3_COCKPIT_HW_BT_STRICT: '1' }), true);
-	assert.equal(resolveBluetoothStrictModeFromEnv({ EV3_COCKPIT_HW_BT_STRICT: 'true' }), true);
-});
-
 test('hardware smoke report path defaults to artifacts/hw/hardware-smoke.json', () => {
 	const reportPath = resolveHardwareSmokeReportPath({});
 	assert.match(reportPath, /artifacts[\\/]+hw[\\/]+hardware-smoke\.json$/i);
@@ -171,23 +153,21 @@ test('hardware smoke report builder computes summary counters', () => {
 			reconnectCheckEnabled: true,
 			reconnectGlitchCheckEnabled: false,
 			reconnectDriverDropCheckEnabled: true,
-			bluetoothStrictModeEnabled: true,
 			warning: undefined,
 			results: [
 				{ transport: TransportMode.USB, status: 'PASS', reason: 'ok' },
-				{ transport: TransportMode.TCP, status: 'SKIP', reason: 'unavailable' },
-				{ transport: TransportMode.BT, status: 'FAIL', reason: 'error' }
+				{ transport: TransportMode.TCP, status: 'SKIP', reason: 'unavailable' }
 			]
 		},
 		1
 	);
 	assert.equal(report.summary.pass, 1);
 	assert.equal(report.summary.skip, 1);
-	assert.equal(report.summary.fail, 1);
-	assert.equal(report.benchmarks.length, 3);
+	assert.equal(report.summary.fail, 0);
+	assert.equal(report.benchmarks.length, 2);
 	assert.deepEqual(
 		report.benchmarks.map((entry) => entry.id),
-		['CONNECT_USB', 'CONNECT_TCP', 'CONNECT_BT']
+		['CONNECT_USB', 'CONNECT_TCP']
 	);
 	assert.equal(report.exitCode, 1);
 });

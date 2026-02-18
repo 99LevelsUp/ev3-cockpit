@@ -4,10 +4,10 @@ import { parseHardwareSmokeOutput, parseScenarioIds } from '../hw/hardwareMatrix
 
 test('hardware matrix parser extracts case rows and summary counts', () => {
 	const output = `
-[HW] Running hardware smoke tests in order: usb -> tcp -> bluetooth
+[HW] Running hardware smoke tests in order: usb -> tcp
 [HW][USB] PASS Connect probe succeeded. {"path":"auto"}
 [HW][TCP] SKIP TCP transport unavailable (UDP discovery timeout after 1500ms.)
-[HW][BLUETOOTH] FAIL Opening COM4: Unknown error code 1256
+[HW][TCP] FAIL connect ECONNRESET 192.168.1.7:5555
 [HW] Summary: PASS=1 SKIP=1 FAIL=1
 `;
 	const parsed = parseHardwareSmokeOutput(output);
@@ -20,7 +20,7 @@ test('hardware matrix parser extracts case rows and summary counts', () => {
 	assert.equal(parsed.results[0].detail?.path, 'auto');
 	assert.equal(parsed.results[1].transport, 'tcp');
 	assert.equal(parsed.results[1].status, 'SKIP');
-	assert.equal(parsed.results[2].transport, 'bt');
+	assert.equal(parsed.results[2].transport, 'tcp');
 	assert.equal(parsed.results[2].status, 'FAIL');
 });
 
@@ -28,7 +28,7 @@ test('hardware matrix parser derives summary when summary line is missing', () =
 	const output = `
 [HW][USB] PASS Connect probe succeeded.
 [HW][TCP] SKIP TCP transport unavailable.
-[HW][BLUETOOTH] SKIP Bluetooth transport unavailable.
+[HW][TCP] SKIP TCP transport unavailable.
 `;
 	const parsed = parseHardwareSmokeOutput(output);
 	assert.equal(parsed.summary.pass, 1);

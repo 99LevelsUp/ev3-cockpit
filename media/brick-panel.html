@@ -1092,6 +1092,34 @@ __CODICONS_LINK_TAG__
 			return null;
 		}
 
+		function isKnownDiscoveryCandidate(candidate) {
+			if (!candidate) {
+				return false;
+			}
+			return candidate.known === true && String(candidate.transport || '').toLowerCase() === 'bt';
+		}
+
+		function resolveDiscoveryCandidateAction(candidate) {
+			const mockToggle = resolveMockDiscoveryToggle(candidate);
+			if (mockToggle) {
+				return {
+					kind: 'mock',
+					mode: mockToggle.mode,
+					iconName: mockToggle.iconName,
+					tooltip: mockToggle.tooltip
+				};
+			}
+			if (isKnownDiscoveryCandidate(candidate) && !isCandidateReadyConnected(candidate)) {
+				return {
+					kind: 'forget',
+					mode: 'forget',
+					iconName: 'trash',
+					tooltip: 'Forget known Brick'
+				};
+			}
+			return null;
+		}
+
 		function escapeHtml(value) {
 			return String(value || '')
 				.replaceAll('&', '&amp;')
@@ -1436,14 +1464,14 @@ __CODICONS_LINK_TAG__
 						const selectedClass = candidate.candidateId === selectedDiscoveryCandidateId ? ' selected' : '';
 						const statusClass = resolveCandidateStatusClass(candidate);
 						const disabledAttr = connectingDiscoveryCandidateId ? ' disabled' : '';
-						const mockToggle = resolveMockDiscoveryToggle(candidate);
+						const candidateAction = resolveDiscoveryCandidateAction(candidate);
 						const mockActionDisabled = connectingDiscoveryCandidateId ? 'true' : 'false';
 						html += '<button class="discovery-item' + selectedClass + statusClass + '" data-candidate-id="' + candidate.candidateId + '"' + disabledAttr + '>'
 							+ '<span class="discovery-main">'
 							+ renderDiscoveryTransportIndicator(candidate)
 							+ '<span class="discovery-main-label">' + escapeHtml(candidate.displayName) + '</span>'
-							+ (mockToggle
-								? '<span class="discovery-item-action" data-candidate-action-id="' + candidate.candidateId + '" data-candidate-action-mode="' + mockToggle.mode + '" aria-disabled="' + mockActionDisabled + '" title="' + mockToggle.tooltip + '" aria-label="' + mockToggle.tooltip + '" role="button">' + renderCodiconReference('codicon:' + mockToggle.iconName, '') + '</span>'
+							+ (candidateAction
+								? '<span class="discovery-item-action" data-candidate-action-id="' + candidate.candidateId + '" data-candidate-action-mode="' + candidateAction.mode + '" data-candidate-action-kind="' + candidateAction.kind + '" aria-disabled="' + mockActionDisabled + '" title="' + candidateAction.tooltip + '" aria-label="' + candidateAction.tooltip + '" role="button">' + renderCodiconReference('codicon:' + candidateAction.iconName, '') + '</span>'
 								: '')
 							+ '</span>'
 							+ '</button>';
@@ -1816,18 +1844,27 @@ __CODICONS_LINK_TAG__
 						return;
 					}
 					const candidate = discoveryCandidates.find((item) => item.candidateId === candidateId);
-					const toggle = resolveMockDiscoveryToggle(candidate);
-					if (!toggle) {
+					const action = resolveDiscoveryCandidateAction(candidate);
+					if (!action) {
 						return;
 					}
 					selectedDiscoveryCandidateId = '';
+					if (action.kind === 'forget') {
+						discoveryCandidates = discoveryCandidates.filter((item) => item.candidateId !== candidateId);
+						if (selectedDiscoveryCandidateId === candidateId) {
+							selectedDiscoveryCandidateId = '';
+						}
+						render();
+						vscode.postMessage({ type: 'forgetScannedBrick', candidateId });
+						return;
+					}
 					connectingDiscoveryCandidateId = candidateId;
 					render();
-					if (toggle.mode === 'disconnect') {
+					if (action.mode === 'disconnect') {
 						vscode.postMessage({ type: 'setMockConnection', candidateId, connected: false });
 						return;
 					}
-					if (toggle.mode === 'connect') {
+					if (action.mode === 'connect') {
 						vscode.postMessage({ type: 'setMockConnection', candidateId, connected: true });
 					}
 				});

@@ -7,7 +7,7 @@ import { createFakeMemento } from './testHelpers';
 async function withProfileModule<T>(
 	run: (mod: {
 		BrickConnectionProfileStore: new (storage: { get<T>(key: string): T | undefined; update(key: string, value: unknown): Promise<void> }) => {
-			get: (brickId: string) => { brickId: string; displayName: string; rootPath: string; transport: { mode?: string; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string; tcpUseDiscovery?: boolean; tcpSerialNumber?: string } } | undefined;
+			get: (brickId: string) => { brickId: string; displayName: string; rootPath: string; transport: { mode?: string; tcpHost?: string; tcpPort?: number; usbPath?: string; tcpUseDiscovery?: boolean; tcpSerialNumber?: string } } | undefined;
 			list: () => Array<{ brickId: string; displayName: string }>;
 			upsert: (profile: unknown) => Promise<void>;
 		};
@@ -42,7 +42,7 @@ async function withProfileModule<T>(
 					brickId: string;
 					displayName: string;
 					rootPath: string;
-					transport: { mode?: string; tcpHost?: string; tcpPort?: number; btPort?: string; usbPath?: string; tcpUseDiscovery?: boolean; tcpSerialNumber?: string };
+					transport: { mode?: string; tcpHost?: string; tcpPort?: number; usbPath?: string; tcpUseDiscovery?: boolean; tcpSerialNumber?: string };
 				} | undefined;
 				list: () => Array<{ brickId: string; displayName: string }>;
 				upsert: (profile: unknown) => Promise<void>;
@@ -157,8 +157,7 @@ test('BrickConnectionProfileStore trims string fields in transport', async () =>
 			savedAtIso: '2026-01-01T00:00:00.000Z',
 			rootPath: '/home/',
 			transport: {
-				mode: TransportMode.BT,
-				btPort: '  COM5  ',
+				mode: TransportMode.TCP,
 				usbPath: '  /dev/hidraw0  ',
 				tcpHost: '  192.168.1.1  ',
 				tcpSerialNumber: '  ABC123  '
@@ -167,7 +166,6 @@ test('BrickConnectionProfileStore trims string fields in transport', async () =>
 		const profile = store.get('brick-4');
 		assert.ok(profile);
 		assert.equal(profile.displayName, 'EV3 D');
-		assert.equal(profile.transport.btPort, 'COM5');
 		assert.equal(profile.transport.usbPath, '/dev/hidraw0');
 		assert.equal(profile.transport.tcpHost, '192.168.1.1');
 		assert.equal(profile.transport.tcpSerialNumber, 'ABC123');

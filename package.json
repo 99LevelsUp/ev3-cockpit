@@ -123,10 +123,6 @@
         "title": "EV3 Cockpit: Transport Health Report"
       },
       {
-        "command": "ev3-cockpit.btDetectionDiagnostics",
-        "title": "EV3 Cockpit: BT Detection Diagnostics"
-      },
-      {
         "command": "ev3-cockpit.inspectBrickSessions",
         "title": "EV3 Cockpit: Inspect Brick Sessions"
       },
@@ -421,11 +417,10 @@
           "enum": [
             "auto",
             "usb",
-            "bluetooth",
             "tcp",
             "mock"
           ],
-          "description": "Transport mode for connect probe. Auto tries USB, then TCP, then Bluetooth, then mock fallback."
+          "description": "Transport mode for connect probe. Auto tries USB, then TCP, then mock fallback."
         },
         "ev3-cockpit.mock": {
           "type": "boolean",
@@ -466,74 +461,6 @@
           "default": 1025,
           "minimum": 2,
           "description": "USB HID report size in bytes including report ID."
-        },
-        "ev3-cockpit.transport.bluetooth.port": {
-          "type": "string",
-          "default": "",
-          "description": "Bluetooth SPP serial port path (for example COM5 on Windows)."
-        },
-        "ev3-cockpit.transport.bluetooth.baudRate": {
-          "type": "number",
-          "default": 115200,
-          "minimum": 300,
-          "description": "Baud rate for Bluetooth SPP serial transport."
-        },
-        "ev3-cockpit.transport.bluetooth.dtr": {
-          "type": "boolean",
-          "default": false,
-          "description": "Data Terminal Ready line state for Bluetooth SPP COM port. Some drivers work better with false."
-        },
-        "ev3-cockpit.transport.bluetooth.autoDtrFallback": {
-          "type": "boolean",
-          "default": true,
-          "description": "In Bluetooth auto-port mode, retry failed candidates with alternative DTR=true profile."
-        },
-        "ev3-cockpit.transport.bluetooth.autoPortFallback": {
-          "type": "boolean",
-          "default": true,
-          "description": "Try multiple discovered COM ports when opening Bluetooth transport."
-        },
-        "ev3-cockpit.transport.bluetooth.portProbeTimeoutMs": {
-          "type": "number",
-          "default": 5000,
-          "minimum": 100,
-          "description": "Probe timeout for each Bluetooth COM candidate during auto port fallback."
-        },
-        "ev3-cockpit.transport.bluetooth.portAttempts": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "description": "Retry attempts per Bluetooth COM candidate before switching to next candidate."
-        },
-        "ev3-cockpit.transport.bluetooth.retryDelayMs": {
-          "type": "number",
-          "default": 300,
-          "minimum": 0,
-          "description": "Delay between Bluetooth retries on the same COM candidate."
-        },
-        "ev3-cockpit.transport.bluetooth.postOpenDelayMs": {
-          "type": "number",
-          "default": 120,
-          "minimum": 0,
-          "description": "Stabilization delay after opening Bluetooth COM port before EV3 probe."
-        },
-        "ev3-cockpit.transport.bluetooth.rediscoveryAttempts": {
-          "type": "number",
-          "default": 1,
-          "minimum": 0,
-          "description": "How many additional COM discovery passes to run after Bluetooth auto-port failure."
-        },
-        "ev3-cockpit.transport.bluetooth.rediscoveryDelayMs": {
-          "type": "number",
-          "default": 700,
-          "minimum": 0,
-          "description": "Delay before repeating Bluetooth COM discovery after a failed auto-port pass."
-        },
-        "ev3-cockpit.transport.bluetooth.probeTimeoutMs": {
-          "type": "number",
-          "default": 8000,
-          "minimum": 50,
-          "description": "Timeout for connect probe when Bluetooth transport mode is active."
         },
         "ev3-cockpit.transport.tcp.host": {
           "type": "string",

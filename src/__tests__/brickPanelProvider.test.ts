@@ -402,3 +402,36 @@ test('BrickPanelProvider setMockConnection delegates to data source', async () =
 		view.disposeHandler?.();
 	});
 });
+
+test('BrickPanelProvider forgetScannedBrick delegates to data source', async () => {
+	await withMockedBrickPanelModule(async ({ BrickPanelProvider }) => {
+		const calls: string[] = [];
+		const provider = new BrickPanelProvider(
+			{} as never,
+			{
+				listBricks: () => [],
+				setActiveBrick: () => false,
+				forgetScannedBrick: async (candidateId) => {
+					calls.push(candidateId);
+				}
+			},
+			{ activeIntervalMs: 60_000, idleIntervalMs: 60_000 }
+		);
+
+		const view = createFakeWebviewView();
+		view.webview.postMessage = async () => true;
+
+		provider.resolveWebviewView(
+			view as never,
+			{} as never,
+			{ isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) } as never
+		);
+
+		assert.ok(view.receiveHandler, 'Expected webview message handler to be registered.');
+		view.receiveHandler?.({ type: 'forgetScannedBrick', candidateId: 'known-1' });
+		await sleep(0);
+
+		assert.deepEqual(calls, ['known-1']);
+		view.disposeHandler?.();
+	});
+});

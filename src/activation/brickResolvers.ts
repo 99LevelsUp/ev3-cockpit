@@ -29,9 +29,6 @@ export interface BrickResolvers {
 	ensureFullFsModeConfirmation(): Promise<boolean>;
 }
 
-/** Default Bluetooth probe timeout (ms); longer than USB/TCP due to pairing variability. */
-const DEFAULT_BT_PROBE_TIMEOUT_MS = 8_000;
-
 /** Default EV3 TCP communication port (LEGO standard). */
 const DEFAULT_TCP_PORT = 5555;
 
@@ -55,24 +52,8 @@ export function createBrickResolvers(deps: {
 }): BrickResolvers {
 	const resolveProbeTimeoutMs = (): number => {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
-		const modeRaw = cfg.get('transport.mode');
-		const mode: TransportMode =
-			modeRaw === TransportMode.USB || modeRaw === 'usb' ? TransportMode.USB :
-			modeRaw === TransportMode.BT || modeRaw === 'bt' ? TransportMode.BT :
-			modeRaw === TransportMode.TCP || modeRaw === 'tcp' ? TransportMode.TCP :
-			modeRaw === TransportMode.MOCK || modeRaw === 'mock' ? TransportMode.MOCK :
-			TransportMode.USB;
-
-		const base = readSchedulerConfig().timeoutMs;
-		const btProbeRaw = cfg.get('transport.bluetooth.probeTimeoutMs');
-		const btProbe =
-			typeof btProbeRaw === 'number' && Number.isFinite(btProbeRaw) ? Math.max(50, Math.floor(btProbeRaw)) : DEFAULT_BT_PROBE_TIMEOUT_MS;
-
-		if (mode === TransportMode.BT) {
-			return Math.max(base, btProbe);
-		}
-
-		return base;
+		void cfg;
+		return readSchedulerConfig().timeoutMs;
 	};
 
 	const resolveFsModeTarget = (): vscode.ConfigurationTarget => {
@@ -131,7 +112,6 @@ export function createBrickResolvers(deps: {
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
 		const mode = cfg.get('transport.mode');
 		if (mode === TransportMode.USB || mode === 'usb') return TransportMode.USB;
-		if (mode === TransportMode.BT || mode === 'bt') return TransportMode.BT;
 		if (mode === TransportMode.TCP || mode === 'tcp') return TransportMode.TCP;
 		if (mode === TransportMode.MOCK || mode === 'mock') return TransportMode.MOCK;
 		return 'unknown';
@@ -153,19 +133,6 @@ export function createBrickResolvers(deps: {
 			const fallbackDisplayName = `EV3 TCP (${endpoint})`;
 			return {
 				brickId: `tcp-${toSafeIdentifier(endpoint)}`,
-				displayName: profileDisplayName ?? fallbackDisplayName,
-				role,
-				transport,
-				rootPath: normalizedRootPath
-			};
-		}
-
-		if (transport === TransportMode.BT) {
-			const portRaw = profile?.transport.btPort ?? cfg.get('transport.bluetooth.port');
-			const port = typeof portRaw === 'string' && portRaw.trim().length > 0 ? portRaw.trim() : 'auto';
-			const fallbackDisplayName = `EV3 Bluetooth (${port})`;
-			return {
-				brickId: `bt-${toSafeIdentifier(port)}`,
 				displayName: profileDisplayName ?? fallbackDisplayName,
 				role,
 				transport,

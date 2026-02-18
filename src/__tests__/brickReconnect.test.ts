@@ -71,7 +71,7 @@ test('returns false if profile is missing', async () => {
 test('returns false if profile transport mode is not usb', async () => {
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: TransportMode.BT } })
+		profile: makeProfile({ transport: { mode: TransportMode.TCP } })
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
 });

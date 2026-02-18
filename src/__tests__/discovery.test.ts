@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 import test from 'node:test';
-import { listSerialCandidates, listUsbHidCandidates } from '../transport/discovery';
+import {
+	listSerialCandidates,
+	listUsbHidCandidates
+} from '../transport/discovery';
 
 type ModuleLoadFn = (request: string, parent: unknown, isMain: boolean) => unknown;
 type ModuleWithLoad = typeof Module & { _load: ModuleLoadFn };

@@ -13,6 +13,7 @@ export interface BrickPanelDataSource {
 	setActiveBrick(brickId: string): boolean;
 	scanAvailableBricks?(): Promise<BrickPanelDiscoveryCandidate[]>;
 	connectScannedBrick?(candidateId: string): Promise<void>;
+	forgetScannedBrick?(candidateId: string): Promise<void>;
 	disconnectBrick?(brickId: string): Promise<void>;
 	setMockConnection?(candidateId: string, connected: boolean): Promise<void>;
 	applyPendingConfigChanges?(request: BrickPanelConfigApplyRequest): Promise<BrickPanelConfigApplyResult | void>;
@@ -36,10 +37,11 @@ export interface BrickPanelConfigApplyResult {
 export interface BrickPanelDiscoveryCandidate {
 	candidateId: string;
 	displayName: string;
-	transport: 'usb' | 'bt' | 'tcp' | 'mock' | 'unknown';
+	transport: 'usb' | 'tcp' | 'mock' | 'unknown';
 	status?: 'AVAILABLE' | 'READY' | 'CONNECTING' | 'UNAVAILABLE' | 'ERROR' | 'UNKNOWN';
 	detail?: string;
 	alreadyConnected?: boolean;
+	known?: boolean;
 }
 
 export interface BrickPanelActiveState {
@@ -62,6 +64,7 @@ type MessageFromWebview =
 	| { type: 'selectBrick'; brickId: string }
 	| { type: 'scanBricks' }
 	| { type: 'connectScannedBrick'; candidateId: string }
+	| { type: 'forgetScannedBrick'; candidateId: string }
 	| { type: 'disconnectBrick'; brickId: string }
 	| { type: 'setMockConnection'; candidateId: string; connected: boolean }
 	| { type: 'applyConfigChanges'; brickId: string; brickName: string }
@@ -171,6 +174,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 				void this.scanAvailableBricks();
 			} else if (message.type === 'connectScannedBrick') {
 				void this.connectScannedBrick(message.candidateId);
+			} else if (message.type === 'forgetScannedBrick') {
+				void this.forgetScannedBrick(message.candidateId);
 			} else if (message.type === 'disconnectBrick') {
 				void this.disconnectBrick(message.brickId);
 			} else if (message.type === 'setMockConnection') {
@@ -366,6 +371,24 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			void vscode.window.showErrorMessage(`Mock connection toggle failed: ${message}`);
+		}
+	}
+
+	private async forgetScannedBrick(candidateId: string): Promise<void> {
+		const normalizedCandidateId = candidateId.trim();
+		if (!normalizedCandidateId) {
+			return;
+		}
+		if (!this.dataSource.forgetScannedBrick) {
+			void vscode.window.showErrorMessage('Forget action is not available in the current runtime.');
+			return;
+		}
+		try {
+			await this.dataSource.forgetScannedBrick(normalizedCandidateId);
+			this.refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			void vscode.window.showErrorMessage(`Forget failed: ${message}`);
 		}
 	}
 

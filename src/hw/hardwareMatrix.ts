@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 
-type TransportKind = 'usb' | 'tcp' | 'bt';
+type TransportKind = 'usb' | 'tcp';
 type HardwareStatus = 'PASS' | 'SKIP' | 'FAIL';
 type MatrixScenarioId = 'baseline' | 'reconnect' | 'reconnect-glitch' | 'driver-drop';
 
@@ -39,7 +39,6 @@ interface MatrixReport {
 	generatedAt: string;
 	nodeVersion: string;
 	transports: string;
-	bluetoothStrictMode: boolean;
 	scenarios: MatrixScenarioResult[];
 	totals: {
 		pass: number;
@@ -127,11 +126,8 @@ function buildScenario(id: MatrixScenarioId, baseEnv: NodeJS.ProcessEnv): Matrix
 
 function parseTransportKind(raw: string): TransportKind {
 	const normalized = raw.trim().toLowerCase();
-	if (normalized === 'usb' || normalized === 'tcp' || normalized === 'bt') {
+	if (normalized === 'usb' || normalized === 'tcp') {
 		return normalized;
-	}
-	if (normalized === 'bluetooth') {
-		return 'bt';
 	}
 	throw new Error(`Unsupported transport kind "${raw}".`);
 }
@@ -165,7 +161,7 @@ export function parseHardwareSmokeOutput(output: string): { results: HardwareCas
 		.filter((line) => line.length > 0);
 
 	for (const line of lines) {
-		const caseMatch = /^\[HW\]\[(USB|TCP|BT|BLUETOOTH)\]\s+(PASS|SKIP|FAIL)\s+(.+)$/i.exec(line);
+		const caseMatch = /^\[HW\]\[(USB|TCP)\]\s+(PASS|SKIP|FAIL)\s+(.+)$/i.exec(line);
 		if (caseMatch) {
 			const transport = parseTransportKind(caseMatch[1]);
 			const status = caseMatch[2].toUpperCase() as HardwareStatus;
@@ -240,8 +236,7 @@ function resolveReportPath(): string {
 }
 
 export async function runHardwareMatrix(): Promise<{ report: MatrixReport; exitCode: number; reportPath: string }> {
-	const selectedTransports = process.env.EV3_COCKPIT_HW_TRANSPORTS?.trim() || 'usb,tcp,bluetooth';
-	const bluetoothStrictMode = /^(1|true|yes|on)$/i.test(process.env.EV3_COCKPIT_HW_BT_STRICT?.trim() ?? '');
+	const selectedTransports = process.env.EV3_COCKPIT_HW_TRANSPORTS?.trim() || 'usb,tcp';
 	const baseEnv: NodeJS.ProcessEnv = {
 		...process.env,
 		EV3_COCKPIT_HW_TRANSPORTS: selectedTransports
@@ -282,7 +277,6 @@ export async function runHardwareMatrix(): Promise<{ report: MatrixReport; exitC
 		generatedAt: new Date().toISOString(),
 		nodeVersion: process.version,
 		transports: selectedTransports,
-		bluetoothStrictMode,
 		scenarios: results,
 		totals
 	};

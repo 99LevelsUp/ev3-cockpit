@@ -33,10 +33,6 @@ import {
 	TransportConfigOverrides
 } from './transport/transportFactory';
 import {
-	isWindowsBluetoothDevicePresent,
-	listWindowsBluetoothLiveDevices,
-	listWindowsBluetoothPairedDevices,
-	listSerialCandidates,
 	listTcpDiscoveryCandidates,
 	listUsbHidCandidates
 } from './transport/discovery';
@@ -53,7 +49,6 @@ import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
 import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
-import { createBtPresenceScanner, probeBtCandidatePresence } from './activation/btPresenceScanner';
 import { BrickPanelActiveState, BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	BrickDiscoveryService,
@@ -93,13 +88,8 @@ export function activate(context: vscode.ExtensionContext) {
 		profileStore,
 		scanners: {
 			listUsbHidCandidates,
-			listSerialCandidates,
 			listTcpDiscoveryCandidates
 		},
-		probeBtCandidatePresence,
-		isBtAddressPresent: isWindowsBluetoothDevicePresent,
-		listBtLiveDevices: listWindowsBluetoothLiveDevices,
-		listBtPairedDevices: listWindowsBluetoothPairedDevices,
 		logger: perfLogger,
 		toSafeIdentifier
 	});
@@ -183,7 +173,6 @@ export function activate(context: vscode.ExtensionContext) {
 		return {
 			mode: profile.transport.mode,
 			usbPath: profile.transport.usbPath,
-			btPort: profile.transport.btPort,
 			tcpHost: profile.transport.tcpHost,
 			tcpPort: profile.transport.tcpPort,
 			tcpUseDiscovery: profile.transport.tcpUseDiscovery,
@@ -372,13 +361,14 @@ export function activate(context: vscode.ExtensionContext) {
 			typeof discoveryTimeoutRaw === 'number' && Number.isFinite(discoveryTimeoutRaw)
 				? Math.max(500, Math.min(3_000, Math.floor(discoveryTimeoutRaw)))
 				: 1_500;
-		const preferredBluetoothPortRaw = cfg.get('transport.bluetooth.port');
-		const preferredBluetoothPort =
-			typeof preferredBluetoothPortRaw === 'string' && preferredBluetoothPortRaw.trim().length > 0
-				? preferredBluetoothPortRaw.trim().toUpperCase()
-				: undefined;
 		const defaultRootPath = normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
-		return { showMockBricks, mockBricks, tcpDiscoveryPort: discoveryPort, tcpDiscoveryTimeoutMs: discoveryTimeoutMs, preferredBluetoothPort, defaultRootPath };
+		return {
+			showMockBricks,
+			mockBricks,
+			tcpDiscoveryPort: discoveryPort,
+			tcpDiscoveryTimeoutMs: discoveryTimeoutMs,
+			defaultRootPath
+		};
 	};
 
 	const nameDeps = { brickRegistry, profileStore, discoveryService };
@@ -404,6 +394,21 @@ export function activate(context: vscode.ExtensionContext) {
 			profileStore,
 			(brickId) => vscode.commands.executeCommand('ev3-cockpit.connectEV3', brickId) as Promise<void>
 		);
+	};
+
+	const forgetDiscoveredBrickFromPanel = async (candidateId: string): Promise<void> => {
+		const normalizedCandidateId = candidateId.trim();
+		if (!normalizedCandidateId) {
+			return;
+		}
+		clearProgramSession('forget-known-brick', normalizedCandidateId);
+		if (isBrickSessionAvailable(normalizedCandidateId)) {
+			await closeBrickSession(normalizedCandidateId);
+		}
+		await profileStore.remove(normalizedCandidateId);
+		brickRegistry.removeWhere((record) => record.brickId === normalizedCandidateId);
+		await brickUiStateStore.pruneMissing(new Set(brickRegistry.listSnapshots().map((snapshot) => snapshot.brickId)));
+		treeProvider.refreshThrottled();
 	};
 
 
@@ -462,9 +467,10 @@ export function activate(context: vscode.ExtensionContext) {
 		onBrickOperation: noteBrickOperation
 	});
 
-	const { inspectTransports, transportHealthReport, btDetectionDiagnostics } = registerTransportCommands({
+	const { inspectTransports, transportHealthReport } = registerTransportCommands({
 		getLogger: () => logger,
-		resolveProbeTimeoutMs
+		resolveProbeTimeoutMs,
+		scanDiscoveryCandidates: discoverBricksForPanel
 	});
 
 	const inspectBrickSessions = registerInspectBrickSessions({
@@ -564,40 +570,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	const btPresenceScanner = createBtPresenceScanner({
-		listSerialCandidates,
-		brickRegistry,
-		profileStore,
-		discoveryService,
-		logger: perfLogger,
-		fastIntervalMs: brickPanelConfig.btPresenceFastMs,
-		slowIntervalMs: brickPanelConfig.btPresenceSlowMs,
-		resolveDefaultRootPath: () =>
-			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
-		resolvePreferredBluetoothPort: () => {
-			const raw = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.bluetooth.port');
-			return typeof raw === 'string' && raw.trim().length > 0
-				? raw.trim().toUpperCase()
-				: undefined;
-		},
-		toSafeIdentifier,
-		isBtScanEnabled: () => {
-			const mode = vscode.workspace.getConfiguration('ev3-cockpit').get('transport.mode');
-			return mode === 'bt' || mode === 'auto' || mode === undefined;
-		},
-		isDiscoveryTabActive: () => panelActiveState.mode === 'discovery',
-		hasConnectedBtOrTcp: () => brickRegistry
-			.listSnapshots()
-			.some((snapshot) => (
-				(snapshot.status === 'READY' || snapshot.status === 'CONNECTING')
-				&& (snapshot.transport === 'bt' || snapshot.transport === 'tcp')
-			)),
-		onPresenceChange: () => {
-			treeProvider.refreshThrottled();
-			// brickPanelProvider is created below; safe because onPresenceChange is called async
-			brickPanelProvider?.refresh();
-		}
-	});
+	// Bluetooth presence scanner intentionally disabled.
 
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
@@ -626,6 +599,7 @@ export function activate(context: vscode.ExtensionContext) {
 		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
 		scanAvailableBricks: discoverBricksForPanel,
 		connectScannedBrick: connectDiscoveredBrickFromPanel,
+		forgetScannedBrick: forgetDiscoveredBrickFromPanel,
 		disconnectBrick: async (brickId: string) => {
 			await vscode.commands.executeCommand('ev3-cockpit.disconnectEV3', brickId);
 		},
@@ -815,7 +789,6 @@ export function activate(context: vscode.ExtensionContext) {
 		emergencyStop,
 		inspectTransports,
 		transportHealthReport,
-		btDetectionDiagnostics,
 		inspectBrickSessions,
 		revealInBricksTree,
 		browseRegistrations.browseRemoteFs,
@@ -837,7 +810,6 @@ export function activate(context: vscode.ExtensionContext) {
 		mockRegistrations.mockToggleDiscovery,
 		mockRegistrations.clearBrickProfiles,
 		usbAutoConnect,
-		btPresenceScanner,
 		telemetryPoller,
 		configWatcher,
 		fsDisposable,

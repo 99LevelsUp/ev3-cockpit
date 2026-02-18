@@ -201,10 +201,10 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 		controlService: mockControl
 	});
 	registry.upsertReady({
-		brickId: 'bt-a',
+		brickId: 'mock-a',
 		displayName: 'Other',
 		role: 'standalone',
-		transport: TransportMode.BT,
+		transport: TransportMode.MOCK,
 		rootPath: '/home/root/lms2012/prjs/',
 		fsService: mockFs,
 		controlService: mockControl
@@ -214,7 +214,7 @@ test('BrickRegistry.updateDisplayNameForMatching updates all matching labels', (
 	assert.deepEqual(updatedIds, ['tcp-a', 'usb-a']);
 	assert.equal(registry.getSnapshot('usb-a')?.displayName, 'Renamed');
 	assert.equal(registry.getSnapshot('tcp-a')?.displayName, 'Renamed');
-	assert.equal(registry.getSnapshot('bt-a')?.displayName, 'Other');
+	assert.equal(registry.getSnapshot('mock-a')?.displayName, 'Other');
 });
 
 test('BrickRegistry.upsertAvailable creates AVAILABLE record', () => {

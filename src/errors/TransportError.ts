@@ -35,7 +35,7 @@ export enum TransportErrorCode {
 /**
  * Transport type for error context.
  */
-export type TransportType = 'usb' | 'bt' | 'tcp' | 'serial' | 'mock';
+export type TransportType = 'usb' | 'tcp' | 'serial' | 'mock';
 
 /**
  * Recovery action recommendation for transport errors.
@@ -50,7 +50,7 @@ export type TransportRecoveryAction =
 
 /**
  * Specialized error for transport layer failures.
- * Used for USB, Bluetooth, TCP, and serial communication issues.
+ * Used for USB, TCP, and serial communication issues.
  */
 export class TransportError extends ExtensionError {
 	public readonly transportType: TransportType;
