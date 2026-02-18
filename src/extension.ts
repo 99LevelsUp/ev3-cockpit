@@ -21,7 +21,7 @@ import { BrickTelemetryStore } from './device/brickTelemetryStore';
 import { BrickSettingsService } from './device/brickSettingsService';
 import { BrickRuntimeSession, BrickSessionManager, ProgramSessionState } from './device/brickSessionManager';
 import { applyDisplayNameAcrossProfiles } from './device/brickNameResolver';
-import { isUsbReconnectCandidateAvailable } from './device/brickReconnect';
+import { isUsbReconnectCandidateAvailable, isBtReconnectCandidateAvailable } from './device/brickReconnect';
 import { Logger, OutputChannelLogger } from './diagnostics/logger';
 import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
 import { performance } from 'node:perf_hooks';
@@ -377,6 +377,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const nameDeps = { brickRegistry, profileStore, discoveryService };
 	const usbReconnectDeps = { brickRegistry, profileStore, listUsbHidCandidates };
+	const btReconnectDeps = { brickRegistry, profileStore, listBluetoothCandidates };
 	let panelActiveState: BrickPanelActiveState = { mode: 'unknown' };
 	const resolveUsbAutoConnectActivation = (): boolean => {
 		if (panelActiveState.mode === 'discovery') {
@@ -779,6 +780,12 @@ export function activate(context: vscode.ExtensionContext) {
 						if (profile.transport.mode === 'usb') {
 							const usbReady = await isUsbReconnectCandidateAvailable(usbReconnectDeps, brickId);
 							if (!usbReady) {
+								return;
+							}
+						}
+						if (profile.transport.mode === 'bt') {
+							const btReady = await isBtReconnectCandidateAvailable(btReconnectDeps, brickId);
+							if (!btReady) {
 								return;
 							}
 						}

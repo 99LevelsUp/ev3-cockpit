@@ -1,11 +1,18 @@
 import { BrickRegistry } from './brickRegistry';
 import { BrickConnectionProfileStore } from './brickConnectionProfiles';
 import { UsbHidCandidate } from '../transport/discovery';
+import type { BluetoothCandidate } from '../transport/discovery';
 
 export interface UsbReconnectDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
 	listUsbHidCandidates: () => Promise<UsbHidCandidate[]>;
+}
+
+export interface BtReconnectDeps {
+	brickRegistry: BrickRegistry;
+	profileStore: BrickConnectionProfileStore;
+	listBluetoothCandidates: () => Promise<BluetoothCandidate[]>;
 }
 
 export const isUsbReconnectCandidateAvailable = async (
@@ -52,4 +59,71 @@ export const isUsbReconnectCandidateAvailable = async (
 		});
 	}
 	return true;
+};
+
+export const isBtReconnectCandidateAvailable = async (
+	deps: BtReconnectDeps,
+	brickId: string
+): Promise<boolean> => {
+	const { brickRegistry, profileStore, listBluetoothCandidates } = deps;
+	const snapshot = brickRegistry.getSnapshot(brickId);
+	if (!snapshot || snapshot.transport !== 'bt') {
+		return false;
+	}
+	const profile = profileStore.get(brickId);
+	if (!profile || profile.transport.mode !== 'bt') {
+		return false;
+	}
+	const btCandidates = await listBluetoothCandidates();
+	if (btCandidates.length === 0) {
+		return false;
+	}
+	const configuredPort = profile.transport.btPortPath?.trim() || '';
+
+	// Try to match by MAC (from brickId) or by configured COM path
+	const macFromId = brickId.startsWith('bt-') ? brickId.slice(3) : undefined;
+	const matchByMac = macFromId && macFromId.length === 12
+		? btCandidates.find((c) => c.mac === macFromId)
+		: undefined;
+
+	if (matchByMac) {
+		const newPath = matchByMac.path.trim();
+		if (newPath && newPath !== configuredPort) {
+			await profileStore.upsert({
+				...profile,
+				savedAtIso: new Date().toISOString(),
+				transport: {
+					...profile.transport,
+					btPortPath: newPath
+				}
+			});
+		}
+		return true;
+	}
+
+	// Fall back to matching by configured COM path
+	if (configuredPort) {
+		const matchByPath = btCandidates.find((c) => c.path.trim() === configuredPort);
+		if (matchByPath) {
+			return true;
+		}
+	}
+
+	// If exactly one BT candidate, use it
+	if (btCandidates.length === 1) {
+		const singlePath = btCandidates[0].path.trim();
+		if (singlePath && singlePath !== configuredPort) {
+			await profileStore.upsert({
+				...profile,
+				savedAtIso: new Date().toISOString(),
+				transport: {
+					...profile.transport,
+					btPortPath: singlePath
+				}
+			});
+		}
+		return !!singlePath;
+	}
+
+	return false;
 };
