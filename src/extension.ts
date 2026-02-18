@@ -50,6 +50,7 @@ import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
 import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
+import { createBtPresenceScanner } from './activation/btPresenceScanner';
 import { BrickPanelActiveState, BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import {
 	BrickDiscoveryService,
@@ -573,7 +574,31 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	// Bluetooth presence scanner intentionally disabled.
+	const btPresenceScanner = createBtPresenceScanner({
+		listBluetoothCandidates,
+		brickRegistry,
+		profileStore,
+		logger: perfLogger,
+		fastIntervalMs: 500,
+		slowIntervalMs: 3000,
+		resolveDefaultRootPath: () =>
+			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
+		toSafeIdentifier,
+		resolveActivateOnConnect: resolveUsbAutoConnectActivation,
+		connectBrick: async (brickId, activateOnSuccess) =>
+			vscode.commands.executeCommand('ev3-cockpit.connectEV3', {
+				brickId,
+				silent: true,
+				activateOnSuccess
+			}) as Promise<void>,
+		disconnectBrick: async (brickId, reason) => {
+			clearProgramSession('bt-presence-disconnect', brickId);
+			await closeBrickSession(brickId);
+			brickRegistry.markUnavailable(brickId, reason);
+			treeProvider.refreshBrick(brickId);
+			brickPanelProvider.refresh();
+		}
+	});
 
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
@@ -813,6 +838,7 @@ export function activate(context: vscode.ExtensionContext) {
 		mockRegistrations.mockToggleDiscovery,
 		mockRegistrations.clearBrickProfiles,
 		usbAutoConnect,
+		btPresenceScanner,
 		telemetryPoller,
 		configWatcher,
 		fsDisposable,
