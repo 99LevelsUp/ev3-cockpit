@@ -1,12 +1,17 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { readSchedulerConfig } from '../config/schedulerConfig';
 import { OutputChannelLogger } from '../diagnostics/logger';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from '../protocol/capabilityProbe';
 import { Ev3CommandClient } from '../protocol/ev3CommandClient';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
+import { EV3_COMMAND, EV3_REPLY, encodeEv3Packet } from '../protocol/ev3Packet';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
-import { listUsbHidCandidates } from '../transport/discovery';
+import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
+import { EV3_PNP_HINT, extractMacFromPnpId, hasLegoMacPrefix } from '../transport/bluetoothPortSelection';
+import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
+import { listBluetoothCandidates, listSerialCandidates, listUsbHidCandidates, resolveWindowsBluetoothNameMap, type SerialCandidate } from '../transport/discovery';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
 
@@ -26,6 +31,7 @@ export interface TransportCommandOptions {
 export interface TransportCommandRegistrations {
 	inspectTransports: vscode.Disposable;
 	transportHealthReport: vscode.Disposable;
+	btDetectionDiagnostics: vscode.Disposable;
 }
 
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
@@ -115,6 +121,111 @@ async function runTransportProbe(
 	}
 }
 
+interface BtProbeResult {
+	dtr: boolean;
+	ok: boolean;
+	message: string;
+	phase: string;
+	code?: number;
+}
+
+function normalizeDiagnosticText(value: unknown): string {
+	if (typeof value !== 'string') {
+		return '(none)';
+	}
+	const normalized = value.replace(/\s+/g, ' ').trim();
+	return normalized.length > 0 ? normalized : '(none)';
+}
+
+function isComPath(value: string): boolean {
+	return /^COM\d+$/i.test(value.trim());
+}
+
+function compareComPath(left: string, right: string): number {
+	const leftNum = Number.parseInt((/(\d+)$/.exec(left) ?? [])[1] ?? '9999', 10);
+	const rightNum = Number.parseInt((/(\d+)$/.exec(right) ?? [])[1] ?? '9999', 10);
+	return leftNum - rightNum;
+}
+
+function isLikelyEv3SerialCandidate(candidate: SerialCandidate): boolean {
+	if (!isComPath(candidate.path)) {
+		return false;
+	}
+	if (hasLegoMacPrefix(candidate.pnpId)) {
+		return true;
+	}
+	const pnpId = candidate.pnpId ?? '';
+	if (pnpId.length > 0 && new RegExp(EV3_PNP_HINT, 'i').test(pnpId)) {
+		return true;
+	}
+	const manufacturer = candidate.manufacturer ?? '';
+	if (/lego/i.test(manufacturer)) {
+		return true;
+	}
+	const friendlyName = candidate.friendlyName ?? '';
+	return /\bev3\b/i.test(friendlyName);
+}
+
+async function probeBluetoothComPort(path: string, dtr: boolean, timeoutMs: number): Promise<BtProbeResult> {
+	const probeMessageCounter = 0xffff;
+	const probePacket = encodeEv3Packet(
+		probeMessageCounter,
+		EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		new Uint8Array([0x81, 0x12])
+	);
+	const adapter = new BluetoothSppAdapter({
+		portPath: path,
+		dtr
+	});
+
+	try {
+		try {
+			await adapter.open();
+		} catch (error) {
+			const rawMessage = `Opening ${path}: ${toErrorMessage(error)}`;
+			const classification = classifyBluetoothFailure(rawMessage, 'open');
+			return {
+				dtr,
+				ok: false,
+				message: normalizeDiagnosticText(rawMessage),
+				phase: classification.phase,
+				code: classification.winErrorCode
+			};
+		}
+
+		const abortController = new AbortController();
+		const timer = setTimeout(() => abortController.abort(), Math.max(250, timeoutMs));
+		timer.unref?.();
+		try {
+			await adapter.send(probePacket, {
+				timeoutMs,
+				signal: abortController.signal,
+				expectedMessageCounter: probeMessageCounter
+			});
+			return {
+				dtr,
+				ok: true,
+				message: 'Probe reply received.',
+				phase: 'probe'
+			};
+		} catch (error) {
+			const rawMessage = toErrorMessage(error);
+			const classification = classifyBluetoothFailure(rawMessage, 'send');
+			return {
+				dtr,
+				ok: false,
+				message: normalizeDiagnosticText(rawMessage),
+				phase: classification.phase,
+				code: classification.winErrorCode
+			};
+		} finally {
+			clearTimeout(timer);
+		}
+	} finally {
+		await adapter.close().catch(() => undefined);
+	}
+}
+
 export function registerTransportCommands(options: TransportCommandOptions): TransportCommandRegistrations {
 	const inspectTransports = vscode.commands.registerCommand('ev3-cockpit.inspectTransports', async () => {
 		const logger = options.getLogger();
@@ -162,5 +273,149 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		);
 	});
 
-	return { inspectTransports, transportHealthReport };
+	const btDetectionDiagnostics = vscode.commands.registerCommand('ev3-cockpit.btDetectionDiagnostics', async () => {
+		const logger = options.getLogger();
+		const config = vscode.workspace.getConfiguration('ev3-cockpit');
+		const transportMode = String(config.get('transport.mode') ?? 'auto');
+		const preferredBtPort = normalizeDiagnosticText(config.get<string>('transport.bt.portPath') ?? '').replace(/^\(none\)$/, '(none)');
+		const probeTimeoutMs = Math.max(400, Math.min(4_000, options.resolveProbeTimeoutMs()));
+
+		const [serialCandidates, btCandidates, pairedNameMap, panelCandidates] = await Promise.all([
+			listSerialCandidates(),
+			listBluetoothCandidates(),
+			resolveWindowsBluetoothNameMap(),
+			options.scanDiscoveryCandidates?.() ?? Promise.resolve([])
+		]);
+
+		const comCandidates = serialCandidates
+			.filter((candidate) => isComPath(candidate.path))
+			.sort((left, right) => compareComPath(left.path, right.path));
+
+		const liveByMac = new Map<string, { name?: string; comMapping: boolean }>();
+		for (const candidate of btCandidates) {
+			if (!candidate.mac) {
+				continue;
+			}
+			const mac = candidate.mac.toLowerCase();
+			const current = liveByMac.get(mac);
+			if (!current) {
+				liveByMac.set(mac, {
+					name: candidate.displayName,
+					comMapping: candidate.connectable === true && isComPath(candidate.path)
+				});
+				continue;
+			}
+			current.name = current.name || candidate.displayName;
+			current.comMapping = current.comMapping || (candidate.connectable === true && isComPath(candidate.path));
+		}
+
+		const comMappingByMac = new Map<string, boolean>();
+		for (const candidate of comCandidates) {
+			const mac = extractMacFromPnpId(candidate.pnpId);
+			if (!mac) {
+				continue;
+			}
+			comMappingByMac.set(mac, true);
+		}
+
+		const lines: string[] = [];
+		lines.push('EV3 Cockpit BT Detection Diagnostics');
+		lines.push(`Timestamp: ${new Date().toISOString()}`);
+		lines.push(`transport.mode: ${transportMode}`);
+		lines.push(`preferred BT port: ${preferredBtPort === '(none)' ? '(none)' : preferredBtPort}`);
+		lines.push('');
+		lines.push('Live Bluetooth devices (discovery pipeline):');
+		if (liveByMac.size === 0) {
+			lines.push('  (none)');
+		} else {
+			for (const [mac, live] of [...liveByMac.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+				lines.push(
+					`  ${mac.toUpperCase()} | name=${normalizeDiagnosticText(live.name)} | comMapping=${live.comMapping ? 'yes' : 'no'}`
+				);
+			}
+		}
+
+		lines.push('');
+		lines.push('Paired Bluetooth devices (registry):');
+		if (pairedNameMap.size === 0) {
+			lines.push('  (none)');
+		} else {
+			for (const [mac, name] of [...pairedNameMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+				const live = liveByMac.has(mac);
+				const comMapping = comMappingByMac.has(mac) || liveByMac.get(mac)?.comMapping === true;
+				lines.push(
+					`  ${mac.toUpperCase()} | name=${normalizeDiagnosticText(name)} | live=${live ? 'yes' : 'no'} | comMapping=${comMapping ? 'yes' : 'no'}`
+				);
+			}
+		}
+
+		lines.push('');
+		if (comCandidates.length === 0) {
+			lines.push('No COM serial candidates found.');
+		} else {
+			for (const candidate of comCandidates) {
+				const path = candidate.path.trim().toUpperCase();
+				const likelyEv3 = isLikelyEv3SerialCandidate(candidate);
+				const probeFalse = await probeBluetoothComPort(path, false, probeTimeoutMs);
+				const probeTrue = await probeBluetoothComPort(path, true, probeTimeoutMs);
+				const present = probeFalse.ok || probeTrue.ok;
+
+				lines.push(`${path} | likelyEv3=${likelyEv3 ? 'yes' : 'no'} | present=${present ? 'yes' : 'no'}`);
+				lines.push(`  manufacturer: ${normalizeDiagnosticText(candidate.manufacturer)}`);
+				lines.push(`  friendlyName: ${normalizeDiagnosticText(candidate.friendlyName)}`);
+				lines.push(`  pnpId: ${normalizeDiagnosticText(candidate.pnpId)}`);
+				for (const probe of [probeFalse, probeTrue]) {
+					const suffix = probe.code !== undefined ? `, code=${probe.code}` : '';
+					lines.push(
+						`  dtr=${probe.dtr ? 'true' : 'false'} -> ${probe.ok ? 'PASS' : 'FAIL'} | ${probe.message} | phase=${probe.phase}${suffix}`
+					);
+				}
+				lines.push('');
+			}
+		}
+
+		lines.push('Panel discovery candidates (same pipeline as + tab):');
+		const panelBtCandidates = panelCandidates.filter((candidate) => candidate.transport === 'bt');
+		if (panelBtCandidates.length === 0) {
+			lines.push('  (none)');
+		} else {
+			for (const candidate of panelBtCandidates) {
+				lines.push(
+					`  ${candidate.candidateId} | status=${candidate.status ?? 'UNKNOWN'} | detail=${normalizeDiagnosticText(candidate.detail)}`
+				);
+			}
+		}
+
+		const reportText = lines.join('\n').trimEnd();
+		logger.info('BT detection diagnostics report generated.', {
+			transportMode,
+			comCandidates: comCandidates.length,
+			liveDevices: liveByMac.size,
+			pairedDevices: pairedNameMap.size,
+			panelBtCandidates: panelBtCandidates.length
+		});
+		logger.info(reportText);
+
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+		const reportDirectory = path.join(workspaceRoot, 'artifacts', 'diagnostics');
+		const reportPath = path.join(reportDirectory, 'bt-detection-diagnostics.txt');
+		try {
+			await fs.mkdir(reportDirectory, { recursive: true });
+			await fs.writeFile(reportPath, reportText, 'utf8');
+		} catch (error) {
+			logger.warn('Failed to write BT diagnostics report to disk.', {
+				reportPath,
+				error: toErrorMessage(error)
+			});
+		}
+
+		const document = await vscode.workspace.openTextDocument({
+			language: 'text',
+			content: reportText
+		});
+		await vscode.window.showTextDocument(document, { preview: false });
+		vscode.window.showInformationMessage(`BT diagnostics ready. Report: ${reportPath}`);
+	});
+
+	return { inspectTransports, transportHealthReport, btDetectionDiagnostics };
 }

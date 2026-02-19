@@ -123,6 +123,10 @@
         "title": "EV3 Cockpit: Transport Health Report"
       },
       {
+        "command": "ev3-cockpit.btDetectionDiagnostics",
+        "title": "EV3 Cockpit: BT Detection Diagnostics"
+      },
+      {
         "command": "ev3-cockpit.inspectBrickSessions",
         "title": "EV3 Cockpit: Inspect Brick Sessions"
       },
@@ -758,6 +762,7 @@
   },
   "optionalDependencies": {
     "node-hid": "^3.3.0",
+    "regkey": "^2.3.3",
     "serialport": "^13.0.0"
   },
   "devDependencies": {

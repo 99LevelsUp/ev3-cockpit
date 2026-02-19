@@ -14,7 +14,9 @@ const TRANSPORT_THEME_ICON_NAME: Record<BrickTransportVisual, string> = {
 const TRANSPORT_WEBVIEW_ICON_SVG: Record<BrickTransportVisual, string> = {
 	usb: 'codicon:plug',
 	tcp: 'codicon:broadcast',
-	bt: 'codicon:radio-tower',
+	bt: '<svg viewBox="0 0 24 24" class="transport-icon-svg" aria-hidden="true">'
+		+ '<path d="m6 7 12 10-6 5V2l6 5L6 17" />'
+		+ '</svg>',
 	mock: '<svg viewBox="-12 -12 24 24" class="transport-icon-svg" aria-hidden="true">'
 		+ '<path d="M 3,2 V -2 A 1,1 45 0 0 2,-3 h -4 a 1,1 135 0 0 -1,1 v 4 a 1,1 45 0 0 1,1 H 2 A 1,1 135 0 0 3,2 Z" />'
 		+ '<path d="M 5,4 V 1 h 6 a 1.24,1.24 67.5 0 1 0.88,2.12 L 4,11 H -4 L -11.88,3.12 A 1.24,1.24 112.5 0 1 -11,1 h 6 v 3 a 1,1 45 0 0 1,1 H 4 A 1,1 135 0 0 5,4 Z" />'

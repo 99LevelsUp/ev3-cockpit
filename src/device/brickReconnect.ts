@@ -75,7 +75,10 @@ export const isBtReconnectCandidateAvailable = async (
 		return false;
 	}
 	const btCandidates = await listBluetoothCandidates();
-	if (btCandidates.length === 0) {
+	const connectableBtCandidates = btCandidates.filter((candidate) => (
+		candidate.connectable !== false && /^COM\d+$/i.test(candidate.path.trim())
+	));
+	if (connectableBtCandidates.length === 0) {
 		return false;
 	}
 	const configuredPort = profile.transport.btPortPath?.trim() || '';
@@ -83,7 +86,7 @@ export const isBtReconnectCandidateAvailable = async (
 	// Try to match by MAC (from brickId) or by configured COM path
 	const macFromId = brickId.startsWith('bt-') ? brickId.slice(3) : undefined;
 	const matchByMac = macFromId && macFromId.length === 12
-		? btCandidates.find((c) => c.mac === macFromId)
+		? connectableBtCandidates.find((c) => c.mac === macFromId)
 		: undefined;
 
 	if (matchByMac) {
@@ -103,15 +106,15 @@ export const isBtReconnectCandidateAvailable = async (
 
 	// Fall back to matching by configured COM path
 	if (configuredPort) {
-		const matchByPath = btCandidates.find((c) => c.path.trim() === configuredPort);
+		const matchByPath = connectableBtCandidates.find((c) => c.path.trim() === configuredPort);
 		if (matchByPath) {
 			return true;
 		}
 	}
 
 	// If exactly one BT candidate, use it
-	if (btCandidates.length === 1) {
-		const singlePath = btCandidates[0].path.trim();
+	if (connectableBtCandidates.length === 1) {
+		const singlePath = connectableBtCandidates[0].path.trim();
 		if (singlePath && singlePath !== configuredPort) {
 			await profileStore.upsert({
 				...profile,

@@ -19,6 +19,8 @@ export interface DiscoveryTransportScanners {
 		mac?: string;
 		displayName?: string;
 		hasLegoPrefix: boolean;
+		present?: boolean;
+		connectable?: boolean;
 	}>>;
 }
 
@@ -194,37 +196,42 @@ export class BrickDiscoveryService {
 		}
 
 		for (const btCandidate of btCandidates) {
-			const comPath = btCandidate.path.trim();
-			if (!comPath) {
+			const rawPath = btCandidate.path.trim();
+			if (!rawPath) {
 				continue;
 			}
-			const idSuffix = btCandidate.mac ?? toSafeIdentifier(comPath);
+			const idSuffix = btCandidate.mac ?? toSafeIdentifier(rawPath);
 			const brickId = `bt-${idSuffix}`;
 			if (seenCandidateIds.has(brickId)) {
 				continue;
 			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = btCandidate.displayName
-				?? (btCandidate.mac ? `EV3 BT (${btCandidate.mac.slice(-4).toUpperCase()})` : `EV3 BT (${comPath})`);
+				?? (btCandidate.mac ? `EV3 BT (${btCandidate.mac.slice(-4).toUpperCase()})` : `EV3 BT (${rawPath})`);
 			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName, btCandidate.displayName);
+			const connectable = btCandidate.connectable !== false && /^COM\d+$/i.test(rawPath);
 			const detail = btCandidate.mac
-				? `${comPath} | ${btCandidate.mac.toUpperCase()}`
-				: comPath;
-			const profile: BrickConnectionProfile = {
+				? `${connectable ? rawPath : 'BT live-only'} | ${btCandidate.mac.toUpperCase()}`
+				: rawPath;
+			const profile: BrickConnectionProfile | undefined = connectable ? {
 				brickId,
 				displayName,
 				savedAtIso: nowIso,
 				rootPath: defaultRoot,
-				transport: { mode: TransportMode.BT, btPortPath: comPath }
-			};
+				transport: { mode: TransportMode.BT, btPortPath: rawPath }
+			} : undefined;
+			const nonConnectableReason = connectable
+				? undefined
+				: 'Brick is visible over Bluetooth, but Windows currently has no COM mapping for connection.';
+			const status = resolveBtCandidateStatus(snapshot, btCandidate.present !== false);
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
 				transport: TransportMode.BT,
 				detail,
-				status: resolveCandidateStatus(snapshot, 'UNKNOWN'),
+				status,
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
-			}, profile);
+			}, profile, nonConnectableReason);
 		}
 
 		for (const profile of storedProfiles) {
@@ -352,6 +359,19 @@ function resolveCandidateStatus(
 		return snapshot.status;
 	}
 	return 'UNKNOWN';
+}
+
+function resolveBtCandidateStatus(
+	snapshot: { status: string } | undefined,
+	present: boolean
+): NonNullable<BrickPanelDiscoveryCandidate['status']> {
+	if (!present) {
+		return resolveCandidateStatus(snapshot, 'UNKNOWN');
+	}
+	if (snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING') {
+		return snapshot.status;
+	}
+	return 'AVAILABLE';
 }
 
 export function resolveDiscoveryTransport(

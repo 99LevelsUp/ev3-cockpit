@@ -472,7 +472,7 @@ export function activate(context: vscode.ExtensionContext) {
 		onBrickOperation: noteBrickOperation
 	});
 
-	const { inspectTransports, transportHealthReport } = registerTransportCommands({
+	const { inspectTransports, transportHealthReport, btDetectionDiagnostics } = registerTransportCommands({
 		getLogger: () => logger,
 		resolveProbeTimeoutMs,
 		scanDiscoveryCandidates: discoverBricksForPanel
@@ -824,6 +824,7 @@ export function activate(context: vscode.ExtensionContext) {
 		emergencyStop,
 		inspectTransports,
 		transportHealthReport,
+		btDetectionDiagnostics,
 		inspectBrickSessions,
 		revealInBricksTree,
 		browseRegistrations.browseRemoteFs,

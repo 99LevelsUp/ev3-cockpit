@@ -66,6 +66,10 @@ export function createBtPresenceScanner(options: BtPresenceScannerOptions): vsco
 			if (!comPath) {
 				continue;
 			}
+			const connectable = bt.connectable !== false && /^COM\d+$/i.test(comPath);
+			if (!connectable) {
+				continue;
+			}
 			const idSuffix = bt.mac ?? toSafeIdentifier(comPath);
 			const brickId = `bt-${idSuffix}`;
 			activeCandidateIds.add(brickId);
