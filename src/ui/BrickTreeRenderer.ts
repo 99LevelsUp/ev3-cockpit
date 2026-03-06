@@ -7,8 +7,8 @@ import { isRemoteExecutablePath } from '../fs/remoteExecutable';
 import { createTransportThemeIcon } from './graphicsLibrary';
 import type { BrickTreeNode, BrickRootNode } from './brickTreeProvider';
 
-const MOCK_TREE_ICON_LIGHT_PATH = path.resolve(__dirname, '../../media/mock-light.svg');
-const MOCK_TREE_ICON_DARK_PATH = path.resolve(__dirname, '../../media/mock-dark.svg');
+const EV3_TREE_ICON_LIGHT_PATH = path.resolve(__dirname, '../../media/ev3-light.svg');
+const EV3_TREE_ICON_DARK_PATH = path.resolve(__dirname, '../../media/ev3-dark.svg');
 
 function toFileUri(filePath: string): vscode.Uri {
 	const uriApi = vscode.Uri as unknown as { parse?: (value: string) => vscode.Uri } | undefined;
@@ -19,17 +19,17 @@ function toFileUri(filePath: string): vscode.Uri {
 	return { toString: () => value } as unknown as vscode.Uri;
 }
 
-function resolveMockTreeIconPath(): { light: vscode.Uri; dark: vscode.Uri } | undefined {
-	if (!fs.existsSync(MOCK_TREE_ICON_LIGHT_PATH) || !fs.existsSync(MOCK_TREE_ICON_DARK_PATH)) {
+function resolveEv3TreeIconPath(): { light: vscode.Uri; dark: vscode.Uri } | undefined {
+	if (!fs.existsSync(EV3_TREE_ICON_LIGHT_PATH) || !fs.existsSync(EV3_TREE_ICON_DARK_PATH)) {
 		return undefined;
 	}
 	return {
-		light: toFileUri(MOCK_TREE_ICON_LIGHT_PATH),
-		dark: toFileUri(MOCK_TREE_ICON_DARK_PATH)
+		light: toFileUri(EV3_TREE_ICON_LIGHT_PATH),
+		dark: toFileUri(EV3_TREE_ICON_DARK_PATH)
 	};
 }
 
-const MOCK_TREE_ICON_PATH = resolveMockTreeIconPath();
+const EV3_TREE_ICON_PATH = resolveEv3TreeIconPath();
 
 function buildEv3Uri(brickId: string, remotePath: string): vscode.Uri {
 	const uriApi = vscode.Uri as unknown as { parse?: (value: string) => vscode.Uri } | undefined;
@@ -91,8 +91,8 @@ function getRootIcon(node: BrickRootNode): vscode.ThemeIcon | { light: vscode.Ur
 		if ((node.busyCommandCount ?? 0) > 0) {
 			return new vscode.ThemeIcon('sync~spin');
 		}
-		if (node.transport === 'mock' && MOCK_TREE_ICON_PATH) {
-			return MOCK_TREE_ICON_PATH;
+		if (node.transport === 'mock' && EV3_TREE_ICON_PATH) {
+			return EV3_TREE_ICON_PATH;
 		}
 		return createTransportThemeIcon(node.transport);
 	}

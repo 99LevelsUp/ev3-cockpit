@@ -18,6 +18,16 @@ Unit tests are colocated in `src/__tests__` (`*.test.ts`) and compile to `out/__
 - `npm run package:vsix`: build installable VSIX into `artifacts/vsix/`.
 - `npm run test:ci:release`: full release gate (includes bundle-size + VSIX smoke).
 
+### Test Command Cheat Sheet
+- Quick UI smoke: `npm run test:pw:smoke`
+- Fast local validation (code quality + core checks): `npm run test:ci`
+- Full local validation (including full Playwright + HW): `npm run test:all`
+- Full UI coverage only: `npm run test:pw`
+- Unit only: `npm run test:unit`
+- Extension host only: `npm run test:host`
+- Hardware only: `npm run test:hw` (or `npm run test:hw:matrix`)
+- Release gate: `npm run test:ci:release`
+
 ## Coding Style & Naming Conventions
 Use TypeScript (`strict` mode, ES2022, CommonJS). Follow existing style: tabs for indentation, semicolons, and single-quote imports.  
 Naming conventions:
@@ -42,3 +52,8 @@ Before requesting review, ensure `npm run test:ci` passes; for release-impacting
 
 ## Security & Configuration Tips
 Do not commit machine-specific hardware values, private endpoints, or local artifact logs. Prefer environment variables for overrides (`EV3_COCKPIT_MAX_BUNDLE_BYTES`, `EV3_COCKPIT_HW_*`) and keep defaults safe.
+
+## Agent Workflow Rules
+- After every code or config change, run: `npm run compile`, `npm run lint`, and baseline tests: `npm run test:unit` + `npm run test:host`.
+- If the change touches UI/webview behavior, also run `npm run test:pw:smoke`.
+- If the user asks for a commit, run full validation first: `npm run compile`, `npm run lint`, and all tests (`npm run test:all`), then `git commit` and `git push`.
