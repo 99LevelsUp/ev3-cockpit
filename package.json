@@ -761,12 +761,16 @@
     "test:all": "npm run test:unit && npm run test:host && npm run test:pw && npm run test:hw"
   },
   "optionalDependencies": {
+    "ffi-napi": "^4.0.3",
     "node-hid": "^3.3.0",
+    "ref-array-di": "npm:null@^1.2.3",
+    "ref-napi": "^3.0.3",
+    "ref-struct-di": "^1.1.1",
     "regkey": "^2.3.3",
     "serialport": "^13.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@eslint/js": "^9.39.2",
     "@playwright/test": "^1.58.2",
     "@types/node": "^25.2.3",
     "@types/vscode": "^1.109.0",

@@ -10,13 +10,12 @@ test('mock bricks config is valid', async () => {
 	const bricks = buildMockBricksFromConfig(parsed);
 
 	const expectedRoles: Record<string, 'master' | 'slave'> = {
-		'Mock 1': 'master',
-		'Mock 1.1': 'slave',
-		'Mock 1.1.1': 'slave',
-		'Mock 2': 'master',
-		'Mock 2.1': 'slave',
-		'Mock 2.2': 'slave',
-		'Mock 3': 'master'
+		Bender: 'master',
+		Marvin: 'master',
+		R2D2: 'master',
+		SkyNet: 'master',
+		T800: 'slave',
+		T1000: 'slave'
 	};
 
 	const actualNames = bricks.map((entry) => entry.displayName).sort();

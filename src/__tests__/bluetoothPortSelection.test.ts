@@ -39,6 +39,24 @@ test('extractMacFromPnpId extracts 12-char hex after backslash', () => {
 	);
 });
 
+test('extractMacFromPnpId extracts 12-char hex after ampersand', () => {
+	assert.equal(
+		extractMacFromPnpId('BTHENUM\\{00001101}_LOCALMFG&005D\\8&2E3EE818&0&001653AABBCC_C00000000'),
+		'001653aabbcc'
+	);
+});
+
+test('extractMacFromPnpId prefers LEGO MAC when multiple sequences exist', () => {
+	assert.equal(
+		extractMacFromPnpId('BTHENUM\\{00001101}_LOCALMFG&0000\\8&2E3EE818&0&000000000000_00000009'),
+		'000000000000'
+	);
+	assert.equal(
+		extractMacFromPnpId('BTHENUM\\{00001101}_LOCALMFG&005D\\8&2E3EE818&0&001653AABBCC_C00000000'),
+		'001653aabbcc'
+	);
+});
+
 test('extractMacFromPnpId returns undefined for missing pnpId', () => {
 	assert.equal(extractMacFromPnpId(undefined), undefined);
 });

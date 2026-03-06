@@ -1,6 +1,5 @@
 import { BrickRegistry } from './brickRegistry';
-import { BrickConnectionProfileStore } from './brickConnectionProfiles';
-import { BrickDiscoveryService } from './brickDiscoveryService';
+import type { BrickConnectionProfile, BrickConnectionProfileStore } from './brickConnectionProfiles';
 
 export const normalizeDisplayName = (value: string | undefined): string => {
 	return typeof value === 'string' ? value.trim() : '';
@@ -12,10 +11,15 @@ export const hasSameDisplayName = (left: string | undefined, right: string | und
 	return leftName.length > 0 && leftName === rightName;
 };
 
+export interface DiscoveredProfileSource {
+	listDiscoveredProfiles(): ReadonlyMap<string, BrickConnectionProfile>;
+	updateDiscoveredProfile?(brickId: string, profile: BrickConnectionProfile): void;
+}
+
 export interface DisplayNamePropagationDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
-	discoveryService: BrickDiscoveryService;
+	discoveryService: DiscoveredProfileSource;
 }
 
 export const applyDisplayNameAcrossProfiles = async (
@@ -61,7 +65,7 @@ export const applyDisplayNameAcrossProfiles = async (
 			|| updated.has(brickId)
 			|| hasSameDisplayName(profile.displayName, previousDisplayName)
 		) {
-			discoveryService.updateDiscoveredProfile(brickId, {
+			discoveryService.updateDiscoveredProfile?.(brickId, {
 				...profile,
 				displayName: normalizedNext,
 				savedAtIso: nowIso

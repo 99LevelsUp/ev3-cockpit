@@ -48,6 +48,8 @@ export interface ConnectCommandOptions {
 	): BrickConnectionProfile;
 	rememberConnectionProfile(profile: BrickConnectionProfile): Promise<void>;
 	onBrickOperation(brickId: string, operation: string): void;
+	pairBluetoothDevice?(mac: string): Promise<{ success: boolean; method?: string; errorMessage?: string }>;
+	resolveBluetoothComPath?(mac: string): Promise<string | undefined>;
 }
 
 export interface ConnectCommandRegistrations {
@@ -98,6 +100,14 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 	return trimmed;
 }
 
+function extractBtMacFromBrickId(brickId: string): string | undefined {
+	const match = /^bt-([0-9a-f]{12})$/i.exec(brickId.trim());
+	if (!match) {
+		return undefined;
+	}
+	return match[1].toLowerCase();
+}
+
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
 	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
 		const parsedArg = parseConnectCommandArg(arg);
@@ -110,7 +120,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(parsedArg.brickIdArg);
-		const requestedProfile = requestedBrickId === 'active' ? undefined : options.getConnectionProfile(requestedBrickId);
+		let requestedProfile = requestedBrickId === 'active' ? undefined : options.getConnectionProfile(requestedBrickId);
 		let keepConnectionOpen = false;
 		let connectingDescriptor: ConnectedBrickDescriptor | undefined;
 		let commandClient: Ev3CommandClient | undefined;
@@ -134,6 +144,42 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			}
 			brickRegistry.upsertConnecting(connectingDescriptor);
 			treeProvider.refreshBrick(connectingDescriptor.brickId);
+			const btMac = extractBtMacFromBrickId(connectingDescriptor.brickId);
+			const needsPairing = btMac && (!requestedProfile?.transport.btPortPath || requestedProfile.transport.btPortPath.trim().length === 0);
+			let pairingError: string | undefined;
+			if (needsPairing && options.pairBluetoothDevice) {
+				activeLogger.info('BT pairing requested', { brickId: connectingDescriptor.brickId, mac: btMac });
+				const pairing = await options.pairBluetoothDevice(btMac);
+				if (!pairing.success) {
+					pairingError = pairing.errorMessage ?? 'BT pairing failed.';
+				}
+			}
+			if (needsPairing && options.resolveBluetoothComPath) {
+				const comPath = await options.resolveBluetoothComPath(btMac);
+				if (!comPath) {
+					throw new Error(pairingError ?? 'BT pairing failed: no COM port was found.');
+				}
+				const updatedProfile: BrickConnectionProfile = requestedProfile ? {
+					...requestedProfile,
+					savedAtIso: new Date().toISOString(),
+					transport: {
+						...requestedProfile.transport,
+						mode: TransportMode.BT,
+						btPortPath: comPath
+					}
+				} : {
+					brickId: connectingDescriptor.brickId,
+					displayName: connectingDescriptor.displayName,
+					savedAtIso: new Date().toISOString(),
+					rootPath: connectingRoot,
+					transport: {
+						mode: TransportMode.BT,
+						btPortPath: comPath
+					}
+				};
+				requestedProfile = updatedProfile;
+			}
+
 			commandClient = await options.prepareBrickSession(connectingDescriptor.brickId, requestedProfile);
 			await commandClient.open();
 			const probeCommand = 0x9d; // LIST_OPEN_HANDLES

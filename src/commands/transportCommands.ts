@@ -12,6 +12,7 @@ import { classifyBluetoothFailure } from '../transport/bluetoothFailure';
 import { EV3_PNP_HINT, extractMacFromPnpId, hasLegoMacPrefix } from '../transport/bluetoothPortSelection';
 import { BluetoothSppAdapter } from '../transport/bluetoothSppAdapter';
 import { listBluetoothCandidates, listSerialCandidates, listUsbHidCandidates, resolveWindowsBluetoothNameMap, type SerialCandidate } from '../transport/discovery';
+import { canUseWindowsBluetoothApi } from '../transport/windowsBluetoothApi';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
 
@@ -286,6 +287,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 			resolveWindowsBluetoothNameMap(),
 			options.scanDiscoveryCandidates?.() ?? Promise.resolve([])
 		]);
+		const winApiAvailable = canUseWindowsBluetoothApi();
 
 		const comCandidates = serialCandidates
 			.filter((candidate) => isComPath(candidate.path))
@@ -323,6 +325,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		lines.push(`Timestamp: ${new Date().toISOString()}`);
 		lines.push(`transport.mode: ${transportMode}`);
 		lines.push(`preferred BT port: ${preferredBtPort === '(none)' ? '(none)' : preferredBtPort}`);
+		lines.push(`winapi.available: ${winApiAvailable ? 'yes' : 'no'}`);
 		lines.push('');
 		lines.push('Live Bluetooth devices (discovery pipeline):');
 		if (liveByMac.size === 0) {

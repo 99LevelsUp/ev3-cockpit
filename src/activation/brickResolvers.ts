@@ -165,6 +165,19 @@ export function createBrickResolvers(deps: {
 			};
 		}
 
+		if (transport === TransportMode.BT) {
+			const brickId = profile?.brickId?.startsWith('bt-') ? profile.brickId : 'bt-active';
+			const portPath = profile?.transport.btPortPath?.trim() || 'unknown';
+			const fallbackDisplayName = `EV3 BT (${portPath})`;
+			return {
+				brickId,
+				displayName: profileDisplayName ?? fallbackDisplayName,
+				role,
+				transport,
+				rootPath: normalizedRootPath
+			};
+		}
+
 		// Fallback to USB when transport mode is unknown.
 		return {
 			brickId: 'usb-active',

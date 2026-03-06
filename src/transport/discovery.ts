@@ -1,6 +1,6 @@
 import * as dgram from 'node:dgram';
-import { execFile } from 'node:child_process';
-import { EV3_PNP_HINT, LEGO_MAC_OUI_PREFIX, extractMacFromPnpId, hasLegoMacPrefix } from './bluetoothPortSelection';
+import { LEGO_MAC_OUI_PREFIX, extractMacFromPnpId, hasEv3PnpHint, hasLegoMacPrefix } from './bluetoothPortSelection';
+import { listBluetoothDevices } from './windowsBluetoothApi';
 
 export interface UsbHidCandidate {
 	path: string;
@@ -37,7 +37,19 @@ export async function listUsbHidCandidates(vendorId = 0x0694, productId = 0x0005
 		const hid = require('node-hid') as {
 			devices: (vid?: number, pid?: number) => UsbHidCandidate[];
 		};
-		return hid.devices(vendorId, productId).map((entry) => ({
+		const devices = hid.devices();
+		let filtered = devices.filter((entry) => entry.vendorId === vendorId && entry.productId === productId);
+		if (filtered.length === 0) {
+			filtered = devices.filter((entry) => entry.vendorId === vendorId);
+		}
+		if (filtered.length === 0) {
+			filtered = devices.filter((entry) => {
+				const product = String(entry.product ?? '');
+				const manufacturer = String((entry as { manufacturer?: string }).manufacturer ?? '');
+				return /ev3/i.test(product) || /lego/i.test(manufacturer);
+			});
+		}
+		return filtered.map((entry) => ({
 			path: entry.path,
 			vendorId: entry.vendorId,
 			productId: entry.productId,
@@ -56,15 +68,11 @@ export async function listSerialCandidates(): Promise<SerialCandidate[]> {
 			SerialPort?: { list: () => Promise<SerialCandidate[]> };
 		};
 		if (!mod.SerialPort || typeof mod.SerialPort.list !== 'function') {
-			return listSerialCandidatesFromWindowsPnp();
+			return [];
 		}
-		const listed = await mod.SerialPort.list();
-		if (listed.length > 0) {
-			return listed;
-		}
-		return listSerialCandidatesFromWindowsPnp();
+		return await mod.SerialPort.list();
 	} catch {
-		return listSerialCandidatesFromWindowsPnp();
+		return [];
 	}
 }
 
@@ -188,13 +196,15 @@ const GENERIC_BT_TOKENS = new Set([
  * from the Windows BT registry.
  */
 export async function listBluetoothCandidates(): Promise<BluetoothCandidate[]> {
-	const [serial, nameMap, liveDevices] = await Promise.all([
+	const [serial, nameMap, unknownDevices, connectedDevices] = await Promise.all([
 		listSerialCandidates(),
 		resolveWindowsBluetoothNameMap(),
-		resolveWindowsLiveBluetoothDevices()
+		resolveWindowsBluetoothUnknownDevices(),
+		resolveWindowsBluetoothConnectedDevices()
 	]);
 
 	const candidatesById = new Map<string, BluetoothCandidate>();
+	const connectedMacs = new Set(connectedDevices.map((device) => device.mac.toLowerCase()));
 
 	for (const serialCandidate of serial) {
 		const path = serialCandidate.path.trim();
@@ -213,18 +223,19 @@ export async function listBluetoothCandidates(): Promise<BluetoothCandidate[]> {
 			mac
 		);
 		const key = mac ?? `com:${path.toLowerCase()}`;
+		const present = mac ? connectedMacs.has(mac) : undefined;
 		candidatesById.set(key, {
 			path,
 			mac,
 			displayName,
 			pnpId: serialCandidate.pnpId,
 			hasLegoPrefix: hasLegoMacPrefix(serialCandidate.pnpId),
-			present: true,
+			present,
 			connectable: true
 		});
 	}
 
-	for (const liveDevice of liveDevices) {
+	for (const liveDevice of unknownDevices) {
 		const mac = liveDevice.mac;
 		if (!mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase())) {
 			continue;
@@ -257,7 +268,6 @@ export async function listBluetoothCandidates(): Promise<BluetoothCandidate[]> {
 let nameMapCache: { map: Map<string, string>; ts: number } | undefined;
 const NAME_MAP_CACHE_TTL_MS = 10_000;
 const WINDOWS_BT_DEVICE_REG_PATH = 'SYSTEM/CurrentControlSet/Services/BTHPORT/Parameters/Devices';
-const PWSH_COMMAND_TIMEOUT_MS = 12_000;
 const WINAPI_LIVE_BT_CACHE_TTL_MS = 10_000;
 
 /**
@@ -413,87 +423,62 @@ interface LiveBluetoothDevice {
 	instanceId?: string;
 }
 
-interface WindowsPnpRow {
-	name?: string;
-	instanceId?: string;
-	manufacturer?: string;
-}
-
-let liveBtWinApiCache:
+let liveBtUnknownCache:
+	| { ts: number; devices: LiveBluetoothDevice[]; inFlight?: Promise<LiveBluetoothDevice[]> }
+	| undefined;
+let liveBtConnectedCache:
 	| { ts: number; devices: LiveBluetoothDevice[]; inFlight?: Promise<LiveBluetoothDevice[]> }
 	| undefined;
 
-async function resolveWindowsLiveBluetoothDevices(): Promise<LiveBluetoothDevice[]> {
+async function resolveWindowsBluetoothUnknownDevices(): Promise<LiveBluetoothDevice[]> {
 	if (process.platform !== 'win32') {
 		return [];
 	}
-	try {
-		const [pnpRows, inquiryDevices] = await Promise.all([
-			queryWindowsBluetoothRowsViaPnp().catch(() => [] as WindowsPnpRow[]),
-			queryWindowsLiveBluetoothDevicesViaWinApi().catch(() => [] as LiveBluetoothDevice[])
-		]);
-		const pnpDevices = toLiveBluetoothDevices(pnpRows);
-		if (pnpDevices.length > 0) {
-			return mergeLiveBluetoothDevices(pnpDevices, inquiryDevices);
-		}
-		const cimRows = await queryWindowsBluetoothRowsViaCim().catch(() => [] as WindowsPnpRow[]);
-		return mergeLiveBluetoothDevices(toLiveBluetoothDevices(cimRows), inquiryDevices);
-	} catch {
+	return queryWindowsBluetoothUnknownDevicesViaWinApi().catch(() => []);
+}
+
+async function resolveWindowsBluetoothConnectedDevices(): Promise<LiveBluetoothDevice[]> {
+	if (process.platform !== 'win32') {
 		return [];
 	}
+	return queryWindowsBluetoothConnectedDevicesViaWinApi().catch(() => []);
 }
 
-async function queryWindowsBluetoothRowsViaPnp(): Promise<WindowsPnpRow[]> {
-	const json = await runPwsh(
-		`$rows = @(); if (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue) { $rows += Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue | ForEach-Object { [PSCustomObject]@{ Name = $_.FriendlyName; InstanceId = $_.InstanceId; Manufacturer = $_.Manufacturer } }; $rows += Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'BTH' } | ForEach-Object { [PSCustomObject]@{ Name = $_.FriendlyName; InstanceId = $_.InstanceId; Manufacturer = $_.Manufacturer } } }; $rows | Sort-Object InstanceId -Unique | ConvertTo-Json -Compress`
-	);
-	return parseWindowsPnpRows(json);
-}
 
-async function queryWindowsBluetoothRowsViaCim(): Promise<WindowsPnpRow[]> {
-	const json = await runPwsh(
-		`if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.DeviceID -match 'BTH' } | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; InstanceId = $_.DeviceID; Manufacturer = $_.Manufacturer } } | Sort-Object InstanceId -Unique | ConvertTo-Json -Compress }`
-	);
-	return parseWindowsPnpRows(json);
-}
-
-async function queryWindowsLiveBluetoothDevicesViaWinApi(): Promise<LiveBluetoothDevice[]> {
+async function queryWindowsBluetoothUnknownDevicesViaWinApi(): Promise<LiveBluetoothDevice[]> {
 	if (process.platform !== 'win32') {
 		return [];
 	}
 	const now = Date.now();
-	if (liveBtWinApiCache && !liveBtWinApiCache.inFlight && now - liveBtWinApiCache.ts < WINAPI_LIVE_BT_CACHE_TTL_MS) {
-		return liveBtWinApiCache.devices;
+	if (liveBtUnknownCache && !liveBtUnknownCache.inFlight && now - liveBtUnknownCache.ts < WINAPI_LIVE_BT_CACHE_TTL_MS) {
+		return liveBtUnknownCache.devices;
 	}
-	if (liveBtWinApiCache?.inFlight) {
-		return liveBtWinApiCache.inFlight;
+	if (liveBtUnknownCache?.inFlight) {
+		return liveBtUnknownCache.inFlight;
 	}
 
 	const inFlight = (async (): Promise<LiveBluetoothDevice[]> => {
 		try {
-			const json = await runPwsh(buildWinApiBluetoothInquiryScript());
-			const devices: LiveBluetoothDevice[] = [];
-			for (const entry of parsePwshJsonArray(json)) {
-				const row = asRecord(entry);
-				const mac = typeof row?.Mac === 'string' ? row.Mac.toLowerCase().trim() : '';
-				if (!/^[0-9a-f]{12}$/.test(mac)) {
-					continue;
-				}
-				const name = typeof row?.Name === 'string' ? row.Name.trim() : undefined;
-				devices.push({
-					mac,
-					name,
-					instanceId: `WINAPI-INQUIRY:${mac}`
-				});
-			}
+			const devices: LiveBluetoothDevice[] = listBluetoothDevices({
+				returnAuthenticated: false,
+				returnRemembered: false,
+				returnUnknown: true,
+				returnConnected: false,
+				issueInquiry: true,
+				timeoutMultiplier: 8
+			}).map((device) => ({
+				mac: device.mac.toLowerCase(),
+				name: device.name?.trim() || undefined,
+				instanceId: `WINAPI-INQUIRY:${device.mac.toLowerCase()}`
+			}));
 			const merged = mergeLiveBluetoothDevices(devices);
-			liveBtWinApiCache = {
+			liveBtUnknownCache = {
 				ts: Date.now(),
 				devices: merged
 			};
 			return merged;
 		} catch {
-			liveBtWinApiCache = {
+			liveBtUnknownCache = {
 				ts: Date.now(),
 				devices: []
 			};
@@ -501,134 +486,73 @@ async function queryWindowsLiveBluetoothDevicesViaWinApi(): Promise<LiveBluetoot
 		}
 	})();
 
-	liveBtWinApiCache = {
+	liveBtUnknownCache = {
 		ts: now,
-		devices: liveBtWinApiCache?.devices ?? [],
+		devices: liveBtUnknownCache?.devices ?? [],
 		inFlight
 	};
 	try {
 		return await inFlight;
 	} finally {
-		if (liveBtWinApiCache) {
-			delete liveBtWinApiCache.inFlight;
+		if (liveBtUnknownCache) {
+			delete liveBtUnknownCache.inFlight;
 		}
 	}
 }
 
-function buildWinApiBluetoothInquiryScript(): string {
-	return [
-		`if (-not ('Ev3CockpitBtApi' -as [type])) {`,
-		`$typeDef = @'`,
-		`using System;`,
-		`using System.Runtime.InteropServices;`,
-		`public static class Ev3CockpitBtApi {`,
-		`    [StructLayout(LayoutKind.Sequential)]`,
-		`    public struct SYSTEMTIME {`,
-		`        public ushort wYear;`,
-		`        public ushort wMonth;`,
-		`        public ushort wDayOfWeek;`,
-		`        public ushort wDay;`,
-		`        public ushort wHour;`,
-		`        public ushort wMinute;`,
-		`        public ushort wSecond;`,
-		`        public ushort wMilliseconds;`,
-		`    }`,
-		`    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]`,
-		`    public struct BLUETOOTH_DEVICE_INFO {`,
-		`        public int dwSize;`,
-		`        public ulong Address;`,
-		`        public uint ulClassofDevice;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fConnected;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fRemembered;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fAuthenticated;`,
-		`        public SYSTEMTIME stLastSeen;`,
-		`        public SYSTEMTIME stLastUsed;`,
-		`        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 248)]`,
-		`        public string szName;`,
-		`    }`,
-		`    [StructLayout(LayoutKind.Sequential)]`,
-		`    public struct BLUETOOTH_DEVICE_SEARCH_PARAMS {`,
-		`        public int dwSize;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fReturnAuthenticated;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fReturnRemembered;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fReturnUnknown;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fReturnConnected;`,
-		`        [MarshalAs(UnmanagedType.Bool)] public bool fIssueInquiry;`,
-		`        public byte cTimeoutMultiplier;`,
-		`        public IntPtr hRadio;`,
-		`    }`,
-		`    [StructLayout(LayoutKind.Sequential)]`,
-		`    public struct BLUETOOTH_FIND_RADIO_PARAMS {`,
-		`        public int dwSize;`,
-		`    }`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    public static extern IntPtr BluetoothFindFirstDevice(ref BLUETOOTH_DEVICE_SEARCH_PARAMS searchParams, ref BLUETOOTH_DEVICE_INFO deviceInfo);`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    [return: MarshalAs(UnmanagedType.Bool)]`,
-		`    public static extern bool BluetoothFindNextDevice(IntPtr hFind, ref BLUETOOTH_DEVICE_INFO deviceInfo);`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    [return: MarshalAs(UnmanagedType.Bool)]`,
-		`    public static extern bool BluetoothFindDeviceClose(IntPtr hFind);`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    public static extern IntPtr BluetoothFindFirstRadio(ref BLUETOOTH_FIND_RADIO_PARAMS p, out IntPtr hRadio);`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    [return: MarshalAs(UnmanagedType.Bool)]`,
-		`    public static extern bool BluetoothFindNextRadio(IntPtr hFind, out IntPtr hRadio);`,
-		`    [DllImport("bthprops.cpl", SetLastError = true)]`,
-		`    [return: MarshalAs(UnmanagedType.Bool)]`,
-		`    public static extern bool BluetoothFindRadioClose(IntPtr hFind);`,
-		`    [DllImport("kernel32.dll", SetLastError = true)]`,
-		`    [return: MarshalAs(UnmanagedType.Bool)]`,
-		`    public static extern bool CloseHandle(IntPtr hObject);`,
-		`}`,
-		`'@`,
-		`Add-Type -TypeDefinition $typeDef -Language CSharp`,
-		`}`,
-		`$radios = @()`,
-		`$findParams = New-Object Ev3CockpitBtApi+BLUETOOTH_FIND_RADIO_PARAMS`,
-		`$findParams.dwSize = [Runtime.InteropServices.Marshal]::SizeOf([type]'Ev3CockpitBtApi+BLUETOOTH_FIND_RADIO_PARAMS')`,
-		`$radioHandle = [IntPtr]::Zero`,
-		`$findRadio = [Ev3CockpitBtApi]::BluetoothFindFirstRadio([ref]$findParams, [ref]$radioHandle)`,
-		`if ($findRadio -ne [IntPtr]::Zero) {`,
-		`    do {`,
-		`        if ($radioHandle -ne [IntPtr]::Zero) {`,
-		`            $radios += $radioHandle`,
-		`        }`,
-		`        $radioHandle = [IntPtr]::Zero`,
-		`    } while ([Ev3CockpitBtApi]::BluetoothFindNextRadio($findRadio, [ref]$radioHandle))`,
-		`    [Ev3CockpitBtApi]::BluetoothFindRadioClose($findRadio) | Out-Null`,
-		`}`,
-		`if ($radios.Count -eq 0) {`,
-		`    $radios += [IntPtr]::Zero`,
-		`}`,
-		`$rows = @()`,
-		`foreach ($radio in $radios) {`,
-		`    $search = New-Object Ev3CockpitBtApi+BLUETOOTH_DEVICE_SEARCH_PARAMS`,
-		`    $search.dwSize = [Runtime.InteropServices.Marshal]::SizeOf([type]'Ev3CockpitBtApi+BLUETOOTH_DEVICE_SEARCH_PARAMS')`,
-		`    $search.fReturnAuthenticated = $true`,
-		`    $search.fReturnRemembered = $true`,
-		`    $search.fReturnUnknown = $true`,
-		`    $search.fReturnConnected = $true`,
-		`    $search.fIssueInquiry = $true`,
-		`    $search.cTimeoutMultiplier = 8`,
-		`    $search.hRadio = $radio`,
-		`    $device = New-Object Ev3CockpitBtApi+BLUETOOTH_DEVICE_INFO`,
-		`    $device.dwSize = [Runtime.InteropServices.Marshal]::SizeOf([type]'Ev3CockpitBtApi+BLUETOOTH_DEVICE_INFO')`,
-		`    $findHandle = [Ev3CockpitBtApi]::BluetoothFindFirstDevice([ref]$search, [ref]$device)`,
-		`    if ($findHandle -eq [IntPtr]::Zero) { continue }`,
-		`    do {`,
-		`        $mac = ('{0:X12}' -f ($device.Address -band 0xFFFFFFFFFFFF)).ToLower()`,
-		`        $rows += [PSCustomObject]@{ Mac = $mac; Name = $device.szName }`,
-		`        $device = New-Object Ev3CockpitBtApi+BLUETOOTH_DEVICE_INFO`,
-		`        $device.dwSize = [Runtime.InteropServices.Marshal]::SizeOf([type]'Ev3CockpitBtApi+BLUETOOTH_DEVICE_INFO')`,
-		`    } while ([Ev3CockpitBtApi]::BluetoothFindNextDevice($findHandle, [ref]$device))`,
-		`    [Ev3CockpitBtApi]::BluetoothFindDeviceClose($findHandle) | Out-Null`,
-		`}`,
-		`foreach ($radio in $radios) {`,
-		`    if ($radio -ne [IntPtr]::Zero) { [Ev3CockpitBtApi]::CloseHandle($radio) | Out-Null }`,
-		`}`,
-		`$rows | Sort-Object Mac -Unique | ConvertTo-Json -Compress`
-	].join('\n');
+async function queryWindowsBluetoothConnectedDevicesViaWinApi(): Promise<LiveBluetoothDevice[]> {
+	if (process.platform !== 'win32') {
+		return [];
+	}
+	const now = Date.now();
+	if (liveBtConnectedCache && !liveBtConnectedCache.inFlight && now - liveBtConnectedCache.ts < WINAPI_LIVE_BT_CACHE_TTL_MS) {
+		return liveBtConnectedCache.devices;
+	}
+	if (liveBtConnectedCache?.inFlight) {
+		return liveBtConnectedCache.inFlight;
+	}
+
+	const inFlight = (async (): Promise<LiveBluetoothDevice[]> => {
+		try {
+			const devices: LiveBluetoothDevice[] = listBluetoothDevices({
+				returnAuthenticated: true,
+				returnRemembered: false,
+				returnUnknown: false,
+				returnConnected: true,
+				issueInquiry: true,
+				timeoutMultiplier: 6
+			}).map((device) => ({
+				mac: device.mac.toLowerCase(),
+				name: device.name?.trim() || undefined,
+				instanceId: `WINAPI-CONNECTED:${device.mac.toLowerCase()}`
+			}));
+			const merged = mergeLiveBluetoothDevices(devices);
+			liveBtConnectedCache = {
+				ts: Date.now(),
+				devices: merged
+			};
+			return merged;
+		} catch {
+			liveBtConnectedCache = {
+				ts: Date.now(),
+				devices: []
+			};
+			return [];
+		}
+	})();
+
+	liveBtConnectedCache = {
+		ts: now,
+		devices: liveBtConnectedCache?.devices ?? [],
+		inFlight
+	};
+	try {
+		return await inFlight;
+	} finally {
+		if (liveBtConnectedCache) {
+			delete liveBtConnectedCache.inFlight;
+		}
+	}
 }
 
 function mergeLiveBluetoothDevices(...sources: LiveBluetoothDevice[][]): LiveBluetoothDevice[] {
@@ -659,140 +583,6 @@ function mergeLiveBluetoothDevices(...sources: LiveBluetoothDevice[][]): LiveBlu
 	return Array.from(byMac.values());
 }
 
-function toLiveBluetoothDevices(rows: WindowsPnpRow[]): LiveBluetoothDevice[] {
-	const byMac = new Map<string, LiveBluetoothDevice>();
-	for (const row of rows) {
-		const instanceId = row.instanceId?.trim();
-		if (!instanceId) {
-			continue;
-		}
-		const mac = extractMacFromWindowsInstanceId(instanceId);
-		if (!mac) {
-			continue;
-		}
-		const existing = byMac.get(mac);
-		const name = row.name?.trim();
-		if (existing) {
-			if (!existing.name && name) {
-				existing.name = name;
-			}
-			continue;
-		}
-		byMac.set(mac, { mac, name, instanceId });
-	}
-	return Array.from(byMac.values());
-}
-
-function extractMacFromWindowsInstanceId(instanceId: string): string | undefined {
-	const devMatch = /DEV_([0-9A-F]{12})/i.exec(instanceId);
-	if (devMatch?.[1]) {
-		return devMatch[1].toLowerCase();
-	}
-	const tailMatch = /\\([0-9A-F]{12})(?:[_\\]|$)/i.exec(instanceId);
-	if (tailMatch?.[1]) {
-		return tailMatch[1].toLowerCase();
-	}
-	const genericMatch = /(?:^|[_\\&])([0-9A-F]{12})(?:[_\\]|$)/i.exec(instanceId);
-	if (genericMatch?.[1]) {
-		return genericMatch[1].toLowerCase();
-	}
-	const separatedMatch = /([0-9A-F]{2}(?:[:-][0-9A-F]{2}){5})/i.exec(instanceId);
-	if (separatedMatch?.[1]) {
-		return separatedMatch[1].replace(/[:-]/g, '').toLowerCase();
-	}
-	return undefined;
-}
-
-function parseWindowsPnpRows(json: string): WindowsPnpRow[] {
-	const rows: WindowsPnpRow[] = [];
-	for (const entry of parsePwshJsonArray(json)) {
-		const record = asRecord(entry);
-		if (!record) {
-			continue;
-		}
-		const instanceId = typeof record.InstanceId === 'string' ? record.InstanceId.trim() : undefined;
-		if (!instanceId) {
-			continue;
-		}
-		rows.push({
-			name: typeof record.Name === 'string' ? record.Name.trim() : undefined,
-			instanceId,
-			manufacturer: typeof record.Manufacturer === 'string' ? record.Manufacturer.trim() : undefined
-		});
-	}
-	return rows;
-}
-
-async function listSerialCandidatesFromWindowsPnp(): Promise<SerialCandidate[]> {
-	if (process.platform !== 'win32') {
-		return [];
-	}
-	try {
-		const pnpRows = await queryWindowsComRowsViaPnp();
-		const pnpCandidates = toSerialCandidates(pnpRows);
-		if (pnpCandidates.length > 0) {
-			return pnpCandidates;
-		}
-		const cimRows = await queryWindowsComRowsViaCim();
-		return toSerialCandidates(cimRows);
-	} catch {
-		return [];
-	}
-}
-
-async function queryWindowsComRowsViaPnp(): Promise<WindowsPnpRow[]> {
-	const json = await runPwsh(
-		`$rows = @(); if (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue) { $rows += Get-PnpDevice -Class Ports -PresentOnly -ErrorAction SilentlyContinue | ForEach-Object { [PSCustomObject]@{ Name = $_.FriendlyName; InstanceId = $_.InstanceId; Manufacturer = $_.Manufacturer } }; $rows += Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'BTHENUM' -or $_.FriendlyName -match '\\(COM\\d+\\)' } | ForEach-Object { [PSCustomObject]@{ Name = $_.FriendlyName; InstanceId = $_.InstanceId; Manufacturer = $_.Manufacturer } } }; $rows | Sort-Object InstanceId -Unique | ConvertTo-Json -Compress`
-	);
-	return parseWindowsPnpRows(json);
-}
-
-async function queryWindowsComRowsViaCim(): Promise<WindowsPnpRow[]> {
-	const json = await runPwsh(
-		`if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\\(COM\\d+\\)' -or $_.DeviceID -match 'BTHENUM' } | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; InstanceId = $_.DeviceID; Manufacturer = $_.Manufacturer } } | Sort-Object InstanceId -Unique | ConvertTo-Json -Compress }`
-	);
-	return parseWindowsPnpRows(json);
-}
-
-function toSerialCandidates(rows: WindowsPnpRow[]): SerialCandidate[] {
-	const byPath = new Map<string, SerialCandidate>();
-	for (const row of rows) {
-		const path = extractComPath(row.name) ?? extractComPath(row.instanceId);
-		if (!path || !isComPath(path)) {
-			continue;
-		}
-		const normalizedPath = path.toUpperCase();
-		const existing = byPath.get(normalizedPath);
-		if (!existing) {
-			byPath.set(normalizedPath, {
-				path: normalizedPath,
-				manufacturer: row.manufacturer,
-				pnpId: row.instanceId,
-				friendlyName: row.name
-			});
-			continue;
-		}
-		if (!existing.manufacturer && row.manufacturer) {
-			existing.manufacturer = row.manufacturer;
-		}
-		if (!existing.pnpId && row.instanceId) {
-			existing.pnpId = row.instanceId;
-		}
-		if (!existing.friendlyName && row.name) {
-			existing.friendlyName = row.name;
-		}
-	}
-	return Array.from(byPath.values()).sort((left, right) => left.path.localeCompare(right.path));
-}
-
-function extractComPath(value: string | undefined): string | undefined {
-	if (!value) {
-		return undefined;
-	}
-	const match = /\b(COM\d+)\b/i.exec(value);
-	return match?.[1]?.toUpperCase();
-}
-
 function isLikelyEv3SerialCandidate(candidate: SerialCandidate, mac?: string): boolean {
 	if (!isComPath(candidate.path)) {
 		return false;
@@ -800,8 +590,7 @@ function isLikelyEv3SerialCandidate(candidate: SerialCandidate, mac?: string): b
 	if (mac?.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase())) {
 		return true;
 	}
-	const pnpId = candidate.pnpId ?? '';
-	if (pnpId.length > 0 && new RegExp(EV3_PNP_HINT, 'i').test(pnpId)) {
+	if (hasEv3PnpHint(candidate.pnpId)) {
 		return true;
 	}
 	const manufacturer = candidate.manufacturer ?? '';
@@ -833,90 +622,4 @@ function cleanBtName(raw: string | undefined): string | undefined {
 		return undefined;
 	}
 	return name;
-}
-
-function parsePwshJsonArray(json: string): unknown[] {
-	if (!json) {
-		return [];
-	}
-	const payload = extractJsonPayload(json);
-	if (!payload) {
-		return [];
-	}
-	const parsed = JSON.parse(payload);
-	if (Array.isArray(parsed)) {
-		return parsed;
-	}
-	return parsed ? [parsed] : [];
-}
-
-function extractJsonPayload(text: string): string | undefined {
-	const trimmed = text.trim();
-	if (!trimmed) {
-		return undefined;
-	}
-	if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-		return trimmed;
-	}
-	const firstIndex = Math.min(
-		...['{', '[']
-			.map((token) => trimmed.indexOf(token))
-			.filter((index) => index >= 0)
-	);
-	if (!Number.isFinite(firstIndex) || firstIndex < 0) {
-		return undefined;
-	}
-	const lastObject = trimmed.lastIndexOf('}');
-	const lastArray = trimmed.lastIndexOf(']');
-	const lastIndex = Math.max(lastObject, lastArray);
-	if (lastIndex <= firstIndex) {
-		return undefined;
-	}
-	return trimmed.slice(firstIndex, lastIndex + 1).trim();
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	if (!value || typeof value !== 'object') {
-		return undefined;
-	}
-	return value as Record<string, unknown>;
-}
-
-function runPwsh(script: string): Promise<string> {
-	const executables = Array.from(new Set([
-		process.env.PWSH_PATH,
-		'pwsh',
-		'pwsh.exe',
-		'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
-	].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
-
-	const tryExec = (index: number): Promise<string> => {
-		if (index >= executables.length) {
-			return Promise.reject(new Error('pwsh executable not found'));
-		}
-		return new Promise<string>((resolve, reject) => {
-			execFile(
-				executables[index],
-				['-NoProfile', '-NonInteractive', '-Command', script],
-				{ timeout: PWSH_COMMAND_TIMEOUT_MS, maxBuffer: 512 * 1024, windowsHide: true },
-				(error, stdout, stderr) => {
-					if (error) {
-						reject(error);
-						return;
-					}
-					const out = typeof stdout === 'string' ? stdout.trim() : '';
-					const err = typeof stderr === 'string' ? stderr.trim() : '';
-					resolve(out.length > 0 ? out : err);
-				}
-			);
-		}).catch((error) => {
-			const message = error instanceof Error ? error.message : String(error);
-			if (/not found|enoent|cannot find/i.test(message)) {
-				return tryExec(index + 1);
-			}
-			throw error;
-		});
-	};
-
-	return tryExec(0);
 }

@@ -32,11 +32,7 @@ import {
 	createProbeTransportFromWorkspace,
 	TransportConfigOverrides
 } from './transport/transportFactory';
-import {
-	listTcpDiscoveryCandidates,
-	listUsbHidCandidates,
-	listBluetoothCandidates
-} from './transport/discovery';
+import { pairWindowsBluetoothDevice } from './transport/windowsBluetoothPairing';
 import {
 	BrickTreeProvider
 } from './ui/brickTreeProvider';
@@ -49,13 +45,7 @@ import { createTreeStatePersistence } from './ui/treeStatePersistence';
 import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
-import { createUsbAutoConnectPoller } from './activation/usbAutoConnect';
-import { createBtPresenceScanner } from './activation/btPresenceScanner';
-import { BrickPanelActiveState, BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
-import {
-	BrickDiscoveryService,
-	DiscoveryConfig
-} from './device/brickDiscoveryService';
+import { BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
 import { readMockBricksConfig } from './config/mockBricksConfig';
 import { isMockBrickId, setMockBricks } from './mock/mockCatalog';
 import {
@@ -69,6 +59,11 @@ import {
 	registerRevealInBricksTree,
 	registerFsChangeSubscription
 } from './activation/extensionCommands';
+import { PresenceAggregator } from './presence/presenceAggregator';
+import { UsbPresenceSource } from './presence/usbPresenceSource';
+import { TcpPresenceSource } from './presence/tcpPresenceSource';
+import { BtPresenceSource } from './presence/btPresenceSource';
+import { MockPresenceSource } from './presence/mockPresenceSource';
 
 export function activate(context: vscode.ExtensionContext) {
 	const activationStart = performance.now();
@@ -85,19 +80,36 @@ export function activate(context: vscode.ExtensionContext) {
 	const profileStore = new BrickConnectionProfileStore(context.workspaceState, {
 		persistenceEnabled: false
 	});
-	const discoveryService = new BrickDiscoveryService({
-		brickRegistry,
-		profileStore,
-		scanners: {
-			listUsbHidCandidates,
-			listTcpDiscoveryCandidates,
-			listBluetoothCandidates
-		},
-		logger: perfLogger,
-		toSafeIdentifier
-	});
 	const brickUiStateStore = new BrickUiStateStore(context.workspaceState);
 	const brickTreeViewStateStore = new BrickTreeViewStateStore(context.workspaceState);
+
+	// --- Presence system (all transports) ---
+	const usbPresenceSource = new UsbPresenceSource(
+		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier },
+		perfLogger
+	);
+	const tcpPresenceSource = new TcpPresenceSource(
+		{ discoveryPort: 3015, toSafeIdentifier },
+		perfLogger
+	);
+	const btPresenceSource = new BtPresenceSource(
+		{ fastIntervalMs: 1000, inquiryIntervalMs: 30000, toSafeIdentifier },
+		perfLogger
+	);
+	const mockPresenceSource = new MockPresenceSource();
+	const presenceAggregator = new PresenceAggregator(
+		{ brickRegistry, profileStore, logger: perfLogger, toSafeIdentifier },
+		{
+			goneTtl: { usb: 3000, bt: 45000, tcp: 10000, mock: Infinity },
+			reaperIntervalMs: 1000,
+			defaultRootPath: normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/')
+		}
+	);
+	presenceAggregator.addSource(usbPresenceSource);
+	presenceAggregator.addSource(tcpPresenceSource);
+	presenceAggregator.addSource(btPresenceSource);
+	presenceAggregator.addSource(mockPresenceSource);
+	presenceAggregator.start();
 
 	const sortSnapshotsForTree = (snapshots: BrickSnapshot[]): BrickSnapshot[] => {
 		const favoriteOrder = brickUiStateStore.getFavoriteOrder();
@@ -341,6 +353,28 @@ export function activate(context: vscode.ExtensionContext) {
 		return sessionManager.getRestartCandidatePath(concreteBrickId);
 	};
 
+	const resolveBtComPathForMac = async (mac: string): Promise<string | undefined> => {
+		const normalized = mac.trim().toLowerCase();
+		if (!/^[0-9a-f]{12}$/.test(normalized)) {
+			return undefined;
+		}
+		const candidateId = `bt-${normalized}`;
+		const deadline = Date.now() + 15_000;
+		while (Date.now() < deadline) {
+			const record = presenceAggregator.getLiveRecord(candidateId);
+			if (
+				record?.connectionParams.mode === 'bt'
+				&& record.connectable
+				&& record.connectionParams.btPortPath
+				&& /^COM\d+$/i.test(record.connectionParams.btPortPath)
+			) {
+				return record.connectionParams.btPortPath;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+		return undefined;
+	};
+
 	const isMockDiscoveryEnabled = (): boolean => {
 		const cfg = vscode.workspace.getConfiguration();
 		const explicit = cfg.get<boolean>('ev3-cockpit.mock');
@@ -350,51 +384,19 @@ export function activate(context: vscode.ExtensionContext) {
 		return cfg.get<boolean>('ev3-cockpit.ui.discovery.showMockBricks', false) === true;
 	};
 
-	const readDiscoveryConfig = (): DiscoveryConfig => {
-		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
+	const nameDeps = { brickRegistry, profileStore, discoveryService: presenceAggregator };
+	const usbReconnectDeps = { brickRegistry, profileStore, presenceAggregator };
+	const btReconnectDeps = { brickRegistry, profileStore, presenceAggregator };
+	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
 		const showMockBricks = isMockDiscoveryEnabled();
 		const mockBricks = readMockBricksConfig(context.extensionPath, perfLogger);
 		setMockBricks(mockBricks);
-		const discoveryPortRaw = cfg.get('transport.tcp.discoveryPort');
-		const discoveryPort =
-			typeof discoveryPortRaw === 'number' && Number.isFinite(discoveryPortRaw)
-				? Math.max(1, Math.floor(discoveryPortRaw))
-				: 3015;
-		const discoveryTimeoutRaw = cfg.get('transport.tcp.discoveryTimeoutMs');
-		const discoveryTimeoutMs =
-			typeof discoveryTimeoutRaw === 'number' && Number.isFinite(discoveryTimeoutRaw)
-				? Math.max(500, Math.min(3_000, Math.floor(discoveryTimeoutRaw)))
-				: 1_500;
-		const defaultRootPath = normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
-		return {
-			showMockBricks,
-			mockBricks,
-			tcpDiscoveryPort: discoveryPort,
-			tcpDiscoveryTimeoutMs: discoveryTimeoutMs,
-			defaultRootPath
-		};
-	};
-
-	const nameDeps = { brickRegistry, profileStore, discoveryService };
-	const usbReconnectDeps = { brickRegistry, profileStore, listUsbHidCandidates };
-	const btReconnectDeps = { brickRegistry, profileStore, listBluetoothCandidates };
-	let panelActiveState: BrickPanelActiveState = { mode: 'unknown' };
-	const resolveUsbAutoConnectActivation = (): boolean => {
-		if (panelActiveState.mode === 'discovery') {
-			return true;
-		}
-		if (panelActiveState.mode === 'brick') {
-			return false;
-		}
-		return !brickRegistry.getActiveBrickId();
-	};
-
-	const discoverBricksForPanel = async (): Promise<BrickPanelDiscoveryCandidate[]> => {
-		return discoveryService.scan(readDiscoveryConfig());
+		mockPresenceSource.refresh(showMockBricks ? mockBricks : []);
+		return presenceAggregator.getCandidates({ showMockBricks });
 	};
 
 	const connectDiscoveredBrickFromPanel = async (candidateId: string): Promise<void> => {
-		return discoveryService.connectDiscoveredBrick(
+		return presenceAggregator.connectDiscoveredBrick(
 			candidateId,
 			profileStore,
 			(brickId) => vscode.commands.executeCommand('ev3-cockpit.connectEV3', brickId) as Promise<void>
@@ -447,7 +449,9 @@ export function activate(context: vscode.ExtensionContext) {
 		rememberConnectionProfile: async (profile) => {
 			await profileStore.upsert(profile);
 		},
-		onBrickOperation: noteBrickOperation
+		onBrickOperation: noteBrickOperation,
+		pairBluetoothDevice: async (mac) => pairWindowsBluetoothDevice(mac),
+		resolveBluetoothComPath: resolveBtComPathForMac
 	});
 
 	const deployRegistrations = registerDeployCommands({
@@ -550,56 +554,6 @@ export function activate(context: vscode.ExtensionContext) {
 		brickRegistry, sessionManager, treeProvider, brickUiStateStore
 	);
 	const brickPanelConfig = readBrickPanelDiscoveryConfig(context.extensionPath, perfLogger);
-	const usbAutoConnect = createUsbAutoConnectPoller({
-		listUsbHidCandidates,
-		brickRegistry,
-		profileStore,
-		logger: perfLogger,
-		intervalMs: 500,
-		resolveDefaultRootPath: () =>
-			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
-		toSafeIdentifier,
-		resolveActivateOnConnect: resolveUsbAutoConnectActivation,
-		connectBrick: async (brickId, activateOnSuccess) =>
-			vscode.commands.executeCommand('ev3-cockpit.connectEV3', {
-				brickId,
-				silent: true,
-				activateOnSuccess
-			}) as Promise<void>,
-		disconnectBrick: async (brickId, reason) => {
-			clearProgramSession('usb-auto-disconnect', brickId);
-			await closeBrickSession(brickId);
-			brickRegistry.markUnavailable(brickId, reason);
-			treeProvider.refreshBrick(brickId);
-			brickPanelProvider.refresh();
-		}
-	});
-
-	const btPresenceScanner = createBtPresenceScanner({
-		listBluetoothCandidates,
-		brickRegistry,
-		profileStore,
-		logger: perfLogger,
-		fastIntervalMs: 500,
-		slowIntervalMs: 3000,
-		resolveDefaultRootPath: () =>
-			normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/'),
-		toSafeIdentifier,
-		resolveActivateOnConnect: resolveUsbAutoConnectActivation,
-		connectBrick: async (brickId, activateOnSuccess) =>
-			vscode.commands.executeCommand('ev3-cockpit.connectEV3', {
-				brickId,
-				silent: true,
-				activateOnSuccess
-			}) as Promise<void>,
-		disconnectBrick: async (brickId, reason) => {
-			clearProgramSession('bt-presence-disconnect', brickId);
-			await closeBrickSession(brickId);
-			brickRegistry.markUnavailable(brickId, reason);
-			treeProvider.refreshBrick(brickId);
-			brickPanelProvider.refresh();
-		}
-	});
 
 	const treeStatePersistence = createTreeStatePersistence(
 		brickTreeViewStateStore, treeProvider, brickTreeView
@@ -685,10 +639,6 @@ export function activate(context: vscode.ExtensionContext) {
 		getButtonState: (brickId) => telemetryStore.getButtonState(brickId),
 		getLedPattern: (brickId) => telemetryStore.getLedPattern(brickId)
 	}, brickPanelConfig);
-	brickPanelProvider.setOnDidChangeActive((state) => {
-		panelActiveState = state;
-		treeProvider.refresh();
-	});
 	const telemetryPoller = new BrickTelemetryPoller({
 		brickRegistry,
 		sessionManager,
@@ -710,6 +660,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	brickRegistry.onStatusChange(() => {
 		treeProvider.refreshThrottled();
+		brickPanelProvider.refresh();
+	});
+	presenceAggregator.onCandidatesChanged(() => {
 		brickPanelProvider.refresh();
 	});
 	const brickPanelRegistration = vscode.window.registerWebviewViewProvider(
@@ -845,8 +798,6 @@ export function activate(context: vscode.ExtensionContext) {
 		mockRegistrations.mockShowState,
 		mockRegistrations.mockToggleDiscovery,
 		mockRegistrations.clearBrickProfiles,
-		usbAutoConnect,
-		btPresenceScanner,
 		telemetryPoller,
 		configWatcher,
 		fsDisposable,
@@ -862,6 +813,9 @@ export function activate(context: vscode.ExtensionContext) {
 		brickPanelRegistration,
 		{
 			dispose: () => eventLoopMonitor.stop()
+		},
+		{
+			dispose: () => presenceAggregator.stop()
 		},
 		treeProvider,
 		output,

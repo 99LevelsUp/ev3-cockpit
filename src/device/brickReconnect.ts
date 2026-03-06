@@ -1,25 +1,24 @@
 import { BrickRegistry } from './brickRegistry';
 import { BrickConnectionProfileStore } from './brickConnectionProfiles';
-import { UsbHidCandidate } from '../transport/discovery';
-import type { BluetoothCandidate } from '../transport/discovery';
+import type { PresenceAggregator } from '../presence/presenceAggregator';
 
 export interface UsbReconnectDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
-	listUsbHidCandidates: () => Promise<UsbHidCandidate[]>;
+	presenceAggregator: PresenceAggregator;
 }
 
 export interface BtReconnectDeps {
 	brickRegistry: BrickRegistry;
 	profileStore: BrickConnectionProfileStore;
-	listBluetoothCandidates: () => Promise<BluetoothCandidate[]>;
+	presenceAggregator: PresenceAggregator;
 }
 
 export const isUsbReconnectCandidateAvailable = async (
 	deps: UsbReconnectDeps,
 	brickId: string
 ): Promise<boolean> => {
-	const { brickRegistry, profileStore, listUsbHidCandidates } = deps;
+	const { brickRegistry, profileStore, presenceAggregator } = deps;
 	const snapshot = brickRegistry.getSnapshot(brickId);
 	if (!snapshot || snapshot.transport !== 'usb') {
 		return false;
@@ -28,44 +27,33 @@ export const isUsbReconnectCandidateAvailable = async (
 	if (!profile || profile.transport.mode !== 'usb') {
 		return false;
 	}
-	const usbCandidates = await listUsbHidCandidates();
-	if (usbCandidates.length === 0) {
-		return false;
-	}
-	const configuredPath = profile.transport.usbPath?.trim() || '';
-	let selectedPath =
-		configuredPath
-			? usbCandidates
-				.map((candidate) => candidate.path.trim())
-				.find((path) => path === configuredPath)
-			: undefined;
-	if (!selectedPath) {
-		if (usbCandidates.length !== 1) {
-			return false;
-		}
-		selectedPath = usbCandidates[0]?.path.trim();
-	}
-	if (!selectedPath) {
-		return false;
-	}
-	if (selectedPath !== configuredPath) {
-		await profileStore.upsert({
-			...profile,
-			savedAtIso: new Date().toISOString(),
-			transport: {
-				...profile.transport,
-				usbPath: selectedPath
+	// Check presence aggregator for live USB candidate
+	if (presenceAggregator.hasLiveCandidate(brickId)) {
+		const liveRecord = presenceAggregator.getLiveRecord(brickId);
+		if (liveRecord?.connectionParams.mode === 'usb') {
+			const livePath = liveRecord.connectionParams.usbPath;
+			const configuredPath = profile.transport.usbPath?.trim() || '';
+			if (livePath && livePath !== configuredPath) {
+				await profileStore.upsert({
+					...profile,
+					savedAtIso: new Date().toISOString(),
+					transport: {
+						...profile.transport,
+						usbPath: livePath
+					}
+				});
 			}
-		});
+			return true;
+		}
 	}
-	return true;
+	return false;
 };
 
 export const isBtReconnectCandidateAvailable = async (
 	deps: BtReconnectDeps,
 	brickId: string
 ): Promise<boolean> => {
-	const { brickRegistry, profileStore, listBluetoothCandidates } = deps;
+	const { brickRegistry, profileStore, presenceAggregator } = deps;
 	const snapshot = brickRegistry.getSnapshot(brickId);
 	if (!snapshot || snapshot.transport !== 'bt') {
 		return false;
@@ -74,59 +62,24 @@ export const isBtReconnectCandidateAvailable = async (
 	if (!profile || profile.transport.mode !== 'bt') {
 		return false;
 	}
-	const btCandidates = await listBluetoothCandidates();
-	const connectableBtCandidates = btCandidates.filter((candidate) => (
-		candidate.connectable !== false && /^COM\d+$/i.test(candidate.path.trim())
-	));
-	if (connectableBtCandidates.length === 0) {
-		return false;
-	}
-	const configuredPort = profile.transport.btPortPath?.trim() || '';
-
-	// Try to match by MAC (from brickId) or by configured COM path
-	const macFromId = brickId.startsWith('bt-') ? brickId.slice(3) : undefined;
-	const matchByMac = macFromId && macFromId.length === 12
-		? connectableBtCandidates.find((c) => c.mac === macFromId)
-		: undefined;
-
-	if (matchByMac) {
-		const newPath = matchByMac.path.trim();
-		if (newPath && newPath !== configuredPort) {
-			await profileStore.upsert({
-				...profile,
-				savedAtIso: new Date().toISOString(),
-				transport: {
-					...profile.transport,
-					btPortPath: newPath
-				}
-			});
-		}
-		return true;
-	}
-
-	// Fall back to matching by configured COM path
-	if (configuredPort) {
-		const matchByPath = connectableBtCandidates.find((c) => c.path.trim() === configuredPort);
-		if (matchByPath) {
+	// Check presence aggregator for live BT candidate
+	if (presenceAggregator.hasLiveCandidate(brickId)) {
+		const liveRecord = presenceAggregator.getLiveRecord(brickId);
+		if (liveRecord?.connectionParams.mode === 'bt' && liveRecord.connectable) {
+			const livePath = liveRecord.connectionParams.btPortPath;
+			const configuredPort = profile.transport.btPortPath?.trim() || '';
+			if (livePath && livePath !== configuredPort) {
+				await profileStore.upsert({
+					...profile,
+					savedAtIso: new Date().toISOString(),
+					transport: {
+						...profile.transport,
+						btPortPath: livePath
+					}
+				});
+			}
 			return true;
 		}
 	}
-
-	// If exactly one BT candidate, use it
-	if (connectableBtCandidates.length === 1) {
-		const singlePath = connectableBtCandidates[0].path.trim();
-		if (singlePath && singlePath !== configuredPort) {
-			await profileStore.upsert({
-				...profile,
-				savedAtIso: new Date().toISOString(),
-				transport: {
-					...profile.transport,
-					btPortPath: singlePath
-				}
-			});
-		}
-		return !!singlePath;
-	}
-
 	return false;
 };

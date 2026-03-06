@@ -77,9 +77,15 @@ export function extractMacFromPnpId(pnpId: string | undefined): string | undefin
 	if (!pnpId) {
 		return undefined;
 	}
-	// Pattern: \00AABBCCDDEE or _00AABBCCDDEE embedded in the pnpId
-	const match = /[\\/_]([\dA-Fa-f]{12})(?:[_\\]|$)/.exec(pnpId);
-	return match ? match[1].toLowerCase() : undefined;
+	const candidates = Array.from(
+		pnpId.matchAll(/(?:^|[^0-9A-Fa-f])([0-9A-Fa-f]{12})(?:[^0-9A-Fa-f]|$)/g),
+		(match) => match[1].toLowerCase()
+	);
+	if (candidates.length === 0) {
+		return undefined;
+	}
+	const legoMac = candidates.find((mac) => mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase()));
+	return legoMac ?? candidates[0];
 }
 
 /**
@@ -88,6 +94,13 @@ export function extractMacFromPnpId(pnpId: string | undefined): string | undefin
 export function hasLegoMacPrefix(pnpId: string | undefined): boolean {
 	const mac = extractMacFromPnpId(pnpId);
 	return mac !== undefined && mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase());
+}
+
+export function hasEv3PnpHint(pnpId: string | undefined): boolean {
+	if (!pnpId) {
+		return false;
+	}
+	return /(?:_005D|&005D)/i.test(pnpId);
 }
 
 // ── internal ────────────────────────────────────────────────────────
@@ -125,8 +138,7 @@ function ev3PriorityScore(candidate: SerialCandidate, targetSerialNumber?: strin
 	if (targetSerialNumber && candidate.serialNumber === targetSerialNumber) {
 		return 0;
 	}
-	const pnp = candidate.pnpId ?? '';
-	if (pnp.includes(EV3_PNP_HINT)) {
+	if (hasEv3PnpHint(candidate.pnpId)) {
 		return 1;
 	}
 	if (hasLegoMacPrefix(candidate.pnpId)) {

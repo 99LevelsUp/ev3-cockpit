@@ -5,7 +5,7 @@ import { isUsbReconnectCandidateAvailable, isBtReconnectCandidateAvailable } fro
 import type { UsbReconnectDeps, BtReconnectDeps } from '../device/brickReconnect';
 import type { BrickSnapshot } from '../device/brickRegistry';
 import type { BrickConnectionProfile } from '../device/brickConnectionProfiles';
-import type { UsbHidCandidate, BluetoothCandidate } from '../transport/discovery';
+import type { PresenceRecord } from '../presence/presenceSource';
 
 function makeSnapshot(overrides: Partial<BrickSnapshot> = {}): BrickSnapshot {
 	return {
@@ -31,10 +31,17 @@ function makeProfile(overrides: Partial<BrickConnectionProfile> = {}): BrickConn
 	};
 }
 
+function makeFakeAggregator(liveRecords: Map<string, PresenceRecord> = new Map()) {
+	return {
+		hasLiveCandidate: (id: string) => liveRecords.has(id),
+		getLiveRecord: (id: string) => liveRecords.get(id)
+	};
+}
+
 function makeDeps(options: {
 	snapshot?: BrickSnapshot | undefined;
 	profile?: BrickConnectionProfile | undefined;
-	candidates?: UsbHidCandidate[];
+	liveRecords?: Map<string, PresenceRecord>;
 	upsertCalls?: BrickConnectionProfile[];
 }): UsbReconnectDeps {
 	const upsertCalls = options.upsertCalls ?? [];
@@ -46,7 +53,7 @@ function makeDeps(options: {
 			get: () => options.profile,
 			upsert: async (p: BrickConnectionProfile) => { upsertCalls.push(p); }
 		} as never,
-		listUsbHidCandidates: async () => options.candidates ?? []
+		presenceAggregator: makeFakeAggregator(options.liveRecords ?? new Map()) as never
 	};
 }
 
@@ -76,44 +83,57 @@ test('returns false if profile transport mode is not usb', async () => {
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
 });
 
-test('returns false if no USB candidates', async () => {
+test('returns false if no live USB candidate in aggregator', async () => {
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
 		profile: makeProfile(),
-		candidates: []
+		liveRecords: new Map()
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
 });
 
-test('returns true if configured path matches a candidate', async () => {
+test('returns true if live USB candidate exists in aggregator', async () => {
+	const liveRecords = new Map<string, PresenceRecord>([
+		['brick-1', {
+			candidateId: 'brick-1',
+			transport: TransportMode.USB,
+			displayName: 'EV3 USB',
+			detail: '/dev/usb0',
+			connectable: true,
+			lastSeenMs: Date.now(),
+			connectionParams: { mode: 'usb', usbPath: '/dev/usb0' }
+		}]
+	]);
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
 		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '/dev/usb0' } }),
-		candidates: [{ path: '/dev/usb0' }, { path: '/dev/usb1' }]
+		liveRecords
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), true);
 });
 
-test('returns true if no configured path and exactly 1 candidate, updates profile', async () => {
+test('returns true and updates profile when live USB path differs', async () => {
 	const upsertCalls: BrickConnectionProfile[] = [];
+	const liveRecords = new Map<string, PresenceRecord>([
+		['brick-1', {
+			candidateId: 'brick-1',
+			transport: TransportMode.USB,
+			displayName: 'EV3 USB',
+			detail: '/dev/usb99',
+			connectable: true,
+			lastSeenMs: Date.now(),
+			connectionParams: { mode: 'usb', usbPath: '/dev/usb99' }
+		}]
+	]);
 	const deps = makeDeps({
 		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '' } }),
-		candidates: [{ path: '/dev/usb99' }],
+		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '/dev/usb0' } }),
+		liveRecords,
 		upsertCalls
 	});
 	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), true);
 	assert.equal(upsertCalls.length, 1);
 	assert.equal(upsertCalls[0].transport.usbPath, '/dev/usb99');
-});
-
-test('returns false if no configured path and multiple candidates', async () => {
-	const deps = makeDeps({
-		snapshot: makeSnapshot(),
-		profile: makeProfile({ transport: { mode: TransportMode.USB, usbPath: '' } }),
-		candidates: [{ path: '/dev/usb0' }, { path: '/dev/usb1' }]
-	});
-	assert.equal(await isUsbReconnectCandidateAvailable(deps, 'brick-1'), false);
 });
 
 // ── BT Reconnect Tests ─────────────────────────────────────────────
@@ -145,7 +165,7 @@ function makeBtProfile(overrides: Partial<BrickConnectionProfile> = {}): BrickCo
 function makeBtDeps(options: {
 	snapshot?: BrickSnapshot | undefined;
 	profile?: BrickConnectionProfile | undefined;
-	candidates?: BluetoothCandidate[];
+	liveRecords?: Map<string, PresenceRecord>;
 	upsertCalls?: BrickConnectionProfile[];
 }): BtReconnectDeps {
 	const upsertCalls = options.upsertCalls ?? [];
@@ -157,7 +177,7 @@ function makeBtDeps(options: {
 			get: () => options.profile,
 			upsert: async (p: BrickConnectionProfile) => { upsertCalls.push(p); }
 		} as never,
-		listBluetoothCandidates: async () => options.candidates ?? []
+		presenceAggregator: makeFakeAggregator(options.liveRecords ?? new Map()) as never
 	};
 }
 
@@ -179,30 +199,54 @@ test('BT reconnect: returns false if profile is missing', async () => {
 	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-001653aabb01'), false);
 });
 
-test('BT reconnect: returns false if no BT candidates', async () => {
+test('BT reconnect: returns false if no live BT candidate in aggregator', async () => {
 	const deps = makeBtDeps({
 		snapshot: makeBtSnapshot(),
 		profile: makeBtProfile(),
-		candidates: []
+		liveRecords: new Map()
 	});
 	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-001653aabb01'), false);
 });
 
-test('BT reconnect: returns true when MAC matches candidate', async () => {
+test('BT reconnect: returns true when live connectable candidate exists', async () => {
+	const liveRecords = new Map<string, PresenceRecord>([
+		['bt-001653aabb01', {
+			candidateId: 'bt-001653aabb01',
+			transport: TransportMode.BT,
+			displayName: 'EV3 BT',
+			detail: 'COM5 | 001653AABB01',
+			connectable: true,
+			lastSeenMs: Date.now(),
+			mac: '001653aabb01',
+			connectionParams: { mode: 'bt', btPortPath: 'COM5', mac: '001653aabb01' }
+		}]
+	]);
 	const deps = makeBtDeps({
 		snapshot: makeBtSnapshot(),
 		profile: makeBtProfile(),
-		candidates: [{ path: 'COM5', mac: '001653aabb01', displayName: 'EV3', hasLegoPrefix: true }]
+		liveRecords
 	});
 	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-001653aabb01'), true);
 });
 
-test('BT reconnect: updates profile when MAC matches but COM path changed', async () => {
+test('BT reconnect: updates profile when COM path changed', async () => {
 	const upsertCalls: BrickConnectionProfile[] = [];
+	const liveRecords = new Map<string, PresenceRecord>([
+		['bt-001653aabb01', {
+			candidateId: 'bt-001653aabb01',
+			transport: TransportMode.BT,
+			displayName: 'EV3 BT',
+			detail: 'COM8 | 001653AABB01',
+			connectable: true,
+			lastSeenMs: Date.now(),
+			mac: '001653aabb01',
+			connectionParams: { mode: 'bt', btPortPath: 'COM8', mac: '001653aabb01' }
+		}]
+	]);
 	const deps = makeBtDeps({
 		snapshot: makeBtSnapshot(),
 		profile: makeBtProfile({ transport: { mode: TransportMode.BT, btPortPath: 'COM5' } }),
-		candidates: [{ path: 'COM8', mac: '001653aabb01', displayName: 'EV3', hasLegoPrefix: true }],
+		liveRecords,
 		upsertCalls
 	});
 	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-001653aabb01'), true);
@@ -210,36 +254,23 @@ test('BT reconnect: updates profile when MAC matches but COM path changed', asyn
 	assert.equal(upsertCalls[0].transport.btPortPath, 'COM8');
 });
 
-test('BT reconnect: falls back to configured COM path match', async () => {
+test('BT reconnect: returns false when live candidate is not connectable', async () => {
+	const liveRecords = new Map<string, PresenceRecord>([
+		['bt-001653aabb01', {
+			candidateId: 'bt-001653aabb01',
+			transport: TransportMode.BT,
+			displayName: 'EV3 BT',
+			detail: 'BT live-only | 001653AABB01',
+			connectable: false,
+			lastSeenMs: Date.now(),
+			mac: '001653aabb01',
+			connectionParams: { mode: 'bt', btPortPath: undefined, mac: '001653aabb01' }
+		}]
+	]);
 	const deps = makeBtDeps({
-		snapshot: makeBtSnapshot({ brickId: 'bt-COM5' }),
-		profile: makeBtProfile({ brickId: 'bt-COM5', transport: { mode: TransportMode.BT, btPortPath: 'COM5' } }),
-		candidates: [{ path: 'COM5', mac: undefined, displayName: undefined, hasLegoPrefix: false }]
+		snapshot: makeBtSnapshot(),
+		profile: makeBtProfile(),
+		liveRecords
 	});
-	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-COM5'), true);
-});
-
-test('BT reconnect: uses single candidate when no match found', async () => {
-	const upsertCalls: BrickConnectionProfile[] = [];
-	const deps = makeBtDeps({
-		snapshot: makeBtSnapshot({ brickId: 'bt-COM5' }),
-		profile: makeBtProfile({ brickId: 'bt-COM5', transport: { mode: TransportMode.BT, btPortPath: 'COM5' } }),
-		candidates: [{ path: 'COM9', mac: undefined, displayName: undefined, hasLegoPrefix: false }],
-		upsertCalls
-	});
-	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-COM5'), true);
-	assert.equal(upsertCalls.length, 1);
-	assert.equal(upsertCalls[0].transport.btPortPath, 'COM9');
-});
-
-test('BT reconnect: returns false when multiple candidates and no match', async () => {
-	const deps = makeBtDeps({
-		snapshot: makeBtSnapshot({ brickId: 'bt-COM5' }),
-		profile: makeBtProfile({ brickId: 'bt-COM5', transport: { mode: TransportMode.BT, btPortPath: 'COM5' } }),
-		candidates: [
-			{ path: 'COM7', mac: undefined, displayName: undefined, hasLegoPrefix: false },
-			{ path: 'COM9', mac: undefined, displayName: undefined, hasLegoPrefix: false }
-		]
-	});
-	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-COM5'), false);
+	assert.equal(await isBtReconnectCandidateAvailable(deps, 'bt-001653aabb01'), false);
 });

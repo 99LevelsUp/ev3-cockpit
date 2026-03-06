@@ -1,120 +1,87 @@
 # Copilot Instructions for EV3 Cockpit
 
+VS Code extension for controlling LEGO Mindstorms EV3 bricks over USB HID, TCP (Wi-Fi), Bluetooth serial, or mock transport.
+
 ## Build, Test, and Lint Commands
 
-- **Build:**
-  - `npm run compile` — Compile TypeScript sources
-  - `npm run package` — Build production bundle (via esbuild)
-  - `npm run package:vsix` — Create VS Code extension package (.vsix)
-- **Lint:**
-  - `npm run lint` — Run ESLint on TypeScript sources
-- **Test:**
-  - `npm run test:unit` — Run unit tests
-  - `npm run test:host` — Run host integration tests
-  - `npm run test:hw` — Run hardware smoke tests (requires EV3 hardware)
-  - `npm run test:hw:matrix` — Run hardware matrix tests
-  - `npm run test:ci` — Compile, lint, unit, and host tests
-  - `npm run test:ci:release` — Full CI release gates (compile, lint, tests, bundle, vsix, smoke)
-  - **Single test:** Run `node scripts/run-unit-tests.cjs --grep <pattern>` for unit tests
+```bash
+npm run compile          # TypeScript compilation (tsc) to out/
+npm run lint             # ESLint on src/**/*.ts
+npm run test:unit        # Compile + run unit tests (node --test)
+npm run test:host        # Compile + run host integration tests
+npm run test:ci          # Full CI: compile + lint + unit + host
+npm run package          # Production esbuild bundle (out/extension.js)
+npm run package:vsix     # Create .vsix into artifacts/vsix/
+npm run test:ci:release  # Release gates: CI + bundle-size + vsix smoke
+```
 
-## High-Level Architecture
+**Single test file:**
+```bash
+npm run compile && node --test out/__tests__/<testName>.test.js
+```
 
-- **VS Code Extension:**
-  - Provides EV3-specific commands, remote file system, and brick control via custom Explorer and webview panels
-  - Connects to EV3 Bricks via USB, Wi-Fi (TCP), or Bluetooth; supports mock mode for development
-  - Core runtime: command scheduler, transport abstraction, capability probe, error handling
-  - Remote file system: `ev3://active/...` and `ev3://<brickId>/...` for per-brick operations
-  - Brick view: status, sensors, motors, controls, and batch actions
-  - Test infrastructure: unit, host, hardware, and matrix tests
+**Hardware tests** (require physical EV3 brick):
+```bash
+npm run test:hw          # Hardware smoke tests
+npm run test:hw:matrix   # Hardware matrix tests
+```
 
-## Atomic execution loop (STRICT)
-You MUST work in **ultra-atomic** steps only:
-- Implement ONLY the step currently listed in `.work/NEXT.md`.
-- Do not start any other step.
-- If you discover additional work, write it to `.work/BACKLOG.md` (with reason + suggested priority), but do not implement it unless it becomes the “NEXT” step.
+**Mandatory gates before committing:** `npm run compile && npm run lint && npm run test:unit && npm run test:host`. If changes touch transport/protocol/scheduler, also run hardware tests when available.
 
-### Mandatory gates after EVERY atomic step (in this order)
-After implementing the step, run:
+## Architecture
 
-1) `npm run compile`
-2) `npm run lint`
-3) `npm run test:unit`
-4) `npm run test:host`
+### Core Data Flow
 
-If the step touches communication/transport/protocol/scheduler/reconnect/framing:
-- Additionally run (if HW available):
-  - `npm run test:hw`
-  - `npm run test:hw:matrix`
-- If HW is required but not available, mark the step as **BLOCKED** in `.work/BLOCKERS.md` unless the change is fully verifiable via unit/host tests and clearly marked as such in `.work/STATE.md`.
+```
+Transport (USB/TCP/BT/Mock)
+  -> CommandScheduler (queue, retry, timeout, orphan recovery)
+    -> Ev3CommandClient (EV3 bytecode protocol encoding)
+      -> BrickSessionManager (per-brick session lifecycle)
+        -> BrickRegistry (central brick state: READY/CONNECTING/UNAVAILABLE/ERROR)
+          -> UI (TreeView + WebView panel)
+```
 
-### Commit & push after EVERY atomic step
-If gates pass:
-- `git status` (must show only intended changes)
-- `git add -A`
-- `git commit -m "<STEP_ID>: <short description>"`
-- `git push`
+### Key Abstractions
 
-Rules:
-- Never use `--force` push.
-- Keep commits small and focused.
-- Never commit secrets. Do not log secrets. Redact sensitive values in logs.
+- **TransportAdapter** (`src/transport/transportAdapter.ts`): Minimal async interface -- `open()`, `close()`, `send(packet, options) -> response`. Implementations for USB HID, TCP, Bluetooth SPP, and mock.
+- **TransportMode**: `USB | TCP | BT | MOCK` (in `src/types/enums.ts`). Brick IDs are prefixed by transport: `usb-`, `tcp-`, `bt-`, `mock-`. The virtual ID `active` aliases the currently selected brick.
+- **CommandScheduler** (`src/scheduler/`): Serializes commands per brick with configurable timeout, retry policy, and orphan recovery. Each brick session gets its own scheduler instance.
+- **Ev3CommandClient** (`src/protocol/ev3CommandClient.ts`): Typed EV3 filesystem/system operations built on scheduler + transport, using `ev3Bytecode.ts` for packet encoding.
+- **BrickRegistry** (`src/device/brickRegistry.ts`): Central state store for all known bricks. Event-driven with `onStatusChange`. Provides `resolveFsService()` and `resolveControlService()` per brick.
+- **BrickSessionManager** (`src/device/brickSessionManager.ts`): Creates/destroys per-brick runtime sessions (scheduler + command client pairs). Tracks program execution state.
+- **Remote Filesystem**: `ev3://` URI scheme via `Ev3FileSystemProvider`. Authority is brick ID or `active`. Operations delegated to `RemoteFsService` per brick.
 
-### Update checkpoint files after EVERY atomic step
-After push:
-- Append to `.work/LOG.md`:
-  - the commands run
-  - whether they passed
-  - brief summary
-  - references to generated artifacts/reports (paths)
-- Update `.work/STATE.md`:
-  - mark the step DONE
-  - add evidence (files changed, tests run)
-  - note any new risks
-- Update `.work/NEXT.md`:
-  - set the next atomic step (ONE step only)
+### Extension Activation
 
-## Architecture review cycle (after each package/bundle)
-A “package” is a larger chapter in the plan (e.g., BALÍČEK A, B, C…).
-After completing a package:
-1) Follow `.work/architecture.md` exactly:
-   - Generate/update `.work/architecture_files/NN.md` (overwrite from scratch).
-   - Do NOT delete `architecture.md`; only update its “Obsah” section.
-2) Write `.work/ARCH_FINDINGS.md`:
-   - concrete refactors/bugfixes/test coverage gaps
-   - for each: P0/P1/P2, estimated scope, affected files, recommended tests
-3) Implement findings as a new mini-package “<PACKAGE>-ARCH-FIX”:
-   - break it into 10–30 atomic steps
-   - each step uses the same gates + commit + push loop
-4) Only then proceed to the next functionality package.
+Single `activate()` in `src/extension.ts` wires everything -- no DI container. Services created in order, cross-referenced via closures. Commands registered in dedicated `registerXxxCommands()` functions in `src/commands/`.
 
-## Context hygiene / compaction
-The canonical memory is `.work/*`. Prefer file-based state over conversation memory.
-If the session becomes too long:
-- Use internal compaction if supported by the tool.
-- If compaction is not available, create `.work/COMPACT.md` (max 1–2 pages) summarizing:
-  - what’s done
-  - what’s next
-  - current blockers/risks
-  - how to proceed
-Then continue strictly from COMPACT + STATE + NEXT + EXECUTION_PLAN_ATOMIC.
+### Error Hierarchy
 
-## README and user-visible changes
-For user-visible or functional changes, update `README.md` accordingly in the same atomic step (or an immediately following atomic step).
+`ExtensionError` base class with typed subclasses: `TransportError`, `ProtocolError`, `SchedulerError`, `FilesystemError`, `Ev3Error`. Each has typed error codes (string union), structured metadata, recovery action recommendations, and error message maps. Type guards provided (`isTransportError()`, etc.). User-facing messages extracted via `getUserFacingMessage()`.
 
-## “ev3io” rename cleanup
-If you find any mention of “ev3io” anywhere in the repo:
-- Record exact `path:line` + surrounding context into `.work/EV3IO_OCCURRENCES.md`.
-- Fix each occurrence as its own atomic step (gates + commit + push).
+### Config Pattern
 
-## Safety and scope control
-- Do not change `.gitignore` to include `.work/`.
-- Do not delete `.work/` contents.
-- Avoid large refactors unless they are explicitly required by the current atomic step or ARCH_FINDINGS.
-- When uncertain: create a BLOCKER entry rather than guessing.
+Config readers in `src/config/` each export a `read*Config()` function returning a typed snapshot. `ConfigService.readExtensionConfig()` consolidates them. Shared sanitizers in `src/config/sanitizers.ts`. All settings under `ev3-cockpit.*` namespace.
 
-## First action each session (summary)
-1) Read `.work/STATE.md` + `.work/NEXT.md` + `.work/LOG.md`.
-2) Execute ONE atomic step.
-3) Run gates.
-4) Commit + push.
-5) Update `.work/STATE.md`, `.work/NEXT.md`, `.work/LOG.md`.
+### Mock System
+
+`src/mock/` provides virtual bricks for development without hardware. Includes simulated sensors, motors, filesystem, and fault injection. Enable via `ev3-cockpit.transport.mode` = `"mock"`.
+
+## Conventions
+
+- **TypeScript**: strict mode, ES2022, CommonJS output. Tabs for indentation, semicolons, single-quote imports.
+- **Naming**: `PascalCase` classes/interfaces/types, `camelCase` functions/variables/filenames, `SCREAMING_SNAKE_CASE` environment variables (`EV3_COCKPIT_*`).
+- **Testing**: Node.js built-in `node:test` runner with `node:assert/strict` -- no external test frameworks. Tests in `src/__tests__/*.test.ts`, shared helpers in `testHelpers.ts`. VS Code API mocked via lightweight fakes (FakeMemento, FakeEventEmitter, etc.).
+- **Native dependencies**: `node-hid`, `serialport`, `ffi-napi`, `regkey` are optional -- loaded via `require()` with try/catch fallback. Marked as externals in esbuild.
+- **Bundling**: esbuild bundles everything into single `out/extension.js`; native deps excluded. Bundle-size budget enforced by `npm run check:bundle-size` (default 256 KiB, override with `EV3_COCKPIT_MAX_BUNDLE_BYTES`).
+- **ESLint**: unused vars error with `_` prefix exception; `no-explicit-any` is off.
+- **Brick names**: max 12 characters (EV3 hardware limit).
+
+## Workflow (.work/ directory)
+
+The project uses a structured `.work/` directory for tracking implementation progress:
+- `.work/STATE.md` -- current state of implementation
+- `.work/NEXT.md` -- the single next atomic step to implement
+- `.work/LOG.md` -- execution log of completed steps
+- `.work/BACKLOG.md` -- discovered work items
+- Check these files at session start to understand current context.
