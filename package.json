@@ -762,6 +762,7 @@
   },
   "optionalDependencies": {
     "ffi-napi": "^4.0.3",
+    "koffi": "^2.15.1",
     "node-hid": "^3.3.0",
     "ref-array-di": "npm:null@^1.2.3",
     "ref-napi": "^3.0.3",

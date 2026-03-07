@@ -2,6 +2,11 @@ import { TransportMode } from '../types/enums';
 import type { Logger } from '../diagnostics/logger';
 import type { PresenceChangeCallback, PresenceRecord, PresenceSource } from './presenceSource';
 import { LEGO_MAC_OUI_PREFIX } from '../transport/bluetoothPortSelection';
+import {
+	canUseNativeBluetoothDiscovery,
+	listBluetoothDevicesNative,
+	type BluetoothDeviceInfo
+} from './bluetoothNativeDiscovery';
 
 export interface BtPresenceSourceOptions {
 	fastIntervalMs: number;
@@ -29,6 +34,7 @@ export class BtPresenceSource implements PresenceSource {
 	private inquiryTimer: ReturnType<typeof setTimeout> | undefined;
 	private started = false;
 	private scanning = false;
+	private scanCount = 0;
 
 	constructor(options: BtPresenceSourceOptions, logger: Logger) {
 		this.options = options;
@@ -40,7 +46,12 @@ export class BtPresenceSource implements PresenceSource {
 			return;
 		}
 		this.started = true;
-		this.scheduleFastScan();
+		this.logger.info('BtPresenceSource started', {
+			fastIntervalMs: this.options.fastIntervalMs,
+			inquiryIntervalMs: this.options.inquiryIntervalMs
+		});
+		// Run first scan immediately
+		void this.runFastScan().then(() => this.scheduleFastScan());
 		this.scheduleInquiryScan();
 	}
 
@@ -91,8 +102,17 @@ export class BtPresenceSource implements PresenceSource {
 			return;
 		}
 		this.scanning = true;
+		this.scanCount += 1;
 		try {
-			const candidates = await this.listBluetoothCandidates();
+			const candidates = await this.listBluetoothCandidates(false);
+			if (this.scanCount <= 3) {
+				this.logger.info('BT fast scan result', {
+					scan: this.scanCount,
+					candidates: candidates.length,
+					names: candidates.map((c) => c.displayName ?? '(none)'),
+					macs: candidates.map((c) => c.mac ?? '(none)')
+				});
+			}
 			this.updateFromCandidates(candidates);
 		} catch (err) {
 			this.logger.warn('BT fast scan failed', { error: String(err) });
@@ -102,9 +122,24 @@ export class BtPresenceSource implements PresenceSource {
 	}
 
 	private async runInquiryScan(): Promise<void> {
-		// Inquiry scan is the same as fast scan for now
-		// In the future, PS worker will differentiate fast (cached) vs full (inquiry)
-		await this.runFastScan();
+		if (!this.started || this.scanning) {
+			return;
+		}
+		this.scanning = true;
+		this.scanCount += 1;
+		try {
+			const candidates = await this.listBluetoothCandidates(true);
+			this.logger.info('BT inquiry scan result', {
+				scan: this.scanCount,
+				candidates: candidates.length,
+				names: candidates.map((c) => c.displayName ?? '(none)')
+			});
+			this.updateFromCandidates(candidates);
+		} catch (err) {
+			this.logger.warn('BT inquiry scan failed', { error: String(err) });
+		} finally {
+			this.scanning = false;
+		}
 	}
 
 	private updateFromCandidates(candidates: BluetoothCandidate[]): void {
@@ -147,77 +182,127 @@ export class BtPresenceSource implements PresenceSource {
 			const existing = this.present.get(candidateId);
 			this.present.set(candidateId, record);
 			if (!existing) {
+				this.logger.info('BT device appeared', { candidateId, displayName, connectable });
+				changed = true;
+			} else if (
+				existing.displayName !== displayName
+				|| existing.connectable !== connectable
+			) {
+				changed = true;
+			} else if (now - existing.lastSeenMs > this.options.fastIntervalMs * 3) {
+				// Device was stale (missed 3+ scans) but is back — notify aggregator
 				changed = true;
 			}
 		}
 
-		// Detect disappearances (don't remove — reaper handles TTL)
-		for (const candidateId of this.present.keys()) {
-			if (!seenIds.has(candidateId)) {
-				changed = true;
-			}
-		}
+		// Devices not in current scan keep their old lastSeenMs.
+		// The aggregator reaper handles stale device removal via TTL —
+		// we never delete here to avoid flapping on transient scan failures.
 
 		if (changed) {
 			this.fireChange();
 		}
 	}
 
-	private async listBluetoothCandidates(): Promise<BluetoothCandidate[]> {
-		const [serial, unknownDevices, connectedDevices] = await Promise.all([
+	private async listBluetoothCandidates(issueInquiry: boolean): Promise<BluetoothCandidate[]> {
+		const [serial, nativeDevices] = await Promise.all([
 			this.listSerialCandidates(),
-			this.listWinApiDevices(false),
-			this.listWinApiDevices(true)
+			Promise.resolve(this.listNativeDevices(issueInquiry))
 		]);
 
-		const candidatesById = new Map<string, BluetoothCandidate>();
-		const connectedMacs = new Set(connectedDevices.map((d) => d.mac.toLowerCase()));
+		if (this.scanCount <= 3) {
+			this.logger.info('BT scan sources', {
+				serialPorts: serial.length,
+				nativeDevices: nativeDevices.length,
+				nativeAvailable: canUseNativeBluetoothDiscovery()
+			});
+		}
 
+		const candidatesById = new Map<string, BluetoothCandidate>();
+		const nativeByMac = new Map<string, BluetoothDeviceInfo>();
+		for (const nd of nativeDevices) {
+			nativeByMac.set(nd.mac, nd);
+		}
+
+		// 1) Serial port candidates (COM ports / rfcomm ports with LEGO MAC)
 		for (const serialCandidate of serial) {
 			const path = serialCandidate.path.trim();
-			if (!/^COM\d+$/i.test(path)) {
+			if (process.platform === 'win32' && !/^COM\d+$/i.test(path)) {
 				continue;
 			}
 			const mac = this.extractMacFromPnpId(serialCandidate.pnpId);
 			if (!this.isLikelyEv3(serialCandidate, mac)) {
 				continue;
 			}
-			const key = mac ?? `com:${path.toLowerCase()}`;
-			const present = mac ? connectedMacs.has(mac) : undefined;
+			const key = mac ?? `serial:${path.toLowerCase()}`;
+			const nativeInfo = mac ? nativeByMac.get(mac) : undefined;
 			candidatesById.set(key, {
 				path,
 				mac,
-				displayName: serialCandidate.friendlyName?.trim() || undefined,
+				displayName: nativeInfo?.name?.trim()
+					|| serialCandidate.friendlyName?.trim()
+					|| undefined,
 				hasLegoPrefix: mac?.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase()) ?? false,
-				present,
+				present: nativeInfo?.connected ?? undefined,
 				connectable: true
 			});
 		}
 
-		for (const device of unknownDevices) {
-			const mac = device.mac;
-			if (!mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase())) {
+		// 2) Native BT devices not already found via serial ports
+		for (const nd of nativeDevices) {
+			if (!nd.mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase())) {
 				continue;
 			}
-			const existing = candidatesById.get(mac);
-			if (existing) {
-				if (!existing.displayName && device.name) {
-					existing.displayName = device.name;
+			if (candidatesById.has(nd.mac)) {
+				// Already have this device via serial — just enrich
+				const existing = candidatesById.get(nd.mac)!;
+				if (!existing.displayName && nd.name) {
+					existing.displayName = nd.name;
 				}
 				existing.present = true;
 				continue;
 			}
-			candidatesById.set(mac, {
-				path: `BTADDR-${mac}`,
-				mac,
-				displayName: device.name,
+			candidatesById.set(nd.mac, {
+				path: `BTADDR-${nd.mac}`,
+				mac: nd.mac,
+				displayName: nd.name || undefined,
 				hasLegoPrefix: true,
 				present: true,
-				connectable: false
+				connectable: false  // no serial port yet
 			});
 		}
 
 		return Array.from(candidatesById.values());
+	}
+
+	/**
+	 * Query native Bluetooth stack via koffi FFI.
+	 * Windows: bthprops.cpl. Linux: libbluetooth.so.
+	 */
+	private listNativeDevices(issueInquiry: boolean): BluetoothDeviceInfo[] {
+		if (!canUseNativeBluetoothDiscovery()) {
+			if (this.scanCount <= 1) {
+				this.logger.warn('BT: native discovery not available (koffi not loaded or unsupported platform)');
+			}
+			return [];
+		}
+		try {
+			return listBluetoothDevicesNative({
+				returnAuthenticated: true,
+				returnRemembered: true,
+				returnUnknown: true,
+				returnConnected: true,
+				issueInquiry,
+				timeoutMultiplier: issueInquiry ? 8 : 4
+			});
+		} catch (err) {
+			if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
+				this.logger.warn('BT: native discovery failed', {
+					error: String(err), scan: this.scanCount
+				});
+			}
+			return [];
+		}
 	}
 
 	private async listSerialCandidates(): Promise<Array<{
@@ -236,53 +321,17 @@ export class BtPresenceSource implements PresenceSource {
 				}>> };
 			};
 			if (!mod.SerialPort || typeof mod.SerialPort.list !== 'function') {
+				if (this.scanCount <= 1) {
+					this.logger.warn('BT: serialport module not available');
+				}
 				return [];
 			}
 			return await mod.SerialPort.list();
-		} catch {
+		} catch (err) {
+			if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
+				this.logger.warn('BT: serialport list failed', { error: String(err), scan: this.scanCount });
+			}
 			return [];
-		}
-	}
-
-	private listWinApiDevices(connected: boolean): Promise<Array<{ mac: string; name?: string }>> {
-		if (process.platform !== 'win32') {
-			return Promise.resolve([]);
-		}
-		try {
-			const { listBluetoothDevices } = require('../transport/windowsBluetoothApi') as {
-				listBluetoothDevices: (opts: {
-					returnAuthenticated: boolean;
-					returnRemembered: boolean;
-					returnUnknown: boolean;
-					returnConnected: boolean;
-					issueInquiry: boolean;
-					timeoutMultiplier: number;
-				}) => Array<{ mac: string; name?: string }>;
-			};
-			const devices = listBluetoothDevices(connected
-				? {
-					returnAuthenticated: true,
-					returnRemembered: false,
-					returnUnknown: false,
-					returnConnected: true,
-					issueInquiry: false,
-					timeoutMultiplier: 4
-				}
-				: {
-					returnAuthenticated: false,
-					returnRemembered: false,
-					returnUnknown: true,
-					returnConnected: false,
-					issueInquiry: false,
-					timeoutMultiplier: 4
-				}
-			);
-			return Promise.resolve(devices.map((d) => ({
-				mac: d.mac.toLowerCase(),
-				name: d.name?.trim() || undefined
-			})));
-		} catch {
-			return Promise.resolve([]);
 		}
 	}
 

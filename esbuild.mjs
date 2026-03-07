@@ -10,7 +10,7 @@ await esbuild.build({
 	target: 'es2022',
 	format: 'cjs',
 	sourcemap: true,
-	external: ['vscode', 'node-hid', 'serialport'],
+	external: ['vscode', 'node-hid', 'serialport', 'koffi'],
 	minify: production,
 	metafile: process.argv.includes('--metafile'),
 });
