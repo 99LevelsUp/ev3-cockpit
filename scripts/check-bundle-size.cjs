@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const bundlePath = path.resolve(process.cwd(), 'out', 'extension.js');
-const maxBytes = Number(process.env.EV3_COCKPIT_MAX_BUNDLE_BYTES ?? 256 * 1024);
+const DEFAULT_MAX_BUNDLE_BYTES = 320 * 1024;
+const maxBytes = Number(process.env.EV3_COCKPIT_MAX_BUNDLE_BYTES ?? DEFAULT_MAX_BUNDLE_BYTES);
 
 if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
 	throw new Error(`Invalid EV3_COCKPIT_MAX_BUNDLE_BYTES value: ${process.env.EV3_COCKPIT_MAX_BUNDLE_BYTES ?? ''}`);

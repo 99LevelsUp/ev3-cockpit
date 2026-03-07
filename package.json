@@ -13,7 +13,7 @@
   },
   "homepage": "https://github.com/99LevelsUp/ev3-cockpit#readme",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.109.0"
   },
   "categories": [
     "Other"

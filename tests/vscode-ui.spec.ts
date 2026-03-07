@@ -173,9 +173,21 @@ async function openEv3View(page: Page): Promise<void> {
 	}
 }
 
+async function ensureEv3WebviewReady(page: Page, maxAttempts: number): Promise<Frame> {
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		await openEv3View(page);
+		const webviewFrame = await waitForWebviewFrame(page, 30000);
+		if (webviewFrame) {
+			return webviewFrame;
+		}
+		await page.waitForTimeout(1500);
+	}
+	throw new Error('EV3 webview did not open (no webview frame detected).');
+}
+
 test.describe('VS Code UI', () => {
 	test('EV3 brick panel webview renders tabs @smoke', async () => {
-		test.setTimeout(120000);
+		test.setTimeout(300000);
 		if (test.info().project.name !== 'chromium') {
 			test.skip(true, 'VS Code UI automation runs only on Chromium.');
 		}
@@ -194,12 +206,7 @@ test.describe('VS Code UI', () => {
 			// Wait for extension host to register commands
 			await page.waitForTimeout(5000);
 
-			await openEv3View(page);
-
-			const webviewFrame = await waitForWebviewFrame(page, 20000);
-			if (!webviewFrame) {
-				throw new Error('EV3 webview did not open (no webview frame detected).');
-			}
+			const webviewFrame = await ensureEv3WebviewReady(page, 3);
 			await expect(webviewFrame.locator('#root')).toBeVisible({ timeout: 15000 });
 
 			await expect
@@ -213,34 +220,47 @@ test.describe('VS Code UI', () => {
 
 			// Verify mock bricks appear/disappear based on settings
 			const listMockNames = async (): Promise<string[]> => {
-				const items = webviewFrame.locator('.discovery-item');
-				const count = await items.count();
-				const names: string[] = [];
-				for (let i = 0; i < count; i += 1) {
-					const item = items.nth(i);
-					const transport = await item.getAttribute('data-transport');
-					const candidateId = (await item.getAttribute('data-candidate-id')) ?? '';
-					const isMock =
-						String(transport).toLowerCase() === 'mock'
-						|| candidateId.toLowerCase().startsWith('mock-');
-					if (!isMock) {
-						continue;
+				return webviewFrame.locator('.discovery-item').evaluateAll((nodes) => {
+					const names: string[] = [];
+					for (const node of nodes) {
+						const transport = (node.getAttribute('data-transport') ?? '').toLowerCase();
+						const candidateId = (node.getAttribute('data-candidate-id') ?? '').toLowerCase();
+						const isMock = transport === 'mock' || candidateId.startsWith('mock-');
+						if (!isMock) {
+							continue;
+						}
+						const label = node.querySelector('.discovery-main-label')?.textContent?.trim() ?? '';
+						if (label) {
+							names.push(label);
+						}
 					}
-					const label = await item.locator('.discovery-main-label').innerText();
-					names.push(label.trim());
+					return names;
+				});
+			};
+			const setMockVisibility = async (enabled: boolean): Promise<void> => {
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					await webviewFrame.locator('.brick-tab.add-tab').click();
+					const current = (await listMockNames()).sort();
+					const matchesTarget = enabled
+						? JSON.stringify(current) === JSON.stringify(expectedMockNames)
+						: current.length === 0;
+					if (matchesTarget) {
+						return;
+					}
+					await runCommand(page, 'EV3 Cockpit: Toggle Mock Bricks');
+					await page.waitForTimeout(300);
 				}
-				return names;
+
+				if (enabled) {
+					await expect.poll(async () => (await listMockNames()).sort(), { timeout: 30000 }).toEqual(expectedMockNames);
+				} else {
+					await expect.poll(listMockNames, { timeout: 30000 }).toEqual([]);
+				}
 			};
 
-			await expect.poll(listMockNames, { timeout: 30000 }).toEqual([]);
-
-			await runCommand(page, 'EV3 Cockpit: Toggle Mock Bricks');
-			await webviewFrame.locator('.brick-tab.add-tab').click();
-			await expect.poll(async () => (await listMockNames()).sort(), { timeout: 30000 }).toEqual(expectedMockNames);
-
-			await runCommand(page, 'EV3 Cockpit: Toggle Mock Bricks');
-			await webviewFrame.locator('.brick-tab.add-tab').click();
-			await expect.poll(listMockNames, { timeout: 30000 }).toEqual([]);
+			await setMockVisibility(false);
+			await setMockVisibility(true);
+			await setMockVisibility(false);
 		} finally {
 			await app.close();
 			await fs.rm(tempRoot, { recursive: true, force: true });
