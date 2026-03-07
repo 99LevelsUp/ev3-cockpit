@@ -134,24 +134,28 @@ async function waitForEv3Webview(page: Page, timeoutMs: number): Promise<boolean
 	}
 }
 
-/** Polls page.frames() for the inner webview frame containing #root. */
+function collectFramesRecursive(frame: Frame): Frame[] {
+	const frames: Frame[] = [frame];
+	for (const child of frame.childFrames()) {
+		frames.push(...collectFramesRecursive(child));
+	}
+	return frames;
+}
+
+/** Polls all frames recursively for EV3 webview content. */
 async function waitForWebviewFrame(page: Page, timeoutMs: number): Promise<Frame | null> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		for (const frame of page.frames()) {
-			if (!frame.url().startsWith('vscode-webview://')) {
-				continue;
-			}
-			// Extension webview content lives in a child iframe
-			for (const child of frame.childFrames()) {
-				try {
-					if ((await child.locator('#root').count()) > 0) {
-						return child;
-					}
-				} catch { /* frame not ready */ }
-			}
+		const rootFrames = page.frames();
+		const allFrames: Frame[] = [];
+		for (const root of rootFrames) {
+			allFrames.push(...collectFramesRecursive(root));
+		}
+		for (const frame of allFrames) {
 			try {
-				if ((await frame.locator('#root').count()) > 0) {
+				const hasRoot = (await frame.locator('#root').count()) > 0;
+				const hasTabs = (await frame.locator('.brick-tab').count()) > 0;
+				if (hasRoot || hasTabs) {
 					return frame;
 				}
 			} catch { /* not ready */ }
