@@ -56,4 +56,5 @@ Do not commit machine-specific hardware values, private endpoints, or local arti
 ## Agent Workflow Rules
 - After every code or config change, run: `npm run compile`, `npm run lint`, and baseline tests: `npm run test:unit` + `npm run test:host`.
 - If the change touches UI/webview behavior, also run `npm run test:pw:smoke`.
-- If the user asks for a commit, run full validation first: `npm run compile`, `npm run lint`, and all tests (`npm run test:all`), then `git commit` and `git push`.
+- If the user asks for a commit, start by reviewing the code changes and preparing a meaningful commit message based on the actual diff.
+- Then run full validation: `npm run compile`, `npm run lint`, and all tests (`npm run test:all`), then `git commit` and `git push`.

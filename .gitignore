@@ -7,7 +7,11 @@ node_modules/
 *.log
 *.logcls
 .claude/
+.codex/
 .work/
+.vscode-bisect/
+.vscode-dev-extensions/
+.vscode-dev-profile/
 
 # Playwright
 /test-results/
