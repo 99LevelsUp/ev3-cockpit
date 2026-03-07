@@ -129,14 +129,18 @@ function createWindowsBackend(): PlatformBackend | undefined {
 		return {
 			available: true,
 			listDevices(opts: BluetoothScanOptions): BluetoothDeviceInfo[] {
+				// CRITICAL: On Windows, fIssueInquiry=1 flushes the "unknown"
+				// device cache — non-authenticated bricks that happen to be
+				// undiscoverable during the scan window vanish permanently.
+				// Always use fIssueInquiry=0 (query cached/known devices only).
 				const search = {
 					dwSize: sizeofSearch,
 					fReturnAuthenticated: opts.returnAuthenticated ? 1 : 0,
 					fReturnRemembered: opts.returnRemembered ? 1 : 0,
 					fReturnUnknown: opts.returnUnknown ? 1 : 0,
 					fReturnConnected: opts.returnConnected ? 1 : 0,
-					fIssueInquiry: opts.issueInquiry ? 1 : 0,
-					cTimeoutMultiplier: opts.timeoutMultiplier,
+					fIssueInquiry: 0,
+					cTimeoutMultiplier: 0,
 					hRadio: null,
 				};
 
