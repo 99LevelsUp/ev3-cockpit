@@ -199,6 +199,9 @@ test.describe('VS Code UI', () => {
 		if (test.info().project.name !== 'chromium') {
 			test.skip(true, 'VS Code UI automation runs only on Chromium.');
 		}
+		if (process.platform === 'linux') {
+			test.skip(true, 'VS Code webview automation is flaky in Linux headless CI.');
+		}
 
 		const workspaceRoot = await createWorkspace({
 			'ev3-cockpit.transport.timeoutMs': 200,
