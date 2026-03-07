@@ -23,6 +23,25 @@ async function tryAcquireLock(): Promise<fs.FileHandle | null> {
 
 async function removeStaleLockIfNeeded(): Promise<void> {
 	try {
+		const content = await fs.readFile(LOCK_PATH, 'utf8').catch(() => '');
+		const pidToken = content.split(':', 1)[0]?.trim();
+		const ownerPid = Number(pidToken);
+		if (Number.isInteger(ownerPid) && ownerPid > 0) {
+			try {
+				process.kill(ownerPid, 0);
+				return;
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				// `ESRCH` => process no longer exists, lock is stale.
+				if (code !== 'ESRCH') {
+					// `EPERM` (or unknown) => assume process may still be alive.
+					return;
+				}
+				await fs.rm(LOCK_PATH, { force: true });
+				return;
+			}
+		}
+
 		const stat = await fs.stat(LOCK_PATH);
 		if (Date.now() - stat.mtimeMs > LOCK_STALE_AFTER_MS) {
 			await fs.rm(LOCK_PATH, { force: true });
