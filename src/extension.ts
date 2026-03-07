@@ -85,7 +85,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// --- Presence system (all transports) ---
 	const usbPresenceSource = new UsbPresenceSource(
-		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier },
+		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier },
 		perfLogger
 	);
 	const tcpPresenceSource = new TcpPresenceSource(

@@ -151,9 +151,10 @@ test('mergeFromSource adds records to master map and fires candidatesChanged', (
 	assert.equal(changed, 1);
 	assert.equal(agg.getPresent().size, 1);
 
+	// Aggregator no longer pushes AVAILABLE entries into the registry;
+	// discovery is read-only until the user explicitly connects.
 	const snapshot = registry.getSnapshot('tcp-192-168-1-1-5555');
-	assert.ok(snapshot);
-	assert.equal(snapshot.status, 'AVAILABLE');
+	assert.equal(snapshot, undefined);
 });
 
 test('getCandidates sorts USB > BT > TCP > Mock', () => {

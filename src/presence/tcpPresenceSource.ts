@@ -66,6 +66,7 @@ export class TcpPresenceSource implements PresenceSource {
 			return;
 		}
 		this.started = true;
+		this.logger.info('TcpPresenceSource started', { discoveryPort: this.options.discoveryPort });
 		this.bind();
 	}
 
@@ -176,6 +177,12 @@ export class TcpPresenceSource implements PresenceSource {
 		this.present.set(candidateId, record);
 
 		if (!existing) {
+			this.logger.info('TCP device appeared', { candidateId, name: parsed.name, endpoint });
+			this.fireChange();
+		} else if (
+			existing.displayName !== record.displayName
+			|| existing.detail !== record.detail
+		) {
 			this.fireChange();
 		}
 	}

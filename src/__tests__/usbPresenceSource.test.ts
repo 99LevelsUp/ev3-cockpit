@@ -14,7 +14,7 @@ function safeId(v: string): string {
 
 test('UsbPresenceSource has USB transport', () => {
 	const source = new UsbPresenceSource(
-		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
+		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
 		createNoopLogger()
 	);
 	assert.equal(source.transport, TransportMode.USB);
@@ -22,7 +22,7 @@ test('UsbPresenceSource has USB transport', () => {
 
 test('UsbPresenceSource starts with empty map', () => {
 	const source = new UsbPresenceSource(
-		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
+		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
 		createNoopLogger()
 	);
 	assert.equal(source.getPresent().size, 0);
@@ -30,7 +30,7 @@ test('UsbPresenceSource starts with empty map', () => {
 
 test('UsbPresenceSource stop is idempotent', () => {
 	const source = new UsbPresenceSource(
-		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
+		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
 		createNoopLogger()
 	);
 	source.stop();
@@ -39,7 +39,7 @@ test('UsbPresenceSource stop is idempotent', () => {
 
 test('UsbPresenceSource onChange registers callback', () => {
 	const source = new UsbPresenceSource(
-		{ pollIntervalMs: 500, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
+		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier: safeId },
 		createNoopLogger()
 	);
 	let called = false;

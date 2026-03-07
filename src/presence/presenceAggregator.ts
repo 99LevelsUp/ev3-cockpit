@@ -187,7 +187,9 @@ export class PresenceAggregator {
 
 			const nonConnectableReason = record.connectable
 				? undefined
-				: 'Brick is visible over Bluetooth, but Windows currently has no COM mapping for connection.';
+				: record.transport === TransportMode.USB
+					? 'USB brick detected but cannot communicate — name probe failed.'
+					: 'Brick is visible over Bluetooth, but Windows currently has no COM mapping for connection.';
 
 			const status = this.resolveCandidateStatus(snapshot, record);
 			registerCandidate({
@@ -284,13 +286,12 @@ export class PresenceAggregator {
 			this.masterMap.set(candidateId, record);
 			if (!existing) {
 				changed = true;
-				this.deps.brickRegistry.upsertAvailable({
-					brickId: candidateId,
-					displayName: record.displayName,
-					role: 'unknown',
-					transport: record.transport,
-					rootPath: this.options.defaultRootPath
-				});
+			} else if (
+				existing.displayName !== record.displayName
+				|| existing.detail !== record.detail
+				|| existing.connectable !== record.connectable
+			) {
+				changed = true;
 			}
 		}
 
@@ -303,6 +304,27 @@ export class PresenceAggregator {
 		const now = Date.now();
 		const { brickRegistry } = this.deps;
 		const goneTtl = this.options.goneTtl;
+		let added = false;
+
+		// Refresh records from all sources to get latest lastSeenMs.
+		// Also re-add entries that were previously reaped but are still
+		// fresh in the source (device reappeared).
+		for (const source of this.sources) {
+			for (const [candidateId, record] of source.getPresent()) {
+				if (this.masterMap.has(candidateId)) {
+					this.masterMap.set(candidateId, record);
+				} else {
+					// Entry was reaped or never merged — re-add only if still fresh
+					const ttl = this.getTtlForTransport(record.transport, goneTtl);
+					const age = now - record.lastSeenMs;
+					if (age <= ttl) {
+						this.masterMap.set(candidateId, record);
+						added = true;
+					}
+				}
+			}
+		}
+
 		const reaped: string[] = [];
 
 		for (const [candidateId, record] of this.masterMap) {
@@ -326,10 +348,10 @@ export class PresenceAggregator {
 			reaped.push(candidateId);
 		}
 
-		if (reaped.length > 0) {
-			const activeIds = new Set(this.masterMap.keys());
-			brickRegistry.removeStale(activeIds);
-			this.deps.logger.debug('Presence reaper removed stale entries', { reaped });
+		if (reaped.length > 0 || added) {
+			if (reaped.length > 0) {
+				this.deps.logger.debug('Presence reaper removed stale entries', { reaped });
+			}
 			this.fireCandidatesChanged();
 		}
 	}
@@ -409,7 +431,11 @@ export class PresenceAggregator {
 				return snapshot.status;
 			}
 		}
-		// Live presence = AVAILABLE
+		// USB brick with failed name probe → ERROR
+		if (record.transport === TransportMode.USB && !record.connectable) {
+			return 'ERROR';
+		}
+		// BT without COM port — still show as available (user can pair)
 		if (record.transport === TransportMode.BT && !record.connectable) {
 			return snapshot ? resolveCandidateStatus(snapshot, 'UNKNOWN') : 'AVAILABLE';
 		}

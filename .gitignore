@@ -12,6 +12,7 @@ node_modules/
 .vscode-bisect/
 .vscode-dev-extensions/
 .vscode-dev-profile/
+CLAUDE.md
 
 # Playwright
 /test-results/
