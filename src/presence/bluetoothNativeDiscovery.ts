@@ -31,6 +31,8 @@ export interface BluetoothScanOptions {
 interface PlatformBackend {
 	available: boolean;
 	listDevices(opts: BluetoothScanOptions): BluetoothDeviceInfo[];
+	/** Look up a single device by MAC address (Windows: BluetoothGetDeviceInfo). */
+	lookupDevice?(mac: string): BluetoothDeviceInfo | undefined;
 }
 
 let _backend: PlatformBackend | undefined;
@@ -59,6 +61,37 @@ export function canUseNativeBluetoothDiscovery(): boolean {
 
 export function listBluetoothDevicesNative(opts: BluetoothScanOptions): BluetoothDeviceInfo[] {
 	return getBackend()?.listDevices(opts) ?? [];
+}
+
+/**
+ * Look up a single device by MAC address using the platform's persistent
+ * device database (Windows: BluetoothGetDeviceInfo).
+ *
+ * Returns the device info if found, or undefined if the device is unknown
+ * to the OS. This works even when the device is NOT in the discovery cache
+ * (FindFirstDevice may miss it, but GetDeviceInfo still knows about it).
+ */
+export function lookupBluetoothDeviceNative(mac: string): BluetoothDeviceInfo | undefined {
+	return getBackend()?.lookupDevice?.(mac);
+}
+
+/**
+ * Batch-lookup known MAC addresses. Returns devices that the OS still knows
+ * about, even if they've fallen out of the discovery cache.
+ */
+export function trackKnownDevicesNative(macs: readonly string[]): BluetoothDeviceInfo[] {
+	const backend = getBackend();
+	if (!backend?.lookupDevice) {
+		return [];
+	}
+	const results: BluetoothDeviceInfo[] = [];
+	for (const mac of macs) {
+		const info = backend.lookupDevice(mac);
+		if (info) {
+			results.push(info);
+		}
+	}
+	return results;
 }
 
 // ── koffi type surface ───────────────────────────────────────────────────
@@ -123,11 +156,19 @@ function createWindowsBackend(): PlatformBackend | undefined {
 			'int __stdcall BluetoothFindDeviceClose(void *)'
 		);
 
+		// BluetoothGetDeviceInfo — looks up a device by MAC address in the
+		// OS device database. Works even when the device has fallen out of
+		// the FindFirstDevice discovery cache.
+		const GetDeviceInfo = bt.func(
+			'uint32 __stdcall BluetoothGetDeviceInfo(void *, _Inout_ EV3_BT_DEVICE_INFO *)'
+		);
+
 		const sizeofSearch = koffi.sizeof(SEARCH_PARAMS);
 		const sizeofInfo = koffi.sizeof(DEVICE_INFO);
 
 		return {
 			available: true,
+
 			listDevices(opts: BluetoothScanOptions): BluetoothDeviceInfo[] {
 				// CRITICAL: On Windows, fIssueInquiry=1 flushes the "unknown"
 				// device cache — non-authenticated bricks that happen to be
@@ -160,6 +201,17 @@ function createWindowsBackend(): PlatformBackend | undefined {
 					FindClose(handle);
 				}
 				return devices;
+			},
+
+			lookupDevice(mac: string): BluetoothDeviceInfo | undefined {
+				const addr = BigInt(`0x${mac}`);
+				const info = winMakeEmptyInfo(sizeofInfo);
+				(info as Record<string, unknown>).Address = addr;
+				const result = GetDeviceInfo(null, info) as number;
+				if (result !== 0) {
+					return undefined;
+				}
+				return winParseInfo(info as unknown as WinDeviceInfoRaw);
 			}
 		};
 	} catch {

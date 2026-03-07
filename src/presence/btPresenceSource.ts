@@ -5,6 +5,7 @@ import { LEGO_MAC_OUI_PREFIX } from '../transport/bluetoothPortSelection';
 import {
 	canUseNativeBluetoothDiscovery,
 	listBluetoothDevicesNative,
+	trackKnownDevicesNative,
 	type BluetoothDeviceInfo
 } from './bluetoothNativeDiscovery';
 
@@ -35,6 +36,10 @@ export class BtPresenceSource implements PresenceSource {
 	private started = false;
 	private scanning = false;
 	private scanCount = 0;
+	/** MAC addresses of LEGO devices seen in previous scans.
+	 *  Used for BluetoothGetDeviceInfo fallback when devices
+	 *  fall out of the FindFirstDevice discovery cache. */
+	private readonly knownLegoMacs = new Set<string>();
 
 	constructor(options: BtPresenceSourceOptions, logger: Logger) {
 		this.options = options;
@@ -278,6 +283,11 @@ export class BtPresenceSource implements PresenceSource {
 	/**
 	 * Query native Bluetooth stack via koffi FFI.
 	 * Windows: bthprops.cpl. Linux: libbluetooth.so.
+	 *
+	 * Uses a dual strategy on Windows:
+	 *  1. FindFirstDevice — enumerates the discovery cache
+	 *  2. GetDeviceInfo for known MACs — catches devices that
+	 *     have fallen out of the volatile discovery cache
 	 */
 	private listNativeDevices(issueInquiry: boolean): BluetoothDeviceInfo[] {
 		if (!canUseNativeBluetoothDiscovery()) {
@@ -287,7 +297,8 @@ export class BtPresenceSource implements PresenceSource {
 			return [];
 		}
 		try {
-			return listBluetoothDevicesNative({
+			// Step 1: standard discovery scan
+			const discovered = listBluetoothDevicesNative({
 				returnAuthenticated: true,
 				returnRemembered: true,
 				returnUnknown: true,
@@ -295,6 +306,29 @@ export class BtPresenceSource implements PresenceSource {
 				issueInquiry,
 				timeoutMultiplier: issueInquiry ? 8 : 4
 			});
+
+			// Remember LEGO MACs for future lookups
+			const discoveredMacs = new Set<string>();
+			for (const d of discovered) {
+				if (d.mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase())) {
+					this.knownLegoMacs.add(d.mac);
+				}
+				discoveredMacs.add(d.mac);
+			}
+
+			// Step 2: look up known MACs not found in discovery cache
+			const missingMacs = [...this.knownLegoMacs].filter(m => !discoveredMacs.has(m));
+			if (missingMacs.length > 0) {
+				const recovered = trackKnownDevicesNative(missingMacs);
+				if (recovered.length > 0) {
+					this.logger.info('BT: recovered devices via GetDeviceInfo', {
+						recovered: recovered.map(d => d.name || d.mac)
+					});
+					discovered.push(...recovered);
+				}
+			}
+
+			return discovered;
 		} catch (err) {
 			if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
 				this.logger.warn('BT: native discovery failed', {
