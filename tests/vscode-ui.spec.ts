@@ -39,6 +39,9 @@ async function launchVsCode(workspacePath: string): Promise<{
 	await fs.mkdir(extensionsDir, { recursive: true });
 
 	try {
+		const linuxSandboxArgs = process.platform === 'linux'
+			? ['--no-sandbox', '--disable-setuid-sandbox']
+			: [];
 		const app = await electron.launch({
 			executablePath: vscodeExecutablePath,
 			args: [
@@ -52,7 +55,8 @@ async function launchVsCode(workspacePath: string): Promise<{
 				'--extensions-dir',
 				extensionsDir,
 				'--extensionDevelopmentPath',
-				EXTENSION_DEV_PATH
+				EXTENSION_DEV_PATH,
+				...linuxSandboxArgs
 			]
 		});
 		return { app, tempRoot, userDataDir, extensionsDir };
