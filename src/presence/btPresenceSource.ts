@@ -8,11 +8,13 @@ import {
 	trackKnownDevicesNative,
 	type BluetoothDeviceInfo
 } from './bluetoothNativeDiscovery';
+import { runWindowsPowerShell } from './windowsPowerShell';
 
 export interface BtPresenceSourceOptions {
 	fastIntervalMs: number;
 	inquiryIntervalMs: number;
 	toSafeIdentifier: (value: string) => string;
+	_listBluetoothCandidates?: (issueInquiry: boolean) => Promise<BluetoothCandidate[]>;
 }
 
 interface BluetoothCandidate {
@@ -22,6 +24,82 @@ interface BluetoothCandidate {
 	hasLegoPrefix: boolean;
 	present?: boolean;
 	connectable?: boolean;
+}
+
+interface WindowsKnownLegoDevice {
+	mac: string;
+	name?: string;
+}
+
+export function parseWindowsKnownLegoMacs(raw: string): string[] {
+	return parseWindowsKnownLegoDevices(raw).map((device) => device.mac);
+}
+
+export function parseWindowsKnownLegoDevices(raw: string): WindowsKnownLegoDevice[] {
+	if (!raw.trim()) {
+		return [];
+	}
+	try {
+		const parsed = JSON.parse(raw) as
+			| string
+			| string[]
+			| { mac?: unknown; name?: unknown }
+			| Array<{ mac?: unknown; name?: unknown }>;
+		const rows = Array.isArray(parsed) ? parsed : [parsed];
+		const byMac = new Map<string, WindowsKnownLegoDevice>();
+		for (const row of rows) {
+			const mac = typeof row === 'string'
+				? row.trim().toLowerCase()
+				: String(row.mac ?? '').trim().toLowerCase();
+			if (!mac.startsWith(LEGO_MAC_OUI_PREFIX.toLowerCase()) || !/^[0-9a-f]{12}$/.test(mac)) {
+				continue;
+			}
+			const existing = byMac.get(mac);
+			const name = typeof row === 'string'
+				? undefined
+				: String(row.name ?? '').trim() || undefined;
+			if (!existing) {
+				byMac.set(mac, { mac, name });
+				continue;
+			}
+			if (!existing.name && name) {
+				existing.name = name;
+			}
+		}
+		return Array.from(byMac.values());
+	} catch {
+		return [];
+	}
+}
+
+export function mergeBluetoothDeviceInfos(...sources: BluetoothDeviceInfo[][]): BluetoothDeviceInfo[] {
+	const byMac = new Map<string, BluetoothDeviceInfo>();
+	for (const source of sources) {
+		for (const device of source) {
+			const mac = String(device.mac ?? '').trim().toLowerCase();
+			if (!/^[0-9a-f]{12}$/.test(mac)) {
+				continue;
+			}
+			const existing = byMac.get(mac);
+			if (!existing) {
+				byMac.set(mac, {
+					mac,
+					name: device.name?.trim() || '',
+					connected: Boolean(device.connected),
+					remembered: Boolean(device.remembered),
+					authenticated: Boolean(device.authenticated)
+				});
+				continue;
+			}
+			if (!existing.name && device.name) {
+				existing.name = device.name.trim();
+			}
+			existing.connected = existing.connected || Boolean(device.connected);
+			existing.remembered = existing.remembered || Boolean(device.remembered);
+			existing.authenticated = existing.authenticated || Boolean(device.authenticated);
+		}
+	}
+	return Array.from(byMac.values());
 }
 
 export class BtPresenceSource implements PresenceSource {
@@ -34,12 +112,17 @@ export class BtPresenceSource implements PresenceSource {
 	private fastTimer: ReturnType<typeof setTimeout> | undefined;
 	private inquiryTimer: ReturnType<typeof setTimeout> | undefined;
 	private started = false;
-	private scanning = false;
 	private scanCount = 0;
+	private scanChain: Promise<void> = Promise.resolve();
+	private fastScanQueued = false;
+	private inquiryScanQueued = false;
 	/** MAC addresses of LEGO devices seen in previous scans.
 	 *  Used for BluetoothGetDeviceInfo fallback when devices
 	 *  fall out of the FindFirstDevice discovery cache. */
 	private readonly knownLegoMacs = new Set<string>();
+	private knownRegistryMacsCache:
+		| { ts: number; devices: WindowsKnownLegoDevice[]; inFlight?: Promise<WindowsKnownLegoDevice[]> }
+		| undefined;
 
 	constructor(options: BtPresenceSourceOptions, logger: Logger) {
 		this.options = options;
@@ -55,8 +138,11 @@ export class BtPresenceSource implements PresenceSource {
 			fastIntervalMs: this.options.fastIntervalMs,
 			inquiryIntervalMs: this.options.inquiryIntervalMs
 		});
-		// Run first scan immediately
-		void this.runFastScan().then(() => this.scheduleFastScan());
+		// Startup should expose cached devices quickly and also run a real inquiry
+		// immediately so visible bricks are not delayed until the first slow cycle.
+		this.enqueueScan(false);
+		this.enqueueScan(true);
+		this.scheduleFastScan();
 		this.scheduleInquiryScan();
 	}
 
@@ -84,8 +170,8 @@ export class BtPresenceSource implements PresenceSource {
 		if (!this.started) {
 			return;
 		}
-		this.fastTimer = setTimeout(async () => {
-			await this.runFastScan();
+		this.fastTimer = setTimeout(() => {
+			this.enqueueScan(false);
 			this.scheduleFastScan();
 		}, this.options.fastIntervalMs);
 		this.fastTimer.unref?.();
@@ -95,22 +181,54 @@ export class BtPresenceSource implements PresenceSource {
 		if (!this.started) {
 			return;
 		}
-		this.inquiryTimer = setTimeout(async () => {
-			await this.runInquiryScan();
+		this.inquiryTimer = setTimeout(() => {
+			this.enqueueScan(true);
 			this.scheduleInquiryScan();
 		}, this.options.inquiryIntervalMs);
 		this.inquiryTimer.unref?.();
 	}
 
-	private async runFastScan(): Promise<void> {
-		if (!this.started || this.scanning) {
+	private enqueueScan(issueInquiry: boolean): void {
+		if (!this.started) {
 			return;
 		}
-		this.scanning = true;
+		if (issueInquiry) {
+			if (this.inquiryScanQueued) {
+				return;
+			}
+			this.inquiryScanQueued = true;
+		} else {
+			if (this.fastScanQueued) {
+				return;
+			}
+			this.fastScanQueued = true;
+		}
+		this.scanChain = this.scanChain
+			.catch(() => undefined)
+			.then(async () => {
+				if (issueInquiry) {
+					this.inquiryScanQueued = false;
+				} else {
+					this.fastScanQueued = false;
+				}
+				if (!this.started) {
+					return;
+				}
+				await this.runScan(issueInquiry);
+			});
+	}
+
+	private async runScan(issueInquiry: boolean): Promise<void> {
 		this.scanCount += 1;
 		try {
-			const candidates = await this.listBluetoothCandidates(false);
-			if (this.scanCount <= 3) {
+			const candidates = await this.listBluetoothCandidates(issueInquiry);
+			if (issueInquiry) {
+				this.logger.info('BT inquiry scan result', {
+					scan: this.scanCount,
+					candidates: candidates.length,
+					names: candidates.map((c) => c.displayName ?? '(none)')
+				});
+			} else if (this.scanCount <= 3) {
 				this.logger.info('BT fast scan result', {
 					scan: this.scanCount,
 					candidates: candidates.length,
@@ -120,30 +238,7 @@ export class BtPresenceSource implements PresenceSource {
 			}
 			this.updateFromCandidates(candidates);
 		} catch (err) {
-			this.logger.warn('BT fast scan failed', { error: String(err) });
-		} finally {
-			this.scanning = false;
-		}
-	}
-
-	private async runInquiryScan(): Promise<void> {
-		if (!this.started || this.scanning) {
-			return;
-		}
-		this.scanning = true;
-		this.scanCount += 1;
-		try {
-			const candidates = await this.listBluetoothCandidates(true);
-			this.logger.info('BT inquiry scan result', {
-				scan: this.scanCount,
-				candidates: candidates.length,
-				names: candidates.map((c) => c.displayName ?? '(none)')
-			});
-			this.updateFromCandidates(candidates);
-		} catch (err) {
-			this.logger.warn('BT inquiry scan failed', { error: String(err) });
-		} finally {
-			this.scanning = false;
+			this.logger.warn(issueInquiry ? 'BT inquiry scan failed' : 'BT fast scan failed', { error: String(err) });
 		}
 	}
 
@@ -210,9 +305,12 @@ export class BtPresenceSource implements PresenceSource {
 	}
 
 	private async listBluetoothCandidates(issueInquiry: boolean): Promise<BluetoothCandidate[]> {
+		if (this.options._listBluetoothCandidates) {
+			return this.options._listBluetoothCandidates(issueInquiry);
+		}
 		const [serial, nativeDevices] = await Promise.all([
 			this.listSerialCandidates(),
-			Promise.resolve(this.listNativeDevices(issueInquiry))
+			this.listNativeDevices(issueInquiry)
 		]);
 
 		if (this.scanCount <= 3) {
@@ -289,16 +387,25 @@ export class BtPresenceSource implements PresenceSource {
 	 *  2. GetDeviceInfo for known MACs — catches devices that
 	 *     have fallen out of the volatile discovery cache
 	 */
-	private listNativeDevices(issueInquiry: boolean): BluetoothDeviceInfo[] {
+	private async listNativeDevices(issueInquiry: boolean): Promise<BluetoothDeviceInfo[]> {
 		if (!canUseNativeBluetoothDiscovery()) {
 			if (this.scanCount <= 1) {
-				this.logger.warn('BT: native discovery not available (koffi not loaded or unsupported platform)');
+				this.logger.warn('BT: native discovery backend not available on this platform');
 			}
 			return [];
 		}
 		try {
-			// Step 1: standard discovery scan
-			const discovered = listBluetoothDevicesNative({
+			let knownWindowsDevices: WindowsKnownLegoDevice[] = [];
+			if (process.platform === 'win32') {
+				knownWindowsDevices = await this.listWindowsKnownLegoDevices();
+				for (const device of knownWindowsDevices) {
+					this.knownLegoMacs.add(device.mac);
+				}
+			}
+
+			// Windows returns different subsets for cached-vs-inquiry enumeration.
+			// Keep both so visible devices and recently remembered LEGO bricks survive.
+			const primary = await listBluetoothDevicesNative({
 				returnAuthenticated: true,
 				returnRemembered: true,
 				returnUnknown: true,
@@ -306,6 +413,17 @@ export class BtPresenceSource implements PresenceSource {
 				issueInquiry,
 				timeoutMultiplier: issueInquiry ? 8 : 4
 			});
+			const secondary = process.platform === 'win32' && issueInquiry
+				? await listBluetoothDevicesNative({
+					returnAuthenticated: true,
+					returnRemembered: true,
+					returnUnknown: true,
+					returnConnected: true,
+					issueInquiry: false,
+					timeoutMultiplier: 4
+				})
+				: [];
+			const discovered = mergeBluetoothDeviceInfos(primary, secondary);
 
 			// Remember LEGO MACs for future lookups
 			const discoveredMacs = new Set<string>();
@@ -319,13 +437,26 @@ export class BtPresenceSource implements PresenceSource {
 			// Step 2: look up known MACs not found in discovery cache
 			const missingMacs = [...this.knownLegoMacs].filter(m => !discoveredMacs.has(m));
 			if (missingMacs.length > 0) {
-				const recovered = trackKnownDevicesNative(missingMacs);
+				const recovered = await trackKnownDevicesNative(missingMacs);
 				if (recovered.length > 0) {
 					this.logger.info('BT: recovered devices via GetDeviceInfo', {
 						recovered: recovered.map(d => d.name || d.mac)
 					});
 					discovered.push(...recovered);
 				}
+			}
+
+			if (process.platform === 'win32' && knownWindowsDevices.length > 0) {
+				const rememberedOnly = knownWindowsDevices
+					.filter((device) => !discovered.some((candidate) => candidate.mac === device.mac))
+					.map((device) => ({
+						mac: device.mac,
+						name: device.name ?? '',
+						connected: false,
+						remembered: true,
+						authenticated: false
+					}));
+				return mergeBluetoothDeviceInfos(discovered, rememberedOnly);
 			}
 
 			return discovered;
@@ -339,12 +470,78 @@ export class BtPresenceSource implements PresenceSource {
 		}
 	}
 
+	private async listWindowsKnownLegoMacs(): Promise<string[]> {
+		return (await this.listWindowsKnownLegoDevices()).map((device) => device.mac);
+	}
+
+	private async listWindowsKnownLegoDevices(): Promise<WindowsKnownLegoDevice[]> {
+		if (process.platform !== 'win32') {
+			return [];
+		}
+		const now = Date.now();
+		if (this.knownRegistryMacsCache && !this.knownRegistryMacsCache.inFlight && now - this.knownRegistryMacsCache.ts < 10000) {
+			return this.knownRegistryMacsCache.devices;
+		}
+		if (this.knownRegistryMacsCache?.inFlight) {
+			return await this.knownRegistryMacsCache.inFlight;
+		}
+
+		const inFlight = (async (): Promise<WindowsKnownLegoDevice[]> => {
+			const script = [
+				'$root = "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices";',
+				'if (-not (Test-Path $root)) { "[]"; return }',
+				'Get-ChildItem $root -ErrorAction SilentlyContinue |',
+				'  ForEach-Object {',
+				'    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue;',
+				'    [PSCustomObject]@{',
+				'      mac = $_.PSChildName;',
+				'      name = if ($props.Name) { [Text.Encoding]::UTF8.GetString($props.Name).Trim([char]0) } else { "" }',
+				'    }',
+				'  } |',
+				'  Where-Object { $_.mac -match "^[0-9A-Fa-f]{12}$" } |',
+				'  ConvertTo-Json -Compress'
+			].join('\n');
+
+			try {
+				const raw = await runWindowsPowerShell(script, 8000);
+				const values = parseWindowsKnownLegoDevices(raw);
+				this.knownRegistryMacsCache = { ts: Date.now(), devices: values };
+				return values;
+			} catch (err) {
+				if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
+					this.logger.warn('BT: Windows registry MAC enumeration failed', {
+						error: String(err),
+						scan: this.scanCount
+					});
+				}
+				this.knownRegistryMacsCache = { ts: Date.now(), devices: [] };
+				return [];
+			}
+		})();
+
+		this.knownRegistryMacsCache = {
+			ts: now,
+			devices: this.knownRegistryMacsCache?.devices ?? [],
+			inFlight
+		};
+		try {
+			return await inFlight;
+		} finally {
+			if (this.knownRegistryMacsCache) {
+				delete this.knownRegistryMacsCache.inFlight;
+			}
+		}
+	}
+
 	private async listSerialCandidates(): Promise<Array<{
 		path: string;
 		pnpId?: string;
 		friendlyName?: string;
 		manufacturer?: string;
 	}>> {
+		if (process.platform === 'win32') {
+			return await this.listWindowsSerialCandidates();
+		}
 		try {
 			const mod = require('serialport') as {
 				SerialPort?: { list: () => Promise<Array<{
@@ -364,6 +561,64 @@ export class BtPresenceSource implements PresenceSource {
 		} catch (err) {
 			if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
 				this.logger.warn('BT: serialport list failed', { error: String(err), scan: this.scanCount });
+			}
+			return [];
+		}
+	}
+
+	private async listWindowsSerialCandidates(): Promise<Array<{
+		path: string;
+		pnpId?: string;
+		friendlyName?: string;
+		manufacturer?: string;
+	}>> {
+		const script = [
+			'$rows = @();',
+			'if (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue) {',
+			'  $ports = Get-PnpDevice -Class Ports -PresentOnly -ErrorAction SilentlyContinue;',
+			'  foreach ($p in $ports) {',
+			'    $inst = [string]$p.InstanceId;',
+			'    $friendly = [string]$p.FriendlyName;',
+			'    $manufacturer = [string]$p.Manufacturer;',
+			'    $com = $null;',
+			'    if ($friendly -match "\\((COM\\d+)\\)") { $com = $Matches[1]; }',
+			'    elseif ($inst -match "\\b(COM\\d+)\\b") { $com = $Matches[1]; }',
+			'    if (-not $com) { continue; }',
+			'    $parent = (Get-PnpDeviceProperty -InstanceId $inst -KeyName "DEVPKEY_Device_Parent" -ErrorAction SilentlyContinue).Data;',
+			'    $rows += [PSCustomObject]@{',
+			'      path = $com;',
+			'      pnpId = if ($parent) { [string]$parent } else { $inst };',
+			'      friendlyName = $friendly;',
+			'      manufacturer = $manufacturer',
+			'    };',
+			'  }',
+			'}',
+			'$rows | ConvertTo-Json -Compress'
+		].join('\n');
+
+		try {
+			const raw = await runWindowsPowerShell(script, 8000);
+			if (!raw.trim()) {
+				return [];
+			}
+			const parsed = JSON.parse(raw) as
+				| { path?: unknown; pnpId?: unknown; friendlyName?: unknown; manufacturer?: unknown }
+				| Array<{ path?: unknown; pnpId?: unknown; friendlyName?: unknown; manufacturer?: unknown }>;
+			const rows = Array.isArray(parsed) ? parsed : [parsed];
+			return rows
+				.map((row) => ({
+					path: String(row.path ?? '').trim().toUpperCase(),
+					pnpId: String(row.pnpId ?? '').trim() || undefined,
+					friendlyName: String(row.friendlyName ?? '').trim() || undefined,
+					manufacturer: String(row.manufacturer ?? '').trim() || undefined
+				}))
+				.filter((row) => /^COM\d+$/i.test(row.path));
+		} catch (err) {
+			if (this.scanCount <= 1 || this.scanCount % 20 === 0) {
+				this.logger.warn('BT: Windows PnP COM enumeration failed', {
+					error: String(err),
+					scan: this.scanCount
+				});
 			}
 			return [];
 		}

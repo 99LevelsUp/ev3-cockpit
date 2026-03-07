@@ -4,6 +4,7 @@ import type { PresenceChangeCallback, PresenceRecord, PresenceSource } from './p
 import { encodeEv3Packet, decodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import { concatBytes, uint16le, lc0, gv0 } from '../protocol/ev3Bytecode';
 import { UsbHidAdapter } from '../transport/usbHidAdapter';
+import { runWindowsPowerShell } from './windowsPowerShell';
 
 export interface UsbPresenceSourceOptions {
 	pollIntervalMs: number;
@@ -25,6 +26,14 @@ interface HidDevice {
 	interface?: number;
 }
 
+interface WindowsUsbPnpRow {
+	instanceId: string;
+	parentId?: string;
+	friendlyName?: string;
+	className?: string;
+	manufacturer?: string;
+}
+
 const OP_COM_GET = 0xd3;
 const GET_BRICKNAME_SUB = 0x0d;
 const BRICKNAME_MAX_LEN = 13; // 12 chars + null terminator
@@ -44,6 +53,7 @@ export class UsbPresenceSource implements PresenceSource {
 	private nameProbeTimer: ReturnType<typeof setInterval> | undefined;
 	private started = false;
 	private pollCount = 0;
+	private polling = false;
 
 	constructor(options: UsbPresenceSourceOptions, logger: Logger) {
 		this.options = options;
@@ -59,11 +69,13 @@ export class UsbPresenceSource implements PresenceSource {
 			pollIntervalMs: this.options.pollIntervalMs,
 			nameProbeIntervalMs: this.options.nameProbeIntervalMs
 		});
-		this.poll();
-		this.timer = setInterval(() => this.poll(), this.options.pollIntervalMs);
+		void this.poll();
+		this.timer = setInterval(() => { void this.poll(); }, this.options.pollIntervalMs);
 		this.timer.unref?.();
-		this.nameProbeTimer = setInterval(() => this.probeAllNames(), this.options.nameProbeIntervalMs);
-		this.nameProbeTimer.unref?.();
+		if (process.platform !== 'win32') {
+			this.nameProbeTimer = setInterval(() => this.probeAllNames(), this.options.nameProbeIntervalMs);
+			this.nameProbeTimer.unref?.();
+		}
 	}
 
 	public stop(): void {
@@ -86,74 +98,81 @@ export class UsbPresenceSource implements PresenceSource {
 		this.listeners.push(callback);
 	}
 
-	private poll(): void {
+	private async poll(): Promise<void> {
+		if (this.polling) {
+			return;
+		}
+		this.polling = true;
 		this.pollCount += 1;
-		const devices = this.listHidDevices();
-		const now = Date.now();
-		let changed = false;
+		try {
+			const devices = await this.listHidDevices();
+			const now = Date.now();
+			let changed = false;
 
-		// Deduplicate: node-hid returns multiple HID collections per physical device.
-		// Group by serialNumber and pick one path per brick.
-		const deduped = this.deduplicateByBrick(devices);
+			// Deduplicate: node-hid returns multiple HID collections per physical device.
+			// Group by serialNumber and pick one path per brick.
+			const deduped = this.deduplicateByBrick(devices);
 
-		if (this.pollCount <= 3) {
-			this.logger.info('USB HID poll', {
-				poll: this.pollCount,
-				rawDevices: devices.length,
-				deduped: deduped.length,
-				serials: deduped.map((d) => d.serialNumber ?? '(none)')
-			});
-		}
-
-		const seenIds = new Set<string>();
-		for (const device of deduped) {
-			const usbPath = device.path?.trim();
-			if (!usbPath) {
-				continue;
+			if (this.pollCount <= 3) {
+				this.logger.info('USB HID poll', {
+					poll: this.pollCount,
+					rawDevices: devices.length,
+					deduped: deduped.length,
+					serials: deduped.map((d) => d.serialNumber ?? '(none)')
+				});
 			}
 
-			// Use serialNumber as stable identifier when available;
-			// fall back to path-based identifier.
-			const stableKey = device.serialNumber?.trim()
-				? this.options.toSafeIdentifier(device.serialNumber.trim())
-				: this.options.toSafeIdentifier(usbPath);
-			const candidateId = `usb-${stableKey}`;
-			seenIds.add(candidateId);
+			for (const device of deduped) {
+				const usbPath = device.path?.trim();
+				if (!usbPath) {
+					continue;
+				}
 
-			const existing = this.present.get(candidateId);
-			const resolvedName = this.resolvedNames.get(candidateId);
-			const displayName = resolvedName ?? 'EV3';
+				// Use serialNumber as stable identifier when available;
+				// fall back to path-based identifier.
+				const stableKey = device.serialNumber?.trim()
+					? this.options.toSafeIdentifier(device.serialNumber.trim())
+					: this.options.toSafeIdentifier(usbPath);
+				const candidateId = `usb-${stableKey}`;
 
-			const record: PresenceRecord = {
-				candidateId,
-				transport: TransportMode.USB,
-				displayName,
-				detail: usbPath,
-				connectable: true,
-				lastSeenMs: now,
-				connectionParams: { mode: 'usb', usbPath }
-			};
+				const existing = this.present.get(candidateId);
+				const resolvedName = this.resolvedNames.get(candidateId);
+				const displayName = resolvedName
+					?? this.deriveDisplayName(device)
+					?? 'EV3';
 
-			this.present.set(candidateId, record);
-			if (!existing) {
-				this.logger.info('USB device appeared', { candidateId, path: usbPath });
-				changed = true;
-				// Trigger immediate name probe for new device
-				void this.probeName(candidateId, usbPath);
-			} else if (existing.displayName !== displayName) {
-				changed = true;
-			} else if (now - existing.lastSeenMs > this.options.pollIntervalMs * 3) {
-				// Device was stale (missed 3+ polls) but is back — notify aggregator
-				changed = true;
+				const record: PresenceRecord = {
+					candidateId,
+					transport: TransportMode.USB,
+					displayName,
+					detail: usbPath,
+					connectable: true,
+					lastSeenMs: now,
+					connectionParams: { mode: 'usb', usbPath }
+				};
+
+				this.present.set(candidateId, record);
+				if (!existing) {
+					this.logger.info('USB device appeared', { candidateId, path: usbPath });
+					changed = true;
+					if (process.platform !== 'win32') {
+						// On Windows, background HID access is isolated out of the extension
+						// host for stability, so we skip active name probing here.
+						void this.probeName(candidateId, usbPath);
+					}
+				} else if (existing.displayName !== displayName) {
+					changed = true;
+				} else if (now - existing.lastSeenMs > this.options.pollIntervalMs * 3) {
+					// Device was stale (missed 3+ polls) but is back — notify aggregator
+					changed = true;
+				}
 			}
-		}
 
-		// Devices not in current scan keep their old lastSeenMs.
-		// The aggregator reaper handles stale device removal via TTL —
-		// we never delete here to avoid flapping on transient scan failures.
-
-		if (changed) {
-			this.fireChange();
+			if (changed) {
+				this.fireChange();
+			}
+		} finally {
+			this.polling = false;
 		}
 	}
 
@@ -289,7 +308,10 @@ export class UsbPresenceSource implements PresenceSource {
 		return [...bySerial.values(), ...noSerial];
 	}
 
-	private listHidDevices(): HidDevice[] {
+	private async listHidDevices(): Promise<HidDevice[]> {
+		if (process.platform === 'win32') {
+			return await this.listWindowsUsbDevices();
+		}
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-var-requires
 			const hid = require('node-hid') as {
@@ -316,6 +338,184 @@ export class UsbPresenceSource implements PresenceSource {
 			}
 			return [];
 		}
+	}
+
+	private async listWindowsUsbDevices(): Promise<HidDevice[]> {
+		const vidHex = this.options.vendorId.toString(16).padStart(4, '0').toUpperCase();
+		const pidHex = this.options.productId.toString(16).padStart(4, '0').toUpperCase();
+		try {
+			const script = [
+				'$rows = @();',
+				'if (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue) {',
+				'  $devices = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object {',
+				`    $_.InstanceId -match 'VID_${vidHex}&PID_${pidHex}' -or $_.InstanceId -match '001653' -or $_.FriendlyName -match 'EV3|LEGO' -or $_.Manufacturer -match 'LEGO'`,
+				'  };',
+				'  foreach ($device in $devices) {',
+				'    $parent = (Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName "DEVPKEY_Device_Parent" -ErrorAction SilentlyContinue).Data;',
+				'    $rows += [PSCustomObject]@{',
+				'      instanceId = [string]$device.InstanceId;',
+				'      parentId = if ($parent) { [string]$parent } else { ""; };',
+				'      friendlyName = [string]$device.FriendlyName;',
+				'      className = [string]$device.Class;',
+				'      manufacturer = [string]$device.Manufacturer',
+				'    };',
+				'  }',
+				'}',
+				'$rows | ConvertTo-Json -Compress -Depth 5'
+			].join('\n');
+
+			const raw = await runWindowsPowerShell(script, 8000);
+			if (!raw.trim()) {
+				return [];
+			}
+			const parsed = JSON.parse(raw) as WindowsUsbPnpRow | WindowsUsbPnpRow[];
+			const rows = Array.isArray(parsed) ? parsed : [parsed];
+			return this.mapWindowsUsbRows(rows);
+		} catch (err) {
+			if (this.pollCount <= 3 || this.pollCount % 20 === 0) {
+				this.logger.warn('USB Windows PnP enumeration failed', {
+					error: String(err),
+					poll: this.pollCount
+				});
+			}
+			return [];
+		}
+	}
+
+	private mapWindowsUsbRows(rows: WindowsUsbPnpRow[]): HidDevice[] {
+		interface NormalizedWindowsUsbRow {
+			instanceId: string;
+			parentId?: string;
+			friendlyName?: string;
+			className?: string;
+			manufacturer?: string;
+		}
+
+		const normalizedRows: NormalizedWindowsUsbRow[] = rows
+			.map((row) => ({
+				instanceId: String(row.instanceId ?? '').trim(),
+				parentId: String(row.parentId ?? '').trim() || undefined,
+				friendlyName: String(row.friendlyName ?? '').trim() || undefined,
+				className: String(row.className ?? '').trim() || undefined,
+				manufacturer: String(row.manufacturer ?? '').trim() || undefined
+			}))
+			.filter((row) => row.instanceId.length > 0)
+			.filter((row) => this.isRelevantWindowsUsbRow(row));
+
+		const groups = new Map<string, NormalizedWindowsUsbRow[]>();
+		for (const row of normalizedRows) {
+			const serial = this.extractWindowsUsbSerial(row.instanceId) ?? this.extractWindowsUsbSerial(row.parentId ?? '');
+			if (!serial) {
+				continue;
+			}
+			const key = serial ?? this.normalizeWindowsUsbGroupKey(row.instanceId, row.parentId);
+			const bucket = groups.get(key) ?? [];
+			bucket.push(row);
+			groups.set(key, bucket);
+		}
+
+		const devices: HidDevice[] = [];
+		for (const [key, group] of groups) {
+			if (!group.some((row) => this.isWindowsUsbConnectableRow(row))) {
+				continue;
+			}
+			const serial = key.startsWith('serial:') ? key.slice('serial:'.length) : this.extractWindowsUsbSerial(key);
+			const product = this.pickWindowsUsbDisplayName(group);
+			const manufacturer = group.find((row) => row.manufacturer)?.manufacturer;
+			devices.push({
+				path: serial ? `serial:${serial}` : this.pickWindowsUsbPath(group),
+				vendorId: this.options.vendorId,
+				productId: this.options.productId,
+				product,
+				serialNumber: serial,
+				manufacturer
+			});
+		}
+
+		return devices.filter((device) => device.path.length > 0);
+	}
+
+	private isRelevantWindowsUsbRow(row: {
+		instanceId: string;
+		parentId?: string;
+		friendlyName?: string;
+		className?: string;
+	}): boolean {
+		const ids = [row.instanceId, row.parentId ?? ''].join(' ').toUpperCase();
+		if (!ids.includes('VID_0694') || !ids.includes('PID_0005')) {
+			return false;
+		}
+		if (ids.includes('&MI_01')) {
+			return false;
+		}
+		return /^(HID|USB)\\VID_0694&PID_0005/i.test(row.instanceId)
+			|| /^(HID|USB)\\VID_0694&PID_0005/i.test(row.parentId ?? '');
+	}
+
+	private isWindowsUsbConnectableRow(row: {
+		instanceId: string;
+		parentId?: string;
+		className?: string;
+	}): boolean {
+		return /^HID\\VID_0694&PID_0005/i.test(row.instanceId)
+			|| (row.className?.toLowerCase() === 'hidclass')
+			|| /USB\\VID_0694&PID_0005&MI_00/i.test(row.instanceId);
+	}
+
+	private normalizeWindowsUsbGroupKey(instanceId: string, parentId?: string): string {
+		const serial = this.extractWindowsUsbSerial(instanceId) ?? this.extractWindowsUsbSerial(parentId ?? '');
+		if (serial) {
+			return `serial:${serial}`;
+		}
+		return (parentId ?? instanceId).trim().toLowerCase();
+	}
+
+	private pickWindowsUsbPath(rows: Array<{ instanceId: string }>): string {
+		const preferred = rows.find((row) => /^HID\\VID_0694&PID_0005/i.test(row.instanceId))
+			?? rows.find((row) => /^USB\\VID_0694&PID_0005&MI_00/i.test(row.instanceId))
+			?? rows[0];
+		return preferred?.instanceId ?? '';
+	}
+
+	private pickWindowsUsbDisplayName(rows: Array<{ friendlyName?: string; className?: string }>): string | undefined {
+		const friendlyNames = rows
+			.map((row) => row.friendlyName?.trim() || '')
+			.filter((name) => name.length > 0);
+		const ev3Name = friendlyNames.find((name) => /\bev3\b/i.test(name));
+		if (ev3Name) {
+			return ev3Name;
+		}
+		const specificName = friendlyNames.find((name) => !this.isGenericWindowsUsbName(name));
+		if (specificName) {
+			return specificName;
+		}
+		return undefined;
+	}
+
+	private isGenericWindowsUsbName(value: string): boolean {
+		const normalized = value.toLowerCase();
+		return /usb|hid|hidclass|composite|storage|input|device|zařízení|vstupní|složené|velkokapacitní|standardu/.test(normalized);
+	}
+
+	private extractWindowsUsbSerial(instanceId: string): string | undefined {
+		const match = instanceId.match(/([0-9A-Fa-f]{12})/);
+		return match ? match[1].toLowerCase() : undefined;
+	}
+
+	private deriveDisplayName(device: HidDevice): string | undefined {
+		const product = String(device.product ?? '').trim();
+		if (product && !/^usb/i.test(product)) {
+			return product;
+		}
+		const manufacturer = String(device.manufacturer ?? '').trim();
+		if (/lego/i.test(manufacturer)) {
+			return 'EV3';
+		}
+		const serial = device.serialNumber?.trim();
+		if (serial && serial.length >= 4) {
+			return `EV3 USB (${serial.slice(-4).toUpperCase()})`;
+		}
+		return undefined;
 	}
 
 	private fireChange(): void {

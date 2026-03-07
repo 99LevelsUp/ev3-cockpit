@@ -9,6 +9,7 @@ interface HidDeviceInfo {
 	path: string;
 	vendorId?: number;
 	productId?: number;
+	serialNumber?: string;
 }
 
 /** Default USB HID report size for EV3 (1-byte report ID + 1024-byte payload). */
@@ -146,7 +147,7 @@ export class UsbHidAdapter implements TransportAdapter {
 
 	private async openInternal(): Promise<void> {
 		const hid = loadNodeHid();
-		const targetPath = this.path ?? this.findDefaultPath(hid);
+		const targetPath = this.resolveTargetPath(hid);
 		const device = new hid.HID(targetPath);
 
 		this.device = device;
@@ -165,12 +166,40 @@ export class UsbHidAdapter implements TransportAdapter {
 		device.on('error', (error) => this.handleFailure(error));
 	}
 
+	private resolveTargetPath(hid: NodeHidModuleLike): string {
+		if (!this.path) {
+			return this.findDefaultPath(hid);
+		}
+		const serialMatch = this.path.match(/^serial:([0-9a-f]{12})$/i);
+		if (!serialMatch) {
+			return this.path;
+		}
+		return this.findPathBySerial(hid, serialMatch[1].toLowerCase());
+	}
+
 	private findDefaultPath(hid: NodeHidModuleLike): string {
 		const devices = hid.devices(this.vendorId, this.productId);
 		const found = devices.find((entry) => Boolean(entry.path));
 		if (!found?.path) {
 			throw new Error(
 				`No EV3 USB HID device found (vendor=${toHex(this.vendorId)}, product=${toHex(this.productId)}).`
+			);
+		}
+		return found.path;
+	}
+
+	private findPathBySerial(hid: NodeHidModuleLike, serial: string): string {
+		const devices = hid.devices();
+		const found = devices.find((entry) =>
+			entry.vendorId === this.vendorId
+			&& entry.productId === this.productId
+			&& entry.serialNumber?.trim().toLowerCase() === serial
+			&& Boolean(entry.path)
+		);
+		if (!found?.path) {
+			throw new Error(
+				`No EV3 USB HID device found for serial ${serial.toUpperCase()} `
+				+ `(vendor=${toHex(this.vendorId)}, product=${toHex(this.productId)}).`
 			);
 		}
 		return found.path;

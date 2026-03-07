@@ -97,17 +97,24 @@ export function activate(context: vscode.ExtensionContext) {
 		perfLogger
 	);
 	const mockPresenceSource = new MockPresenceSource();
+	const enableHardwarePresence = context.extensionMode !== vscode.ExtensionMode.Test;
+	const usbGoneTtlMs = process.platform === 'win32' ? 15_000 : 3_000;
 	const presenceAggregator = new PresenceAggregator(
 		{ brickRegistry, profileStore, logger: perfLogger, toSafeIdentifier },
 		{
-			goneTtl: { usb: 3000, bt: 45000, tcp: 10000, mock: Infinity },
+			// Windows USB discovery uses PnP enumeration instead of node-hid polling.
+			// That scan is materially slower, so USB entries must survive longer
+			// than a single poll cycle or they flap out of the UI between scans.
+			goneTtl: { usb: usbGoneTtlMs, bt: 45000, tcp: 10000, mock: Infinity },
 			reaperIntervalMs: 1000,
 			defaultRootPath: normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/')
 		}
 	);
-	presenceAggregator.addSource(usbPresenceSource);
-	presenceAggregator.addSource(tcpPresenceSource);
-	presenceAggregator.addSource(btPresenceSource);
+	if (enableHardwarePresence) {
+		presenceAggregator.addSource(usbPresenceSource);
+		presenceAggregator.addSource(tcpPresenceSource);
+		presenceAggregator.addSource(btPresenceSource);
+	}
 	presenceAggregator.addSource(mockPresenceSource);
 	presenceAggregator.start();
 
