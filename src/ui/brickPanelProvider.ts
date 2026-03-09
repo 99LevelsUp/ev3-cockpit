@@ -498,6 +498,7 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			: '';
 		const transportIconsLiteral = JSON.stringify(getWebviewTransportIcons());
 		const tabActionIconsLiteral = JSON.stringify(getWebviewTabActionIcons());
+		const brickTabIconSvgLiteral = JSON.stringify(readBrickTabIconSvg(this.extensionUri));
 		const template = readBrickPanelTemplate(this.extensionUri);
 
 		return template
@@ -506,12 +507,14 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			.replace('__CODICONS_LINK_TAG__', codiconsLinkTag)
 			.replace('__TRANSPORT_ICONS_LITERAL__', transportIconsLiteral)
 			.replace('__TAB_ACTION_ICONS_LITERAL__', tabActionIconsLiteral)
+			.replace('__BRICK_TAB_ICON_SVG_LITERAL__', brickTabIconSvgLiteral)
 			.replace('__DISCOVERY_REFRESH_FAST_MS__', String(this.discoveryRefreshFastMs))
 			.replace('__DISCOVERY_REFRESH_SLOW_MS__', String(this.discoveryRefreshSlowMs));
 	}
 }
 
 let cachedBrickPanelTemplate: string | undefined;
+let cachedBrickTabIconSvg: string | undefined;
 
 function readBrickPanelTemplate(extensionUri: vscode.Uri): string {
 	if (cachedBrickPanelTemplate) {
@@ -523,6 +526,18 @@ function readBrickPanelTemplate(extensionUri: vscode.Uri): string {
 	const templatePath = path.join(extensionFsPath, 'media', 'brick-panel.html');
 	cachedBrickPanelTemplate = fs.readFileSync(templatePath, 'utf8');
 	return cachedBrickPanelTemplate;
+}
+
+function readBrickTabIconSvg(extensionUri: vscode.Uri): string {
+	if (cachedBrickTabIconSvg) {
+		return cachedBrickTabIconSvg;
+	}
+	const extensionFsPath = typeof extensionUri.fsPath === 'string' && extensionUri.fsPath.length > 0
+		? extensionUri.fsPath
+		: process.cwd();
+	const iconPath = path.join(extensionFsPath, 'media', 'ev3-brick.svg');
+	cachedBrickTabIconSvg = fs.readFileSync(iconPath, 'utf8');
+	return cachedBrickTabIconSvg;
 }
 
 function getNonce(): string {

@@ -161,9 +161,13 @@ async function openEV3Panel(page: Page): Promise<void> {
 	} catch {
 		// Fall back to opening the EV3 view directly.
 	}
-	const found = await waitForEV3Webview(page, 8000);
+	let found = await waitForEV3Webview(page, 8000);
 	if (!found) {
 		await openAnyViewPicker(page, ['EV3', 'EVƎ']);
+		found = await waitForEV3Webview(page, 12000);
+	}
+	if (!found) {
+		await runCommand(page, 'EV3 Cockpit: Open Brick Panel');
 	}
 	const paneHeader = page.locator('.pane .pane-header').filter({ hasText: /EV3|EVƎ/ }).first();
 	if ((await paneHeader.count()) > 0) {

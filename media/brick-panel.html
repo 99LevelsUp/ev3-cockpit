@@ -20,6 +20,22 @@ __CODICONS_LINK_TAG__
 		display: flex;
 		flex-direction: column;
 	}
+	.brick-panel-shell {
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+	.brick-panel-header {
+		flex: 0 0 auto;
+		background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background, var(--vscode-editor-background)));
+		border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, transparent));
+	}
+	.brick-panel-content {
+		flex: 1 1 auto;
+		min-height: 0;
+		background: var(--vscode-editor-background);
+	}
 	.config-error {
 		padding: 6px 12px 0;
 		color: var(--vscode-errorForeground);
@@ -44,10 +60,10 @@ __CODICONS_LINK_TAG__
 	}
 	.brick-tabs {
 		display: flex;
-		align-items: flex-end;
+		align-items: stretch;
 		flex-wrap: nowrap;
 		gap: 0;
-		padding: 8px 8px 0;
+		padding: 10px 10px 0;
 		overflow: visible;
 	}
 	.brick-tab-baseline {
@@ -84,7 +100,7 @@ __CODICONS_LINK_TAG__
 	}
 	.brick-tabs-track {
 		display: flex;
-		align-items: flex-end;
+		align-items: stretch;
 		min-width: 0;
 	}
 	.brick-tabs.tabs-overflowing .brick-tabs-scroller {
@@ -104,22 +120,62 @@ __CODICONS_LINK_TAG__
 	.brick-tab {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 6px;
 		padding: 6px 10px;
 		margin: 0 2px -1px 0;
 		border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, transparent));
-		border-top-left-radius: 0;
-		border-top-right-radius: 0;
+		border-top-left-radius: 8px;
+		border-top-right-radius: 8px;
 		border-bottom-left-radius: 0;
 		border-bottom-right-radius: 0;
 		border-bottom-color: transparent;
 		cursor: pointer;
-		background: transparent;
+		background: var(--vscode-tab-unfocusedInactiveBackground, var(--vscode-sideBar-background, transparent));
 		color: var(--vscode-tab-inactiveForeground, var(--vscode-foreground));
 		font-size: var(--vscode-font-size);
 		white-space: nowrap;
 		flex: 0 0 auto;
-		min-width: 44px;
+		min-width: 78px;
+		max-width: 180px;
+		min-height: 40px;
+		box-sizing: border-box;
+		position: relative;
+	}
+	.brick-tab-main {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.brick-tab-illustration {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: 0 0 auto;
+		width: 26px;
+		height: 40px;
+		overflow: hidden;
+	}
+	.brick-tab-illustration svg {
+		display: block;
+		width: 100%;
+		height: 100%;
+	}
+	.brick-tab-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 4px;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.brick-tab-status-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		width: 100%;
 	}
 	.brick-tab-label {
 		overflow: hidden;
@@ -127,7 +183,9 @@ __CODICONS_LINK_TAG__
 		white-space: nowrap;
 		flex: 1 1 auto;
 		min-width: 0;
-		margin-right: 2px;
+		margin-right: 0;
+		font-weight: 600;
+		line-height: 1.2;
 	}
 	.brick-tab-action {
 		display: inline-flex;
@@ -153,7 +211,7 @@ __CODICONS_LINK_TAG__
 		line-height: 16px;
 	}
 	.brick-tab-close {
-		margin-left: -2px;
+		margin-left: 0;
 		margin-right: -2px;
 		opacity: 0;
 		pointer-events: none;
@@ -184,11 +242,12 @@ __CODICONS_LINK_TAG__
 		position: relative;
 		display: inline-flex;
 		align-items: center;
-		margin-left: 0;
+		margin-left: 2px;
 		margin-right: -2px;
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity .1s linear;
+		align-self: center;
 	}
 	.brick-tab.active .brick-tab-config-group {
 		opacity: 0.9;
@@ -276,6 +335,7 @@ __CODICONS_LINK_TAG__
 	.brick-tab.add-tab {
 		min-width: 32px;
 		justify-content: center;
+		padding: 8px 12px;
 	}
 	.brick-tab-add-icon {
 		margin-left: 0;
@@ -446,6 +506,25 @@ __CODICONS_LINK_TAG__
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+	.brick-hero {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 20px 12px 12px;
+	}
+	.brick-hero-figure {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: min(220px, 72%);
+		max-width: 220px;
+		aspect-ratio: 279 / 429;
+	}
+	.brick-hero-figure svg {
+		display: block;
+		width: 100%;
+		height: 100%;
 	}
 	.config-editor-title {
 		font-size: 14px;
@@ -649,6 +728,10 @@ __CODICONS_LINK_TAG__
 		const DISCOVERY_REFRESH_SLOW_MS = __DISCOVERY_REFRESH_SLOW_MS__;
 		const TRANSPORT_ICONS = __TRANSPORT_ICONS_LITERAL__;
 		const TAB_ACTION_ICONS = __TAB_ACTION_ICONS_LITERAL__;
+		const BRICK_TAB_ICON_SVG = (__BRICK_TAB_ICON_SVG_LITERAL__ || '').replace(
+			'<svg ',
+			'<svg class="brick-tab-brick-svg" aria-hidden="true" focusable="false" '
+		);
 
 		function isPlusTabActive() {
 			return discoveryOpen || bricks.length === 0;
@@ -1024,6 +1107,10 @@ __CODICONS_LINK_TAG__
 					? 'status-' + normalizedStatus
 					: 'status-' + connectedStatus;
 			return '<span class="transport-indicator ' + statusClass + '">' + renderTransportIcon(candidate.transport) + '</span>';
+		}
+
+		function renderBrickHeroIllustration() {
+			return '<div class="brick-hero"><div class="brick-hero-figure" aria-hidden="true">' + BRICK_TAB_ICON_SVG + '</div></div>';
 		}
 
 		function shouldShowTabClose(brick) {
@@ -1408,7 +1495,7 @@ __CODICONS_LINK_TAG__
 				tabsScrollLeft = previousTabsMain.scrollLeft;
 			}
 			const activeBrick = bricks.find(b => b.isActive);
-			let html = '<div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-scroller"><div class="brick-tabs-main"><div class="brick-tabs-track">';
+			let html = '<div class="brick-panel-shell"><div class="brick-panel-header"><div class="brick-tabs-wrap"><div class="brick-tabs"><div class="brick-tabs-scroller"><div class="brick-tabs-main"><div class="brick-tabs-track">';
 			for (const brick of bricks) {
 				const isAvailable = String(brick.status || '').toUpperCase() === 'AVAILABLE';
 				const isActiveTab = !discoveryOpen && brick.isActive && !isAvailable;
@@ -1441,9 +1528,9 @@ __CODICONS_LINK_TAG__
 			html += '</div>';
 			html += '<div class="brick-tab-baseline"></div>';
 			html += '<div class="brick-tab-baseline-gap"></div>';
-			html += '</div>';
+			html += '</div></div>';
 
-			html += '<div class="brick-detail-shell"><div class="brick-detail-area">';
+			html += '<div class="brick-panel-content"><div class="brick-detail-shell"><div class="brick-detail-area">';
 			const activeConfigError = getActiveBrickConfigError();
 			if (activeConfigError) {
 				html += '<div class="config-error">' + activeConfigError + '</div>';
@@ -1479,9 +1566,8 @@ __CODICONS_LINK_TAG__
 					html += '</div>';
 				}
 				html += '</div>';
-			}
-
-			if (!discoveryOpen && activeBrick) {
+			} else if (activeBrick) {
+				html += renderBrickHeroIllustration();
 				const activeState = getTabConfigState(activeBrick.brickId);
 				if (activeState.mode) {
 					const currentName = getCurrentBrickDisplayName(activeBrick.brickId);
@@ -1508,9 +1594,10 @@ __CODICONS_LINK_TAG__
 				}
 			}
 
-			const isActiveConfigMode = !discoveryOpen && !!activeBrick && getTabConfigState(activeBrick.brickId).mode;
+			const shouldRenderBrickContent = !discoveryOpen;
+			const isActiveConfigMode = shouldRenderBrickContent && !!activeBrick && getTabConfigState(activeBrick.brickId).mode;
 
-			if (!isActiveConfigMode && sensors && sensors.length > 0) {
+			if (shouldRenderBrickContent && !isActiveConfigMode && sensors && sensors.length > 0) {
 				html += '<div class="sensor-section"><h3>Sensors</h3>';
 				for (const s of sensors) {
 					const cls = s.connected ? 'sensor-port' : 'sensor-port disconnected';
@@ -1525,7 +1612,7 @@ __CODICONS_LINK_TAG__
 				html += '</div>';
 			}
 
-			if (!isActiveConfigMode && motors && motors.length > 0) {
+			if (shouldRenderBrickContent && !isActiveConfigMode && motors && motors.length > 0) {
 				html += '<div class="motor-section"><h3>Motors</h3>';
 				for (const m of motors) {
 					const cls = m.running ? 'motor-port' : 'motor-port stopped';
@@ -1540,7 +1627,7 @@ __CODICONS_LINK_TAG__
 				html += '</div>';
 			}
 
-			if (!isActiveConfigMode && controls) {
+			if (shouldRenderBrickContent && !isActiveConfigMode && controls) {
 				html += '<div class="controls-section"><h3>Controls</h3>';
 				if (controls.buttonName) {
 					html += '<div class="controls-row">'
@@ -1561,7 +1648,7 @@ __CODICONS_LINK_TAG__
 				+ '<div class="overlay-scrollbar overlay-scrollbar-vertical" data-overlay-track="detail">'
 				+ '<div class="overlay-scrollbar-thumb" data-overlay-thumb="detail"></div>'
 				+ '</div>'
-				+ '</div>';
+				+ '</div></div></div>';
 
 			root.innerHTML = html;
 			const detailArea = root.querySelector('.brick-detail-area');

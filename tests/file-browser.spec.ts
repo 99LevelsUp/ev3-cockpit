@@ -142,7 +142,7 @@ test.describe('File Browser (Tree View)', () => {
 			await page.waitForTimeout(5000);
 
 			// Connect to mock brick via command
-			await runCommand(page, 'EV3 Cockpit: Connect to EV3');
+			await runCommand(page, 'EV3 Cockpit: Connect to EV3 Brick');
 			await page.waitForTimeout(5000); // Wait for connection
 
 			// Open tree view
@@ -178,7 +178,7 @@ test.describe('File Browser (Tree View)', () => {
 			await page.waitForTimeout(5000);
 
 			// Connect to mock brick
-			await runCommand(page, 'EV3 Cockpit: Connect to EV3');
+			await runCommand(page, 'EV3 Cockpit: Connect to EV3 Brick');
 			await page.waitForTimeout(5000);
 
 			// Open tree view
@@ -223,7 +223,7 @@ test.describe('File Browser (Tree View)', () => {
 			await page.waitForTimeout(5000);
 
 			// Connect to mock brick
-			await runCommand(page, 'EV3 Cockpit: Connect to EV3');
+			await runCommand(page, 'EV3 Cockpit: Connect to EV3 Brick');
 			await page.waitForTimeout(5000);
 
 			// Open tree view
@@ -269,7 +269,7 @@ test.describe('File Browser (Tree View)', () => {
 			await page.waitForTimeout(5000);
 
 			// Connect to mock brick
-			await runCommand(page, 'EV3 Cockpit: Connect to EV3');
+			await runCommand(page, 'EV3 Cockpit: Connect to EV3 Brick');
 			await page.waitForTimeout(5000);
 
 			// Open both file explorer and EV3 tree view
@@ -328,7 +328,7 @@ test.describe('File Browser (Tree View)', () => {
 			await page.waitForTimeout(5000);
 
 			// Connect to mock brick
-			await runCommand(page, 'EV3 Cockpit: Connect to EV3');
+			await runCommand(page, 'EV3 Cockpit: Connect to EV3 Brick');
 			await page.waitForTimeout(5000);
 
 			// Open tree view
