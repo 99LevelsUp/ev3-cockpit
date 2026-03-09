@@ -13,7 +13,7 @@ import {
 	isBrickFileNode,
 	isBrickRootNode
 } from '../ui/brickTreeProvider';
-import { toErrorMessage, withBrickOperation } from './commandUtils';
+import { presentCommandError, toErrorMessage, toUserFacingErrorMessage, withBrickOperation } from './commandUtils';
 
 type ProgramStartSource = 'remote-fs-run';
 
@@ -98,12 +98,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 					});
 					vscode.window.showInformationMessage(`Program started: ev3://${authority}${remotePath}`);
 				} catch (error) {
-					const message = toErrorMessage(error);
-					logger.warn('Remote FS run program failed', {
-						path: remotePath,
-						message
-					});
-					vscode.window.showErrorMessage(`Cannot run ${uri.toString()}. Detail: ${message}`);
+					vscode.window.showErrorMessage(
+						presentCommandError({
+							logger,
+							operation: 'Run remote file',
+							level: 'warn',
+							context: {
+								brickId,
+								path: remotePath
+							},
+							userMessage: `Cannot run ${uri.toString()}. Detail: ${toUserFacingErrorMessage(error)}`,
+							error
+						})
+					);
 				}
 				return;
 			}
@@ -141,12 +148,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 			try {
 				listing = await fsService.listDirectory(currentPath);
 			} catch (error) {
-				const message = toErrorMessage(error);
-				logger.warn('Remote FS browse listing failed', {
-					path: currentPath,
-					message
-				});
-				vscode.window.showErrorMessage(`EV3 browse failed for ${currentPath}: ${message}`);
+				vscode.window.showErrorMessage(
+					presentCommandError({
+						logger,
+						operation: 'Browse remote filesystem',
+						level: 'warn',
+						context: {
+							brickId,
+							path: currentPath
+						},
+						userMessage: `EV3 browse failed for ${currentPath}: ${toUserFacingErrorMessage(error)}`,
+						error
+					})
+				);
 				break;
 			}
 			type FsQuickPick = vscode.QuickPickItem & {
@@ -274,12 +288,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 					vscode.window.showInformationMessage(`Folder created: ev3://${authority}${remotePath}`);
 					options.getTreeProvider().refreshDirectory(brickId, currentPath);
 				} catch (error) {
-					const message = toErrorMessage(error);
-					logger.warn('Remote FS mkdir failed', {
-						path: remotePath,
-						message
-					});
-					vscode.window.showErrorMessage(`Cannot create folder ${remotePath}. Detail: ${message}`);
+					vscode.window.showErrorMessage(
+						presentCommandError({
+							logger,
+							operation: 'Create remote folder',
+							level: 'warn',
+							context: {
+								brickId,
+								path: remotePath
+							},
+							userMessage: `Cannot create folder ${remotePath}. Detail: ${toUserFacingErrorMessage(error)}`,
+							error
+						})
+					);
 				}
 				continue;
 			}
@@ -337,12 +358,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 					vscode.window.showInformationMessage(`Deleted ev3://${authority}${toDelete.targetPath}`);
 					options.getTreeProvider().refreshDirectory(brickId, currentPath);
 				} catch (error) {
-					const message = toErrorMessage(error);
-					logger.warn('Remote FS delete failed', {
-						path: toDelete.targetPath,
-						message
-					});
-					vscode.window.showErrorMessage(`Cannot delete ${targetUri.toString()}. Detail: ${message}`);
+					vscode.window.showErrorMessage(
+						presentCommandError({
+							logger,
+							operation: 'Delete remote entry',
+							level: 'warn',
+							context: {
+								brickId,
+								path: toDelete.targetPath
+							},
+							userMessage: `Cannot delete ${targetUri.toString()}. Detail: ${toUserFacingErrorMessage(error)}`,
+							error
+						})
+					);
 				}
 				continue;
 			}
@@ -365,11 +393,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 					continue;
 				}
 
-				logger.warn('Remote FS open failed', {
-					path: selected.targetPath,
-					message
-				});
-				vscode.window.showErrorMessage(`Cannot open ${uri.toString()}. Detail: ${message}`);
+				vscode.window.showErrorMessage(
+					presentCommandError({
+						logger,
+						operation: 'Open remote entry',
+						level: 'warn',
+						context: {
+							brickId,
+							path: selected.targetPath
+						},
+						userMessage: `Cannot open ${uri.toString()}. Detail: ${toUserFacingErrorMessage(error)}`,
+						error
+					})
+				);
 			}
 		}
 	});
@@ -472,8 +508,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				});
 				treeProvider.refreshDirectory(node.brickId, path.posix.dirname(node.remotePath));
 			} catch (error) {
-				const message = toErrorMessage(error);
-				vscode.window.showErrorMessage(`Cannot delete ${targetUri.toString()}. Detail: ${message}`);
+				vscode.window.showErrorMessage(
+					presentCommandError({
+						logger: options.getLogger(),
+						operation: 'Delete remote entry',
+						level: 'warn',
+						context: {
+							brickId: node.brickId,
+							path: node.remotePath
+						},
+						userMessage: `Cannot delete ${targetUri.toString()}. Detail: ${toUserFacingErrorMessage(error)}`,
+						error
+					})
+				);
 			}
 		}
 	);
@@ -506,8 +553,19 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				});
 				vscode.window.showInformationMessage(`Program started: ev3://${fsContext.authority}${node.remotePath}`);
 			} catch (error) {
-				const message = toErrorMessage(error);
-				vscode.window.showErrorMessage(`Run failed: ${message}`);
+				vscode.window.showErrorMessage(
+					presentCommandError({
+						logger,
+						operation: 'Run executable from tree',
+						level: 'warn',
+						context: {
+							brickId: fsContext.brickId,
+							path: node.remotePath
+						},
+						userMessage: `Run failed: ${toUserFacingErrorMessage(error)}`,
+						error
+					})
+				);
 			}
 		}
 	);
