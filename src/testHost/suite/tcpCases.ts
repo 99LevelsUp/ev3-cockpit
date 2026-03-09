@@ -4,6 +4,7 @@ import type { HostTestCase } from './hostTestCases';
 import { startFakeDiscoveryBeacon, startFakeEv3TcpServer } from './fakeEv3Server';
 import {
 	toSafeIdentifierForTest,
+	waitForAsyncCondition,
 	waitForCondition,
 	withReconnectPromptChoice,
 	withWorkspaceSettings
@@ -34,7 +35,18 @@ async function testTcpConnectFlowWithMockDiscoveryAndServer(): Promise<void> {
 					() => fakeServer.getAcceptedConnectionCount() >= 1,
 					6_000
 				);
-				await new Promise<void>((resolve) => setTimeout(resolve, 300));
+				await waitForAsyncCondition(
+					'tcp connect should restore explicit brick filesystem access',
+					async () => {
+						try {
+							await vscode.workspace.fs.readDirectory(vscode.Uri.parse(`ev3://${tcpBrickId}/home/root/lms2012/prjs/`));
+							return true;
+						} catch {
+							return false;
+						}
+					},
+					6_000
+				);
 
 				const selectedBrickRoot = {
 					kind: 'brick',
@@ -150,6 +162,18 @@ async function testConfigChangeReconnectPromptBranchesWithMockTcp(): Promise<voi
 					await waitForCondition(
 						'reconnect all should open socket on server B',
 						() => fakeServerB.getAcceptedConnectionCount() >= 1,
+						6_000
+					);
+					await waitForAsyncCondition(
+						'reconnect all should restore active filesystem access',
+						async () => {
+							try {
+								await vscode.workspace.fs.readDirectory(activeRootUri);
+								return true;
+							} catch {
+								return false;
+							}
+						},
 						6_000
 					);
 				});

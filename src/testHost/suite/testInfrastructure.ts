@@ -20,6 +20,20 @@ export async function waitForCondition(
 	}
 }
 
+export async function waitForAsyncCondition(
+	label: string,
+	condition: () => Promise<boolean>,
+	timeoutMs = 10_000
+): Promise<void> {
+	const start = Date.now();
+	while (!await condition()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`Timeout while waiting for condition: ${label}`);
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	}
+}
+
 export function toSafeIdentifierForTest(input: string): string {
 	const normalized = input
 		.toLowerCase()

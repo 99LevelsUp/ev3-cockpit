@@ -109,6 +109,18 @@ async function openViewPicker(page: Page, viewName: string): Promise<void> {
 	}
 }
 
+async function openAnyViewPicker(page: Page, viewNames: readonly string[]): Promise<void> {
+	for (const viewName of viewNames) {
+		try {
+			await openViewPicker(page, viewName);
+			return;
+		} catch {
+			// Try the next visible-title variant.
+		}
+	}
+	throw new Error(`Unable to open any requested view: ${JSON.stringify(viewNames)}`);
+}
+
 async function waitForEV3Webview(page: Page, timeoutMs: number): Promise<boolean> {
 	try {
 		await page.waitForSelector('iframe.webview, webview.webview', { timeout: timeoutMs });
@@ -151,9 +163,9 @@ async function openEV3Panel(page: Page): Promise<void> {
 	}
 	const found = await waitForEV3Webview(page, 8000);
 	if (!found) {
-		await openViewPicker(page, 'EV3');
+		await openAnyViewPicker(page, ['EV3', 'EVƎ']);
 	}
-	const paneHeader = page.locator('.pane .pane-header:has-text("EV3")').first();
+	const paneHeader = page.locator('.pane .pane-header').filter({ hasText: /EV3|EVƎ/ }).first();
 	if ((await paneHeader.count()) > 0) {
 		await paneHeader.click();
 	}
