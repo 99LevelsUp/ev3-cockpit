@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from '../protocol/capabilityProbe';
 import { Ev3CommandClient } from '../protocol/ev3CommandClient';
 import { concatBytes, gv0, lc0, uint16le } from '../protocol/ev3Bytecode';
@@ -15,6 +16,11 @@ import type { Logger } from '../diagnostics/logger';
 import type { RemoteFsService } from '../fs/remoteFsService';
 import { readFeatureConfig } from '../config/featureConfig';
 import type { Lane } from '../scheduler/types';
+import {
+	createTelemetryTaskDefinitions,
+	type TelemetryTaskDefinition,
+	type TelemetryTaskKey
+} from './telemetryTaskRuntime';
 
 const OP_UI_READ = 0x81;
 const OP_MEMORY_USAGE = 0xc5;
@@ -31,11 +37,9 @@ const UI_READ_SUB = {
 	GET_SDCARD: 0x1d
 } as const;
 
-type TaskKey = 'fastDevices' | 'fastValues' | 'medium' | 'slow' | 'extraSlow' | 'static';
-
 interface BrickTelemetryState {
-	lastRun: Record<TaskKey, number>;
-	inFlight: Set<TaskKey>;
+	lastRun: Record<TelemetryTaskKey, number>;
+	inFlight: Set<TelemetryTaskKey>;
 	lastDeviceTypes?: number[];
 	lastTacho?: Partial<Record<MotorPort, number>>;
 	lastLayerTacho?: Map<string, number>;
@@ -483,6 +487,7 @@ export class BrickTelemetryPoller {
 	private readonly defaultTimeoutMs: number;
 	private readonly onTelemetryChange?: (brickId: string) => void;
 	private readonly logger?: Logger;
+	private readonly taskDefinitions: ReadonlyArray<TelemetryTaskDefinition>;
 	private timer?: NodeJS.Timeout;
 	private readonly state = new Map<string, BrickTelemetryState>();
 
@@ -494,6 +499,7 @@ export class BrickTelemetryPoller {
 		this.defaultTimeoutMs = options.defaultTimeoutMs;
 		this.onTelemetryChange = options.onTelemetryChange;
 		this.logger = options.logger;
+		this.taskDefinitions = createTelemetryTaskDefinitions(options.config);
 	}
 
 	public start(): void {
@@ -542,12 +548,9 @@ export class BrickTelemetryPoller {
 			const state = this.ensureState(brickId);
 			const queueSize = session.scheduler.getQueueSize();
 			const isActive = snapshot.isActive;
-			this.maybeSchedule(brickId, session.commandClient, state, 'static', isActive, queueSize);
-			this.maybeSchedule(brickId, session.commandClient, state, 'fastDevices', isActive, queueSize);
-			this.maybeSchedule(brickId, session.commandClient, state, 'fastValues', isActive, queueSize);
-			this.maybeSchedule(brickId, session.commandClient, state, 'medium', isActive, queueSize);
-			this.maybeSchedule(brickId, session.commandClient, state, 'slow', isActive, queueSize);
-			this.maybeSchedule(brickId, session.commandClient, state, 'extraSlow', isActive, queueSize);
+			for (const task of this.taskDefinitions) {
+				this.maybeSchedule(brickId, session.commandClient, state, task, isActive, queueSize);
+			}
 		}
 	}
 
@@ -565,7 +568,7 @@ export class BrickTelemetryPoller {
 				extraSlow: 0,
 				static: 0
 			},
-			inFlight: new Set<TaskKey>(),
+			inFlight: new Set<TelemetryTaskKey>(),
 			lastTacho: {},
 			lastLayerTacho: new Map<string, number>(),
 			inputTypeModes: new Map<string, { typeCode: number; mode: number }>()
@@ -578,89 +581,52 @@ export class BrickTelemetryPoller {
 		brickId: string,
 		client: Ev3CommandClient,
 		state: BrickTelemetryState,
-		task: TaskKey,
+		task: TelemetryTaskDefinition,
 		isActive: boolean,
 		queueSize: number
 	): void {
-		const interval = this.resolveInterval(task);
-		if (!shouldRun(state.lastRun[task], interval)) {
+		if (!shouldRun(state.lastRun[task.key], task.intervalMs)) {
 			return;
 		}
-		if (state.inFlight.has(task)) {
+		if (state.inFlight.has(task.key)) {
 			return;
 		}
-		if (this.shouldSkipTask(task, isActive, queueSize)) {
+		if (task.shouldSkip(isActive, queueSize)) {
 			return;
 		}
-		state.inFlight.add(task);
-		const lane = this.resolveLane(task, isActive);
-		void this.runTask(brickId, client, state, task, lane)
+		state.inFlight.add(task.key);
+		const lane = task.resolveLane(isActive);
+		const startedAt = performance.now();
+		void this.runTask(brickId, client, state, task.key, lane)
+			.then(() => {
+				this.logger?.debug('Telemetry task completed', {
+					brickId,
+					task: task.key,
+					lane,
+					durationMs: Number((performance.now() - startedAt).toFixed(1))
+				});
+			})
 			.catch((error) => {
 				this.logger?.debug('Telemetry task failed', {
 					brickId,
-					task,
-					error: error instanceof Error ? error.message : String(error)
+					task: task.key,
+					lane,
+					durationMs: Number((performance.now() - startedAt).toFixed(1)),
+					error: error instanceof Error ? error.message : String(error),
+					errorHandling: task.errorHandling
 				});
 			})
 			.finally(() => {
-				state.inFlight.delete(task);
-				state.lastRun[task] = Date.now();
+				state.inFlight.delete(task.key);
+				state.lastRun[task.key] = Date.now();
 			});
-	}
-
-	private resolveInterval(task: TaskKey): number {
-		switch (task) {
-			case 'fastDevices':
-				return this.config.fastDeviceIntervalMs;
-			case 'fastValues':
-				return this.config.fastValuesIntervalMs;
-			case 'medium':
-				return this.config.mediumIntervalMs;
-			case 'slow':
-				return this.config.slowIntervalMs;
-			case 'extraSlow':
-				return this.config.extraSlowIntervalMs;
-			case 'static':
-				return this.config.staticIntervalMs;
-			default:
-				return 0;
-		}
-	}
-
-	private resolveLane(task: TaskKey, isActive: boolean): Lane {
-		if (isActive) {
-			if (task === 'fastDevices' || task === 'fastValues') {
-				return 'high';
-			}
-			if (task === 'medium') {
-				return 'normal';
-			}
-			return 'low';
-		}
-		if (task === 'fastDevices' || task === 'fastValues') {
-			return 'normal';
-		}
-		return 'low';
-	}
-
-	private shouldSkipTask(task: TaskKey, isActive: boolean, queueSize: number): boolean {
-		if (task === 'slow' || task === 'extraSlow') {
-			return queueSize >= this.config.queueLimitSlow;
-		}
-		if (task === 'medium') {
-			return queueSize >= this.config.queueLimitMedium;
-		}
-		if (!isActive && (task === 'fastDevices' || task === 'fastValues')) {
-			return queueSize >= this.config.queueLimitInactiveFast;
-		}
-		return false;
 	}
 
 	private async runTask(
 		brickId: string,
 		client: Ev3CommandClient,
 		state: BrickTelemetryState,
-		task: TaskKey,
+		task: TelemetryTaskKey,
 		lane: Lane
 	): Promise<void> {
 		switch (task) {

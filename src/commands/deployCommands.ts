@@ -4,14 +4,10 @@ import { DEPLOY_PROFILE_PRESETS } from '../config/deployProfiles';
 import { DeployConflictPolicy, DeployConflictAskFallback } from '../types/enums';
 import { readFeatureConfig } from '../config/featureConfig';
 import {
-	buildRemoteDeployPath,
-	buildRemoteProjectRoot,
-	choosePreferredExecutableCandidate,
-	isExecutableFileName
+	buildRemoteDeployPath
 } from '../fs/deployActions';
 import { buildLocalProjectLayout, planRemoteCleanup } from '../fs/deployCleanup';
 import { RemoteFileSnapshot } from '../fs/deployIncremental';
-import { isDeployTransientTransportError, sleepMs } from '../fs/deployResilience';
 import { verifyUploadedFile } from '../fs/deployVerify';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind } from '../fs/remoteFsOps';
@@ -20,12 +16,18 @@ import { nextCorrelationId, withTiming } from '../diagnostics/perfTiming';
 import { toErrorMessage, withBrickOperation } from './commandUtils';
 import { executeAtomicSwap, executeDeployPlan } from './deployExecution';
 import { resolveDeployFlow } from './deployFlow';
+import {
+	buildDeployRoots,
+	createDeployStepRunner,
+	describeDeployOperation,
+	mapScannedFilesToDeployEntries,
+	resolveRunTarget
+} from './deployOrchestration';
 import { collectLocalFilesRecursive, collectRemoteFileIndexRecursive } from './deployScan';
 import {
 	DeployCommandOptions,
 	DeployCommandRegistrations,
 	DeployTargetContext,
-	LocalProjectFileEntry,
 	ProjectDeployRequest
 } from './deployTypes';
 
@@ -57,6 +59,7 @@ async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 export function registerDeployCommands(options: DeployCommandOptions): DeployCommandRegistrations {
 	const executeProjectDeploy = async (deployOptions: ProjectDeployRequest): Promise<void> => {
 		const logger = options.getLogger();
+		const operation = describeDeployOperation(deployOptions);
 		const correlationId = nextCorrelationId();
 		const deployStartedAt = Date.now();
 		const fsTarget: DeployTargetContext | undefined = deployOptions.target ?? (() => {
@@ -82,14 +85,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		const fsService = fsTarget.fsService;
 		const targetBrickId = fsTarget.brickId;
 		const targetAuthority = fsTarget.authority;
-		options.onBrickOperation(
-			targetBrickId,
-			deployOptions.previewOnly
-				? 'Deploy preview started'
-				: deployOptions.runAfterDeploy
-				? 'Deploy and run started'
-				: 'Deploy sync started'
-		);
+		options.onBrickOperation(targetBrickId, operation.started);
 		const isCancellationError = (error: unknown): boolean =>
 			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
 
@@ -99,11 +95,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				canSelectMany: false,
 				canSelectFiles: false,
 				canSelectFolders: true,
-				openLabel: deployOptions.previewOnly
-					? 'Preview Project Deploy Changes'
-					: deployOptions.runAfterDeploy
-					? 'Deploy Project to EV3'
-					: 'Sync Project to EV3'
+				openLabel: operation.openLabel
 			});
 			if (!selection || selection.length === 0) {
 				return;
@@ -112,67 +104,29 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		}
 		const featureConfig = readFeatureConfig();
 		const deployResilience = featureConfig.deploy.resilience;
-		const runDeployStepWithResilience = async <T>(step: string, action: () => Promise<T>): Promise<T> => {
-			for (let attempt = 0; ; ) {
-				try {
-					return await action();
-				} catch (error) {
-					if (isCancellationError(error)) {
-						throw error;
-					}
-
-					const message = toErrorMessage(error);
-					const canRetry =
-						deployResilience.enabled &&
-						attempt < deployResilience.maxRetries &&
-						isDeployTransientTransportError(message);
-					if (!canRetry) {
-						throw error;
-					}
-
-					attempt += 1;
-					logger.warn('Deploy step failed, retrying.', {
-						step,
-						attempt,
-						maxRetries: deployResilience.maxRetries,
-						reopenConnection: deployResilience.reopenConnection,
-						delayMs: deployResilience.retryDelayMs,
-						message
-					});
-					if (deployResilience.reopenConnection) {
-						try {
-							await commandClient.close();
-						} catch {
-							// ignore close errors during reconnect attempt
-						}
-						await commandClient.open();
-					}
-					await sleepMs(deployResilience.retryDelayMs);
-				}
-			}
-		};
+		const runDeployStepWithResilience = createDeployStepRunner(deployResilience, {
+			logger,
+			isCancellationError,
+			closeCommandClient: () => commandClient.close(),
+			openCommandClient: () => commandClient.open()
+		});
 		const defaultRoot = fsTarget.rootPath ?? featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 		let remoteProjectRoot: string;
+		let atomicStagingRoot = '';
+		let atomicBackupRoot = '';
+		let deployProjectRoot = '';
 		try {
-			remoteProjectRoot = buildRemoteProjectRoot(projectUri.fsPath, defaultRoot);
+			const roots = buildDeployRoots(projectUri.fsPath, defaultRoot, featureConfig.deploy.atomicEnabled && !deployOptions.previewOnly);
+			remoteProjectRoot = roots.remoteProjectRoot;
+			atomicStagingRoot = roots.atomicStagingRoot;
+			atomicBackupRoot = roots.atomicBackupRoot;
+			deployProjectRoot = roots.deployProjectRoot;
 		} catch (error) {
 			const message = toErrorMessage(error);
 			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
 			return;
 		}
 		const atomicEnabled = featureConfig.deploy.atomicEnabled && !deployOptions.previewOnly;
-		const remoteProjectParent = path.posix.dirname(remoteProjectRoot);
-		const remoteProjectName = path.posix.basename(remoteProjectRoot);
-		const atomicTag = `${Date.now().toString(36)}-${Math.floor(Math.random() * 10_000).toString(36)}`;
-		const atomicStagingRoot = path.posix.join(
-			remoteProjectParent,
-			`.${remoteProjectName}.ev3-cockpit-staging-${atomicTag}`
-		);
-		const atomicBackupRoot = path.posix.join(
-			remoteProjectParent,
-			`.${remoteProjectName}.ev3-cockpit-backup-${atomicTag}`
-		);
-		const deployProjectRoot = atomicEnabled ? atomicStagingRoot : remoteProjectRoot;
 
 		try {
 			const scan = await withTiming(
@@ -193,35 +147,17 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				return;
 			}
 
-			const files: LocalProjectFileEntry[] = scan.files.map((entry) => {
-				const relativePosix = entry.relativePath.split(path.sep).join('/');
-				return {
-					localUri: entry.localUri,
-					relativePath: entry.relativePath,
-					remotePath: path.posix.join(deployProjectRoot, relativePosix),
-					sizeBytes: entry.sizeBytes,
-					isExecutable: isExecutableFileName(path.basename(entry.localUri.fsPath))
-				};
-			});
+			const files = mapScannedFilesToDeployEntries(scan.files, deployProjectRoot);
 
 			let runTarget: string | undefined;
 			if (deployOptions.runAfterDeploy) {
-				const executableFiles = files.filter((entry) => entry.isExecutable);
-				if (executableFiles.length === 0) {
+				runTarget = resolveRunTarget(files, remoteProjectRoot);
+				if (!runTarget) {
 					vscode.window.showErrorMessage(`No executable file found in project folder "${projectUri.fsPath}".`);
 					return;
 				}
 
-				runTarget = choosePreferredExecutableCandidate(
-					executableFiles.map((entry) =>
-						path.posix.join(remoteProjectRoot, entry.relativePath.split(path.sep).join('/'))
-					)
-				);
-				if (!runTarget) {
-					vscode.window.showErrorMessage('Could not determine executable run target.');
-					return;
-				}
-
+				const executableFiles = files.filter((entry) => entry.isExecutable);
 				if (executableFiles.length > 1) {
 					const quickPickItems = executableFiles.map((entry) => ({
 						label: entry.relativePath,
@@ -399,8 +335,8 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				{
 					location: vscode.ProgressLocation.Notification,
 					title: deployOptions.previewOnly
-						? `Previewing EV3 deploy: ${path.basename(projectUri.fsPath)}`
-						: `Deploying EV3 project: ${path.basename(projectUri.fsPath)}`,
+						? `${operation.progressTitle}: ${path.basename(projectUri.fsPath)}`
+						: `${operation.progressTitle}: ${path.basename(projectUri.fsPath)}`,
 					cancellable: true
 				},
 				(progress, token) =>
@@ -551,15 +487,12 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 					: '';
 
 			if (deployOptions.previewOnly) {
-				options.onBrickOperation(targetBrickId, 'Deploy preview completed');
+				options.onBrickOperation(targetBrickId, operation.completed);
 				vscode.window.showInformationMessage(
 					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EV3 Cockpit output for sample paths.`
 				);
 			} else {
-				options.onBrickOperation(
-					targetBrickId,
-					deployOptions.runAfterDeploy ? 'Deploy and run completed' : 'Deploy sync completed'
-				);
+				options.onBrickOperation(targetBrickId, operation.completed);
 				const verifySummary =
 					verifyAfterUpload !== 'none'
 					? `; verified ${verifiedFilesCount} file(s) (${verifyAfterUpload})`
@@ -588,11 +521,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			const message = toErrorMessage(error);
 			options.onBrickOperation(targetBrickId, 'Deploy failed');
 			logger.warn(
-				deployOptions.previewOnly
-					? 'Deploy project preview failed'
-					: deployOptions.runAfterDeploy
-					? 'Deploy project and run failed'
-					: 'Deploy project sync failed',
+				operation.failed,
 				{
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,

@@ -15,7 +15,7 @@ import {
 	BrickConnectionProfileStore,
 	captureConnectionProfileFromWorkspace
 } from './device/brickConnectionProfiles';
-import { BrickRegistry, BrickSnapshot } from './device/brickRegistry';
+import { BrickRegistry } from './device/brickRegistry';
 import { BrickTelemetryPoller } from './device/brickTelemetryPoller';
 import { BrickTelemetryStore } from './device/brickTelemetryStore';
 import { BrickSettingsService } from './device/brickSettingsService';
@@ -25,13 +25,8 @@ import { isUsbReconnectCandidateAvailable, isBtReconnectCandidateAvailable } fro
 import { Logger, OutputChannelLogger } from './diagnostics/logger';
 import { nextCorrelationId, startEventLoopMonitor, withTimingSync } from './diagnostics/perfTiming';
 import { performance } from 'node:perf_hooks';
-import { Ev3FileSystemProvider, FsAvailabilityError } from './fs/ev3FileSystemProvider';
 import { Ev3CommandClient } from './protocol/ev3CommandClient';
 import { CommandScheduler } from './scheduler/commandScheduler';
-import {
-	createProbeTransportFromWorkspace,
-	TransportConfigOverrides
-} from './transport/transportFactory';
 import { pairWindowsBluetoothDevice } from './transport/windowsBluetoothPairing';
 import {
 	BrickTreeProvider
@@ -42,7 +37,7 @@ import { BrickTreeViewStateStore } from './ui/brickTreeViewStateStore';
 import { createBusyIndicatorPoller } from './ui/busyIndicator';
 import { createConnectionHealthPoller } from './ui/connectionHealthPoller';
 import { createTreeStatePersistence } from './ui/treeStatePersistence';
-import { LoggingOrphanRecoveryStrategy, normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
+import { normalizeBrickRootPath, toSafeIdentifier } from './activation/helpers';
 import { createConfigWatcher } from './activation/configWatcher';
 import { createBrickResolvers } from './activation/brickResolvers';
 import { BrickPanelDiscoveryCandidate, BrickPanelProvider } from './ui/brickPanelProvider';
@@ -59,11 +54,9 @@ import {
 	registerRevealInBricksTree,
 	registerFsChangeSubscription
 } from './activation/extensionCommands';
-import { PresenceAggregator } from './presence/presenceAggregator';
-import { UsbPresenceSource } from './presence/usbPresenceSource';
-import { TcpPresenceSource } from './presence/tcpPresenceSource';
-import { BtPresenceSource } from './presence/btPresenceSource';
-import { MockPresenceSource } from './presence/mockPresenceSource';
+import { createBrickSessionFactory } from './activation/sessionFactory';
+import { createFsProvider, createPresenceRuntime } from './activation/runtimeFactories';
+import { sortBrickSnapshotsForTree } from './activation/runtimeHelpers';
 
 export function activate(context: vscode.ExtensionContext) {
 	const activationStart = performance.now();
@@ -82,71 +75,23 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	const brickUiStateStore = new BrickUiStateStore(context.workspaceState);
 	const brickTreeViewStateStore = new BrickTreeViewStateStore(context.workspaceState);
-
-	// --- Presence system (all transports) ---
-	const usbPresenceSource = new UsbPresenceSource(
-		{ pollIntervalMs: 500, nameProbeIntervalMs: 15000, vendorId: 0x0694, productId: 0x0005, toSafeIdentifier },
-		perfLogger
-	);
-	const tcpPresenceSource = new TcpPresenceSource(
-		{ discoveryPort: 3015, toSafeIdentifier },
-		perfLogger
-	);
-	const btPresenceSource = new BtPresenceSource(
-		{ fastIntervalMs: 1000, inquiryIntervalMs: 30000, toSafeIdentifier },
-		perfLogger
-	);
-	const mockPresenceSource = new MockPresenceSource();
-	const enableHardwarePresence = context.extensionMode !== vscode.ExtensionMode.Test;
-	const usbGoneTtlMs = process.platform === 'win32' ? 15_000 : 3_000;
-	const presenceAggregator = new PresenceAggregator(
-		{ brickRegistry, profileStore, logger: perfLogger, toSafeIdentifier },
-		{
-			// Windows USB discovery uses PnP enumeration instead of node-hid polling.
-			// That scan is materially slower, so USB entries must survive longer
-			// than a single poll cycle or they flap out of the UI between scans.
-			goneTtl: { usb: usbGoneTtlMs, bt: 45000, tcp: 10000, mock: Infinity },
-			reaperIntervalMs: 1000,
-			defaultRootPath: normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/')
-		}
-	);
-	if (enableHardwarePresence) {
-		presenceAggregator.addSource(usbPresenceSource);
-		presenceAggregator.addSource(tcpPresenceSource);
-		presenceAggregator.addSource(btPresenceSource);
-	}
-	presenceAggregator.addSource(mockPresenceSource);
-	presenceAggregator.start();
-
-	const sortSnapshotsForTree = (snapshots: BrickSnapshot[]): BrickSnapshot[] => {
-		const favoriteOrder = brickUiStateStore.getFavoriteOrder();
-		const favoriteIndex = new Map<string, number>();
-		for (let i = 0; i < favoriteOrder.length; i += 1) {
-			favoriteIndex.set(favoriteOrder[i], i);
-		}
-		return snapshots
-			.slice()
-			.sort((left, right) => {
-				const leftPinned = favoriteIndex.has(left.brickId);
-				const rightPinned = favoriteIndex.has(right.brickId);
-				if (leftPinned !== rightPinned) {
-					return leftPinned ? -1 : 1;
-				}
-				if (leftPinned && rightPinned) {
-					return (favoriteIndex.get(left.brickId) ?? 0) - (favoriteIndex.get(right.brickId) ?? 0);
-				}
-				if (left.isActive !== right.isActive) {
-					return left.isActive ? -1 : 1;
-				}
-				return left.displayName.localeCompare(right.displayName);
-			});
-	};
+	const defaultRootPath = normalizeBrickRootPath(readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
+	const { presenceAggregator, mockPresenceSource } = createPresenceRuntime({
+		brickRegistry,
+		profileStore,
+		logger: perfLogger,
+		toSafeIdentifier,
+		defaultRootPath,
+		enableHardwarePresence: context.extensionMode !== vscode.ExtensionMode.Test
+	});
 	const filterState = createTreeFilterState(() => () => treeProvider.refresh());
 
 	const treeProvider = new BrickTreeProvider({
 		dataSource: {
-			listBricks: () => sortSnapshotsForTree(
+			listBricks: () => sortBrickSnapshotsForTree(
 				brickRegistry.listSnapshots().filter((s) => s.status === 'READY')
+				,
+				brickUiStateStore.getFavoriteOrder()
 			),
 			getBrickSnapshot: (brickId) => brickRegistry.getSnapshot(brickId),
 			resolveFsService: async (brickId) => {
@@ -161,73 +106,18 @@ export function activate(context: vscode.ExtensionContext) {
 		getFilterQuery: () => filterState.getQuery()
 	});
 
-	const fsProvider = new Ev3FileSystemProvider(async (brickId) => {
-		const resolved = brickRegistry.resolveFsService(brickId);
-		if (resolved) {
-			return resolved;
-		}
-
-		if (brickId === 'active') {
-			throw new FsAvailabilityError(
-				'NO_ACTIVE_BRICK',
-				'No active EV3 connection for filesystem access. Run "EV3 Cockpit: Connect to EV3 Brick".'
-			);
-		}
-
-		const snapshot = brickRegistry.getSnapshot(brickId);
-		if (snapshot) {
-			throw new FsAvailabilityError(
-				'BRICK_UNAVAILABLE',
-				`Brick "${brickId}" is currently ${snapshot.status.toLowerCase()}.`
-			);
-		}
-
-		throw new FsAvailabilityError(
-			'BRICK_NOT_REGISTERED',
-			`Brick "${brickId}" is not registered. Connect it first or use ev3://active/...`
-		);
-	});
-
-	const toTransportOverrides = (profile?: BrickConnectionProfile): TransportConfigOverrides | undefined => {
-		if (!profile?.transport) {
-			return undefined;
-		}
-		return {
-			mode: profile.transport.mode,
-			usbPath: profile.transport.usbPath,
-			tcpHost: profile.transport.tcpHost,
-			tcpPort: profile.transport.tcpPort,
-			tcpUseDiscovery: profile.transport.tcpUseDiscovery,
-			tcpSerialNumber: profile.transport.tcpSerialNumber,
-			btPortPath: profile.transport.btPortPath
-		};
-	};
-
-	const createBrickSession = (
-		brickId: string,
-		connectionProfile?: BrickConnectionProfile
-	): BrickRuntimeSession<CommandScheduler, Ev3CommandClient> => {
-		const config = readSchedulerConfig();
-		const scheduler = new CommandScheduler({
-			defaultTimeoutMs: config.timeoutMs,
-			logger,
-			defaultRetryPolicy: config.defaultRetryPolicy,
-			orphanRecoveryStrategy: new LoggingOrphanRecoveryStrategy((msg, meta) => logger.info(msg, meta))
-		});
-		const commandClient = new Ev3CommandClient({
-			scheduler,
-			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs, toTransportOverrides(connectionProfile)),
-			logger
-		});
-		return {
-			brickId,
-			scheduler,
-			commandClient
-		};
-	};
-
+	const fsProvider = createFsProvider(brickRegistry);
 	const sessionManager = new BrickSessionManager<CommandScheduler, Ev3CommandClient, BrickConnectionProfile>(
-		createBrickSession
+		createBrickSessionFactory({
+			getLogger: () => logger,
+			readSchedulerConfig: () => {
+				const config = readSchedulerConfig();
+				return {
+					timeoutMs: config.timeoutMs,
+					defaultRetryPolicy: config.defaultRetryPolicy
+				};
+			}
+		})
 	);
 	const telemetryStore = new BrickTelemetryStore();
 	const telemetryConfig = readBrickTelemetryConfig(context.extensionPath, perfLogger);
@@ -584,7 +474,7 @@ export function activate(context: vscode.ExtensionContext) {
 					&& snapshot.lastError !== 'Disconnected by user.'
 				)
 			)).filter((snapshot) => includeMocks || !isMockBrickId(snapshot.brickId));
-			return sortSnapshotsForTree(snapshots);
+			return sortBrickSnapshotsForTree(snapshots, brickUiStateStore.getFavoriteOrder());
 		},
 		setActiveBrick: (brickId) => brickRegistry.setActiveBrick(brickId),
 		scanAvailableBricks: discoverBricksForPanel,
