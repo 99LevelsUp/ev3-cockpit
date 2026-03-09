@@ -33,7 +33,10 @@ __CODICONS_LINK_TAG__
 	}
 	.brick-panel-content {
 		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
 		min-height: 0;
+		overflow: hidden;
 		background: var(--vscode-editor-background);
 	}
 	.config-error {
@@ -43,17 +46,22 @@ __CODICONS_LINK_TAG__
 	.brick-detail-shell {
 		position: relative;
 		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		height: 100%;
 		min-height: 0;
 	}
 	.brick-detail-area {
+		flex: 1 1 auto;
 		background: var(--vscode-editor-background);
 		height: 100%;
 		min-height: 0;
 		overflow-y: auto;
 		overflow-x: hidden;
 		position: relative;
-		scrollbar-width: none;
-		-ms-overflow-style: none;
+		scrollbar-width: thin;
+		-ms-overflow-style: auto;
+		overscroll-behavior: contain;
 	}
 	.brick-tabs-wrap {
 		position: relative;
@@ -391,13 +399,43 @@ __CODICONS_LINK_TAG__
 		width: 10px;
 		min-height: 20px;
 	}
-	.brick-detail-area::-webkit-scrollbar,
+	.brick-detail-area::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+	.brick-detail-area::-webkit-scrollbar-thumb {
+		background: var(--vscode-scrollbarSlider-background);
+		border: 2px solid transparent;
+		border-radius: 0;
+		background-clip: content-box;
+	}
+	.brick-detail-area::-webkit-scrollbar-thumb:hover {
+		background: var(--vscode-scrollbarSlider-hoverBackground);
+		background-clip: content-box;
+	}
+	.brick-detail-area::-webkit-scrollbar-thumb:active {
+		background: var(--vscode-scrollbarSlider-activeBackground);
+		background-clip: content-box;
+	}
+	.brick-detail-area::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.brick-detail-area::-webkit-scrollbar-button {
+		display: none;
+		width: 0;
+		height: 0;
+	}
+	.brick-detail-area::-webkit-scrollbar-corner {
+		background: transparent;
+	}
 	.brick-tabs-main::-webkit-scrollbar {
 		width: 0;
 		height: 0;
 	}
 	.discovery-section {
 		padding: 8px 12px 12px;
+		box-sizing: border-box;
+		min-height: 100%;
 	}
 	.discovery-title {
 		margin: 0 0 14px;
@@ -511,7 +549,7 @@ __CODICONS_LINK_TAG__
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 20px 12px 12px;
+		padding: 4px 12px;
 	}
 	.brick-hero-figure {
 		display: inline-flex;
@@ -525,6 +563,74 @@ __CODICONS_LINK_TAG__
 		display: block;
 		width: 100%;
 		height: 100%;
+	}
+	.brick-hero-stack {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 10px;
+		padding: 14px 12px 10px;
+	}
+	.port-cluster {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		width: min(360px, 100%);
+	}
+	.port-cluster-labels {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: clamp(4px, 3.5%, 12px);
+		justify-items: center;
+		margin: 0 auto;
+		width: 100%;
+	}
+	.port-layer-row {
+		display: flex;
+		justify-content: center;
+		width: 100%;
+	}
+	.port-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: clamp(4px, 3.5%, 12px);
+		justify-items: center;
+		width: 100%;
+	}
+	.port-cell {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		width: 100%;
+		min-width: 0;
+	}
+	.port-square {
+		width: min(54px, 100%);
+		max-width: 54px;
+		aspect-ratio: 1 / 1;
+		border: 1px dashed var(--vscode-descriptionForeground, var(--vscode-panel-border, var(--vscode-foreground)));
+		border-radius: 6px;
+		background: transparent;
+		box-sizing: border-box;
+		opacity: 0.72;
+	}
+	.port-square.connected {
+		border-style: solid;
+		border-color: var(--vscode-foreground);
+		background: var(--vscode-foreground);
+		opacity: 1;
+	}
+	.port-label {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		font-size: 11px;
+		font-weight: 600;
+		line-height: 1;
+		opacity: 0.82;
+		text-align: center;
 	}
 	.config-editor-title {
 		font-size: 14px;
@@ -732,6 +838,8 @@ __CODICONS_LINK_TAG__
 			'<svg ',
 			'<svg class="brick-tab-brick-svg" aria-hidden="true" focusable="false" '
 		);
+		const MOTOR_PORT_LABELS = ['A', 'B', 'C', 'D'];
+		const SENSOR_PORT_LABELS = ['1', '2', '3', '4'];
 
 		function isPlusTabActive() {
 			return discoveryOpen || bricks.length === 0;
@@ -1109,8 +1217,75 @@ __CODICONS_LINK_TAG__
 			return '<span class="transport-indicator ' + statusClass + '">' + renderTransportIcon(candidate.transport) + '</span>';
 		}
 
+		function normalizeTelemetryLayer(layer) {
+			return typeof layer === 'number' && Number.isFinite(layer) && layer > 0
+				? Math.floor(layer)
+				: 0;
+		}
+
+		function resolveTelemetryLayers() {
+			const layers = new Set([0]);
+			for (const sensor of sensors || []) {
+				layers.add(normalizeTelemetryLayer(sensor?.layer));
+			}
+			for (const motor of motors || []) {
+				layers.add(normalizeTelemetryLayer(motor?.layer));
+			}
+		return Array.from(layers).sort((left, right) => left - right);
+		}
+
+		function renderPortLabels(labels) {
+			return '<div class="port-cluster-labels">'
+				+ labels.map((label) => '<span class="port-label">' + escapeHtml(label) + '</span>').join('')
+				+ '</div>';
+		}
+
+		function renderPortCell(label, connected) {
+			return '<div class="port-cell">'
+				+ '<span class="port-square' + (connected ? ' connected' : '') + '" aria-hidden="true"></span>'
+				+ '</div>';
+		}
+
+		function renderMotorRows(layers) {
+			const orderedLayers = layers.slice().sort((left, right) => right - left);
+			return orderedLayers.map((layer) => {
+				const cells = MOTOR_PORT_LABELS.map((port) => {
+					const connected = (motors || []).some((motor) =>
+						normalizeTelemetryLayer(motor?.layer) === layer && motor?.port === port
+					);
+					return renderPortCell(port, connected);
+				}).join('');
+				return '<div class="port-layer-row"><div class="port-grid">' + cells + '</div></div>';
+			}).join('');
+		}
+
+		function renderSensorRows(layers) {
+			return layers.map((layer) => {
+				const cells = SENSOR_PORT_LABELS.map((label, index) => {
+					const connected = (sensors || []).some((sensor) =>
+						normalizeTelemetryLayer(sensor?.layer) === layer
+						&& Number(sensor?.port) === index
+						&& sensor?.connected === true
+					);
+					return renderPortCell(label, connected);
+				}).join('');
+				return '<div class="port-layer-row"><div class="port-grid">' + cells + '</div></div>';
+			}).join('');
+		}
+
 		function renderBrickHeroIllustration() {
-			return '<div class="brick-hero"><div class="brick-hero-figure" aria-hidden="true">' + BRICK_TAB_ICON_SVG + '</div></div>';
+			const layers = resolveTelemetryLayers();
+			return '<div class="brick-hero-stack">'
+				+ '<div class="port-cluster port-cluster-motors">'
+				+ renderMotorRows(layers)
+				+ renderPortLabels(MOTOR_PORT_LABELS)
+				+ '</div>'
+				+ '<div class="brick-hero"><div class="brick-hero-figure" aria-hidden="true">' + BRICK_TAB_ICON_SVG + '</div></div>'
+				+ '<div class="port-cluster port-cluster-sensors">'
+				+ renderPortLabels(SENSOR_PORT_LABELS)
+				+ renderSensorRows(layers)
+				+ '</div>'
+				+ '</div>';
 		}
 
 		function shouldShowTabClose(brick) {
