@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
+import { createFlowLogger } from '../diagnostics/flowLogger';
 import { Logger } from '../diagnostics/logger';
+import { nextCorrelationId } from '../diagnostics/perfTiming';
 import { presentCommandError, toUserFacingErrorMessage } from './commandUtils';
 
 export interface BatchCommandOptions {
@@ -168,23 +170,34 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 			vscode.window.showInformationMessage('No ready bricks available for batch reconnect.');
 			return;
 		}
+		const flowLogger = createFlowLogger(logger, 'batch.reconnect-ready-bricks', {
+			correlationId: nextCorrelationId(),
+			targetCount: selectedBrickIds.length,
+			targetBrickIds: selectedBrickIds
+		});
+		flowLogger.started();
 
-			const result = await runBatchWithProgress(selectedBrickIds, 'Batch reconnect bricks', async (brickId) => {
-				try {
-					await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
-				} catch (error) {
-					presentCommandError({
-						logger,
-						operation: 'Batch reconnect brick',
-						level: 'warn',
-						context: {
-							brickId
-						},
-						error
-					});
-					throw error;
-				}
-			});
+		const result = await runBatchWithProgress(selectedBrickIds, 'Batch reconnect bricks', async (brickId) => {
+			try {
+				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
+			} catch (error) {
+				presentCommandError({
+					logger,
+					operation: 'Batch reconnect brick',
+					level: 'warn',
+					context: {
+						brickId
+					},
+					error
+				});
+				throw error;
+			}
+		});
+		flowLogger.completed({
+			completed: result.completed,
+			failed: result.failed,
+			cancelled: result.cancelled
+		});
 
 		const suffix = result.cancelled ? ' (cancelled)' : '';
 		await presentBatchResult(
@@ -205,6 +218,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 				vscode.window.showInformationMessage('No ready bricks available for batch workspace deploy.');
 				return;
 			}
+			const flowLogger = createFlowLogger(logger, 'batch.deploy-workspace-ready-bricks', {
+				correlationId: nextCorrelationId(),
+				targetCount: selectedBrickIds.length,
+				targetBrickIds: selectedBrickIds
+			});
+			flowLogger.started();
 
 			const result = await runBatchWithProgress(
 				selectedBrickIds,
@@ -226,6 +245,11 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					}
 				}
 			);
+			flowLogger.completed({
+				completed: result.completed,
+				failed: result.failed,
+				cancelled: result.cancelled
+			});
 
 			const suffix = result.cancelled ? ' (cancelled)' : '';
 			await presentBatchResult(
@@ -247,6 +271,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 				vscode.window.showInformationMessage('No ready bricks available for batch workspace preview.');
 				return;
 			}
+			const flowLogger = createFlowLogger(logger, 'batch.preview-workspace-ready-bricks', {
+				correlationId: nextCorrelationId(),
+				targetCount: selectedBrickIds.length,
+				targetBrickIds: selectedBrickIds
+			});
+			flowLogger.started();
 
 			const result = await runBatchWithProgress(
 				selectedBrickIds,
@@ -268,6 +298,11 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					}
 				}
 			);
+			flowLogger.completed({
+				completed: result.completed,
+				failed: result.failed,
+				cancelled: result.cancelled
+			});
 
 			const suffix = result.cancelled ? ' (cancelled)' : '';
 			await presentBatchResult(
@@ -289,6 +324,12 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 				vscode.window.showInformationMessage('No ready bricks available for batch workspace deploy+run.');
 				return;
 			}
+			const flowLogger = createFlowLogger(logger, 'batch.deploy-workspace-run-ready-bricks', {
+				correlationId: nextCorrelationId(),
+				targetCount: selectedBrickIds.length,
+				targetBrickIds: selectedBrickIds
+			});
+			flowLogger.started();
 
 			const result = await runBatchWithProgress(
 				selectedBrickIds,
@@ -310,6 +351,11 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					}
 				}
 			);
+			flowLogger.completed({
+				completed: result.completed,
+				failed: result.failed,
+				cancelled: result.cancelled
+			});
 
 			const suffix = result.cancelled ? ' (cancelled)' : '';
 			await presentBatchResult(

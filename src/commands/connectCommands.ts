@@ -9,7 +9,9 @@ import { MotorService } from '../device/motorService';
 import { SensorService } from '../device/sensorService';
 import { SoundService } from '../device/soundService';
 import { BrickRegistry } from '../device/brickRegistry';
+import { createFlowLogger } from '../diagnostics/flowLogger';
 import { Logger } from '../diagnostics/logger';
+import { nextCorrelationId } from '../diagnostics/perfTiming';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from '../protocol/capabilityProbe';
 import { Ev3CommandClient } from '../protocol/ev3CommandClient';
@@ -124,8 +126,15 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		let keepConnectionOpen = false;
 		let connectingDescriptor: ConnectedBrickDescriptor | undefined;
 		let commandClient: Ev3CommandClient | undefined;
+		const flowLogger = createFlowLogger(activeLogger, 'connect.session', {
+			correlationId: nextCorrelationId(),
+			requestedBrickId,
+			silent,
+			activateOnSuccess
+		});
 
 		try {
+			flowLogger.started();
 			const connectingRoot = requestedProfile?.rootPath ?? (readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
 			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot, requestedProfile);
 			if (requestedBrickId !== 'active') {
@@ -148,6 +157,10 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			const needsPairing = btMac && (!requestedProfile?.transport.btPortPath || requestedProfile.transport.btPortPath.trim().length === 0);
 			let pairingError: string | undefined;
 			if (needsPairing && options.pairBluetoothDevice) {
+				flowLogger.info('pairing-requested', {
+					brickId: connectingDescriptor.brickId,
+					mac: btMac
+				});
 				activeLogger.info('BT pairing requested', { brickId: connectingDescriptor.brickId, mac: btMac });
 				const pairing = await options.pairBluetoothDevice(btMac);
 				if (!pairing.success) {
@@ -362,6 +375,13 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 					`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
 				);
 			}
+			flowLogger.completed({
+				brickId: brickDescriptor.brickId,
+				transport: brickDescriptor.transport,
+				rootPath: brickDescriptor.rootPath,
+				capabilityProfileId: profile.id,
+				probeMessageCounter: result.messageCounter
+			});
 		} catch (error) {
 			const message = toErrorMessage(error);
 			activeLogger.error('Connect probe failed', { message });
@@ -385,6 +405,10 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 					})
 				);
 			}
+			flowLogger.failed(error, {
+				brickId: connectingDescriptor?.brickId ?? requestedBrickId,
+				userMessage: `EV3 connect probe failed: ${toUserFacingErrorMessage(error)}`
+			});
 		} finally {
 			if (!keepConnectionOpen && connectingDescriptor) {
 				await options.closeBrickSession(connectingDescriptor.brickId).catch((closeError: unknown) => {
@@ -402,8 +426,13 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		const brickRegistry = options.getBrickRegistry();
 		const treeProvider = options.getTreeProvider();
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		const flowLogger = createFlowLogger(logger, 'connect.disconnect', {
+			correlationId: nextCorrelationId(),
+			requestedBrickId
+		});
 
 		try {
+			flowLogger.started();
 			const activeBrickId = brickRegistry.getActiveBrickId();
 			const disconnectedBrickId = requestedBrickId === 'active' ? activeBrickId : requestedBrickId;
 			if (disconnectedBrickId && options.isBrickSessionAvailable(disconnectedBrickId)) {
@@ -421,8 +450,14 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				requestedBrickId,
 				disconnectedBrickId
 			});
+			flowLogger.completed({
+				disconnectedBrickId: disconnectedBrickId ?? null
+			});
 			vscode.window.showInformationMessage('EV3 disconnected.');
 		} catch (error) {
+			flowLogger.failed(error, {
+				userMessage: `Disconnect failed: ${toUserFacingErrorMessage(error)}`
+			});
 			vscode.window.showErrorMessage(
 				presentCommandError({
 					logger,
@@ -439,11 +474,18 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 
 	const reconnect = vscode.commands.registerCommand('ev3-cockpit.reconnectEV3', async (arg?: unknown) => {
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
+		const logger = options.getLogger();
+		const flowLogger = createFlowLogger(logger, 'connect.reconnect', {
+			correlationId: nextCorrelationId(),
+			requestedBrickId
+		});
+		flowLogger.started();
 		if (requestedBrickId !== 'active') {
 			options.onBrickOperation(requestedBrickId, 'Reconnect requested');
 		}
-		options.getLogger().info('Reconnect requested; delegating to connect flow.', { requestedBrickId });
+		logger.info('Reconnect requested; delegating to connect flow.', { requestedBrickId });
 		await vscode.commands.executeCommand('ev3-cockpit.connectEV3', arg);
+		flowLogger.completed();
 	});
 
 	return { connect, disconnect, reconnect };
