@@ -24,14 +24,14 @@ test('describeDeployOperation resolves labels and status texts', () => {
 		started: 'Deploy preview started',
 		completed: 'Deploy preview completed',
 		failed: 'Deploy project preview failed',
-		progressTitle: 'Previewing EV3 deploy',
+		progressTitle: 'Previewing EVƎ deploy',
 		openLabel: 'Preview Project Deploy Changes'
 	});
 	assert.deepEqual(describeDeployOperation({ previewOnly: false, runAfterDeploy: true }), {
 		started: 'Deploy and run started',
 		completed: 'Deploy and run completed',
 		failed: 'Deploy project and run failed',
-		progressTitle: 'Deploying EV3 project',
+		progressTitle: 'Deploying EVƎ project',
 		openLabel: 'Deploy Project to EV3'
 	});
 });

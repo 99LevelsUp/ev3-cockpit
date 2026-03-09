@@ -372,7 +372,7 @@ test('BrickTreeProvider maps root status to context and action', async () => {
 				listBricks: () => [
 					{
 						brickId: 'connecting-1',
-						displayName: 'Connecting EV3',
+						displayName: 'Connecting EVƎ',
 						role: 'standalone',
 						transport: TransportMode.USB,
 						status: 'CONNECTING',
@@ -381,7 +381,7 @@ test('BrickTreeProvider maps root status to context and action', async () => {
 					},
 					{
 						brickId: 'error-1',
-						displayName: 'Error EV3',
+						displayName: 'Error EVƎ',
 						role: 'standalone',
 						transport: TransportMode.TCP,
 						status: 'ERROR',

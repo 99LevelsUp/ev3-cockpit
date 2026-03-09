@@ -44,6 +44,7 @@ void schedulerErrorCodeContract;
 
 test('errors index public exports remain stable', () => {
 	assert.deepEqual(Object.keys(errorExports).sort(), [
+		'EV3Error',
 		'EV3_ERROR_MESSAGES',
 		'Ev3Error',
 		'ExtensionError',

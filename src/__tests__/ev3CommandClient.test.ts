@@ -7,7 +7,7 @@ import { SchedulerError } from '../scheduler/types';
 import { MockTransportAdapter } from '../transport/mockTransportAdapter';
 import { sleep } from './testHelpers';
 
-test('Ev3CommandClient sends request packet and decodes matching reply', async () => {
+test('EV3CommandClient sends request packet and decodes matching reply', async () => {
 	const scheduler = new CommandScheduler();
 	const transport = new MockTransportAdapter((outgoing) => {
 		const decoded = decodeEv3Packet(outgoing);
@@ -35,7 +35,7 @@ test('Ev3CommandClient sends request packet and decodes matching reply', async (
 	}
 });
 
-test('Ev3CommandClient surfaces timeout and next request can still succeed', async () => {
+test('EV3CommandClient surfaces timeout and next request can still succeed', async () => {
 	const scheduler = new CommandScheduler({ defaultTimeoutMs: 10 });
 	let calls = 0;
 	const transport = new MockTransportAdapter(async (outgoing) => {
@@ -76,7 +76,7 @@ test('Ev3CommandClient surfaces timeout and next request can still succeed', asy
 	}
 });
 
-test('Ev3CommandClient retries idempotent request after transport disconnect error', async () => {
+test('EV3CommandClient retries idempotent request after transport disconnect error', async () => {
 	const scheduler = new CommandScheduler();
 	let calls = 0;
 	const transport = new MockTransportAdapter((outgoing) => {
@@ -111,7 +111,7 @@ test('Ev3CommandClient retries idempotent request after transport disconnect err
 	}
 });
 
-test('Ev3CommandClient rejects stale out-of-order reply after timeout and accepts following valid reply', async () => {
+test('EV3CommandClient rejects stale out-of-order reply after timeout and accepts following valid reply', async () => {
 	const scheduler = new CommandScheduler({ defaultTimeoutMs: 10 });
 	let staleCounter = 0;
 	let calls = 0;
@@ -169,7 +169,7 @@ test('Ev3CommandClient rejects stale out-of-order reply after timeout and accept
 	}
 });
 
-test('Ev3CommandClient rejects when reply messageCounter does not match request', async () => {
+test('EV3CommandClient rejects when reply messageCounter does not match request', async () => {
 	const scheduler = new CommandScheduler();
 	const transport = new MockTransportAdapter((outgoing) => {
 		const decoded = decodeEv3Packet(outgoing);

@@ -331,7 +331,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 					];
 					const previewText = previewItems.join('\n');
 					const decision = await vscode.window.showWarningMessage(
-						`Deploy cleanup will delete ${cleanupPlan.filesToDelete.length} file(s) and ${cleanupPlan.directoriesToDelete.length} director${cleanupPlan.directoriesToDelete.length === 1 ? 'y' : 'ies'} on EV3. Continue?`,
+						`Deploy cleanup will delete ${cleanupPlan.filesToDelete.length} file(s) and ${cleanupPlan.directoriesToDelete.length} director${cleanupPlan.directoriesToDelete.length === 1 ? 'y' : 'ies'} on EVƎ. Continue?`,
 						{
 							modal: true,
 							detail:
@@ -504,7 +504,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			if (deployOptions.previewOnly) {
 				options.onBrickOperation(targetBrickId, operation.completed);
 				vscode.window.showInformationMessage(
-					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EV3 Cockpit output for sample paths.`
+					`Preview: ${plannedUploadCount}/${files.length} file(s) would upload${cleanupSummary}. See EVƎ Cockpit output for sample paths.`
 				);
 			} else {
 				options.onBrickOperation(targetBrickId, operation.completed);

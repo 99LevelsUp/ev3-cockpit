@@ -27,7 +27,7 @@ export type Ev3RecoveryAction =
  * Unified error class for EV3 device command failures.
  * Carries structured context for diagnostics and user-facing messages.
  */
-export class Ev3Error extends ExtensionError {
+export class EV3Error extends ExtensionError {
 	public readonly op: string;
 	public readonly brickId?: string;
 	public readonly recommendedAction: Ev3RecoveryAction;
@@ -41,19 +41,21 @@ export class Ev3Error extends ExtensionError {
 		cause?: unknown;
 	}) {
 		super(options.code, options.message, options.cause);
-		this.name = 'Ev3Error';
+		this.name = 'EV3Error';
 		this.op = options.op;
 		this.brickId = options.brickId;
 		this.recommendedAction = options.recommendedAction ?? 'none';
 	}
 }
 
+export { EV3Error as Ev3Error };
+
 /**
  * Map an Ev3ErrorCode to a user-friendly message and recommended action.
  */
 export const EV3_ERROR_MESSAGES: Record<Ev3ErrorCode, { message: string; action: Ev3RecoveryAction }> = {
 	DIRECT_REPLY_ERROR: {
-		message: 'The EV3 Brick rejected the command. The operation or port may be invalid.',
+		message: 'The EVƎ Brick rejected the command. The operation or port may be invalid.',
 		action: 'check-port'
 	},
 	SYSTEM_ERROR: {

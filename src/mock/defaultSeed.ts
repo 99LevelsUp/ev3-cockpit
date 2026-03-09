@@ -33,7 +33,7 @@ export const DEFAULT_MOCK_CONFIG: MockWorldConfig = {
 		{ port: 'B', typeCode: EV3_SENSOR_TYPE.EV3_MEDIUM_MOTOR, initialPosition: 0 }
 	],
 	brick: {
-		name: 'MockEV3',
+		name: 'MockEVƎ',
 		firmwareVersion: 'V1.10E',
 		batteryVoltage: 7.5,
 		batteryCurrent: 0.15,

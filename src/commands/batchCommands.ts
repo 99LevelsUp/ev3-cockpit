@@ -123,8 +123,8 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		selectedBrickIds: string[],
 		result: { completed: number; failed: number; cancelled: boolean; failedEntries: BatchFailedEntry[] }
 	): string => {
-		const lines = [
-			`EV3 Cockpit batch report`,
+	const lines = [
+			`EVƎ Cockpit batch report`,
 			`action: ${actionLabel}`,
 			`timestamp: ${new Date().toISOString()}`,
 			`targets: ${selectedBrickIds.join(', ')}`,

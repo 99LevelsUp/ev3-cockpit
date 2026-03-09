@@ -109,7 +109,7 @@ async function openViewPicker(page: Page, viewName: string): Promise<void> {
 	}
 }
 
-async function waitForEv3Webview(page: Page, timeoutMs: number): Promise<boolean> {
+async function waitForEV3Webview(page: Page, timeoutMs: number): Promise<boolean> {
 	try {
 		await page.waitForSelector('iframe.webview, webview.webview', { timeout: timeoutMs });
 		return true;
@@ -143,13 +143,13 @@ async function waitForWebviewFrame(page: Page, timeoutMs: number): Promise<Frame
 	return null;
 }
 
-async function openEv3Panel(page: Page): Promise<void> {
+async function openEV3Panel(page: Page): Promise<void> {
 	try {
 		await runCommand(page, 'EV3 Cockpit: Open Brick Panel');
 	} catch {
 		// Fall back to opening the EV3 view directly.
 	}
-	const found = await waitForEv3Webview(page, 8000);
+	const found = await waitForEV3Webview(page, 8000);
 	if (!found) {
 		await openViewPicker(page, 'EV3');
 	}
@@ -181,7 +181,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000); // Wait for extension activation
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			expect(webviewFrame).not.toBeNull();
@@ -210,7 +210,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000);
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			if (!webviewFrame) {
@@ -252,7 +252,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000);
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			if (!webviewFrame) {
@@ -302,7 +302,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000);
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			if (!webviewFrame) {
@@ -353,7 +353,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000);
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			if (!webviewFrame) {
@@ -405,7 +405,7 @@ test.describe('Brick Panel UI', () => {
 			await page.waitForLoadState('domcontentloaded');
 			await page.waitForTimeout(5000);
 
-			await openEv3Panel(page);
+			await openEV3Panel(page);
 
 			const webviewFrame = await waitForWebviewFrame(page, 20000);
 			if (!webviewFrame) {

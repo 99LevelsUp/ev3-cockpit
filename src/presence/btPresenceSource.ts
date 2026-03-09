@@ -259,7 +259,7 @@ export class BtPresenceSource implements PresenceSource {
 
 			const connectable = bt.connectable !== false && /^COM\d+$/i.test(rawPath);
 			const displayName = bt.displayName
-				?? (bt.mac ? `EV3 BT (${bt.mac.slice(-4).toUpperCase()})` : `EV3 BT (${rawPath})`);
+				?? (bt.mac ? `EVƎ BT (${bt.mac.slice(-4).toUpperCase()})` : `EVƎ BT (${rawPath})`);
 			const detail = bt.mac
 				? `${connectable ? rawPath : 'BT live-only'} | ${bt.mac.toUpperCase()}`
 				: rawPath;

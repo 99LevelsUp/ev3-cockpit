@@ -89,19 +89,21 @@ export interface FsListResult {
 	totalBytes: number;
 }
 
-export class Ev3SystemCommandError extends ExtensionError {
+export class EV3SystemCommandError extends ExtensionError {
 	public readonly command: number;
 	public readonly status: number;
 	public readonly statusText: string;
 
 	public constructor(command: number, status: number, message: string) {
 		super('EV3_SYSTEM_COMMAND', message);
-		this.name = 'Ev3SystemCommandError';
+		this.name = 'EV3SystemCommandError';
 		this.command = command;
 		this.status = status;
 		this.statusText = SYSTEM_STATUS_TEXT[status] ?? `0x${status.toString(16)}`;
 	}
 }
+
+export { EV3SystemCommandError as Ev3SystemCommandError };
 
 interface RemoteFsServiceOptions {
 	commandClient: Ev3CommandSendLike;
@@ -238,7 +240,7 @@ export class RemoteFsService {
 			} catch (error) {
 				lastError = error;
 				const recoverable =
-					error instanceof Ev3SystemCommandError &&
+					error instanceof EV3SystemCommandError &&
 					error.command === SYSTEM_CMD.CONTINUE_UPLOAD &&
 					error.status === SYSTEM_STATUS.UNKNOWN_HANDLE &&
 					attempt === 0;
@@ -420,7 +422,7 @@ export class RemoteFsService {
 		const statusAllowed = allowedStatuses.includes(status);
 		if (result.reply.type === EV3_REPLY.SYSTEM_REPLY_ERROR || !statusAllowed) {
 			const statusText = SYSTEM_STATUS_TEXT[status] ?? `0x${status.toString(16)}`;
-			throw new Ev3SystemCommandError(
+			throw new EV3SystemCommandError(
 				command,
 				status,
 				`System command 0x${command.toString(16)} failed with status ${statusText}.`
@@ -496,7 +498,7 @@ export class RemoteFsService {
 				{ idempotent: true }
 			);
 		} catch (error) {
-			if (error instanceof Ev3SystemCommandError && error.status === SYSTEM_STATUS.UNKNOWN_HANDLE) {
+			if (error instanceof EV3SystemCommandError && error.status === SYSTEM_STATUS.UNKNOWN_HANDLE) {
 				return;
 			}
 

@@ -60,7 +60,7 @@ import { sortBrickSnapshotsForTree } from './activation/runtimeHelpers';
 
 export function activate(context: vscode.ExtensionContext) {
 	const activationStart = performance.now();
-	const output = vscode.window.createOutputChannel('EV3 Cockpit');
+	const output = vscode.window.createOutputChannel('EVƎ Cockpit');
 	let logger: OutputChannelLogger;
 	const perfLogger: Logger = {
 		error: (message, meta) => logger?.error(message, meta),

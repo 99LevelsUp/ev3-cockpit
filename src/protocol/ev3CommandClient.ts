@@ -21,7 +21,7 @@ interface Ev3CommandClientOptions {
 	logger?: Logger;
 }
 
-export class Ev3CommandClient {
+export class EV3CommandClient {
 	private readonly scheduler: CommandScheduler;
 	private readonly transport: TransportAdapter;
 	private readonly logger: Logger;
@@ -82,3 +82,5 @@ export class Ev3CommandClient {
 		return result;
 	}
 }
+
+export { EV3CommandClient as Ev3CommandClient };

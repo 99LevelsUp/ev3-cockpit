@@ -180,7 +180,7 @@ async function withMockedProvider<T>(run: (providerModule: { Ev3FileSystemProvid
 	}
 }
 
-test('Ev3FileSystemProvider supports copy and rename over remote FS service', async () => {
+test('EV3FileSystemProvider supports copy and rename over remote FS service', async () => {
 	await withMockedProvider(async ({ Ev3FileSystemProvider }) => {
 		const fs = new InMemoryRemoteFs();
 		fs.addDirectory('/home');
@@ -212,7 +212,7 @@ test('Ev3FileSystemProvider supports copy and rename over remote FS service', as
 	});
 });
 
-test('Ev3FileSystemProvider maps offline write to NoPermissions and offline read to Unavailable', async () => {
+test('EV3FileSystemProvider maps offline write to NoPermissions and offline read to Unavailable', async () => {
 	await withMockedProvider(async ({ Ev3FileSystemProvider }) => {
 		const provider = new Ev3FileSystemProvider(async () => {
 			throw new Error('No active EV3 connection for filesystem access. Run "EV3 Cockpit: Connect to EV3 Brick".');
@@ -249,7 +249,7 @@ test('Ev3FileSystemProvider maps offline write to NoPermissions and offline read
 	});
 });
 
-test('Ev3FileSystemProvider maps PathPolicyError to NoPermissions', async () => {
+test('EV3FileSystemProvider maps PathPolicyError to NoPermissions', async () => {
 	await withMockedProvider(async ({ Ev3FileSystemProvider }) => {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
 		const { PathPolicyError } = require('../fs/pathPolicy') as { PathPolicyError: new (message: string) => Error };

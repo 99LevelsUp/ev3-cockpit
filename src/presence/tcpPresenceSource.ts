@@ -162,7 +162,7 @@ export class TcpPresenceSource implements PresenceSource {
 		const record: PresenceRecord = {
 			candidateId,
 			transport: TransportMode.TCP,
-			displayName: parsed.name || `EV3 TCP (${endpoint})`,
+			displayName: parsed.name || `EVƎ TCP (${endpoint})`,
 			detail,
 			connectable: true,
 			lastSeenMs: now,

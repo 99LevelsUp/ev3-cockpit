@@ -212,7 +212,7 @@
       "secondarySidebar": [
         {
           "id": "ev3-cockpit-brick-container",
-          "title": "EV3",
+          "title": "EVƎ",
           "icon": "$(device-camera-video)"
         }
       ]
@@ -221,14 +221,14 @@
       "explorer": [
         {
           "id": "ev3-cockpit.fileSystem",
-          "name": "EV3"
+          "name": "EVƎ"
         }
       ],
       "ev3-cockpit-brick-container": [
         {
           "type": "webview",
           "id": "ev3-cockpit.brick",
-          "name": "EV3"
+          "name": "EVƎ"
         }
       ]
     },

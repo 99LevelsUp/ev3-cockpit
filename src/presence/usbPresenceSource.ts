@@ -139,7 +139,7 @@ export class UsbPresenceSource implements PresenceSource {
 				const resolvedName = this.resolvedNames.get(candidateId);
 				const displayName = resolvedName
 					?? this.deriveDisplayName(device)
-					?? 'EV3';
+					?? 'EVƎ';
 
 				const record: PresenceRecord = {
 					candidateId,
@@ -509,11 +509,11 @@ export class UsbPresenceSource implements PresenceSource {
 		}
 		const manufacturer = String(device.manufacturer ?? '').trim();
 		if (/lego/i.test(manufacturer)) {
-			return 'EV3';
+			return 'EVƎ';
 		}
 		const serial = device.serialNumber?.trim();
 		if (serial && serial.length >= 4) {
-			return `EV3 USB (${serial.slice(-4).toUpperCase()})`;
+			return `EVƎ USB (${serial.slice(-4).toUpperCase()})`;
 		}
 		return undefined;
 	}

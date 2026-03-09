@@ -234,7 +234,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 
 		logger.info('Transport discovery snapshot', { usbCandidates });
 		vscode.window.showInformationMessage(
-			`Transport discovery done: USB=${usbCandidates.length}. See output channel EV3 Cockpit.`
+			`Transport discovery done: USB=${usbCandidates.length}. See output channel EVƎ Cockpit.`
 		);
 	});
 
@@ -270,7 +270,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		const skip = results.filter((entry) => entry.status === 'SKIP').length;
 		const fail = results.filter((entry) => entry.status === 'FAIL').length;
 		vscode.window.showInformationMessage(
-			`Transport health report: PASS=${pass}, SKIP=${skip}, FAIL=${fail}. See EV3 Cockpit output for details.`
+			`Transport health report: PASS=${pass}, SKIP=${skip}, FAIL=${fail}. See EVƎ Cockpit output for details.`
 		);
 	});
 
@@ -321,7 +321,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		}
 
 		const lines: string[] = [];
-		lines.push('EV3 Cockpit BT Detection Diagnostics');
+		lines.push('EVƎ Cockpit BT Detection Diagnostics');
 		lines.push(`Timestamp: ${new Date().toISOString()}`);
 		lines.push(`transport.mode: ${transportMode}`);
 		lines.push(`preferred BT port: ${preferredBtPort === '(none)' ? '(none)' : preferredBtPort}`);

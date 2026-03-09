@@ -98,7 +98,7 @@ export function createConfigWatcher(deps: {
 			}
 
 			if (event.affectsConfiguration('ev3-cockpit')) {
-				deps.getLogger().info('EV3 Cockpit configuration changed. Existing brick sessions stay online; new connections use updated settings.');
+				deps.getLogger().info('EVƎ Cockpit configuration changed. Existing brick sessions stay online; new connections use updated settings.');
 				if (affectsRuntimeReconnectConfig(event)) {
 					await offerReconnectAfterConfigChange();
 				}

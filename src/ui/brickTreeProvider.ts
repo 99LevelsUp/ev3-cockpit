@@ -556,7 +556,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 				contextValue: 'ev3BrickMessageConnect',
 				command: {
 					command: 'ev3-cockpit.connectEV3',
-					title: 'Connect EV3',
+					title: 'Connect EVƎ',
 					arguments: [brickId]
 				}
 			};
@@ -569,7 +569,7 @@ export class BrickTreeProvider implements vscode.TreeDataProvider<BrickTreeNode>
 			contextValue: 'ev3BrickMessageConnect',
 			command: {
 				command: 'ev3-cockpit.connectEV3',
-				title: 'Connect EV3',
+				title: 'Connect EVƎ',
 				arguments: [brickId]
 			}
 		};

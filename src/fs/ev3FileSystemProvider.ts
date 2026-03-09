@@ -19,7 +19,7 @@ export class FsAvailabilityError extends ExtensionError {
 	}
 }
 
-export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
+export class EV3FileSystemProvider implements vscode.FileSystemProvider {
 	private readonly eventEmitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
 	public readonly onDidChangeFile = this.eventEmitter.event;
 
@@ -282,7 +282,7 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 			return vscode.FileSystemError.FileNotFound(uri);
 		}
 
-		this.logger.warn('EV3 FileSystemProvider operation failed', {
+		this.logger.warn('EVƎ FileSystemProvider operation failed', {
 			uri: uri.toString(),
 			message
 		});
@@ -307,3 +307,5 @@ export class Ev3FileSystemProvider implements vscode.FileSystemProvider {
 		};
 	}
 }
+
+export { EV3FileSystemProvider as Ev3FileSystemProvider };

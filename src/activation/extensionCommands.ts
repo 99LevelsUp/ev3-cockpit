@@ -267,7 +267,7 @@ export function registerRevealInBricksTree(options: RevealInBricksTreeOptions): 
 			parsed = parseEv3UriParts(targetUri.authority, targetUri.path);
 		} catch (error) {
 			const message = toErrorMessage(error);
-			vscode.window.showErrorMessage(`Cannot parse EV3 URI: ${message}`);
+			vscode.window.showErrorMessage(`Cannot parse EVƎ URI: ${message}`);
 			return;
 		}
 

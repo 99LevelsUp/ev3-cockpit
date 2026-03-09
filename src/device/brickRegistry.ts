@@ -278,7 +278,7 @@ export class BrickRegistry {
 		const fallback: BrickRuntimeRecord =
 			existing ?? {
 				brickId,
-				displayName: `EV3 (${brickId})`,
+				displayName: `EVƎ (${brickId})`,
 				role: 'unknown',
 				transport: 'unknown',
 				rootPath: '/home/root/lms2012/prjs/',

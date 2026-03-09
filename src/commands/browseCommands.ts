@@ -149,18 +149,18 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 				listing = await fsService.listDirectory(currentPath);
 			} catch (error) {
 				vscode.window.showErrorMessage(
-					presentCommandError({
-						logger,
-						operation: 'Browse remote filesystem',
-						level: 'warn',
-						context: {
-							brickId,
-							path: currentPath
-						},
-						userMessage: `EV3 browse failed for ${currentPath}: ${toUserFacingErrorMessage(error)}`,
-						error
-					})
-				);
+						presentCommandError({
+							logger,
+							operation: 'Browse remote filesystem',
+							level: 'warn',
+							context: {
+								brickId,
+								path: currentPath
+							},
+							userMessage: `EVƎ browse failed for ${currentPath}: ${toUserFacingErrorMessage(error)}`,
+							error
+						})
+					);
 				break;
 			}
 			type FsQuickPick = vscode.QuickPickItem & {
@@ -479,7 +479,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		async (node?: unknown) => {
 			const treeProvider = options.getTreeProvider();
 			if (!isBrickDirectoryNode(node) && !isBrickFileNode(node)) {
-				vscode.window.showErrorMessage('Select a remote file or folder in EV3 Cockpit Bricks view.');
+				vscode.window.showErrorMessage('Select a remote file or folder in EVƎ Cockpit Bricks view.');
 				return;
 			}
 
@@ -530,7 +530,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		async (node?: unknown) => {
 			const logger = options.getLogger();
 			if (!isBrickFileNode(node) || !isRemoteExecutablePath(node.remotePath)) {
-				vscode.window.showErrorMessage('Select an executable file in EV3 Cockpit Bricks view.');
+				vscode.window.showErrorMessage('Select an executable file in EVƎ Cockpit Bricks view.');
 				return;
 			}
 

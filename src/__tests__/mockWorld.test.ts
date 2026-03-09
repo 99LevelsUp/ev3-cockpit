@@ -105,7 +105,7 @@ test('MockWorld reset restores initial state', () => {
 
 	// Reset
 	world.reset();
-	assert.equal(world.brick.getName(), 'MockEV3');
+	assert.equal(world.brick.getName(), 'MockEVƎ');
 	assert.equal(world.motors.getSpeed('A'), 0);
 
 	world.dispose();

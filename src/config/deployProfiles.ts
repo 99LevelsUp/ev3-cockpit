@@ -13,7 +13,7 @@ export const DEPLOY_PROFILE_PRESETS: readonly DeployProfilePreset[] = [
 		id: 'safe-sync',
 		label: 'Safe Sync',
 		description: 'safe FS + incremental upload',
-		detail: 'Balanced default for regular project sync to EV3 safe roots.',
+		detail: 'Balanced default for regular project sync to EVƎ safe roots.',
 		settings: {
 			'fs.mode': 'safe',
 			'deploy.atomic.enabled': false,
@@ -64,4 +64,3 @@ export function resolveDeployProfilePreset(id: DeployProfileId): DeployProfilePr
 	}
 	return preset;
 }
-

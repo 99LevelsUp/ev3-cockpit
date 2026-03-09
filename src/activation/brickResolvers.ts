@@ -130,7 +130,7 @@ export function createBrickResolvers(deps: {
 			const portRaw = profile?.transport.tcpPort ?? cfg.get('transport.tcp.port');
 			const port = typeof portRaw === 'number' && Number.isFinite(portRaw) ? Math.max(1, Math.floor(portRaw)) : DEFAULT_TCP_PORT;
 			const endpoint = `${host}:${port}`;
-			const fallbackDisplayName = `EV3 TCP (${endpoint})`;
+			const fallbackDisplayName = `EVƎ TCP (${endpoint})`;
 			return {
 				brickId: `tcp-${toSafeIdentifier(endpoint)}`,
 				displayName: profileDisplayName ?? fallbackDisplayName,
@@ -143,7 +143,7 @@ export function createBrickResolvers(deps: {
 		if (transport === TransportMode.USB) {
 			const pathRaw = profile?.transport.usbPath ?? cfg.get('transport.usb.path');
 			const usbPath = typeof pathRaw === 'string' && pathRaw.trim().length > 0 ? pathRaw.trim() : 'auto';
-			const fallbackDisplayName = `EV3 USB (${usbPath})`;
+			const fallbackDisplayName = `EVƎ USB (${usbPath})`;
 			return {
 				brickId: `usb-${toSafeIdentifier(usbPath)}`,
 				displayName: profileDisplayName ?? fallbackDisplayName,
@@ -168,7 +168,7 @@ export function createBrickResolvers(deps: {
 		if (transport === TransportMode.BT) {
 			const brickId = profile?.brickId?.startsWith('bt-') ? profile.brickId : 'bt-active';
 			const portPath = profile?.transport.btPortPath?.trim() || 'unknown';
-			const fallbackDisplayName = `EV3 BT (${portPath})`;
+			const fallbackDisplayName = `EVƎ BT (${portPath})`;
 			return {
 				brickId,
 				displayName: profileDisplayName ?? fallbackDisplayName,
@@ -181,7 +181,7 @@ export function createBrickResolvers(deps: {
 		// Fallback to USB when transport mode is unknown.
 		return {
 			brickId: 'usb-active',
-			displayName: profileDisplayName ?? 'EV3 USB',
+			displayName: profileDisplayName ?? 'EVƎ USB',
 			role,
 			transport: 'usb' as TransportMode,
 			rootPath: normalizedRootPath

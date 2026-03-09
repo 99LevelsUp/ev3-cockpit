@@ -17,7 +17,7 @@ export function registerMockCommands(deps: MockCommandDeps): MockCommandRegistra
 		// MockWorld reset will be wired when MockWorld is accessible from extension context.
 		// For now, show info that mock mode requires reconnect after reset.
 		vscode.window.showInformationMessage(
-			'EV3 Mock: Reset requested. Disconnect and reconnect to reload mock state.'
+			'EVƎ Mock: Reset requested. Disconnect and reconnect to reload mock state.'
 		);
 	});
 
@@ -31,7 +31,7 @@ export function registerMockCommands(deps: MockCommandDeps): MockCommandRegistra
 			`Mock active: ${isMock ? 'YES' : 'NO'}`,
 			'',
 			isMock
-				? 'Mock transport is active. The extension simulates an EV3 brick with virtual sensors, motors, and filesystem.'
+				? 'Mock transport is active. The extension simulates an EVƎ brick with virtual sensors, motors, and filesystem.'
 				: 'Mock transport is not active. Set ev3-cockpit.transport.mode to "mock" to enable.'
 		];
 

@@ -7,7 +7,7 @@
  *   - ProtocolError (EV3 protocol violations and malformed packets)
  *   - SchedulerError (Command scheduling and queuing errors)
  *   - FilesystemError (File operations on the brick)
- *   - Ev3Error (Device command execution errors)
+ *   - EV3Error (Device command execution errors)
  *
  * Each specialized error class provides:
  * - Typed error codes (enums)
@@ -50,6 +50,7 @@ export {
 } from './FilesystemError';
 
 export {
+	EV3Error,
 	Ev3Error,
 	EV3_ERROR_MESSAGES,
 	type Ev3ErrorCode,
@@ -61,7 +62,7 @@ import { TransportError as TError, TRANSPORT_ERROR_MESSAGES as TRANSPORT_MSGS, T
 import { ProtocolError as PError, PROTOCOL_ERROR_MESSAGES as PROTOCOL_MSGS, ProtocolErrorCode as PCode } from './ProtocolError';
 import { SchedulerError as SError, SCHEDULER_ERROR_MESSAGES as SCHEDULER_MSGS, SchedulerErrorCode as SCode } from './SchedulerError';
 import { FilesystemError as FError, FILESYSTEM_ERROR_MESSAGES as FILESYSTEM_MSGS, FilesystemErrorCode as FCode } from './FilesystemError';
-import { Ev3Error as E3Error, EV3_ERROR_MESSAGES as EV3_MSGS, Ev3ErrorCode as E3Code } from './Ev3Error';
+import { EV3Error as E3Error, EV3_ERROR_MESSAGES as EV3_MSGS, Ev3ErrorCode as E3Code } from './Ev3Error';
 
 /**
  * Type guard to check if an error is an ExtensionError.
@@ -99,7 +100,7 @@ export function isFilesystemError(error: unknown): error is FError {
 }
 
 /**
- * Type guard to check if an error is an Ev3Error.
+ * Type guard to check if an error is an EV3Error.
  */
 export function isEv3Error(error: unknown): error is E3Error {
 	return error instanceof E3Error;

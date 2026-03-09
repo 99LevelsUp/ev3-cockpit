@@ -116,7 +116,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		const silent = parsedArg.silent;
 		const activateOnSuccess = parsedArg.activateOnSuccess;
 		if (!silent) {
-			vscode.window.showInformationMessage('Connecting to EV3 Brick...');
+			vscode.window.showInformationMessage('Connecting to EVƎ Brick...');
 		}
 		const activeLogger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
@@ -372,7 +372,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 
 			if (!silent) {
 				vscode.window.showInformationMessage(
-					`EV3 connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
+					`EVƎ connect probe completed (mc=${result.messageCounter})${capabilitySummary}. FS: ev3://active/`
 				);
 			}
 			flowLogger.completed({
@@ -396,18 +396,18 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				vscode.window.showErrorMessage(
 					presentCommandError({
 						logger: activeLogger,
-						operation: 'EV3 connect probe',
+						operation: 'EVƎ connect probe',
 						context: {
 							brickId: connectingDescriptor?.brickId ?? requestedBrickId
 						},
-						userMessage: `EV3 connect probe failed: ${toUserFacingErrorMessage(error)}`,
+						userMessage: `EVƎ connect probe failed: ${toUserFacingErrorMessage(error)}`,
 						error
 					})
 				);
 			}
 			flowLogger.failed(error, {
 				brickId: connectingDescriptor?.brickId ?? requestedBrickId,
-				userMessage: `EV3 connect probe failed: ${toUserFacingErrorMessage(error)}`
+				userMessage: `EVƎ connect probe failed: ${toUserFacingErrorMessage(error)}`
 			});
 		} finally {
 			if (!keepConnectionOpen && connectingDescriptor) {
@@ -453,7 +453,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			flowLogger.completed({
 				disconnectedBrickId: disconnectedBrickId ?? null
 			});
-			vscode.window.showInformationMessage('EV3 disconnected.');
+			vscode.window.showInformationMessage('EVƎ disconnected.');
 		} catch (error) {
 			flowLogger.failed(error, {
 				userMessage: `Disconnect failed: ${toUserFacingErrorMessage(error)}`

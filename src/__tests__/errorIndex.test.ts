@@ -10,7 +10,7 @@ import {
 	SchedulerErrorCode,
 	FilesystemError,
 	FilesystemErrorCode,
-	Ev3Error,
+	EV3Error,
 	isExtensionError,
 	isTransportError,
 	isProtocolError,
@@ -87,7 +87,7 @@ test('isFilesystemError type guard works', () => {
 });
 
 test('isEv3Error type guard works', () => {
-	const ev3Err = new Ev3Error({
+	const ev3Err = new EV3Error({
 		code: 'TIMEOUT',
 		message: 'Timeout',
 		op: 'readSensor'
@@ -142,8 +142,8 @@ test('getUserFacingMessage extracts message from FilesystemError', () => {
 	assert.ok(message.includes('not found') || message.includes('Not found'));
 });
 
-test('getUserFacingMessage extracts message from Ev3Error', () => {
-	const error = new Ev3Error({
+test('getUserFacingMessage extracts message from EV3Error', () => {
+	const error = new EV3Error({
 		code: 'TIMEOUT',
 		message: 'Command timed out',
 		op: 'readSensor'
@@ -216,15 +216,15 @@ test('FilesystemError is instance of ExtensionError', () => {
 	assert.ok(error instanceof FilesystemError);
 });
 
-test('Ev3Error is instance of ExtensionError', () => {
-	const error = new Ev3Error({
+test('EV3Error is instance of ExtensionError', () => {
+	const error = new EV3Error({
 		code: 'TIMEOUT',
 		message: 'Timeout',
 		op: 'readSensor'
 	});
 
 	assert.ok(error instanceof ExtensionError);
-	assert.ok(error instanceof Ev3Error);
+	assert.ok(error instanceof EV3Error);
 });
 
 test('All error types have proper inheritance chain', () => {
@@ -233,7 +233,7 @@ test('All error types have proper inheritance chain', () => {
 		new ProtocolError({ code: ProtocolErrorCode.MALFORMED_PACKET, message: 'Test' }),
 		new SchedulerError({ code: SchedulerErrorCode.TIMEOUT, message: 'Test' }),
 		new FilesystemError({ code: FilesystemErrorCode.NOT_FOUND, message: 'Test', operation: 'read' }),
-		new Ev3Error({ code: 'TIMEOUT', message: 'Test', op: 'test' })
+		new EV3Error({ code: 'TIMEOUT', message: 'Test', op: 'test' })
 	];
 
 	for (const error of errors) {

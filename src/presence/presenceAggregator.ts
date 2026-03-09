@@ -177,7 +177,7 @@ export class PresenceAggregator {
 				continue;
 			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
-			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
+			const fallbackDisplayName = profile.displayName?.trim() || `EVƎ (${brickId})`;
 			const displayName = resolvePreferredDiscoveryDisplayName({
 				connectedDisplayName: snapshot?.displayName,
 				rememberedDisplayName: profileStore.get(brickId)?.displayName,

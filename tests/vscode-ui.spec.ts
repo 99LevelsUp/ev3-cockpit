@@ -125,7 +125,7 @@ async function openViewPicker(page: Page, viewName: string): Promise<void> {
 	}
 }
 
-async function waitForEv3Webview(page: Page, timeoutMs: number): Promise<boolean> {
+async function waitForEV3Webview(page: Page, timeoutMs: number): Promise<boolean> {
 	try {
 		await page.waitForSelector('iframe.webview, webview.webview', { timeout: timeoutMs });
 		return true;
@@ -165,13 +165,13 @@ async function waitForWebviewFrame(page: Page, timeoutMs: number): Promise<Frame
 	return null;
 }
 
-async function openEv3View(page: Page): Promise<void> {
+async function openEV3View(page: Page): Promise<void> {
 	try {
 		await runCommand(page, 'EV3 Cockpit: Open Brick Panel');
 	} catch {
 		// Command may not be registered yet; fall back to view picker.
 	}
-	const found = await waitForEv3Webview(page, 8000);
+	const found = await waitForEV3Webview(page, 8000);
 	if (!found) {
 		await openViewPicker(page, 'EV3');
 	}
@@ -181,9 +181,9 @@ async function openEv3View(page: Page): Promise<void> {
 	}
 }
 
-async function ensureEv3WebviewReady(page: Page, maxAttempts: number): Promise<Frame> {
+async function ensureEV3WebviewReady(page: Page, maxAttempts: number): Promise<Frame> {
 	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-		await openEv3View(page);
+		await openEV3View(page);
 		const webviewFrame = await waitForWebviewFrame(page, 30000);
 		if (webviewFrame) {
 			return webviewFrame;
@@ -217,7 +217,7 @@ test.describe('VS Code UI', () => {
 			// Wait for extension host to register commands
 			await page.waitForTimeout(5000);
 
-			const webviewFrame = await ensureEv3WebviewReady(page, 3);
+			const webviewFrame = await ensureEV3WebviewReady(page, 3);
 			await expect(webviewFrame.locator('#root')).toBeVisible({ timeout: 15000 });
 
 			await expect

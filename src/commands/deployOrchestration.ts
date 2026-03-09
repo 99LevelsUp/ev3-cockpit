@@ -49,7 +49,7 @@ export function describeDeployOperation(input: DeployOperationShape): {
 			started: 'Deploy preview started',
 			completed: 'Deploy preview completed',
 			failed: 'Deploy project preview failed',
-			progressTitle: 'Previewing EV3 deploy',
+			progressTitle: 'Previewing EVƎ deploy',
 			openLabel: 'Preview Project Deploy Changes'
 		};
 	}
@@ -58,7 +58,7 @@ export function describeDeployOperation(input: DeployOperationShape): {
 			started: 'Deploy and run started',
 			completed: 'Deploy and run completed',
 			failed: 'Deploy project and run failed',
-			progressTitle: 'Deploying EV3 project',
+			progressTitle: 'Deploying EVƎ project',
 			openLabel: 'Deploy Project to EV3'
 		};
 	}
@@ -66,7 +66,7 @@ export function describeDeployOperation(input: DeployOperationShape): {
 		started: 'Deploy sync started',
 		completed: 'Deploy sync completed',
 		failed: 'Deploy project sync failed',
-		progressTitle: 'Deploying EV3 project',
+		progressTitle: 'Deploying EVƎ project',
 		openLabel: 'Sync Project to EV3'
 	};
 }

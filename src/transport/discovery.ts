@@ -324,7 +324,7 @@ function normalizeBtBrickName(
 	}
 
 	if (mac && mac.length >= 4) {
-		return `EV3-${mac.slice(-4).toUpperCase()}`;
+		return `EVƎ-${mac.slice(-4).toUpperCase()}`;
 	}
 
 	return undefined;

@@ -602,7 +602,7 @@ test('brickResolvers resolveConnectedBrickDescriptor unknown transport falls bac
 			const desc = resolvers.resolveConnectedBrickDescriptor('/home/root/lms2012/prjs/');
 			assert.equal(desc.brickId, 'usb-active');
 			assert.equal(desc.transport, 'usb');
-			assert.equal(desc.displayName, 'EV3 USB');
+			assert.equal(desc.displayName, 'EVƎ USB');
 		}
 	);
 });
