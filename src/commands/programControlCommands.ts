@@ -3,7 +3,7 @@ import { BrickControlService } from '../device/brickControlService';
 import { Logger } from '../diagnostics/logger';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { RemoteFsService } from '../fs/remoteFsService';
-import { toErrorMessage, withBrickOperation } from './commandUtils';
+import { presentCommandError, withBrickOperation } from './commandUtils';
 
 type ProgramStartSource = 'run-command' | 'restart-command';
 type ProgramClearReason = 'stop-program-command' | 'emergency-stop-command';
@@ -69,12 +69,16 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Program started: ev3://${fsContext.authority}${runPath}`);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			options.getLogger().warn('Run program command failed', {
-				brickId: fsContext.brickId,
-				message
+			const message = presentCommandError({
+				logger: options.getLogger(),
+				operation: 'Run program',
+				level: 'warn',
+				context: {
+					brickId: fsContext.brickId
+				},
+				error
 			});
-			vscode.window.showErrorMessage(`Run program failed: ${message}`);
+			vscode.window.showErrorMessage(message);
 		}
 	});
 
@@ -92,12 +96,16 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Program stop command sent: ev3://${controlContext.authority}`);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			options.getLogger().error('Program stop failed', {
-				brickId: controlContext.brickId,
-				message
-			});
-			vscode.window.showErrorMessage(`Program stop failed: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger: options.getLogger(),
+					operation: 'Program stop',
+					context: {
+						brickId: controlContext.brickId
+					},
+					error
+				})
+			);
 		}
 	});
 
@@ -148,12 +156,16 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Program restarted: ev3://${fsContext.authority}${runPath}`);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			options.getLogger().error('Restart program failed', {
-				brickId: fsContext.brickId,
-				message
-			});
-			vscode.window.showErrorMessage(`Restart program failed: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger: options.getLogger(),
+					operation: 'Restart program',
+					context: {
+						brickId: fsContext.brickId
+					},
+					error
+				})
+			);
 		}
 	});
 
@@ -171,12 +183,16 @@ export function registerProgramControlCommands(
 			});
 			vscode.window.showInformationMessage(`Emergency stop sent: ev3://${controlContext.authority}`);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			options.getLogger().error('Emergency stop failed', {
-				brickId: controlContext.brickId,
-				message
-			});
-			vscode.window.showErrorMessage(`Emergency stop failed: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger: options.getLogger(),
+					operation: 'Emergency stop',
+					context: {
+						brickId: controlContext.brickId
+					},
+					error
+				})
+			);
 		}
 	});
 

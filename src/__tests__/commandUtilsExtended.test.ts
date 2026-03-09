@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { toUserFacingErrorMessage } from '../commands/commandUtils';
+import { presentCommandError, toUserFacingErrorMessage } from '../commands/commandUtils';
 import { ExtensionError } from '../errors/ExtensionError';
 import { TransportError, TransportErrorCode } from '../errors/TransportError';
 
@@ -43,4 +43,29 @@ test('toUserFacingErrorMessage uses centralized taxonomy for specialized errors'
 		transportType: 'tcp'
 	});
 	assert.equal(toUserFacingErrorMessage(error), '[TIMEOUT] Connection timed out.');
+});
+
+test('presentCommandError returns user message and logs requested level', () => {
+	const logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }> = [];
+	const userMessage = presentCommandError({
+		logger: {
+			error: (message, meta) => logs.push({ level: 'error', message, meta }),
+			warn: (message, meta) => logs.push({ level: 'warn', message, meta })
+		},
+		operation: 'Run program',
+		level: 'warn',
+		context: { brickId: 'tcp-a' },
+		error: new TransportError({
+			code: TransportErrorCode.TIMEOUT,
+			message: 'socket timeout',
+			transportType: 'tcp'
+		})
+	});
+
+	assert.equal(userMessage, 'Run program failed: [TIMEOUT] Connection timed out.');
+	assert.equal(logs.length, 1);
+	assert.equal(logs[0]?.level, 'warn');
+	assert.equal(logs[0]?.message, 'Run program failed');
+	assert.equal(logs[0]?.meta?.brickId, 'tcp-a');
+	assert.equal(logs[0]?.meta?.error, 'socket timeout');
 });

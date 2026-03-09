@@ -52,7 +52,10 @@ export async function withBrickOperation<T>(
  */
 export interface HandleCommandErrorOptions {
 	/** Logger instance for error logging */
-	logger: { error: (message: string, metadata?: Record<string, unknown>) => void };
+	logger: {
+		error: (message: string, metadata?: Record<string, unknown>) => void;
+		warn?: (message: string, metadata?: Record<string, unknown>) => void;
+	};
 	/** Operation description (e.g., "Deploy project", "Run program") */
 	operation: string;
 	/** Additional context metadata to log */
@@ -125,4 +128,30 @@ export function formatCommandError(options: Omit<HandleCommandErrorOptions, 'sho
 	});
 
 	return { logMessage, userMessage };
+}
+
+export function presentCommandError(
+	options: Omit<HandleCommandErrorOptions, 'showToUser'> & {
+		error: unknown;
+		level?: 'error' | 'warn';
+	}
+): string {
+	const { logger, operation, context = {}, error, userMessage, level = 'error' } = options;
+	const errorMessage = toErrorMessage(error);
+	const logMessage = `${operation} failed`;
+	const resolvedUserMessage = userMessage ?? `${operation} failed: ${toUserFacingErrorMessage(error)}`;
+
+	if (level === 'warn' && logger.warn) {
+		logger.warn(logMessage, {
+			...context,
+			error: errorMessage
+		});
+	} else {
+		logger.error(logMessage, {
+			...context,
+			error: errorMessage
+		});
+	}
+
+	return resolvedUserMessage;
 }
