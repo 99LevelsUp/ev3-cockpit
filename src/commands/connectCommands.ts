@@ -18,7 +18,7 @@ import { BrickTreeProvider } from '../ui/brickTreeProvider';
 import { TransportMode } from '../transport/transportFactory';
 import { BrickRole } from '../device/brickRegistry';
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
-import { toErrorMessage } from './commandUtils';
+import { presentCommandError, toErrorMessage, toUserFacingErrorMessage } from './commandUtils';
 
 interface ConnectedBrickDescriptor {
 	brickId: string;
@@ -363,7 +363,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				);
 			}
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Unknown scheduler error';
+			const message = toErrorMessage(error);
 			activeLogger.error('Connect probe failed', { message });
 			if (connectingDescriptor) {
 				brickRegistry.markError(connectingDescriptor.brickId, message);
@@ -373,7 +373,17 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				treeProvider.refreshThrottled();
 			}
 			if (!silent) {
-				vscode.window.showErrorMessage(`EV3 connect probe failed: ${message}`);
+				vscode.window.showErrorMessage(
+					presentCommandError({
+						logger: activeLogger,
+						operation: 'EV3 connect probe',
+						context: {
+							brickId: connectingDescriptor?.brickId ?? requestedBrickId
+						},
+						userMessage: `EV3 connect probe failed: ${toUserFacingErrorMessage(error)}`,
+						error
+					})
+				);
 			}
 		} finally {
 			if (!keepConnectionOpen && connectingDescriptor) {
@@ -413,9 +423,17 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			});
 			vscode.window.showInformationMessage('EV3 disconnected.');
 		} catch (error) {
-			const message = toErrorMessage(error);
-			logger.warn('Disconnect failed', { message });
-			vscode.window.showErrorMessage(`Disconnect failed: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger,
+					operation: 'Disconnect',
+					level: 'warn',
+					context: {
+						requestedBrickId
+					},
+					error
+				})
+			);
 		}
 	});
 
