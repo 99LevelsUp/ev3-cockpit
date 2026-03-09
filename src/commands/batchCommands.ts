@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';
-import { toErrorMessage } from './commandUtils';
+import { presentCommandError, toUserFacingErrorMessage } from './commandUtils';
 
 export interface BatchCommandOptions {
 	getLogger(): Logger;
@@ -96,7 +96,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 						failed += 1;
 						failedEntries.push({
 							brickId,
-							error: toErrorMessage(error)
+							error: toUserFacingErrorMessage(error)
 						});
 					}
 					const done = index + 1;
@@ -169,17 +169,22 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 			return;
 		}
 
-		const result = await runBatchWithProgress(selectedBrickIds, 'Batch reconnect bricks', async (brickId) => {
-			try {
-				await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
-			} catch (error) {
-				logger.warn('Batch reconnect failed for brick', {
-					brickId,
-					error: toErrorMessage(error)
-				});
-				throw error;
-			}
-		});
+			const result = await runBatchWithProgress(selectedBrickIds, 'Batch reconnect bricks', async (brickId) => {
+				try {
+					await vscode.commands.executeCommand('ev3-cockpit.reconnectEV3', brickId);
+				} catch (error) {
+					presentCommandError({
+						logger,
+						operation: 'Batch reconnect brick',
+						level: 'warn',
+						context: {
+							brickId
+						},
+						error
+					});
+					throw error;
+				}
+			});
 
 		const suffix = result.cancelled ? ' (cancelled)' : '';
 		await presentBatchResult(
@@ -208,9 +213,14 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					try {
 						await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceToBrick', brickId);
 					} catch (error) {
-						logger.warn('Batch workspace deploy failed for brick', {
-							brickId,
-							error: toErrorMessage(error)
+						presentCommandError({
+							logger,
+							operation: 'Batch workspace deploy',
+							level: 'warn',
+							context: {
+								brickId
+							},
+							error
 						});
 						throw error;
 					}
@@ -245,9 +255,14 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					try {
 						await vscode.commands.executeCommand('ev3-cockpit.previewWorkspaceDeployToBrick', brickId);
 					} catch (error) {
-						logger.warn('Batch workspace deploy preview failed for brick', {
-							brickId,
-							error: toErrorMessage(error)
+						presentCommandError({
+							logger,
+							operation: 'Batch workspace deploy preview',
+							level: 'warn',
+							context: {
+								brickId
+							},
+							error
 						});
 						throw error;
 					}
@@ -282,9 +297,14 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 					try {
 						await vscode.commands.executeCommand('ev3-cockpit.deployWorkspaceAndRunExecutableToBrick', brickId);
 					} catch (error) {
-						logger.warn('Batch workspace deploy+run failed for brick', {
-							brickId,
-							error: toErrorMessage(error)
+						presentCommandError({
+							logger,
+							operation: 'Batch workspace deploy and run',
+							level: 'warn',
+							context: {
+								brickId
+							},
+							error
 						});
 						throw error;
 					}

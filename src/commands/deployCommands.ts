@@ -14,7 +14,7 @@ import { deleteRemotePath, getRemotePathKind } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
 import { createFlowLogger } from '../diagnostics/flowLogger';
 import { nextCorrelationId, withTiming } from '../diagnostics/perfTiming';
-import { toErrorMessage, withBrickOperation } from './commandUtils';
+import { presentCommandError, toErrorMessage, toUserFacingErrorMessage, withBrickOperation } from './commandUtils';
 import { executeAtomicSwap, executeDeployPlan } from './deployExecution';
 import { resolveDeployFlow } from './deployFlow';
 import {
@@ -122,8 +122,20 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			atomicBackupRoot = roots.atomicBackupRoot;
 			deployProjectRoot = roots.deployProjectRoot;
 		} catch (error) {
-			const message = toErrorMessage(error);
-			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger,
+					operation: 'Resolve deploy paths',
+					level: 'warn',
+					context: {
+						brickId: targetBrickId,
+						projectPath: projectUri.fsPath,
+						defaultRoot
+					},
+					userMessage: `Deploy path error: ${toUserFacingErrorMessage(error)}`,
+					error
+				})
+			);
 			return;
 		}
 		const atomicEnabled = featureConfig.deploy.atomicEnabled && !deployOptions.previewOnly;
@@ -521,7 +533,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				return;
 			}
 
-			const message = toErrorMessage(error);
+			const message = toUserFacingErrorMessage(error);
 			options.onBrickOperation(targetBrickId, 'Deploy failed');
 			flowLogger.failed(error, {
 				localProjectPath: projectUri.fsPath,
@@ -627,8 +639,20 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		try {
 			remotePath = buildRemoteDeployPath(localUri.fsPath, defaultRoot);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			vscode.window.showErrorMessage(`Deploy path error: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger,
+					operation: 'Resolve deploy path',
+					level: 'warn',
+					context: {
+						brickId: target.brickId,
+						localPath: localUri.fsPath,
+						defaultRoot
+					},
+					userMessage: `Deploy path error: ${toUserFacingErrorMessage(error)}`,
+					error
+				})
+			);
 			return;
 		}
 		const correlationId = nextCorrelationId();
@@ -683,13 +707,20 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			});
 			vscode.window.showInformationMessage(`Deployed and started: ev3://${target.authority}${remotePath}`);
 		} catch (error) {
-			const message = toErrorMessage(error);
-			logger.warn('Deploy and run failed', {
-				localPath: localUri.fsPath,
-				remotePath,
-				message
-			});
-			vscode.window.showErrorMessage(`Deploy and run failed: ${message}`);
+			vscode.window.showErrorMessage(
+				presentCommandError({
+					logger,
+					operation: 'Deploy and run',
+					level: 'warn',
+					context: {
+						brickId: target.brickId,
+						localPath: localUri.fsPath,
+						remotePath
+					},
+					userMessage: `Deploy and run failed: ${toUserFacingErrorMessage(error)}`,
+					error
+				})
+			);
 		}
 	});
 
