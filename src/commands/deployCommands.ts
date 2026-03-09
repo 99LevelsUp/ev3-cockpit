@@ -12,6 +12,7 @@ import { verifyUploadedFile } from '../fs/deployVerify';
 import { runRemoteExecutable } from '../fs/remoteExecutable';
 import { deleteRemotePath, getRemotePathKind } from '../fs/remoteFsOps';
 import { RemoteFsService } from '../fs/remoteFsService';
+import { createFlowLogger } from '../diagnostics/flowLogger';
 import { nextCorrelationId, withTiming } from '../diagnostics/perfTiming';
 import { toErrorMessage, withBrickOperation } from './commandUtils';
 import { executeAtomicSwap, executeDeployPlan } from './deployExecution';
@@ -85,7 +86,6 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		const fsService = fsTarget.fsService;
 		const targetBrickId = fsTarget.brickId;
 		const targetAuthority = fsTarget.authority;
-		options.onBrickOperation(targetBrickId, operation.started);
 		const isCancellationError = (error: unknown): boolean =>
 			error instanceof vscode.CancellationError || (error instanceof Error && error.name === 'Canceled');
 
@@ -127,6 +127,17 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			return;
 		}
 		const atomicEnabled = featureConfig.deploy.atomicEnabled && !deployOptions.previewOnly;
+		const flowLogger = createFlowLogger(logger, 'deploy.project', {
+			correlationId,
+			brickId: targetBrickId,
+			authority: targetAuthority,
+			projectPath: projectUri.fsPath,
+			remoteProjectRoot,
+			previewOnly: deployOptions.previewOnly,
+			runAfterDeploy: deployOptions.runAfterDeploy
+		});
+		options.onBrickOperation(targetBrickId, operation.started);
+		flowLogger.started();
 
 		try {
 			const scan = await withTiming(
@@ -399,17 +410,9 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				options.markProgramStarted(runTarget, 'deploy-project-run', targetBrickId);
 			}
 
-			logger.info(
-				deployOptions.previewOnly
-					? 'Deploy project preview completed'
-					: deployOptions.runAfterDeploy
-					? 'Deploy project and run completed'
-					: 'Deploy project sync completed',
-				{
+			flowLogger.completed({
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
-				brickId: targetBrickId,
-				authority: targetAuthority,
 				filesScanned: files.length,
 				filesUploaded: uploadedFilesCount,
 				filesVerified: verifiedFilesCount,
@@ -446,13 +449,13 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				runTarget: runTarget ?? null
 			});
 			if (deployOptions.previewOnly && previewUploadSamples.length > 0) {
-				logger.info('Deploy preview upload sample', {
+				flowLogger.info('preview-upload-sample', {
 					remoteProjectRoot,
 					files: previewUploadSamples
 				});
 			}
 			if (deployOptions.previewOnly && (plannedStaleFilesCount > 0 || plannedStaleDirectoriesCount > 0)) {
-				logger.info('Deploy preview cleanup sample', {
+				flowLogger.info('preview-cleanup-sample', {
 					remoteProjectRoot,
 					files: cleanupPlan.filesToDelete.slice(0, 8),
 					directories: cleanupPlan.directoriesToDelete.slice(0, 8)
@@ -466,7 +469,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 				scan.skippedByExcludeGlob.length > 0 ||
 				scan.skippedBySize.length > 0
 			) {
-				logger.info('Deploy project scan skipped entries', {
+				flowLogger.info('scan-skipped-entries', {
 					skippedDirectories: scan.skippedDirectories,
 					skippedByExtension: scan.skippedByExtension,
 					skippedByIncludeGlob: scan.skippedByIncludeGlob,
@@ -508,7 +511,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		} catch (error) {
 			if (isCancellationError(error)) {
 				options.onBrickOperation(targetBrickId, 'Deploy cancelled');
-				logger.info('Deploy project operation cancelled by user.', {
+				flowLogger.cancelled({
 					localProjectPath: projectUri.fsPath,
 					remoteProjectRoot,
 					runAfterDeploy: deployOptions.runAfterDeploy,
@@ -520,13 +523,10 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 
 			const message = toErrorMessage(error);
 			options.onBrickOperation(targetBrickId, 'Deploy failed');
-			logger.warn(
-				operation.failed,
-				{
+			flowLogger.failed(error, {
 				localProjectPath: projectUri.fsPath,
 				remoteProjectRoot,
-				brickId: targetBrickId,
-				message
+				userMessage: message
 			});
 			vscode.window.showErrorMessage(
 				deployOptions.previewOnly
