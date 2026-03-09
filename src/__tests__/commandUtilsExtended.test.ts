@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { toUserFacingErrorMessage } from '../commands/commandUtils';
 import { ExtensionError } from '../errors/ExtensionError';
+import { TransportError, TransportErrorCode } from '../errors/TransportError';
 
 // --- toUserFacingErrorMessage ---
 
@@ -33,4 +34,13 @@ test('toUserFacingErrorMessage preserves ExtensionError with cause', () => {
 	const cause = new Error('root cause');
 	const error = new ExtensionError('E_CONNECT', 'Connection failed', cause);
 	assert.equal(toUserFacingErrorMessage(error), '[E_CONNECT] Connection failed');
+});
+
+test('toUserFacingErrorMessage uses centralized taxonomy for specialized errors', () => {
+	const error = new TransportError({
+		code: TransportErrorCode.TIMEOUT,
+		message: 'raw low-level timeout',
+		transportType: 'tcp'
+	});
+	assert.equal(toUserFacingErrorMessage(error), '[TIMEOUT] Connection timed out.');
 });
