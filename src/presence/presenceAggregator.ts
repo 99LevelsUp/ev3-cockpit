@@ -2,8 +2,18 @@ import type { BrickConnectionProfile, BrickConnectionProfileStore } from '../dev
 import type { BrickRegistry } from '../device/brickRegistry';
 import type { Logger } from '../diagnostics/logger';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
-import { isMockBrickId } from '../mock/mockCatalog';
 import { TransportMode } from '../types/enums';
+import {
+	buildDiscoveredProfile,
+	resolveDiscoveryDetail,
+	resolveDiscoveryTransport,
+	resolveLiveCandidateStatus,
+	resolveNonConnectableReason,
+	resolvePreferredDiscoveryDisplayName,
+	resolveStoredCandidateStatus,
+	shouldIncludeDiscoveryCandidate,
+	sortDiscoveryCandidates
+} from './presenceCandidateHelpers';
 import type { PresenceRecord, PresenceSource } from './presenceSource';
 
 export interface GoneTtlConfig {
@@ -17,6 +27,7 @@ export interface PresenceAggregatorOptions {
 	goneTtl: GoneTtlConfig;
 	reaperIntervalMs: number;
 	defaultRootPath: string;
+	candidateChangeCoalesceMs?: number;
 }
 
 export interface PresenceAggregatorDeps {
@@ -28,25 +39,6 @@ export interface PresenceAggregatorDeps {
 
 type CandidatesChangedCallback = () => void;
 
-function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
-	if (typeof value !== 'string') {
-		return undefined;
-	}
-	const trimmed = value.trim();
-	if (!trimmed || trimmed.length > 12) {
-		return undefined;
-	}
-	return trimmed;
-}
-
-const TRANSPORT_RANK: Record<string, number> = {
-	usb: 0,
-	bt: 1,
-	tcp: 2,
-	mock: 3,
-	unknown: 4
-};
-
 export class PresenceAggregator {
 	private readonly deps: PresenceAggregatorDeps;
 	private readonly options: PresenceAggregatorOptions;
@@ -56,6 +48,7 @@ export class PresenceAggregator {
 	private readonly nonConnectableCandidates = new Map<string, string>();
 	private readonly candidatesListeners: CandidatesChangedCallback[] = [];
 	private reaperTimer: ReturnType<typeof setInterval> | undefined;
+	private candidateChangeTimer: ReturnType<typeof setTimeout> | undefined;
 	private started = false;
 
 	constructor(deps: PresenceAggregatorDeps, options: PresenceAggregatorOptions) {
@@ -87,6 +80,10 @@ export class PresenceAggregator {
 		if (this.reaperTimer) {
 			clearInterval(this.reaperTimer);
 			this.reaperTimer = undefined;
+		}
+		if (this.candidateChangeTimer) {
+			clearTimeout(this.candidateChangeTimer);
+			this.candidateChangeTimer = undefined;
 		}
 		for (const source of this.sources) {
 			source.stop();
@@ -134,11 +131,7 @@ export class PresenceAggregator {
 			profile?: BrickConnectionProfile,
 			nonConnectableReason?: string
 		): void => {
-			if (!config.showMockBricks && isMockBrickId(candidate.candidateId)) {
-				return;
-			}
-			const normalizedCandidateId = candidate.candidateId.trim().toLowerCase();
-			if (normalizedCandidateId === 'active') {
+			if (!shouldIncludeDiscoveryCandidate(candidate.candidateId, config.showMockBricks)) {
 				return;
 			}
 			if (seenCandidateIds.has(candidate.candidateId)) {
@@ -154,44 +147,19 @@ export class PresenceAggregator {
 			candidates.push(candidate);
 		};
 
-		const resolvePreferredDisplayName = (
-			brickId: string,
-			fallbackDisplayName: string,
-			discoveredName?: string
-		): string => {
-			const connectedName = normalizeBrickNameCandidate(brickRegistry.getSnapshot(brickId)?.displayName);
-			if (connectedName) {
-				return connectedName;
-			}
-			const rememberedName = normalizeBrickNameCandidate(profileStore.get(brickId)?.displayName);
-			if (rememberedName) {
-				return rememberedName;
-			}
-			const liveDiscoveredName = normalizeBrickNameCandidate(discoveredName);
-			if (liveDiscoveredName) {
-				return liveDiscoveredName;
-			}
-			return fallbackDisplayName;
-		};
-
 		// Live presence records from all sources
 		for (const [candidateId, record] of this.masterMap) {
 			const snapshot = brickRegistry.getSnapshot(candidateId);
-			const displayName = resolvePreferredDisplayName(
-				candidateId,
-				record.displayName,
-				record.displayName
-			);
+			const displayName = resolvePreferredDiscoveryDisplayName({
+				connectedDisplayName: brickRegistry.getSnapshot(candidateId)?.displayName,
+				rememberedDisplayName: profileStore.get(candidateId)?.displayName,
+				liveDisplayName: record.displayName,
+				fallbackDisplayName: record.displayName
+			});
 
-			const profile = this.buildProfile(record, displayName, defaultRoot, nowIso);
-
-			const nonConnectableReason = record.connectable
-				? undefined
-				: record.transport === TransportMode.USB
-					? 'USB brick detected but cannot communicate — name probe failed.'
-					: 'Brick is visible over Bluetooth, but Windows currently has no COM mapping for connection.';
-
-			const status = this.resolveCandidateStatus(snapshot, record);
+			const profile = buildDiscoveredProfile(record, displayName, defaultRoot, nowIso);
+			const nonConnectableReason = resolveNonConnectableReason(record);
+			const status = resolveLiveCandidateStatus(snapshot, record);
 			registerCandidate({
 				candidateId,
 				displayName,
@@ -210,13 +178,17 @@ export class PresenceAggregator {
 			}
 			const snapshot = brickRegistry.getSnapshot(brickId);
 			const fallbackDisplayName = profile.displayName?.trim() || `EV3 (${brickId})`;
-			const displayName = resolvePreferredDisplayName(brickId, fallbackDisplayName);
+			const displayName = resolvePreferredDiscoveryDisplayName({
+				connectedDisplayName: snapshot?.displayName,
+				rememberedDisplayName: profileStore.get(brickId)?.displayName,
+				fallbackDisplayName
+			});
 			registerCandidate({
 				candidateId: brickId,
 				displayName,
 				transport: resolveDiscoveryTransport(brickId, profile),
 				detail: resolveDiscoveryDetail(profile),
-				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+				status: resolveStoredCandidateStatus(snapshot, 'UNAVAILABLE'),
 				alreadyConnected: snapshot?.status === 'READY' || snapshot?.status === 'CONNECTING'
 			}, profile);
 		}
@@ -230,24 +202,19 @@ export class PresenceAggregator {
 			const transport = resolveDiscoveryTransport(snapshot.brickId, rememberedProfile);
 			registerCandidate({
 				candidateId: snapshot.brickId,
-				displayName: resolvePreferredDisplayName(snapshot.brickId, snapshot.displayName),
+				displayName: resolvePreferredDiscoveryDisplayName({
+					connectedDisplayName: snapshot.displayName,
+					rememberedDisplayName: rememberedProfile?.displayName,
+					fallbackDisplayName: snapshot.displayName
+				}),
 				transport,
 				detail: resolveDiscoveryDetail(rememberedProfile),
-				status: resolveCandidateStatus(snapshot, 'UNAVAILABLE'),
+				status: resolveStoredCandidateStatus(snapshot, 'UNAVAILABLE'),
 				alreadyConnected: snapshot.status === 'READY' || snapshot.status === 'CONNECTING'
 			}, rememberedProfile);
 		}
 
-		// Sort: USB > BT > TCP > Mock
-		candidates.sort((left, right) => {
-			const rank = (TRANSPORT_RANK[left.transport] ?? 4) - (TRANSPORT_RANK[right.transport] ?? 4);
-			if (rank !== 0) {
-				return rank;
-			}
-			return left.displayName.localeCompare(right.displayName);
-		});
-
-		return candidates;
+		return sortDiscoveryCandidates(candidates);
 	}
 
 	public async connectDiscoveredBrick(
@@ -366,83 +333,23 @@ export class PresenceAggregator {
 		}
 	}
 
-	private buildProfile(
-		record: PresenceRecord,
-		displayName: string,
-		defaultRoot: string,
-		nowIso: string
-	): BrickConnectionProfile {
-		const params = record.connectionParams;
-		switch (params.mode) {
-			case 'usb':
-				return {
-					brickId: record.candidateId,
-					displayName,
-					savedAtIso: nowIso,
-					rootPath: defaultRoot,
-					transport: { mode: TransportMode.USB, usbPath: params.usbPath }
-				};
-			case 'tcp':
-				return {
-					brickId: record.candidateId,
-					displayName,
-					savedAtIso: nowIso,
-					rootPath: defaultRoot,
-					transport: {
-						mode: TransportMode.TCP,
-						tcpHost: params.tcpHost,
-						tcpPort: params.tcpPort,
-						tcpUseDiscovery: false,
-						tcpSerialNumber: params.tcpSerialNumber
-					}
-				};
-			case 'bt':
-				return {
-					brickId: record.candidateId,
-					displayName,
-					savedAtIso: nowIso,
-					rootPath: defaultRoot,
-					transport: {
-						mode: TransportMode.BT,
-						btPortPath: params.btPortPath
-					}
-				};
-			case 'mock':
-				return {
-					brickId: record.candidateId,
-					displayName,
-					savedAtIso: nowIso,
-					rootPath: defaultRoot,
-					transport: { mode: TransportMode.MOCK }
-				};
-		}
-	}
-
-	private resolveCandidateStatus(
-		snapshot: { status: string } | undefined,
-		record: PresenceRecord
-	): NonNullable<BrickPanelDiscoveryCandidate['status']> {
-		if (snapshot) {
-			if (
-				snapshot.status === 'READY'
-				|| snapshot.status === 'CONNECTING'
-				|| snapshot.status === 'ERROR'
-			) {
-				return snapshot.status;
-			}
-		}
-		// USB brick with failed name probe → ERROR
-		if (record.transport === TransportMode.USB && !record.connectable) {
-			return 'ERROR';
-		}
-		// BT without COM port — still show as available (user can pair)
-		if (record.transport === TransportMode.BT && !record.connectable) {
-			return snapshot ? resolveCandidateStatus(snapshot, 'UNKNOWN') : 'AVAILABLE';
-		}
-		return 'AVAILABLE';
-	}
-
 	private fireCandidatesChanged(): void {
+		const delayMs = Math.max(0, this.options.candidateChangeCoalesceMs ?? 0);
+		if (delayMs <= 0) {
+			this.notifyCandidatesChanged();
+			return;
+		}
+		if (this.candidateChangeTimer) {
+			return;
+		}
+		this.candidateChangeTimer = setTimeout(() => {
+			this.candidateChangeTimer = undefined;
+			this.notifyCandidatesChanged();
+		}, delayMs);
+		this.candidateChangeTimer.unref?.();
+	}
+
+	private notifyCandidatesChanged(): void {
 		for (const listener of this.candidatesListeners) {
 			try {
 				listener();
@@ -451,61 +358,4 @@ export class PresenceAggregator {
 			}
 		}
 	}
-}
-
-function resolveCandidateStatus(
-	snapshot: { status: string } | undefined,
-	fallback: 'AVAILABLE' | 'UNKNOWN' | 'UNAVAILABLE'
-): NonNullable<BrickPanelDiscoveryCandidate['status']> {
-	if (!snapshot) {
-		return fallback;
-	}
-	if (
-		snapshot.status === 'AVAILABLE'
-		|| snapshot.status === 'READY'
-		|| snapshot.status === 'CONNECTING'
-		|| snapshot.status === 'UNAVAILABLE'
-		|| snapshot.status === 'ERROR'
-	) {
-		return snapshot.status;
-	}
-	return 'UNKNOWN';
-}
-
-function resolveDiscoveryTransport(
-	brickId: string,
-	profile?: BrickConnectionProfile
-): BrickPanelDiscoveryCandidate['transport'] {
-	const mode = profile?.transport.mode;
-	if (mode === TransportMode.USB || mode === TransportMode.TCP || mode === TransportMode.BT || mode === TransportMode.MOCK) {
-		return mode;
-	}
-	if (brickId.startsWith('usb-')) return TransportMode.USB;
-	if (brickId.startsWith('tcp-')) return TransportMode.TCP;
-	if (brickId.startsWith('bt-')) return TransportMode.BT;
-	if (brickId.startsWith('mock-')) return TransportMode.MOCK;
-	return 'unknown';
-}
-
-function resolveDiscoveryDetail(profile?: BrickConnectionProfile): string | undefined {
-	if (!profile) {
-		return undefined;
-	}
-	const transport = profile.transport;
-	if (transport.mode === TransportMode.USB) {
-		return transport.usbPath?.trim() || undefined;
-	}
-	if (transport.mode === TransportMode.TCP) {
-		const host = transport.tcpHost?.trim() || '';
-		const port =
-			typeof transport.tcpPort === 'number' && Number.isFinite(transport.tcpPort)
-				? Math.max(1, Math.floor(transport.tcpPort))
-				: undefined;
-		const endpoint = host && port ? `${host}:${port}` : host || (port ? String(port) : '');
-		return endpoint || transport.tcpSerialNumber?.trim() || undefined;
-	}
-	if (transport.mode === TransportMode.BT) {
-		return transport.btPortPath?.trim() || undefined;
-	}
-	return undefined;
 }

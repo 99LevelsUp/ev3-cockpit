@@ -105,6 +105,7 @@ function createAggregator(overrides?: {
 	registry?: InstanceType<typeof BrickRegistry>;
 	profileStore?: InstanceType<typeof BrickConnectionProfileStore>;
 	goneTtl?: Partial<{ usb: number; bt: number; tcp: number; mock: number }>;
+	candidateChangeCoalesceMs?: number;
 }) {
 	const registry = overrides?.registry ?? new BrickRegistry();
 	const profileStore = overrides?.profileStore ?? createFakeProfileStore();
@@ -124,7 +125,8 @@ function createAggregator(overrides?: {
 				...overrides?.goneTtl
 			},
 			reaperIntervalMs: 60000,
-			defaultRootPath: '/home/root/lms2012/prjs/'
+			defaultRootPath: '/home/root/lms2012/prjs/',
+			candidateChangeCoalesceMs: overrides?.candidateChangeCoalesceMs ?? 0
 		}
 	);
 }
@@ -310,4 +312,22 @@ test('getCandidates deduplicates live records vs stored profiles', async () => {
 	const tcpXCandidates = candidates.filter((c) => c.candidateId === 'tcp-x');
 	assert.equal(tcpXCandidates.length, 1);
 	assert.equal(tcpXCandidates[0].status, 'AVAILABLE');
+});
+
+test('candidate change notifications are coalesced when configured', async () => {
+	const agg = createAggregator({ candidateChangeCoalesceMs: 20 });
+	const tcpSource = createFakeSource(TransportMode.TCP);
+	agg.addSource(tcpSource);
+
+	let changed = 0;
+	agg.onCandidatesChanged(() => {
+		changed += 1;
+	});
+
+	tcpSource.emit(new Map([['tcp-a', makeRecord('tcp-a', TransportMode.TCP)]]));
+	tcpSource.emit(new Map([['tcp-b', makeRecord('tcp-b', TransportMode.TCP)]]));
+	assert.equal(changed, 0);
+
+	await new Promise((resolve) => setTimeout(resolve, 35));
+	assert.equal(changed, 1);
 });

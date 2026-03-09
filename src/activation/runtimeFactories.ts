@@ -47,7 +47,8 @@ export function createPresenceRuntime(options: PresenceRuntimeOptions): Presence
 		{
 			goneTtl: { usb: usbGoneTtlMs, bt: 45000, tcp: 10000, mock: Infinity },
 			reaperIntervalMs: 1000,
-			defaultRootPath: options.defaultRootPath
+			defaultRootPath: options.defaultRootPath,
+			candidateChangeCoalesceMs: 75
 		}
 	);
 	if (options.enableHardwarePresence) {
