@@ -133,7 +133,37 @@
       "name": "Bender"
     },
     {
-      "name": "Marvin"
+      "name": "Marvin",
+      "world": {
+        "sensors": [
+          {
+            "port": 1,
+            "type": "EV3-Color",
+            "generator": "sine-wave",
+            "generator_config": {
+              "frequency": 0.5,
+              "range": [0, 100]
+            }
+          }
+        ],
+        "motors": [
+          {
+            "port": "A",
+            "tachoMax": 1000
+          }
+        ],
+        "brick": {
+          "name": "Marvin",
+          "firmwareVersion": "V1.10E"
+        },
+        "fsSeed": [],
+        "fault": {
+          "errorRate": 0,
+          "latencyMs": 0,
+          "jitterMs": 0,
+          "timeoutRate": 0
+        }
+      }
     },
     {
       "name": "R2D2"

@@ -1,3 +1,4 @@
+import type { MockWorldConfig } from './mockTypes';
 import type { BrickRole } from '../device/brickRegistry';
 
 export interface MockBrickDefinition {
@@ -5,6 +6,7 @@ export interface MockBrickDefinition {
 	displayName: string;
 	role: BrickRole;
 	parentDisplayName?: string;
+	worldConfig?: MockWorldConfig;
 }
 
 export interface MockBrickConfigNode {
@@ -78,17 +80,19 @@ export function buildMockBricksFromConfig(raw: unknown): MockBrickDefinition[] {
 
 	const visit = (nodes: unknown[], parentId: string | undefined, parentDisplayName: string | undefined): void => {
 		nodes.forEach((node, index) => {
-			const record = node as MockBrickConfigNode;
+			const record = node as MockBrickConfigNode & { world?: unknown };
 			const name = normalizeName(record?.name) ?? 'Mock';
 			const token = toSafeIdentifier(name === 'Mock' ? `mock-${index + 1}` : name);
 			const baseId = parentId ? `${parentId}-${token}` : `mock-${token}`;
 			const brickId = reserveId(baseId);
 			const role: BrickRole = parentId ? 'slave' : 'master';
+			const worldConfig = record?.world as MockWorldConfig | undefined;
 			results.push({
 				brickId,
 				displayName: name,
 				role,
-				parentDisplayName
+				parentDisplayName,
+				worldConfig
 			});
 			const children = toArray(record?.bricks);
 			if (children.length > 0) {
@@ -119,4 +123,9 @@ export function resolveMockDisplayName(brickId: string): string {
 
 export function isMockBrickId(brickId: string): boolean {
 	return brickId.startsWith('mock-');
+}
+
+export function resolveMockWorldConfig(brickId: string): MockWorldConfig | undefined {
+	const match = cachedMockBricks.find((entry) => entry.brickId === brickId);
+	return match?.worldConfig;
 }

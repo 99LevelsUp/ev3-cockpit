@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { OutputChannelLogger } from '../diagnostics/logger';
 import { MockWorld } from '../mock/mockWorld';
+import { resolveMockWorldConfig } from '../mock/mockCatalog';
 import { decodeEv3Packet } from '../protocol/ev3Packet';
 import { MockTransportAdapter } from './mockTransportAdapter';
 import { TransportAdapter } from './transportAdapter';
@@ -23,6 +24,7 @@ export interface TransportConfigOverrides {
 	tcpUseDiscovery?: boolean;
 	tcpSerialNumber?: string;
 	btPortPath?: string;
+	mockBrickId?: string;
 }
 
 /** Default EV3 USB HID report size (1-byte report ID + 1024-byte payload). */
@@ -51,11 +53,16 @@ function sanitizeTransportMode(value: unknown): TransportMode {
 	return TransportMode.USB;
 }
 
-function createMockProbeTransport(logger: OutputChannelLogger): MockTransportAdapter {
-	const world = MockWorld.create();
+function createMockProbeTransport(logger: OutputChannelLogger, mockBrickId?: string): MockTransportAdapter {
+	const worldConfig = mockBrickId ? resolveMockWorldConfig(mockBrickId) : undefined;
+	const world = MockWorld.create(worldConfig);
 	world.startTicking(100);
 
-	logger.info('MockWorld created with default seed. Tick interval: 100 ms.');
+	if (worldConfig) {
+		logger.info(`MockWorld created for brick '${mockBrickId}' with custom config. Tick interval: 100 ms.`);
+	} else {
+		logger.info('MockWorld created with default seed. Tick interval: 100 ms.');
+	}
 
 	return new MockTransportAdapter(async (packet, options) => {
 		const request = decodeEv3Packet(packet);
@@ -122,12 +129,13 @@ export function createProbeTransportForMode(
 	cfg: ConfigurationReader,
 	logger: OutputChannelLogger,
 	timeoutMs: number,
-	modeRaw: unknown
+	modeRaw: unknown,
+	mockBrickId?: string
 ): TransportAdapter {
 	const mode = sanitizeTransportMode(modeRaw);
 	if (mode === TransportMode.MOCK) {
 		logger.info('Using mock transport for connect probe (ev3-cockpit.transport.mode=mock).');
-		return createMockProbeTransport(logger);
+		return createMockProbeTransport(logger, mockBrickId);
 	}
 
 	if (mode === TransportMode.USB) {
@@ -192,5 +200,5 @@ export function createProbeTransportFromWorkspace(
 			return cfg.get(section, defaultValue as T);
 		}
 	};
-	return createProbeTransportForMode(profileReader, logger, timeoutMs, overrides?.mode ?? cfg.get('transport.mode'));
+	return createProbeTransportForMode(profileReader, logger, timeoutMs, overrides?.mode ?? cfg.get('transport.mode'), overrides?.mockBrickId);
 }

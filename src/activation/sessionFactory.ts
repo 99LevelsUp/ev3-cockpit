@@ -30,9 +30,10 @@ export function createBrickSessionFactory(
 			defaultRetryPolicy: config.defaultRetryPolicy,
 			orphanRecoveryStrategy: new LoggingOrphanRecoveryStrategy((message, meta) => logger.info(message, meta))
 		});
+		const overrides = toTransportOverrides(profile);
 		const commandClient = new Ev3CommandClient({
 			scheduler,
-			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs, toTransportOverrides(profile)),
+			transport: createProbeTransportFromWorkspace(logger, config.timeoutMs, overrides ? { ...overrides, mockBrickId: brickId } : { mockBrickId: brickId }),
 			logger
 		});
 		return {
