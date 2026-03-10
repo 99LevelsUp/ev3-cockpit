@@ -85,6 +85,7 @@ interface WebviewMotorInfo {
 	layer?: number;
 	speed: number;
 	running: boolean;
+	typeCode?: number;
 }
 
 interface WebviewControlsInfo {
@@ -253,7 +254,8 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 					port: m.port,
 					layer: m.layer,
 					speed: m.speed,
-					running: m.running
+					running: m.running,
+					typeCode: m.typeCode
 				}));
 			}
 		}
@@ -499,6 +501,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 		const transportIconsLiteral = JSON.stringify(getWebviewTransportIcons());
 		const tabActionIconsLiteral = JSON.stringify(getWebviewTabActionIcons());
 		const brickTabIconSvgLiteral = JSON.stringify(readBrickTabIconSvg(this.extensionUri));
+		const portEmptySvgLiteral = JSON.stringify(readPortEmptySvg(this.extensionUri));
+		const motorLargeSvgLiteral = JSON.stringify(readMotorLargeSvg(this.extensionUri));
+		const motorMediumSvgLiteral = JSON.stringify(readMotorMediumSvg(this.extensionUri));
 		const template = readBrickPanelTemplate(this.extensionUri);
 
 		return template
@@ -508,6 +513,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 			.replace('__TRANSPORT_ICONS_LITERAL__', transportIconsLiteral)
 			.replace('__TAB_ACTION_ICONS_LITERAL__', tabActionIconsLiteral)
 			.replace('__BRICK_TAB_ICON_SVG_LITERAL__', brickTabIconSvgLiteral)
+			.replace('__PORT_EMPTY_SVG_LITERAL__', portEmptySvgLiteral)
+			.replace('__MOTOR_LARGE_SVG_LITERAL__', motorLargeSvgLiteral)
+			.replace('__MOTOR_MEDIUM_SVG_LITERAL__', motorMediumSvgLiteral)
 			.replace('__DISCOVERY_REFRESH_FAST_MS__', String(this.discoveryRefreshFastMs))
 			.replace('__DISCOVERY_REFRESH_SLOW_MS__', String(this.discoveryRefreshSlowMs));
 	}
@@ -515,6 +523,9 @@ export class BrickPanelProvider implements vscode.WebviewViewProvider {
 
 let cachedBrickPanelTemplate: string | undefined;
 let cachedBrickTabIconSvg: string | undefined;
+let cachedPortEmptySvg: string | undefined;
+let cachedMotorLargeSvg: string | undefined;
+let cachedMotorMediumSvg: string | undefined;
 
 function readBrickPanelTemplate(extensionUri: vscode.Uri): string {
 	if (cachedBrickPanelTemplate) {
@@ -538,6 +549,37 @@ function readBrickTabIconSvg(extensionUri: vscode.Uri): string {
 	const iconPath = path.join(extensionFsPath, 'media', 'ev3-brick.svg');
 	cachedBrickTabIconSvg = fs.readFileSync(iconPath, 'utf8');
 	return cachedBrickTabIconSvg;
+}
+
+function readMediaSvg(extensionUri: vscode.Uri, fileName: string): string {
+	const extensionFsPath = typeof extensionUri.fsPath === 'string' && extensionUri.fsPath.length > 0
+		? extensionUri.fsPath
+		: process.cwd();
+	return fs.readFileSync(path.join(extensionFsPath, 'media', fileName), 'utf8');
+}
+
+function readPortEmptySvg(extensionUri: vscode.Uri): string {
+	if (cachedPortEmptySvg) {
+		return cachedPortEmptySvg;
+	}
+	cachedPortEmptySvg = readMediaSvg(extensionUri, 'ev3-port-empty.svg');
+	return cachedPortEmptySvg;
+}
+
+function readMotorLargeSvg(extensionUri: vscode.Uri): string {
+	if (cachedMotorLargeSvg) {
+		return cachedMotorLargeSvg;
+	}
+	cachedMotorLargeSvg = readMediaSvg(extensionUri, 'ev3-motor-large.svg');
+	return cachedMotorLargeSvg;
+}
+
+function readMotorMediumSvg(extensionUri: vscode.Uri): string {
+	if (cachedMotorMediumSvg) {
+		return cachedMotorMediumSvg;
+	}
+	cachedMotorMediumSvg = readMediaSvg(extensionUri, 'ev3-motor-medium.svg');
+	return cachedMotorMediumSvg;
 }
 
 function getNonce(): string {

@@ -606,19 +606,31 @@ __CODICONS_LINK_TAG__
 		min-width: 0;
 	}
 	.port-square {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		width: min(54px, 100%);
 		max-width: 54px;
 		aspect-ratio: 1 / 1;
-		border: 1px dashed var(--vscode-descriptionForeground, var(--vscode-panel-border, var(--vscode-foreground)));
-		border-radius: 6px;
+		border: none;
 		background: transparent;
 		box-sizing: border-box;
+		color: var(--vscode-descriptionForeground, var(--vscode-panel-border, var(--vscode-foreground)));
 		opacity: 0.72;
 	}
+	.port-square svg {
+		width: 100%;
+		height: 100%;
+	}
 	.port-square.connected {
-		border-style: solid;
-		border-color: var(--vscode-foreground);
+		border: 1px solid var(--vscode-foreground);
+		border-radius: 6px;
 		background: var(--vscode-foreground);
+		opacity: 1;
+	}
+	.port-square.port-motor {
+		border: none;
+		background: transparent;
 		opacity: 1;
 	}
 	.port-label {
@@ -838,6 +850,9 @@ __CODICONS_LINK_TAG__
 			'<svg ',
 			'<svg class="brick-tab-brick-svg" aria-hidden="true" focusable="false" '
 		);
+		const PORT_EMPTY_SVG = __PORT_EMPTY_SVG_LITERAL__;
+		const MOTOR_LARGE_SVG = __MOTOR_LARGE_SVG_LITERAL__;
+		const MOTOR_MEDIUM_SVG = __MOTOR_MEDIUM_SVG_LITERAL__;
 		const MOTOR_PORT_LABELS = ['A', 'B', 'C', 'D'];
 		const SENSOR_PORT_LABELS = ['1', '2', '3', '4'];
 
@@ -1240,20 +1255,32 @@ __CODICONS_LINK_TAG__
 				+ '</div>';
 		}
 
-		function renderPortCell(label, connected) {
-			return '<div class="port-cell">'
-				+ '<span class="port-square' + (connected ? ' connected' : '') + '" aria-hidden="true"></span>'
-				+ '</div>';
+		function renderPortCell(label, connected, motorSvg) {
+			var inner;
+			if (motorSvg) {
+				inner = '<span class="port-square port-motor" aria-hidden="true">' + motorSvg + '</span>';
+			} else if (connected) {
+				inner = '<span class="port-square connected" aria-hidden="true"></span>';
+			} else {
+				inner = '<span class="port-square" aria-hidden="true">' + PORT_EMPTY_SVG + '</span>';
+			}
+			return '<div class="port-cell">' + inner + '</div>';
+		}
+
+		function resolveMotorSvg(typeCode) {
+			if (typeCode === 7) return MOTOR_LARGE_SVG;
+			if (typeCode === 8) return MOTOR_MEDIUM_SVG;
+			return undefined;
 		}
 
 		function renderMotorRows(layers) {
 			const orderedLayers = layers.slice().sort((left, right) => right - left);
 			return orderedLayers.map((layer) => {
 				const cells = MOTOR_PORT_LABELS.map((port) => {
-					const connected = (motors || []).some((motor) =>
-						normalizeTelemetryLayer(motor?.layer) === layer && motor?.port === port
+					const motor = (motors || []).find((m) =>
+						normalizeTelemetryLayer(m?.layer) === layer && m?.port === port
 					);
-					return renderPortCell(port, connected);
+					return renderPortCell(port, !!motor, motor ? resolveMotorSvg(motor.typeCode) : undefined);
 				}).join('');
 				return '<div class="port-layer-row"><div class="port-grid">' + cells + '</div></div>';
 			}).join('');

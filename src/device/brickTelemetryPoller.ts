@@ -732,7 +732,7 @@ export class BrickTelemetryPoller {
 
 		const sensors: SensorInfo[] = [];
 
-		const motors: { port: MotorPort; speed: number; running: boolean; layer?: number }[] = [];
+		const motors: { port: MotorPort; speed: number; running: boolean; layer?: number; typeCode?: number }[] = [];
 		const deviceTypes = this.telemetryStore.getSnapshot(brickId)?.deviceTypes;
 		if (deviceTypes) {
 			for (let port = 0; port < 4; port += 1) {
@@ -759,7 +759,7 @@ export class BrickTelemetryPoller {
 				const index = 16 + i;
 				if (deviceTypes[index] !== 126) {
 					const port = MOTOR_PORTS[i];
-					motors.push({ port, speed: 0, running: false });
+					motors.push({ port, speed: 0, running: false, typeCode: deviceTypes[index] });
 				}
 			}
 		}

@@ -47,4 +47,5 @@ export interface MotorState {
 	layer?: number;
 	speed: number;
 	running: boolean;
+	typeCode?: number;
 }

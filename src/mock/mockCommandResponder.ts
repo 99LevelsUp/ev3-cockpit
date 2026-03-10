@@ -12,6 +12,7 @@ import type { MotorPort } from '../device/motorTypes';
 
 const OP = {
 	INPUT_DEVICE: 0x99,
+	INPUT_DEVICE_LIST: 0x98,
 	INPUT_READ_SI: 0x9a,
 	OUTPUT_SPEED: 0xa5,
 	OUTPUT_START: 0xa6,
@@ -114,6 +115,10 @@ const MASK_TO_PORT: Record<number, MotorPort> = {
 	0x01: 'A', 0x02: 'B', 0x04: 'C', 0x08: 'D'
 };
 
+const MOTOR_INDEX_TO_PORT: Record<number, MotorPort> = {
+	0: 'A', 1: 'B', 2: 'C', 3: 'D'
+};
+
 // ---------------------------------------------------------------------------
 // MockCommandResponder
 // ---------------------------------------------------------------------------
@@ -177,19 +182,68 @@ function handleDirectCommand(payload: Uint8Array, deps: MockCommandResponderDeps
 				const sub = payload[pos];
 				pos += 1;
 				if (sub === INPUT_DEVICE_SUB.GET_TYPEMODE) {
-					const { bytesConsumed: bc1 } = decodeLc(payload, pos); pos += bc1; // layer
+					const { value: layer, bytesConsumed: bc1 } = decodeLc(payload, pos); pos += bc1;
 					const { value: port, bytesConsumed: bc2 } = decodeLc(payload, pos); pos += bc2;
 					const { value: gvType, bytesConsumed: bc3 } = decodeLc(payload, pos); pos += bc3;
 					const { value: gvMode, bytesConsumed: bc4 } = decodeLc(payload, pos); pos += bc4;
-					const sensorPort = (port & 0x03) as 0 | 1 | 2 | 3;
-					replyBuf[gvType] = deps.sensors.getTypeCode(sensorPort);
-					replyBuf[gvMode] = deps.sensors.getMode(sensorPort);
+					if (layer === 0) {
+						const sensorPort = (port & 0x03) as 0 | 1 | 2 | 3;
+						if (port >= 16) {
+							// Output port query (motor)
+							const motorPort = MOTOR_INDEX_TO_PORT[port & 0x03];
+							if (motorPort) {
+								replyBuf[gvType] = deps.motors.getTypeCode(motorPort);
+								replyBuf[gvMode] = 0;
+							} else {
+								replyBuf[gvType] = 126;
+								replyBuf[gvMode] = 0;
+							}
+						} else {
+							replyBuf[gvType] = deps.sensors.getTypeCode(sensorPort);
+							replyBuf[gvMode] = deps.sensors.getMode(sensorPort);
+						}
+					} else {
+						// Non-zero layer: no daisy-chained bricks in mock
+						replyBuf[gvType] = 126;
+						replyBuf[gvMode] = 0;
+					}
 				} else if (sub === INPUT_DEVICE_SUB.SET_TYPEMODE) {
 					const { bytesConsumed: bc1 } = decodeLc(payload, pos); pos += bc1; // layer
 					const { value: port, bytesConsumed: bc2 } = decodeLc(payload, pos); pos += bc2;
 					const { value: tc, bytesConsumed: bc3 } = decodeLc(payload, pos); pos += bc3;
 					const { value: mode, bytesConsumed: bc4 } = decodeLc(payload, pos); pos += bc4;
 					deps.sensors.setMode((port & 0x03) as 0 | 1 | 2 | 3, tc, mode);
+				}
+				break;
+			}
+
+			case OP.INPUT_DEVICE_LIST: {
+				// INPUT_DEVICE_LIST: LC(length), GV(array_offset), GV(changed_offset)
+				const { value: length, bytesConsumed: bc1 } = decodeLc(payload, pos); pos += bc1;
+				const { value: gvArray, bytesConsumed: bc2 } = decodeLc(payload, pos); pos += bc2;
+				const { value: gvChanged, bytesConsumed: bc3 } = decodeLc(payload, pos); pos += bc3;
+				// Fill with 126 (empty/not present)
+				const count = Math.min(length, replyBuf.length - gvArray);
+				for (let i = 0; i < count; i += 1) {
+					replyBuf[gvArray + i] = 126;
+				}
+				// Layer 0 inputs (ports 0-3): sensor type codes
+				const SENSOR_PORTS: Array<0 | 1 | 2 | 3> = [0, 1, 2, 3];
+				for (const sp of SENSOR_PORTS) {
+					if (sp < count) {
+						replyBuf[gvArray + sp] = deps.sensors.getTypeCode(sp);
+					}
+				}
+				// Layer 0 outputs (ports 16-19): motor type codes
+				const MOTOR_LABELS: MotorPort[] = ['A', 'B', 'C', 'D'];
+				for (let mi = 0; mi < MOTOR_LABELS.length; mi += 1) {
+					const slot = 16 + mi;
+					if (slot < count) {
+						replyBuf[gvArray + slot] = deps.motors.getTypeCode(MOTOR_LABELS[mi]);
+					}
+				}
+				if (gvChanged < replyBuf.length) {
+					replyBuf[gvChanged] = 0;
 				}
 				break;
 			}
