@@ -1,3 +1,9 @@
+/**
+ * Low-level remote filesystem operations (list, read, write, delete, mkdir).
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { ExtensionError } from '../errors/ExtensionError';
 import { canonicalizeEv3Path, PathPolicyError } from './pathPolicy';

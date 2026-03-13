@@ -1,3 +1,9 @@
+/**
+ * Auto-reconnection logic for disconnected bricks with transport-specific path migration.
+ *
+ * @packageDocumentation
+ */
+
 import { BrickRegistry } from './brickRegistry';
 import { BrickConnectionProfileStore } from './brickConnectionProfiles';
 import type { PresenceAggregator } from '../presence/presenceAggregator';

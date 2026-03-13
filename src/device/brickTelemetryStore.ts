@@ -1,3 +1,9 @@
+/**
+ * In-memory store for brick sensor and motor telemetry data with dirty tracking.
+ *
+ * @packageDocumentation
+ */
+
 import type {
 	BrickFilesystemSnapshot,
 	BrickIdentity,

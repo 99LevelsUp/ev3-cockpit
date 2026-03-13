@@ -1,3 +1,9 @@
+/**
+ * Watches for VS Code configuration changes and triggers runtime updates.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { captureConnectionProfileFromWorkspace, BrickConnectionProfileStore } from '../device/brickConnectionProfiles';
 import { BrickRegistry } from '../device/brickRegistry';

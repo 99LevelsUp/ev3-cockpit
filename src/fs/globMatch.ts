@@ -1,3 +1,9 @@
+/**
+ * Minimal glob pattern matching for deploy include/exclude filters.
+ *
+ * @packageDocumentation
+ */
+
 function escapeRegex(value: string): string {
 	return value.replace(/[.+^${}()|[\]\\]/g, '\\$&');
 }

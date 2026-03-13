@@ -1,3 +1,9 @@
+/**
+ * Minimal valid EV3 .rbf program binary used as a test fixture.
+ *
+ * @packageDocumentation
+ */
+
 // Empty EV3 bytecode program fixture captured from stock brick:
 // /home/root/lms2012/prjs/Empty/Empty.rbf
 //

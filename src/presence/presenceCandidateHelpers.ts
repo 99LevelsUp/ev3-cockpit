@@ -1,3 +1,9 @@
+/**
+ * Helper functions for normalizing and merging presence candidate data.
+ *
+ * @packageDocumentation
+ */
+
 import type { BrickConnectionProfile } from '../device/brickConnectionProfiles';
 import type { BrickPanelDiscoveryCandidate } from '../ui/brickPanelProvider';
 import { isMockBrickId } from '../mock/mockCatalog';

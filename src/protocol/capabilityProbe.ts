@@ -1,3 +1,9 @@
+/**
+ * Builds and parses a lightweight capability probe direct command for EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 export interface CapabilityProbeResult {
 	osVersion: string;
 	hwVersion: string;

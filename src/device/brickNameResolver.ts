@@ -1,3 +1,9 @@
+/**
+ * Resolves display names for bricks from hardware, profiles, and user overrides.
+ *
+ * @packageDocumentation
+ */
+
 import { BrickRegistry } from './brickRegistry';
 import type { BrickConnectionProfile, BrickConnectionProfileStore } from './brickConnectionProfiles';
 

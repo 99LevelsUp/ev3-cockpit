@@ -1,3 +1,9 @@
+/**
+ * MD5 hashing utilities for deploy verification.
+ *
+ * @packageDocumentation
+ */
+
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 

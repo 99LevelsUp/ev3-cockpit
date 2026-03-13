@@ -1,3 +1,9 @@
+/**
+ * WebView panel provider for the EV3 Cockpit secondary sidebar.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';

@@ -1,20 +1,38 @@
+/**
+ * Performance timing utilities for the EV3 Cockpit extension.
+ *
+ * @remarks
+ * All timing features are gated behind the `EXT_PERF=1` environment variable.
+ * When disabled, the timing wrappers are zero-cost pass-throughs that execute
+ * the wrapped function directly without any overhead.
+ *
+ * @packageDocumentation
+ */
+
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import type { Logger } from './logger';
 
+/** Whether performance instrumentation is enabled (`EXT_PERF=1`). */
 const PERF_ENABLED = process.env.EXT_PERF === '1';
 
 let correlationCounter = 0;
 
+/** Options for configuring the event-loop delay monitor. */
 export interface EventLoopMonitorOptions {
+	/** Histogram resolution in milliseconds. @defaultValue 10 */
 	resolutionMs?: number;
+	/** Interval between snapshot samples in milliseconds. @defaultValue 10000 */
 	sampleIntervalMs?: number;
+	/** p99 threshold above which a warning is logged. @defaultValue 50 */
 	warnThresholdMs?: number;
 }
 
+/** Returns `true` if performance instrumentation is enabled. */
 export function isPerfEnabled(): boolean {
 	return PERF_ENABLED;
 }
 
+/** Generates a monotonically increasing correlation ID for perf traces. */
 export function nextCorrelationId(): string {
 	correlationCounter += 1;
 	return `perf-${Date.now().toString(36)}-${correlationCounter.toString(36)}`;
@@ -35,6 +53,18 @@ function getCorrelationId(meta: Record<string, unknown> | undefined): string {
 	return nextCorrelationId();
 }
 
+/**
+ * Wraps a synchronous function with performance timing.
+ *
+ * @remarks
+ * No-op when `EXT_PERF` is not set. Logs duration and metadata on completion or failure.
+ *
+ * @param logger - Logger for emitting timing entries
+ * @param stepName - Name of the step being timed
+ * @param fn - Synchronous function to measure
+ * @param meta - Optional metadata (may include `correlationId`)
+ * @returns The return value of `fn`
+ */
 export function withTimingSync<T>(
 	logger: Logger,
 	stepName: string,
@@ -63,6 +93,18 @@ export function withTimingSync<T>(
 	}
 }
 
+/**
+ * Wraps an async function with performance timing.
+ *
+ * @remarks
+ * No-op when `EXT_PERF` is not set. Logs duration and metadata on completion or failure.
+ *
+ * @param logger - Logger for emitting timing entries
+ * @param stepName - Name of the step being timed
+ * @param fn - Async function to measure
+ * @param meta - Optional metadata (may include `correlationId`)
+ * @returns Promise resolving to the return value of `fn`
+ */
 export async function withTiming<T>(
 	logger: Logger,
 	stepName: string,
@@ -96,13 +138,19 @@ const MIN_SAMPLE_INTERVAL_MS = 250;
 /** Default event-loop sample interval (ms) between histogram snapshots. */
 const DEFAULT_SAMPLE_INTERVAL_MS = 10_000;
 
+/** Point-in-time snapshot of event-loop delay percentiles. */
 export interface EventLoopLagSnapshot {
+	/** 50th percentile (median) delay in milliseconds. */
 	p50Ms: number;
+	/** 95th percentile delay in milliseconds. */
 	p95Ms: number;
+	/** 99th percentile delay in milliseconds. */
 	p99Ms: number;
+	/** Maximum observed delay in milliseconds. */
 	maxMs: number;
 }
 
+/** Handle returned by {@link startEventLoopMonitor} to control the monitor. */
 export interface EventLoopMonitorHandle {
 	/** Stops the event-loop delay monitor and releases resources. */
 	stop: () => void;
@@ -110,6 +158,14 @@ export interface EventLoopMonitorHandle {
 	snapshot: () => EventLoopLagSnapshot;
 }
 
+/**
+ * Starts a periodic event-loop delay monitor that logs warnings
+ * when the p99 delay exceeds the configured threshold.
+ *
+ * @param logger - Logger for emitting delay warnings
+ * @param options - Monitor configuration
+ * @returns A handle to stop the monitor and read snapshots
+ */
 export function startEventLoopMonitor(logger: Logger, options: EventLoopMonitorOptions = {}): EventLoopMonitorHandle {
 	const noopHandle: EventLoopMonitorHandle = {
 		stop: () => undefined,

@@ -1,3 +1,9 @@
+/**
+ * Incremental deploy with MD5 hash comparison to skip unchanged files.
+ *
+ * @packageDocumentation
+ */
+
 import { computeMd5Hex } from './hashUtils';
 
 export interface RemoteFileSnapshot {

@@ -1,3 +1,9 @@
+/**
+ * VS Code commands for batch operations across multiple connected bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
 import { createFlowLogger } from '../diagnostics/flowLogger';
@@ -5,24 +11,59 @@ import { Logger } from '../diagnostics/logger';
 import { nextCorrelationId } from '../diagnostics/perfTiming';
 import { presentCommandError, toUserFacingErrorMessage } from './commandUtils';
 
+/**
+ * Dependency injection options for batch commands.
+ */
 export interface BatchCommandOptions {
+	/** Returns the active logger instance. */
 	getLogger(): Logger;
+	/** Returns the central brick state registry. */
 	getBrickRegistry(): BrickRegistry;
 }
 
+/**
+ * Disposable registrations returned by {@link registerBatchCommands}.
+ *
+ * @remarks
+ * Each property corresponds to a batch command that operates on
+ * multiple READY bricks in sequence with progress tracking.
+ */
 export interface BatchCommandRegistrations {
+	/** Reconnects all selected READY bricks in batch. */
 	reconnectReadyBricks: vscode.Disposable;
+	/** Previews workspace deploy to multiple bricks. */
 	previewWorkspaceDeployToReadyBricks: vscode.Disposable;
+	/** Deploys workspace to multiple bricks. */
 	deployWorkspaceToReadyBricks: vscode.Disposable;
+	/** Deploys workspace and runs an executable on multiple bricks. */
 	deployWorkspaceAndRunExecutableToReadyBricks: vscode.Disposable;
 }
 
+/** Tracks a failed brick operation within a batch run. */
 interface BatchFailedEntry {
+	/** Brick ID that failed. */
 	brickId: string;
+	/** User-facing error message. */
 	error: string;
 }
 
+/**
+ * Registers VS Code commands for batch operations across multiple EV3 bricks.
+ *
+ * @remarks
+ * Batch commands follow a consistent pattern:
+ * 1. Select target bricks from the READY list (via args or QuickPick)
+ * 2. Execute the task for each brick with progress notification
+ * 3. Present results with "Copy report" and "Retry failed" actions
+ *
+ * @param options - Dependency injection options.
+ * @returns Disposable registrations for all four batch commands.
+ *
+ * @see {@link BatchCommandOptions}
+ * @see {@link BatchCommandRegistrations}
+ */
 export function registerBatchCommands(options: BatchCommandOptions): BatchCommandRegistrations {
+	// Resolves brick IDs from a command arg (array, string, or undefined)
 	const resolveRequestedBrickIds = async (arg: unknown): Promise<string[] | undefined> => {
 		if (Array.isArray(arg)) {
 			const ids = arg.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean);
@@ -34,6 +75,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		return undefined;
 	};
 
+	// Shows a multi-select QuickPick of READY bricks (or filters by provided IDs)
 	const selectReadyBrickIds = async (arg: unknown, actionLabel: string): Promise<string[]> => {
 		const readyBricks = options
 			.getBrickRegistry()
@@ -67,6 +109,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		return selected.map((entry) => entry.brickId);
 	};
 
+	// Executes a task for each brick with VS Code progress notification and cancellation
 	const runBatchWithProgress = async (
 		brickIds: string[],
 		title: string,
@@ -118,6 +161,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		};
 	};
 
+	// Builds a clipboard-friendly batch report with timestamps and failure details
 	const buildBatchReport = (
 		actionLabel: string,
 		selectedBrickIds: string[],
@@ -139,6 +183,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		return lines.join('\n');
 	};
 
+	// Shows the batch result with "Copy report" and "Retry failed" action buttons
 	const presentBatchResult = async (
 		actionLabel: string,
 		successSummary: string,
@@ -163,6 +208,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		}
 	};
 
+	// --- Command: reconnectReadyBricks ---
 	const reconnectReadyBricks = vscode.commands.registerCommand('ev3-cockpit.reconnectReadyBricks', async (arg?: unknown) => {
 		const logger = options.getLogger();
 		const selectedBrickIds = await selectReadyBrickIds(arg, 'Reconnect Ready Bricks');
@@ -209,6 +255,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		);
 	});
 
+	// --- Command: deployWorkspaceToReadyBricks ---
 	const deployWorkspaceToReadyBricks = vscode.commands.registerCommand(
 		'ev3-cockpit.deployWorkspaceToReadyBricks',
 		async (arg?: unknown) => {
@@ -262,6 +309,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		}
 	);
 
+	// --- Command: previewWorkspaceDeployToReadyBricks ---
 	const previewWorkspaceDeployToReadyBricks = vscode.commands.registerCommand(
 		'ev3-cockpit.previewWorkspaceDeployToReadyBricks',
 		async (arg?: unknown) => {
@@ -315,6 +363,7 @@ export function registerBatchCommands(options: BatchCommandOptions): BatchComman
 		}
 	);
 
+	// --- Command: deployWorkspaceAndRunExecutableToReadyBricks ---
 	const deployWorkspaceAndRunExecutableToReadyBricks = vscode.commands.registerCommand(
 		'ev3-cockpit.deployWorkspaceAndRunExecutableToReadyBricks',
 		async (arg?: unknown) => {

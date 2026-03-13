@@ -1,3 +1,9 @@
+/**
+ * Helpers for identifying and launching executable files on EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import type { RemoteFsService } from './remoteFsService';
 

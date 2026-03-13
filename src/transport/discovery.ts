@@ -1,3 +1,9 @@
+/**
+ * Transport-agnostic discovery service for finding available EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as dgram from 'node:dgram';
 import { LEGO_MAC_OUI_PREFIX, extractMacFromPnpId, hasEv3PnpHint, hasLegoMacPrefix } from './bluetoothPortSelection';
 import { listBluetoothDevices } from './windowsBluetoothApi';

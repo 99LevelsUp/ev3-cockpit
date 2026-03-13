@@ -1,3 +1,9 @@
+/**
+ * VS Code commands for deploying projects to EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { DEPLOY_PROFILE_PRESETS } from '../config/deployProfiles';
@@ -32,6 +38,10 @@ import {
 	ProjectDeployRequest
 } from './deployTypes';
 
+/**
+ * Prompts the user to choose a workspace folder if multiple are open.
+ * Returns immediately if there's exactly one. Returns `undefined` if none or cancelled.
+ */
 async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -57,12 +67,38 @@ async function pickWorkspaceProjectFolder(): Promise<vscode.Uri | undefined> {
 	return pick?.uri;
 }
 
+/**
+ * Registers all deploy-related VS Code commands.
+ *
+ * @remarks
+ * This function registers 16 commands covering:
+ * - **Single-file deploy+run** (`deployAndRunExecutable`)
+ * - **Project deploy** (preview, sync, sync+run) with optional brick targeting
+ * - **Workspace deploy** (same variants, using a workspace folder picker)
+ * - **Deploy profiles** (apply preset configurations)
+ *
+ * All project/workspace deploy commands delegate to the internal
+ * `executeProjectDeploy` closure, which orchestrates:
+ * local scan → file mapping → flow resolution → remote index →
+ * cleanup planning → execution → atomic swap → post-deploy run.
+ *
+ * @param options - Dependency injection options.
+ * @returns Disposable registrations for all 16 deploy commands.
+ *
+ * @see {@link DeployCommandOptions}
+ * @see {@link DeployCommandRegistrations}
+ */
 export function registerDeployCommands(options: DeployCommandOptions): DeployCommandRegistrations {
+	/**
+	 * Core deploy orchestration closure.
+	 * Handles the full pipeline from FS target resolution through execution and cleanup.
+	 */
 	const executeProjectDeploy = async (deployOptions: ProjectDeployRequest): Promise<void> => {
 		const logger = options.getLogger();
 		const operation = describeDeployOperation(deployOptions);
 		const correlationId = nextCorrelationId();
 		const deployStartedAt = Date.now();
+		// --- Resolve FS target (brick connection + FS service) ---
 		const fsTarget: DeployTargetContext | undefined = deployOptions.target ?? (() => {
 			const resolved = options.resolveFsAccessContext('active');
 			if ('error' in resolved) {
@@ -110,6 +146,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 			closeCommandClient: () => commandClient.close(),
 			openCommandClient: () => commandClient.open()
 		});
+		// --- Build deploy root paths (including atomic staging/backup if enabled) ---
 		const defaultRoot = fsTarget.rootPath ?? featureConfig.fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/';
 		let remoteProjectRoot: string;
 		let atomicStagingRoot = '';
@@ -152,6 +189,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		flowLogger.started();
 
 		try {
+			// --- Scan local project files and apply filters ---
 			const scan = await withTiming(
 				logger,
 				'deploy.scan-local',
@@ -567,6 +605,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		}
 	};
 
+	/** Shows a QuickPick of deploy profile presets and applies selected settings. */
 	const executeApplyDeployProfile = async (requestingBrickId?: string): Promise<void> => {
 		const logger = options.getLogger();
 		const picks = DEPLOY_PROFILE_PRESETS.map((profile) => ({
@@ -601,6 +640,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		vscode.window.showInformationMessage(`Deploy profile applied: ${selected.profile.label}`);
 	};
 
+	/** Resolves the active brick's FS context, returning undefined if no active connection. */
 	const getActiveFsTarget = (): { brickId: string; authority: string; fsService: RemoteFsService } | undefined => {
 		const resolved = options.resolveFsAccessContext('active');
 		if ('error' in resolved) {
@@ -609,6 +649,7 @@ export function registerDeployCommands(options: DeployCommandOptions): DeployCom
 		return resolved;
 	};
 
+	// --- Command: deployAndRunExecutable — single-file deploy + run ---
 	const deployAndRunExecutable = vscode.commands.registerCommand('ev3-cockpit.deployAndRunExecutable', async () => {
 		const logger = options.getLogger();
 		const target = getActiveFsTarget();

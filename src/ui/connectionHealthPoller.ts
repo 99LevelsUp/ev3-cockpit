@@ -1,3 +1,9 @@
+/**
+ * Periodically probes connected bricks and triggers auto-reconnect on failure.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
 import type { Logger } from '../diagnostics/logger';

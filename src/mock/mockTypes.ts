@@ -1,3 +1,9 @@
+/**
+ * Type definitions for the mock brick simulation system.
+ *
+ * @packageDocumentation
+ */
+
 import type { SensorPort } from '../device/sensorTypes';
 import type { MotorPort } from '../device/motorTypes';
 

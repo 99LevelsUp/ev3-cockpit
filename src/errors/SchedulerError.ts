@@ -1,3 +1,9 @@
+/**
+ * Error class for command scheduler failures including timeouts, cancellations, and queue overflows.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from './ExtensionError';
 
 /**

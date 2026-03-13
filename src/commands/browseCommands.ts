@@ -1,3 +1,9 @@
+/**
+ * VS Code commands for browsing and managing files on EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { readFeatureConfig } from '../config/featureConfig';
@@ -15,27 +21,74 @@ import {
 } from '../ui/brickTreeProvider';
 import { presentCommandError, toErrorMessage, toUserFacingErrorMessage, withBrickOperation } from './commandUtils';
 
+/** Source identifier for program runs initiated from the remote FS browser. */
 type ProgramStartSource = 'remote-fs-run';
 
+/**
+ * Dependency injection options for browse commands.
+ *
+ * @remarks
+ * Provides access to the logger, brick registry, tree view, FS context
+ * resolution, and program-start tracking.
+ */
 export interface BrowseCommandOptions {
+	/** Returns the active logger instance. */
 	getLogger(): Logger;
+	/** Returns the central brick state registry. */
 	getBrickRegistry(): BrickRegistry;
+	/** Returns the tree view provider for the bricks sidebar. */
 	getTreeProvider(): BrickTreeProvider;
+	/** Resolves a filesystem access context (brick ID, authority, FS service) from a command arg. */
 	resolveFsAccessContext(arg: unknown): { brickId: string; authority: string; fsService: RemoteFsService } | { error: string };
+	/** Resolves a brick ID from a raw command argument. */
 	resolveBrickIdFromCommandArg(arg: unknown): string;
+	/** Records that a program was started from the remote filesystem browser. */
 	markProgramStarted(path: string, source: ProgramStartSource, brickId: string): void;
+	/** Notifies the UI that an operation is in progress for a brick. */
 	onBrickOperation(brickId: string, operation: string): void;
 }
 
+/**
+ * Disposable registrations returned by {@link registerBrowseCommands}.
+ */
 export interface BrowseCommandRegistrations {
+	/** Interactive QuickPick-based remote filesystem browser. */
 	browseRemoteFs: vscode.Disposable;
+	/** Refreshes the entire bricks tree view. */
 	refreshBricksView: vscode.Disposable;
+	/** Uploads local files to a target folder on the brick (tree context menu). */
 	uploadToBrickFolder: vscode.Disposable;
+	/** Deletes a remote file or folder from the brick (tree context menu). */
 	deleteRemoteEntryFromTree: vscode.Disposable;
+	/** Runs an executable file on the brick (tree context menu). */
 	runRemoteExecutableFromTree: vscode.Disposable;
 }
 
+/**
+ * Registers VS Code commands for browsing and managing the remote EV3 filesystem.
+ *
+ * @remarks
+ * Commands registered:
+ * | Command ID | Action |
+ * |---|---|
+ * | `ev3-cockpit.browseRemoteFs` | Interactive loop-based filesystem browser |
+ * | `ev3-cockpit.refreshBricksView` | Full tree view refresh |
+ * | `ev3-cockpit.uploadToBrickFolder` | Upload local files to a remote folder |
+ * | `ev3-cockpit.deleteRemoteEntryFromTree` | Delete a remote entry via tree context menu |
+ * | `ev3-cockpit.runRemoteExecutableFromTree` | Run an executable from tree context menu |
+ *
+ * The browse command uses a `while(browsing)` loop, showing QuickPick menus
+ * for each directory level. Binary files get special handling with preview,
+ * download, and run options.
+ *
+ * @param options - Dependency injection options.
+ * @returns Disposable registrations for all five commands.
+ *
+ * @see {@link BrowseCommandOptions}
+ * @see {@link BrowseCommandRegistrations}
+ */
 export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCommandRegistrations {
+	// --- Command: browseRemoteFs — interactive loop-based filesystem browser ---
 	const browseRemoteFs = vscode.commands.registerCommand('ev3-cockpit.browseRemoteFs', async (arg?: unknown) => {
 		const logger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
@@ -47,6 +100,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		const { brickId, authority, fsService } = fsContext;
 		const rootSnapshot = brickRegistry.getSnapshot(brickId);
 
+		// Binary file handler: offers preview, download, or run (if executable)
 		const handleBinaryFile = async (uri: vscode.Uri, remotePath: string): Promise<void> => {
 			const items: Array<
 				vscode.QuickPickItem & {
@@ -142,6 +196,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 			currentPath = `${currentPath}/`;
 		}
 
+		// Browse loop: each iteration lists a directory and shows a QuickPick
 		let browsing = true;
 		while (browsing) {
 			let listing;
@@ -410,10 +465,12 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		}
 	});
 
+	// --- Command: refreshBricksView — full tree view refresh ---
 	const refreshBricksView = vscode.commands.registerCommand('ev3-cockpit.refreshBricksView', async () => {
 		options.getTreeProvider().refresh();
 	});
 
+	// --- Command: uploadToBrickFolder — upload local files via tree context menu ---
 	const uploadToBrickFolder = vscode.commands.registerCommand(
 		'ev3-cockpit.uploadToBrickFolder',
 		async (node?: unknown) => {
@@ -474,6 +531,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		}
 	);
 
+	// --- Command: deleteRemoteEntryFromTree — delete via tree context menu ---
 	const deleteRemoteEntryFromTree = vscode.commands.registerCommand(
 		'ev3-cockpit.deleteRemoteEntryFromTree',
 		async (node?: unknown) => {
@@ -525,6 +583,7 @@ export function registerBrowseCommands(options: BrowseCommandOptions): BrowseCom
 		}
 	);
 
+	// --- Command: runRemoteExecutableFromTree — run executable via tree context menu ---
 	const runRemoteExecutableFromTree = vscode.commands.registerCommand(
 		'ev3-cockpit.runRemoteExecutableFromTree',
 		async (node?: unknown) => {

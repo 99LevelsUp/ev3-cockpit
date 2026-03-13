@@ -1,3 +1,9 @@
+/**
+ * Service for running, stopping, and monitoring programs on EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le } from '../protocol/ev3Bytecode';

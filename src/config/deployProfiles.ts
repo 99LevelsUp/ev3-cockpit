@@ -1,3 +1,9 @@
+/**
+ * Deploy profile presets (quick, safe, full) with pre-configured deploy settings.
+ *
+ * @packageDocumentation
+ */
+
 export type DeployProfileId = 'safe-sync' | 'atomic-sync' | 'full-sync';
 
 export interface DeployProfilePreset {

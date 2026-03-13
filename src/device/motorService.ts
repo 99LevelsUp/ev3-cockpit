@@ -1,3 +1,9 @@
+/**
+ * Service for reading motor state (position, speed, type) from EV3 output ports.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, lc1, uint16le, gv0 } from '../protocol/ev3Bytecode';

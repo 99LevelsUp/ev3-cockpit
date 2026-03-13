@@ -1,3 +1,9 @@
+/**
+ * Test suite barrel that registers all host test cases.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { CORE_HOST_TEST_CASES } from './coreCases';
 import { DEPLOY_HOST_TEST_CASES } from './deployCases';

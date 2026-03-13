@@ -1,3 +1,9 @@
+/**
+ * Conflict detection and resolution for files that exist on both sides.
+ *
+ * @packageDocumentation
+ */
+
 import { DeployConflictPolicy, DeployConflictDecision } from '../types/enums';
 
 export type DeployConflictBulkDecision = DeployConflictDecision | undefined;

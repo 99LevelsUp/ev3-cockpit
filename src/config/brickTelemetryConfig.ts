@@ -1,3 +1,9 @@
+/**
+ * Reads and validates the `ev3-cockpit.telemetry.*` configuration namespace.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../diagnostics/logger';

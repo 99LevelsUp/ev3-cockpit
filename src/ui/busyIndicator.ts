@@ -1,3 +1,9 @@
+/**
+ * Monitors scheduler busy state and surfaces a spinner in the status bar.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { BrickRegistry } from '../device/brickRegistry';
 import { BrickTreeProvider } from './brickTreeProvider';

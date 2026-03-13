@@ -1,3 +1,9 @@
+/**
+ * File type classification (executable, data, system) for EV3 remote files.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 
 const BINARY_EXTENSIONS = new Set<string>([

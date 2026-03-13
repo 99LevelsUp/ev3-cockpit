@@ -1,3 +1,9 @@
+/**
+ * Factory functions for creating presence runtime and filesystem provider.
+ *
+ * @packageDocumentation
+ */
+
 import { BrickConnectionProfileStore } from '../device/brickConnectionProfiles';
 import { BrickRegistry } from '../device/brickRegistry';
 import { Logger } from '../diagnostics/logger';

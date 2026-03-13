@@ -1,3 +1,9 @@
+/**
+ * Hardware matrix test definitions covering all transport and feature combinations.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';

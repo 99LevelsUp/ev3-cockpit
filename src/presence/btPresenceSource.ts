@@ -1,3 +1,9 @@
+/**
+ * Bluetooth presence source for discovering EV3 bricks via serial port enumeration.
+ *
+ * @packageDocumentation
+ */
+
 import { TransportMode } from '../types/enums';
 import type { Logger } from '../diagnostics/logger';
 import type { PresenceChangeCallback, PresenceRecord, PresenceSource } from './presenceSource';

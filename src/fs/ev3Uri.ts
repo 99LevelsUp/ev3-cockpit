@@ -1,3 +1,9 @@
+/**
+ * URI parsing and construction helpers for ev3:// URIs.
+ *
+ * @packageDocumentation
+ */
+
 import { canonicalizeEv3Path } from './pathPolicy';
 
 export interface ParsedEv3UriParts {

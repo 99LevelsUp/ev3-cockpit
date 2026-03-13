@@ -1,3 +1,9 @@
+/**
+ * Virtual brick state including battery, name, and firmware version.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockBrickConfig } from '../mockTypes';
 import type { LedPattern } from '../../device/ledService';
 

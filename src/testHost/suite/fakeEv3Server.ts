@@ -1,3 +1,9 @@
+/**
+ * Fake TCP server that simulates an EV3 brick for integration tests.
+ *
+ * @packageDocumentation
+ */
+
 import * as dgram from 'node:dgram';
 import * as net from 'node:net';
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../../protocol/ev3Packet';

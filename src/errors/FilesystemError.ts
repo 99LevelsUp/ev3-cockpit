@@ -1,3 +1,9 @@
+/**
+ * Error class for remote filesystem operations on the EV3 brick.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from './ExtensionError';
 
 /**

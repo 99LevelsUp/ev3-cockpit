@@ -1,3 +1,9 @@
+/**
+ * Transport layer error class and error codes for USB, TCP, and Bluetooth communication failures.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from './ExtensionError';
 
 /**

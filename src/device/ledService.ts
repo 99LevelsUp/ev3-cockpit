@@ -1,3 +1,9 @@
+/**
+ * Service for controlling the EV3 brick LED color and pattern.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le } from '../protocol/ev3Bytecode';

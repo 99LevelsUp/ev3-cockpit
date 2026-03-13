@@ -1,3 +1,9 @@
+/**
+ * TCP presence source for discovering EV3 bricks over Wi-Fi via UDP broadcast.
+ *
+ * @packageDocumentation
+ */
+
 import * as dgram from 'node:dgram';
 import { TransportMode } from '../types/enums';
 import type { Logger } from '../diagnostics/logger';

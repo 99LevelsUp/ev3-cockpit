@@ -1,3 +1,9 @@
+/**
+ * Post-upload verification by size or MD5 checksum comparison.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { DeployVerifyMode } from '../config/deployConfig';
 import { computeMd5Hex } from './hashUtils';

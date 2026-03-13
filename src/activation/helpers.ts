@@ -1,3 +1,9 @@
+/**
+ * General activation helpers: safe identifiers, path normalization, orphan recovery.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { OrphanRecoveryContext, OrphanRecoveryStrategy } from '../scheduler/orphanRecovery';
 import { BrickRole } from '../device/brickRegistry';

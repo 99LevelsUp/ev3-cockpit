@@ -1,3 +1,9 @@
+/**
+ * Service for reading and writing EV3 brick settings (name, volume, sleep timeout).
+ *
+ * @packageDocumentation
+ */
+
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, lc2, lcs, uint16le, gv0 } from '../protocol/ev3Bytecode';

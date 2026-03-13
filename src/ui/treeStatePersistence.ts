@@ -1,3 +1,9 @@
+/**
+ * Serialization and deserialization of tree expand/collapse state.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { BrickTreeNode, BrickTreeProvider, getBrickTreeNodeId } from './brickTreeProvider';
 import { BrickTreeViewStateStore } from './brickTreeViewStateStore';

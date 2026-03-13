@@ -1,3 +1,9 @@
+/**
+ * Persists UI state (favourite bricks, last selection) across VS Code sessions.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 
 const BRICK_UI_STATE_KEY = 'ev3-cockpit.brickUiState.v1';

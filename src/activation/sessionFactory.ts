@@ -1,3 +1,9 @@
+/**
+ * Factory function for creating per-brick runtime sessions.
+ *
+ * @packageDocumentation
+ */
+
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
 import { BrickRuntimeSession } from '../device/brickSessionManager';
 import { OutputChannelLogger } from '../diagnostics/logger';

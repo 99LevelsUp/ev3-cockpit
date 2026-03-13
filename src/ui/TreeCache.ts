@@ -1,3 +1,9 @@
+/**
+ * Generic LRU cache with per-entry TTL support extracted from BrickTreeProvider.
+ *
+ * @packageDocumentation
+ */
+
 export interface TreeCacheEntry<T> {
 	data: T;
 	timestamp: number;
@@ -10,7 +16,10 @@ export interface TreeCacheOptions {
 }
 
 /**
- * Generická LRU cache s TTL – extrahováno z BrickTreeProvider.
+ * Generic LRU cache with per-entry TTL support.
+ *
+ * @typeParam K - Cache key type
+ * @typeParam V - Cached value type
  */
 export class TreeCache<K, V> {
 	private readonly entries = new Map<K, TreeCacheEntry<V>>();
@@ -31,13 +40,13 @@ export class TreeCache<K, V> {
 			this.entries.delete(key);
 			return undefined;
 		}
-		// LRU touch – přesun na konec mapy.
+		// LRU touch — move to the end of the map to mark as most-recently-used.
 		this.entries.delete(key);
 		this.entries.set(key, entry);
 		return entry.data;
 	}
 
-	/** Uloží hodnotu s volitelným per-entry TTL (jinak se použije výchozí). */
+	/** Stores a value with an optional per-entry TTL (falls back to the default). */
 	public set(key: K, value: V, ttlMs?: number): void {
 		this.entries.delete(key);
 		this.entries.set(key, {

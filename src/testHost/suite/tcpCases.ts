@@ -1,3 +1,9 @@
+/**
+ * TCP transport integration test cases with fake EV3 server.
+ *
+ * @packageDocumentation
+ */
+
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
 import type { HostTestCase } from './hostTestCases';

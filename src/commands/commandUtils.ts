@@ -8,7 +8,10 @@ export function toErrorMessage(error: unknown): string {
 }
 
 /**
- * Formátuje chybu pro zobrazení uživateli — bez stack trace a interních detailů.
+ * Formats an error for display to the user — strips stack traces and internal details.
+ *
+ * @param error - The caught error value (may be any type)
+ * @returns A single-line, user-safe error description
  */
 export function toUserFacingErrorMessage(error: unknown): string {
 	if (typeof error === 'string') {

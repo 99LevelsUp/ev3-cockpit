@@ -1,3 +1,9 @@
+/**
+ * Type definitions for brick metadata, status, capabilities, and connection state.
+ *
+ * @packageDocumentation
+ */
+
 export interface BrickSpec {
 	cpu?: {
 		model?: string;

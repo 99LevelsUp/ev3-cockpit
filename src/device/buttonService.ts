@@ -1,3 +1,9 @@
+/**
+ * Service for reading EV3 brick button states (up, down, left, right, center, back).
+ *
+ * @packageDocumentation
+ */
+
 import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le, gv0 } from '../protocol/ev3Bytecode';

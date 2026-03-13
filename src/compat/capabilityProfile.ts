@@ -1,3 +1,9 @@
+/**
+ * EV3 firmware capability profiles for adapting to different firmware versions.
+ *
+ * @packageDocumentation
+ */
+
 import { CapabilityProbeResult } from '../protocol/capabilityProbe';
 
 export type CompatProfileMode = 'auto' | 'stock-strict';

@@ -1,3 +1,9 @@
+/**
+ * TreeDataProvider for the Explorer sidebar showing connected bricks and remote filesystem.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';

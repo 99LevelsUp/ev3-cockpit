@@ -1,6 +1,13 @@
 /**
  * Common enums used throughout the EV3 Cockpit extension.
- * Provides type safety, autocomplete support, and prevents typos.
+ *
+ * @remarks
+ * These enums provide type safety, IDE autocomplete, and prevent typos when
+ * working with configuration values and protocol constants. Each enum has a
+ * corresponding `Value` type alias for runtime string validation and an
+ * `is*` type guard for narrowing unknown values.
+ *
+ * @packageDocumentation
  */
 
 /**

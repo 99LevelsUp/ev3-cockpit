@@ -1,3 +1,9 @@
+/**
+ * Factory for creating transport adapters based on transport mode and configuration.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { OutputChannelLogger } from '../diagnostics/logger';
 import { MockWorld } from '../mock/mockWorld';

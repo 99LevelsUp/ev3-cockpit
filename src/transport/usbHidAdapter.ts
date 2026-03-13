@@ -1,3 +1,9 @@
+/**
+ * USB HID transport adapter using node-hid for EV3 brick communication.
+ *
+ * @packageDocumentation
+ */
+
 import {
 	PendingReply,
 	drainPendingReply,

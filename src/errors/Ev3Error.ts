@@ -1,3 +1,9 @@
+/**
+ * Unified error class for EV3 device command execution failures.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from './ExtensionError';
 
 /**

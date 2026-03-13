@@ -1,3 +1,9 @@
+/**
+ * Priority-lane command scheduler with timeout, retry, and orphan recovery.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { MessageCounter } from './messageCounter';
 import {

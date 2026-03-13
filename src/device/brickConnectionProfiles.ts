@@ -1,3 +1,9 @@
+/**
+ * Persisted per-brick connection parameters (transport mode, paths, host/port).
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { TransportMode, TransportConfigOverrides } from '../transport/transportFactory';
 

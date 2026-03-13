@@ -1,3 +1,9 @@
+/**
+ * VS Code commands for connecting and disconnecting EV3 bricks.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { buildCapabilityProfile } from '../compat/capabilityProfile';
 import { readFeatureConfig } from '../config/featureConfig';
@@ -22,50 +28,100 @@ import { BrickRole } from '../device/brickRegistry';
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
 import { presentCommandError, toErrorMessage, toUserFacingErrorMessage } from './commandUtils';
 
+/** Internal descriptor for a brick in the process of connecting. */
 interface ConnectedBrickDescriptor {
+	/** Unique brick identifier (transport-prefixed, e.g. `usb-001`). */
 	brickId: string;
+	/** Human-readable display name (may be detected or profile-based). */
 	displayName: string;
+	/** Brick role (e.g. primary, secondary). */
 	role: BrickRole;
+	/** Transport mode used for this connection. */
 	transport: TransportMode | 'unknown';
+	/** Remote filesystem root path for this brick. */
 	rootPath: string;
 }
 
+/**
+ * Dependency injection options for the connect/disconnect/reconnect commands.
+ *
+ * @remarks
+ * Provides callbacks to access shared services (logger, registry, tree provider),
+ * manage brick sessions, handle Bluetooth pairing, and persist connection profiles.
+ */
 export interface ConnectCommandOptions {
+	/** Returns the active logger instance. */
 	getLogger(): Logger;
+	/** Returns the central brick state registry. */
 	getBrickRegistry(): BrickRegistry;
+	/** Returns the tree view provider for the bricks sidebar. */
 	getTreeProvider(): BrickTreeProvider;
+	/** Clears the active program session state for a brick. */
 	clearProgramSession(reason: string, brickId?: string): void;
+	/** Resolves a brick ID from a raw command argument (may return `'active'`). */
 	resolveBrickIdFromCommandArg(arg: unknown): string;
+	/** Returns the probe timeout in milliseconds from configuration. */
 	resolveProbeTimeoutMs(): number;
+	/** Builds a connecting brick descriptor from a root path and optional profile. */
 	resolveConnectedBrickDescriptor(rootPath: string, profile?: BrickConnectionProfile): ConnectedBrickDescriptor;
+	/** Creates or retrieves a transport session and command client for a brick. */
 	prepareBrickSession(brickId: string, profile?: BrickConnectionProfile): Promise<Ev3CommandClient>;
+	/** Closes a brick's transport session and releases resources. */
 	closeBrickSession(brickId: string): Promise<void>;
+	/** Checks whether a brick session is currently active. */
 	isBrickSessionAvailable(brickId: string): boolean;
+	/** Retrieves the persisted connection profile for a brick. */
 	getConnectionProfile(brickId: string): BrickConnectionProfile | undefined;
+	/** Creates a new connection profile snapshot from current brick state. */
 	captureConnectionProfile(
 		brickId: string,
 		displayName: string,
 		rootPath: string,
 		existingProfile?: BrickConnectionProfile
 	): BrickConnectionProfile;
+	/** Persists a connection profile for future reconnections. */
 	rememberConnectionProfile(profile: BrickConnectionProfile): Promise<void>;
+	/** Notifies the UI that an operation is in progress for a brick. */
 	onBrickOperation(brickId: string, operation: string): void;
+	/** Optional: attempts Bluetooth pairing with a device by MAC address. */
 	pairBluetoothDevice?(mac: string): Promise<{ success: boolean; method?: string; errorMessage?: string }>;
+	/** Optional: resolves a Bluetooth COM port path from a MAC address. */
 	resolveBluetoothComPath?(mac: string): Promise<string | undefined>;
 }
 
+/**
+ * Disposable registrations returned by {@link registerConnectCommands}.
+ */
 export interface ConnectCommandRegistrations {
+	/** The `ev3-cockpit.connectEV3` command disposable. */
 	connect: vscode.Disposable;
+	/** The `ev3-cockpit.disconnectEV3` command disposable. */
 	disconnect: vscode.Disposable;
+	/** The `ev3-cockpit.reconnectEV3` command disposable. */
 	reconnect: vscode.Disposable;
 }
 
+/**
+ * Optional structured argument for connect commands.
+ * @remarks
+ * When passed programmatically, allows specifying a target brick ID
+ * and controlling UI feedback and activation behaviour.
+ */
 interface ConnectCommandArg {
+	/** Target brick ID to connect to. */
 	brickId?: string;
+	/** When `true`, suppresses info/error messages in the UI. */
 	silent?: boolean;
+	/** When `true` (default), sets the connected brick as active. */
 	activateOnSuccess?: boolean;
 }
 
+/**
+ * Parses a raw command argument into a structured connect command arg.
+ *
+ * @param arg - The raw argument from `vscode.commands.executeCommand`.
+ * @returns Parsed argument with `brickIdArg`, `silent`, and `activateOnSuccess` fields.
+ */
 function parseConnectCommandArg(arg: unknown): { brickIdArg: unknown; silent: boolean; activateOnSuccess: boolean } {
 	if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
 		return { brickIdArg: arg, silent: false, activateOnSuccess: true };
@@ -87,6 +143,16 @@ function parseConnectCommandArg(arg: unknown): { brickIdArg: unknown; silent: bo
 	};
 }
 
+/**
+ * Validates and normalises a candidate brick name string.
+ *
+ * @remarks
+ * Returns `undefined` if the value is not a non-empty string of at most
+ * 12 characters (the EV3 firmware limit for brick names).
+ *
+ * @param value - Raw brick name candidate.
+ * @returns Trimmed name, or `undefined` if invalid.
+ */
 function normalizeBrickNameCandidate(value: string | undefined): string | undefined {
 	if (typeof value !== 'string') {
 		return undefined;
@@ -102,6 +168,12 @@ function normalizeBrickNameCandidate(value: string | undefined): string | undefi
 	return trimmed;
 }
 
+/**
+ * Extracts a lowercase 12-hex-digit MAC address from a `bt-`-prefixed brick ID.
+ *
+ * @param brickId - Brick identifier (e.g. `'bt-001122334455'`).
+ * @returns The lowercase MAC hex string, or `undefined` if not a BT brick ID.
+ */
 function extractBtMacFromBrickId(brickId: string): string | undefined {
 	const match = /^bt-([0-9a-f]{12})$/i.exec(brickId.trim());
 	if (!match) {
@@ -110,7 +182,30 @@ function extractBtMacFromBrickId(brickId: string): string | undefined {
 	return match[1].toLowerCase();
 }
 
+/**
+ * Registers the connect, disconnect, and reconnect VS Code commands.
+ *
+ * @remarks
+ * The **connect** command performs a multi-step handshake:
+ * 1. Resolve brick identity and remote root path
+ * 2. Handle Bluetooth pairing if needed (MAC extraction, COM port resolution)
+ * 3. Open transport and send a LIST_OPEN_HANDLES probe (opcode 0x9d)
+ * 4. Run a capability probe to detect firmware version
+ * 5. Read the brick name (max 12 chars)
+ * 6. Create per-brick services (FS, control, sensor, motor, LED, sound, button, settings)
+ * 7. Register the brick as READY in the registry and persist the connection profile
+ *
+ * The **disconnect** command closes the transport session and marks the brick UNAVAILABLE.
+ * The **reconnect** command delegates to the connect flow.
+ *
+ * @param options - Dependency injection options.
+ * @returns Disposable registrations for the three commands.
+ *
+ * @see {@link ConnectCommandOptions}
+ * @see {@link ConnectCommandRegistrations}
+ */
 export function registerConnectCommands(options: ConnectCommandOptions): ConnectCommandRegistrations {
+	// --- Command: connectEV3 — multi-step handshake to establish a brick session ---
 	const connect = vscode.commands.registerCommand('ev3-cockpit.connectEV3', async (arg?: unknown) => {
 		const parsedArg = parseConnectCommandArg(arg);
 		const silent = parsedArg.silent;
@@ -135,6 +230,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 
 		try {
 			flowLogger.started();
+			// Step 1: Resolve the remote root path and brick descriptor
 			const connectingRoot = requestedProfile?.rootPath ?? (readFeatureConfig().fs.defaultRoots[0] ?? '/home/root/lms2012/prjs/');
 			connectingDescriptor = options.resolveConnectedBrickDescriptor(connectingRoot, requestedProfile);
 			if (requestedBrickId !== 'active') {
@@ -153,6 +249,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 			}
 			brickRegistry.upsertConnecting(connectingDescriptor);
 			treeProvider.refreshBrick(connectingDescriptor.brickId);
+			// Step 2: Handle Bluetooth pairing if the brick ID has a BT MAC prefix
 			const btMac = extractBtMacFromBrickId(connectingDescriptor.brickId);
 			const needsPairing = btMac && (!requestedProfile?.transport.btPortPath || requestedProfile.transport.btPortPath.trim().length === 0);
 			let pairingError: string | undefined;
@@ -193,6 +290,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				requestedProfile = updatedProfile;
 			}
 
+			// Step 3: Open transport and send LIST_OPEN_HANDLES system probe
 			commandClient = await options.prepareBrickSession(connectingDescriptor.brickId, requestedProfile);
 			await commandClient.open();
 			const probeCommand = 0x9d; // LIST_OPEN_HANDLES
@@ -204,6 +302,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
 				payload: new Uint8Array([probeCommand])
 			});
+			// Validate probe reply: must be a system reply with matching command echo
 			const replyType = result.reply.type;
 			const isSystemReply = replyType === EV3_REPLY.SYSTEM_REPLY || replyType === EV3_REPLY.SYSTEM_REPLY_ERROR;
 			if (!isSystemReply) {
@@ -237,6 +336,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				result: 'ok'
 			});
 
+			// Step 4: Capability probe — detect firmware version and features
 			let capabilitySummary = '';
 			const featureConfig = readFeatureConfig();
 			let profile = buildCapabilityProfile(
@@ -303,6 +403,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 					fsSafeRoots: featureConfig.fs.defaultRoots
 				});
 			}
+			// Step 5: Read brick name (max 12 chars per EV3 firmware limit)
 			let detectedBrickName: string | undefined;
 			try {
 				const settingsService = new BrickSettingsService({
@@ -317,6 +418,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				});
 			}
 
+			// Step 6: Create per-brick services (FS, control, sensors, motors, etc.)
 			const serviceOpts = {
 				commandClient,
 				defaultTimeoutMs: Math.max(options.resolveProbeTimeoutMs(), profile.recommendedTimeoutMs),
@@ -349,6 +451,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 				buttonService: new ButtonService(serviceOpts),
 				settingsService: new BrickSettingsService(serviceOpts)
 			};
+			// Step 7: Register brick as READY and persist the connection profile
 			if (activateOnSuccess) {
 				brickRegistry.upsertReady(readyInput);
 			} else {
@@ -421,6 +524,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		}
 	});
 
+	// --- Command: disconnectEV3 — closes transport and marks brick unavailable ---
 	const disconnect = vscode.commands.registerCommand('ev3-cockpit.disconnectEV3', async (arg?: unknown) => {
 		const logger = options.getLogger();
 		const brickRegistry = options.getBrickRegistry();
@@ -472,6 +576,7 @@ export function registerConnectCommands(options: ConnectCommandOptions): Connect
 		}
 	});
 
+	// --- Command: reconnectEV3 — delegates to the connect flow ---
 	const reconnect = vscode.commands.registerCommand('ev3-cockpit.reconnectEV3', async (arg?: unknown) => {
 		const requestedBrickId = options.resolveBrickIdFromCommandArg(arg);
 		const logger = options.getLogger();

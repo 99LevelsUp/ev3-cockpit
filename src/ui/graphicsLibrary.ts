@@ -1,3 +1,9 @@
+/**
+ * SVG and icon generation utilities for tree items and the WebView panel.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import type { BrickSnapshot } from '../device/brickRegistry';
 

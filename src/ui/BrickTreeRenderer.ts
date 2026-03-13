@@ -1,3 +1,9 @@
+/**
+ * Renders tree items with appropriate icons, labels, and status badges.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';

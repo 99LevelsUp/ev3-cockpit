@@ -1,3 +1,9 @@
+/**
+ * Service for reading sensor values from EV3 input ports.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc0, uint16le, gv0 } from '../protocol/ev3Bytecode';

@@ -1,3 +1,9 @@
+/**
+ * Deploy file upload operations with chunked transfer support.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { canonicalizeEv3Path } from './pathPolicy';
 import { isRemoteExecutablePath, supportedExecutableExtensions } from './remoteExecutable';

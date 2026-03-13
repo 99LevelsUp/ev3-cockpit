@@ -1,3 +1,9 @@
+/**
+ * Service for playing tones and sound files on the EV3 brick speaker.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger } from '../diagnostics/logger';
 import { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { concatBytes, lc2, lcs, uint16le } from '../protocol/ev3Bytecode';

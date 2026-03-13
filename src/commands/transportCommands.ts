@@ -1,3 +1,9 @@
+/**
+ * VS Code commands for switching transport modes and managing connections.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -16,9 +22,15 @@ import { canUseWindowsBluetoothApi } from '../transport/windowsBluetoothApi';
 import { createProbeTransportForMode } from '../transport/transportFactory';
 import { toErrorMessage } from './commandUtils';
 
+/**
+ * Dependency injection options for transport diagnostic commands.
+ */
 export interface TransportCommandOptions {
+	/** Returns the output channel logger for transport diagnostics. */
 	getLogger(): OutputChannelLogger;
+	/** Returns the probe timeout in milliseconds from configuration. */
 	resolveProbeTimeoutMs(): number;
+	/** Optional: scans all discovery candidates (same pipeline as the panel's + tab). */
 	scanDiscoveryCandidates?(): Promise<Array<{
 		candidateId: string;
 		displayName: string;
@@ -29,12 +41,22 @@ export interface TransportCommandOptions {
 	}>>;
 }
 
+/**
+ * Disposable registrations returned by {@link registerTransportCommands}.
+ */
 export interface TransportCommandRegistrations {
+	/** Enumerates USB HID candidates and logs a snapshot. */
 	inspectTransports: vscode.Disposable;
+	/** Probes USB/TCP transports with EV3 protocol handshake. */
 	transportHealthReport: vscode.Disposable;
+	/** Comprehensive BT detection diagnostics with COM port probing. */
 	btDetectionDiagnostics: vscode.Disposable;
 }
 
+/**
+ * Simple orphan recovery strategy that logs the recovery event.
+ * Used by diagnostic probes that don't need full orphan handling.
+ */
 class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	public constructor(private readonly log: (message: string, meta?: Record<string, unknown>) => void) {}
 
@@ -48,12 +70,20 @@ class LoggingOrphanRecoveryStrategy implements OrphanRecoveryStrategy {
 	}
 }
 
+/** Checks if an error message indicates the transport is likely unavailable. */
 function isTransportLikelyUnavailable(message: string): boolean {
 	return /not found|requires setting|timeout|unknown error code 121|unknown error code 1256|access is denied|send aborted/i.test(
 		message
 	);
 }
 
+/**
+ * Runs a two-phase probe on a USB or TCP transport:
+ * Phase 1 sends a LIST_OPEN_HANDLES system command,
+ * Phase 2 sends a capability direct command.
+ *
+ * @returns PASS if both succeed, SKIP if transport unavailable, FAIL on error.
+ */
 async function runTransportProbe(
 	mode: 'usb' | 'tcp',
 	logger: OutputChannelLogger,
@@ -122,6 +152,7 @@ async function runTransportProbe(
 	}
 }
 
+/** Result of probing a Bluetooth COM port with DTR on or off. */
 interface BtProbeResult {
 	dtr: boolean;
 	ok: boolean;
@@ -130,6 +161,7 @@ interface BtProbeResult {
 	code?: number;
 }
 
+/** Normalises a diagnostic text value, replacing empty/non-string with `'(none)'`. */
 function normalizeDiagnosticText(value: unknown): string {
 	if (typeof value !== 'string') {
 		return '(none)';
@@ -138,16 +170,19 @@ function normalizeDiagnosticText(value: unknown): string {
 	return normalized.length > 0 ? normalized : '(none)';
 }
 
+/** Returns `true` if the value looks like a Windows COM port (e.g. `COM3`). */
 function isComPath(value: string): boolean {
 	return /^COM\d+$/i.test(value.trim());
 }
 
+/** Compares two COM paths numerically (e.g. COM3 < COM12). */
 function compareComPath(left: string, right: string): number {
 	const leftNum = Number.parseInt((/(\d+)$/.exec(left) ?? [])[1] ?? '9999', 10);
 	const rightNum = Number.parseInt((/(\d+)$/.exec(right) ?? [])[1] ?? '9999', 10);
 	return leftNum - rightNum;
 }
 
+/** Heuristic: checks if a serial candidate is likely an EV3 brick (LEGO MAC, PnP hint, manufacturer). */
 function isLikelyEv3SerialCandidate(candidate: SerialCandidate): boolean {
 	if (!isComPath(candidate.path)) {
 		return false;
@@ -167,6 +202,15 @@ function isLikelyEv3SerialCandidate(candidate: SerialCandidate): boolean {
 	return /\bev3\b/i.test(friendlyName);
 }
 
+/**
+ * Opens a Bluetooth SPP adapter on a COM port and sends an EV3 direct command
+ * probe to check if a brick is reachable.
+ *
+ * @param path - COM port path (e.g. `'COM3'`).
+ * @param dtr - Whether to assert DTR on the serial port.
+ * @param timeoutMs - Maximum time to wait for a probe reply.
+ * @returns Probe result with ok/fail status, message, phase, and optional error code.
+ */
 async function probeBluetoothComPort(path: string, dtr: boolean, timeoutMs: number): Promise<BtProbeResult> {
 	const probeMessageCounter = 0xffff;
 	const probePacket = encodeEv3Packet(
@@ -227,7 +271,30 @@ async function probeBluetoothComPort(path: string, dtr: boolean, timeoutMs: numb
 	}
 }
 
+/**
+ * Registers VS Code commands for transport inspection and diagnostics.
+ *
+ * @remarks
+ * Commands registered:
+ * | Command ID | Action |
+ * |---|---|
+ * | `ev3-cockpit.inspectTransports` | Enumerate USB HID candidates |
+ * | `ev3-cockpit.transportHealthReport` | Probe USB/TCP with full EV3 handshake |
+ * | `ev3-cockpit.btDetectionDiagnostics` | Comprehensive BT diagnostics with COM probing |
+ *
+ * The BT diagnostics command gathers serial candidates, live BT devices,
+ * paired devices from the Windows registry, probes each COM port with
+ * DTR true/false, cross-references with panel discovery, and writes a
+ * report to disk.
+ *
+ * @param options - Dependency injection options.
+ * @returns Disposable registrations for all three commands.
+ *
+ * @see {@link TransportCommandOptions}
+ * @see {@link TransportCommandRegistrations}
+ */
 export function registerTransportCommands(options: TransportCommandOptions): TransportCommandRegistrations {
+	// --- Command: inspectTransports — enumerate USB HID candidates ---
 	const inspectTransports = vscode.commands.registerCommand('ev3-cockpit.inspectTransports', async () => {
 		const logger = options.getLogger();
 		const usbCandidates = await listUsbHidCandidates();
@@ -238,6 +305,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		);
 	});
 
+	// --- Command: transportHealthReport — probe USB/TCP with EV3 protocol ---
 	const transportHealthReport = vscode.commands.registerCommand('ev3-cockpit.transportHealthReport', async () => {
 		const logger = options.getLogger();
 		const cfg = vscode.workspace.getConfiguration('ev3-cockpit');
@@ -274,6 +342,7 @@ export function registerTransportCommands(options: TransportCommandOptions): Tra
 		);
 	});
 
+	// --- Command: btDetectionDiagnostics — comprehensive BT detection report ---
 	const btDetectionDiagnostics = vscode.commands.registerCommand('ev3-cockpit.btDetectionDiagnostics', async () => {
 		const logger = options.getLogger();
 		const config = vscode.workspace.getConfiguration('ev3-cockpit');

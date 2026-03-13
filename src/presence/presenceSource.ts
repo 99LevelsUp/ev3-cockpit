@@ -1,3 +1,9 @@
+/**
+ * Base interface and types for brick presence (discovery) sources.
+ *
+ * @packageDocumentation
+ */
+
 import type { TransportMode } from '../types/enums';
 
 export interface PresenceRecord {

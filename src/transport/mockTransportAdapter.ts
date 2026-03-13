@@ -1,3 +1,9 @@
+/**
+ * Mock transport adapter for development without hardware.
+ *
+ * @packageDocumentation
+ */
+
 import { TransportAdapter, TransportRequestOptions } from './transportAdapter';
 
 export type MockTransportResponder = (

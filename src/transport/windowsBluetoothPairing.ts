@@ -1,3 +1,9 @@
+/**
+ * Programmatic Bluetooth pairing on Windows via BluetoothAuthenticateDeviceEx.
+ *
+ * @packageDocumentation
+ */
+
 import { LEGO_MAC_OUI_PREFIX } from './bluetoothPortSelection';
 import { pairBluetoothDevice, removeBluetoothDevice } from './windowsBluetoothApi';
 

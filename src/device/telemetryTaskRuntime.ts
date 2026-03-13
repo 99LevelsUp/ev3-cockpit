@@ -1,3 +1,9 @@
+/**
+ * Runtime for executing periodic telemetry polling tasks with configurable intervals.
+ *
+ * @packageDocumentation
+ */
+
 import type { Lane } from '../scheduler/types';
 
 export type TelemetryTaskKey = 'fastDevices' | 'fastValues' | 'medium' | 'slow' | 'extraSlow' | 'static';

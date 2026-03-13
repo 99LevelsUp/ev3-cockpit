@@ -1,3 +1,9 @@
+/**
+ * Reads and validates the `ev3-cockpit.deploy.*` configuration namespace.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { sanitizeBoolean, sanitizeGlobList, sanitizeNumber, sanitizeStringList } from './sanitizers';
 import { DeployVerifyMode, DeployConflictPolicy, DeployConflictAskFallback } from '../types/enums';

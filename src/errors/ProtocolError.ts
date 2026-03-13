@@ -1,3 +1,9 @@
+/**
+ * Protocol layer error class for EV3 bytecode protocol violations and malformed packets.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from './ExtensionError';
 
 /**

@@ -1,3 +1,9 @@
+/**
+ * TCP transport adapter for Wi-Fi/Ethernet EV3 brick communication.
+ *
+ * @packageDocumentation
+ */
+
 import * as dgram from 'node:dgram';
 import * as net from 'node:net';
 import {

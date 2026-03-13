@@ -1,3 +1,9 @@
+/**
+ * Drag-and-drop controller for uploading local files and moving remote files.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { Logger, NoopLogger } from '../diagnostics/logger';

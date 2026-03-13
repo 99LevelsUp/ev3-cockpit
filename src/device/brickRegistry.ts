@@ -1,3 +1,9 @@
+/**
+ * Central state store for all known bricks. Event-driven with onStatusChange. Provides per-brick service resolution.
+ *
+ * @packageDocumentation
+ */
+
 import type { BrickControlService } from './brickControlService';
 import type { ButtonService } from './buttonService';
 import type { LedService } from './ledService';

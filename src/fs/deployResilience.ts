@@ -1,3 +1,9 @@
+/**
+ * Transient error detection and retry utilities for deploy operations.
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from '../errors/ExtensionError';
 
 const DEPLOY_TRANSIENT_TRANSPORT_PATTERNS: RegExp[] = [
@@ -33,7 +39,10 @@ export function isDeployTransientTransportError(message: string): boolean {
 }
 
 /**
- * Detekce přechodné transportní chyby: typový kód má přednost, regex je záloha.
+ * Detects transient transport errors: typed error codes take precedence, regex is a fallback.
+ *
+ * @param error - The caught error value
+ * @returns `true` if the error is transient and retryable
  */
 export function isTransientDeployError(error: unknown): boolean {
 	if (error instanceof ExtensionError && TRANSIENT_ERROR_CODES.has(error.code)) {

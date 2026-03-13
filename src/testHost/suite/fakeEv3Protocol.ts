@@ -1,3 +1,9 @@
+/**
+ * Fake EV3 protocol response builders for integration tests.
+ *
+ * @packageDocumentation
+ */
+
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { CAPABILITY_PROBE_GLOBAL_BYTES } from '../../protocol/capabilityProbe';

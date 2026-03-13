@@ -1,3 +1,9 @@
+/**
+ * Periodic poller that reads sensor/motor telemetry from connected bricks.
+ *
+ * @packageDocumentation
+ */
+
 import { performance } from 'node:perf_hooks';
 import { buildCapabilityProbeDirectPayload, parseCapabilityProbeReply } from '../protocol/capabilityProbe';
 import { Ev3CommandClient } from '../protocol/ev3CommandClient';

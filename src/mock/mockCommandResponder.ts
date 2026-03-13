@@ -1,3 +1,9 @@
+/**
+ * Responds to EV3 protocol commands with simulated data from the mock world.
+ *
+ * @packageDocumentation
+ */
+
 import { decodeEv3Packet, encodeEv3Packet, EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 import type { MockTransportResponder } from '../transport/mockTransportAdapter';
 import type { MockSensorState } from './state/mockSensorState';

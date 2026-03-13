@@ -1,3 +1,9 @@
+/**
+ * Reads and validates the `ev3-cockpit.scheduler.*` configuration namespace.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { LogLevel } from '../diagnostics/logger';
 import { RetryPolicy, SchedulerErrorCode } from '../scheduler/types';

@@ -1,3 +1,9 @@
+/**
+ * Brick ID resolution logic: resolves virtual "active" ID and brick lookups.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { BrickControlService } from '../device/brickControlService';

@@ -1,3 +1,9 @@
+/**
+ * Entry point for running VS Code extension host integration tests.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';

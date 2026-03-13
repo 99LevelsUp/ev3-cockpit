@@ -1,3 +1,9 @@
+/**
+ * Path access policy enforcement (safe vs full mode).
+ *
+ * @packageDocumentation
+ */
+
 import { ExtensionError } from '../errors/ExtensionError';
 import { FsMode } from '../config/featureConfig';
 

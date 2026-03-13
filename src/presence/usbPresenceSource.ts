@@ -1,3 +1,9 @@
+/**
+ * USB HID presence source that enumerates connected EV3 bricks via node-hid.
+ *
+ * @packageDocumentation
+ */
+
 import { TransportMode } from '../types/enums';
 import type { Logger } from '../diagnostics/logger';
 import type { PresenceChangeCallback, PresenceRecord, PresenceSource } from './presenceSource';

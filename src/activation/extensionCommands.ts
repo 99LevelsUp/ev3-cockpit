@@ -1,3 +1,9 @@
+/**
+ * Registers all VS Code commands and returns disposables for cleanup.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';

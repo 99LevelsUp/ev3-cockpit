@@ -1,3 +1,9 @@
+/**
+ * Virtual world state management for mock bricks (sensors, motors, filesystem).
+ *
+ * @packageDocumentation
+ */
+
 import type { MockWorldConfig } from './mockTypes';
 import type { MockTransportResponder } from '../transport/mockTransportAdapter';
 import { MockSensorState } from './state/mockSensorState';

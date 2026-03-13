@@ -1,3 +1,9 @@
+/**
+ * High-level brick device abstraction combining transport, scheduler, and command client.
+ *
+ * @packageDocumentation
+ */
+
 import { buildCapabilityProfile } from '../compat/capabilityProfile';
 import { BrickSettingsService } from './brickSettingsService';
 import {

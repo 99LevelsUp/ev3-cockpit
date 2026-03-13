@@ -1,3 +1,9 @@
+/**
+ * Bluetooth SPP (Serial Port Profile) transport adapter via serialport.
+ *
+ * @packageDocumentation
+ */
+
 import {
 	PendingReply,
 	drainPendingReply,

@@ -1,3 +1,9 @@
+/**
+ * Simulated in-memory filesystem tree for mock bricks.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockFsSeedNode, MockFsSeedDir, MockFsSeedFile } from '../mockTypes';
 
 // ---------------------------------------------------------------------------

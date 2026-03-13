@@ -1,3 +1,9 @@
+/**
+ * File browser UI actions: open, download, delete, rename remote files.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { canonicalizeEv3Path } from './pathPolicy';
 

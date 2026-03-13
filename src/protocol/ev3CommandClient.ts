@@ -1,3 +1,9 @@
+/**
+ * High-level typed command interface wrapping scheduler and transport for EV3 operations.
+ *
+ * @packageDocumentation
+ */
+
 import { Logger, NoopLogger } from '../diagnostics/logger';
 import { CommandScheduler } from '../scheduler/commandScheduler';
 import { CommandResult, Lane, RetryPolicy } from '../scheduler/types';

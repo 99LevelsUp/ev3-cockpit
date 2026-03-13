@@ -1,3 +1,9 @@
+/**
+ * Ev3FileSystemProvider integration test cases.
+ *
+ * @packageDocumentation
+ */
+
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
 import type { HostTestCase } from './hostTestCases';

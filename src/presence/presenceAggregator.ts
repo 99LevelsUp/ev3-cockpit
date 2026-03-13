@@ -1,3 +1,9 @@
+/**
+ * Aggregates presence records from all transport-specific discovery sources.
+ *
+ * @packageDocumentation
+ */
+
 import type { BrickConnectionProfile, BrickConnectionProfileStore } from '../device/brickConnectionProfiles';
 import type { BrickRegistry } from '../device/brickRegistry';
 import type { Logger } from '../diagnostics/logger';

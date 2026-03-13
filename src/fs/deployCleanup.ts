@@ -1,3 +1,9 @@
+/**
+ * Post-deploy cleanup: removes orphaned remote files not in the deploy set.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import { canonicalizeEv3Path } from './pathPolicy';
 

@@ -3,15 +3,25 @@ import type { Logger } from './logger';
 import type { Ev3CommandSendLike } from '../protocol/commandSendLike';
 import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
 
+/**
+ * Result of a single RTT (round-trip time) probe to an EV3 brick.
+ */
 export interface RttProbeResult {
+	/** Measured round-trip time in milliseconds. */
 	rttMs: number;
+	/** Whether the probe received a valid reply. */
 	success: boolean;
+	/** Error message if the probe failed. */
 	error?: string;
 }
 
 /**
  * Measures transport round-trip time by sending a lightweight GET_BRICKNAME
- * system command (0x9d) to the brick and timing the reply.
+ * system command (opcode 0x9D) to the brick and timing the reply.
+ *
+ * @param commandClient - Command send interface for the target brick
+ * @param options - Optional timeout configuration
+ * @returns Probe result with timing and success/failure status
  */
 export async function measureRtt(
 	commandClient: Ev3CommandSendLike,
@@ -49,6 +59,11 @@ export async function measureRtt(
 
 /**
  * Runs multiple RTT probes and returns aggregated statistics.
+ *
+ * @param commandClient - Command send interface for the target brick
+ * @param logger - Logger for emitting aggregated stats
+ * @param options - Probe count and timeout configuration
+ * @returns Aggregated statistics including min, max, avg, median, and success count
  */
 export async function measureRttStats(
 	commandClient: Ev3CommandSendLike,

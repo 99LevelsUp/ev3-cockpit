@@ -1,3 +1,9 @@
+/**
+ * Default initial state seed for newly created mock bricks.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockWorldConfig } from './mockTypes';
 import { EV3_SENSOR_TYPE } from '../device/sensorTypes';
 

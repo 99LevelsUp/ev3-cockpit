@@ -1,3 +1,9 @@
+/**
+ * Virtual motor state with simulated position and speed dynamics.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockMotorConfig } from '../mockTypes';
 import type { MotorPort } from '../../device/motorTypes';
 import { EV3_SENSOR_TYPE } from '../../device/sensorTypes';

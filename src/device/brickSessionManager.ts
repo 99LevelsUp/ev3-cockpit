@@ -1,3 +1,9 @@
+/**
+ * Creates and destroys per-brick runtime sessions (scheduler + command client pairs).
+ *
+ * @packageDocumentation
+ */
+
 import { Logger, NoopLogger } from '../diagnostics/logger';
 
 export type ProgramSessionSource =

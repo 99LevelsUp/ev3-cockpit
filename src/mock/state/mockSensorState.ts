@@ -1,3 +1,9 @@
+/**
+ * Virtual sensor state with configurable value generators.
+ *
+ * @packageDocumentation
+ */
+
 import type {
 	MockSensorConfig,
 	ValueGenerator,

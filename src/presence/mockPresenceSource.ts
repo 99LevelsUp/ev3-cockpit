@@ -1,3 +1,9 @@
+/**
+ * Mock presence source providing virtual bricks for development without hardware.
+ *
+ * @packageDocumentation
+ */
+
 import { TransportMode } from '../types/enums';
 import type { MockBrickDefinition } from '../mock/mockCatalog';
 import type { PresenceChangeCallback, PresenceRecord, PresenceSource } from './presenceSource';

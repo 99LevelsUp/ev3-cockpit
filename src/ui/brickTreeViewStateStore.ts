@@ -1,3 +1,9 @@
+/**
+ * Persists tree view expand/collapse state across VS Code sessions.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 
 const BRICK_TREE_VIEW_STATE_KEY = 'ev3-cockpit.brickTreeViewState.v1';

@@ -1,3 +1,9 @@
+/**
+ * Mock brick catalog management: loading, creating, and querying virtual bricks.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockWorldConfig } from './mockTypes';
 import type { BrickRole } from '../device/brickRegistry';
 

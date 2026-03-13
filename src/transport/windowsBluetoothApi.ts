@@ -1,3 +1,9 @@
+/**
+ * Windows-specific Bluetooth API via ffi-napi (BluetoothFindFirstDevice/Next).
+ *
+ * @packageDocumentation
+ */
+
 /* eslint-disable @typescript-eslint/no-var-requires */
 import { LEGO_MAC_OUI_PREFIX } from './bluetoothPortSelection';
 

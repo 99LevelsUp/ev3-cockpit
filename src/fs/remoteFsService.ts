@@ -1,3 +1,9 @@
+/**
+ * Per-brick remote filesystem service delegating to Ev3CommandClient.
+ *
+ * @packageDocumentation
+ */
+
 import { CapabilityProfile } from '../compat/capabilityProfile';
 import { FsConfigSnapshot } from '../config/featureConfig';
 import { Logger, NoopLogger } from '../diagnostics/logger';

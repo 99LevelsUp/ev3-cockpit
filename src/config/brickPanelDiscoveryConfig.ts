@@ -1,3 +1,9 @@
+/**
+ * Reads and validates the brick panel discovery scan configuration.
+ *
+ * @packageDocumentation
+ */
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Logger } from '../diagnostics/logger';

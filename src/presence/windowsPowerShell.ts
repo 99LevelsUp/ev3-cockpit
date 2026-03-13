@@ -1,3 +1,9 @@
+/**
+ * PowerShell helper utilities for Bluetooth operations on Windows.
+ *
+ * @packageDocumentation
+ */
+
 import { spawn } from 'node:child_process';
 
 const WINDOWS_SHELL_FALLBACK = ['pwsh.exe', 'pwsh', 'powershell.exe', 'powershell'];

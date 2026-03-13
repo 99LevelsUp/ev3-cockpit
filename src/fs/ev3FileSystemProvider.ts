@@ -1,3 +1,9 @@
+/**
+ * VS Code FileSystemProvider for the ev3:// URI scheme.
+ *
+ * @packageDocumentation
+ */
+
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { Logger, NoopLogger } from '../diagnostics/logger';

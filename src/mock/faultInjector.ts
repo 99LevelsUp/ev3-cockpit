@@ -1,3 +1,9 @@
+/**
+ * Fault injection wrapper for testing error paths in transport adapters.
+ *
+ * @packageDocumentation
+ */
+
 import type { MockFaultConfig } from './mockTypes';
 import type { MockTransportResponder } from '../transport/mockTransportAdapter';
 import type { TransportRequestOptions } from '../transport/transportAdapter';

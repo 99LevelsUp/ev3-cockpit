@@ -1,3 +1,9 @@
+/**
+ * Feature flags and experimental feature configuration.
+ *
+ * @packageDocumentation
+ */
+
 import * as vscode from 'vscode';
 import { CompatProfileMode } from '../compat/capabilityProfile';
 import { DeployConfigSnapshot, readDeployConfig } from './deployConfig';

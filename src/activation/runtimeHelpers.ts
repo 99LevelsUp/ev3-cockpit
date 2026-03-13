@@ -1,3 +1,9 @@
+/**
+ * Helper functions for sorting brick snapshots and building transport overrides.
+ *
+ * @packageDocumentation
+ */
+
 import { BrickConnectionProfile } from '../device/brickConnectionProfiles';
 import { BrickSnapshot } from '../device/brickRegistry';
 import { TransportConfigOverrides } from '../transport/transportFactory';
