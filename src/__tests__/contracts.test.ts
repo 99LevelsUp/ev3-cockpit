@@ -1,8 +1,12 @@
-const assert = require('assert/strict');
-const { describe, it } = require('node:test');
+import assert from 'assert/strict';
+import { describe, it } from 'node:test';
 
-const { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey } = require('../contracts/index');
-const { CockpitError, ErrorCode, TransportError, ConnectionError, TimeoutError, SessionError, HeartbeatError, ConsumerError, SubscriptionError } = require('../errors/index');
+import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey } from '../contracts/index';
+import {
+	CockpitError, ErrorCode,
+	TransportError, ConnectionError, TimeoutError,
+	SessionError, HeartbeatError, ConsumerError, SubscriptionError,
+} from '../errors/index';
 
 describe('Transport enum', () => {
 	it('has all four values', () => {
@@ -65,7 +69,7 @@ describe('CockpitError', () => {
 	});
 
 	it('each subclass has the right name and code', () => {
-		const cases = [
+		const cases: [CockpitError, string, ErrorCode][] = [
 			[new TransportError('t'), 'TransportError', ErrorCode.TransportFailed],
 			[new ConnectionError('c'), 'ConnectionError', ErrorCode.ConnectionFailed],
 			[new TimeoutError('to'), 'TimeoutError', ErrorCode.Timeout],

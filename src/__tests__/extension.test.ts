@@ -1,10 +1,8 @@
-const assert = require('assert/strict');
-const { describe, it } = require('node:test');
+import assert from 'assert/strict';
+import { describe, it } from 'node:test';
 
 describe('Extension Activation', () => {
 	it('should be defined', () => {
 		assert.ok(true);
 	});
 });
-
-
