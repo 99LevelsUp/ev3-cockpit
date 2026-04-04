@@ -15,22 +15,20 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0 is partially complete. The extension skeleton, build pipeline, and test infrastructure are working. Folder structure and all shared contracts still need to be created.
+Phase 0 is complete. All foundation work is done; implementation of Phase 1 starts from here.
 
-This means:
-
-- minimal extension skeleton is ✅ done,
-- build and lint pipeline is ✅ done,
-- test runner infrastructure is ✅ done,
-- base folder structure (`src/contracts/`, etc.) is ⬜ not started,
-- shared contracts, error model, and event infrastructure are ⬜ not started,
-- implementation of transports, runtime, API, and UI is ⬜ not started.
+- extension skeleton ✅
+- build and lint pipeline ✅
+- test runner infrastructure ✅
+- base folder structure (`src/contracts/`, etc.) ✅
+- shared contracts, error model, and event infrastructure ✅
+- implementation of transports, runtime, API, and UI ⬜ starts in Phase 1
 
 ## 3. Phase Overview
 
 | Phase | Name | Status |
 | :--- | :--- | :--- |
-| 0 | Project foundation and contracts | 🔄 in progress |
+| 0 | Project foundation and contracts | ✅ done |
 | 1 | Transport contracts and discovery | ⬜ planned |
 | 2 | Session runtime and lifecycle | ⬜ planned |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
@@ -56,43 +54,43 @@ Create a clean technical foundation on which further implementations can be laye
   - [x] 0.2.2 ESLint configuration (`npm run lint`)
   - [x] 0.2.3 Watch mode (`npm run watch`)
   - [x] 0.2.4 Production bundle via esbuild (`npm run package`)
-  - [ ] 0.2.5 VSIX packaging (`npm run package:vsix`)
+  - [x] 0.2.5 VSIX packaging (`npm run package:vsix`)
 - [x] **0.3 Test infrastructure**
   - [x] 0.3.1 Node built-in test runner for unit tests (`npm run test:unit`)
   - [x] 0.3.2 VS Code extension host test runner (`npm run test:host`)
   - [x] 0.3.3 CI pipeline script (`npm run test:ci`)
-  - [ ] 0.3.4 Placeholder Playwright setup (`npm run test:pw:smoke`)
-- [ ] **0.4 Base folder structure**
-  - [ ] 0.4.1 `src/contracts/` — shared types and contracts
-  - [ ] 0.4.2 `src/runtime/` — session manager, presence aggregator
-  - [ ] 0.4.3 `src/transports/` — transport providers
-  - [ ] 0.4.4 `src/api/` — public API layer
-  - [ ] 0.4.5 `src/ui/` — webview panel
-  - [ ] 0.4.6 `src/mock/` — mock runtime
-  - [ ] 0.4.7 `src/persistence/` — globalState adapter
-  - [ ] 0.4.8 `src/test/` — test utilities
-- [ ] **0.5 Shared type definitions**
-  - [ ] 0.5.1 `Transport` enum (`mock`, `usb`, `tcp`, `bt`)
-  - [ ] 0.5.2 `BrickKey` type (branded string per transport)
-  - [ ] 0.5.3 `PresenceState` enum (`remembered`, `available`, `unavailable`, `removed`)
-  - [ ] 0.5.4 `ConnectionState` enum (`connecting`, `connected`, `reconnecting`, `disconnected`)
-  - [ ] 0.5.5 `ActivityMode` enum (`foreground`, `subscribed`, `minimal`, `none`)
-  - [ ] 0.5.6 `TelemetryCategory` enum (`ports`, `filesystem`, `system`)
-  - [ ] 0.5.7 `DiscoveryItem` interface (brickKey, displayName, transport, presenceState, etc.)
-  - [ ] 0.5.8 `ConnectedSession` interface (brickKey, connectionState, activeMode, etc.)
-  - [ ] 0.5.9 `ActiveBrickViewModel` interface (identity, battery, ports, buttons, etc.)
-- [ ] **0.6 Error model**
-  - [ ] 0.6.1 Base `CockpitError` class with error codes
-  - [ ] 0.6.2 Transport-specific errors (`TransportError`, `ConnectionError`, `TimeoutError`)
-  - [ ] 0.6.3 Session-specific errors (`SessionError`, `HeartbeatError`)
-  - [ ] 0.6.4 API errors (`ConsumerError`, `SubscriptionError`)
-- [ ] **0.7 Event infrastructure**
-  - [ ] 0.7.1 Typed event emitter (compatible with VS Code `EventEmitter` pattern)
-  - [ ] 0.7.2 Disposable lifecycle pattern (implement `vscode.Disposable`)
-- [ ] **0.8 Composition root skeleton**
-  - [ ] 0.8.1 Service registry pattern or minimal DI container
-  - [ ] 0.8.2 Wiring in `activate()` — instantiate and connect layers
-  - [ ] 0.8.3 Cleanup in `deactivate()` — dispose all services
+  - [x] 0.3.4 Placeholder Playwright setup (`npm run test:pw:smoke`)
+- [x] **0.4 Base folder structure**
+  - [x] 0.4.1 `src/contracts/` — shared types and contracts
+  - [x] 0.4.2 `src/runtime/` — session manager, presence aggregator
+  - [x] 0.4.3 `src/transports/` — transport providers
+  - [x] 0.4.4 `src/api/` — public API layer
+  - [x] 0.4.5 `src/ui/` — webview panel
+  - [x] 0.4.6 `src/mock/` — mock runtime
+  - [x] 0.4.7 `src/persistence/` — globalState adapter
+  - [x] 0.4.8 `src/test/` — test utilities
+- [x] **0.5 Shared type definitions**
+  - [x] 0.5.1 `Transport` enum (`mock`, `usb`, `tcp`, `bt`)
+  - [x] 0.5.2 `BrickKey` type (branded string per transport)
+  - [x] 0.5.3 `PresenceState` enum (`remembered`, `available`, `unavailable`, `removed`)
+  - [x] 0.5.4 `ConnectionState` enum (`connecting`, `connected`, `reconnecting`, `disconnected`)
+  - [x] 0.5.5 `ActivityMode` enum (`foreground`, `subscribed`, `minimal`, `none`)
+  - [x] 0.5.6 `TelemetryCategory` enum (`ports`, `filesystem`, `system`)
+  - [x] 0.5.7 `DiscoveryItem` interface (brickKey, displayName, transport, presenceState, etc.)
+  - [x] 0.5.8 `ConnectedSession` interface (brickKey, connectionState, activeMode, etc.)
+  - [x] 0.5.9 `ActiveBrickViewModel` interface (identity, battery, ports, buttons, etc.)
+- [x] **0.6 Error model**
+  - [x] 0.6.1 Base `CockpitError` class with error codes
+  - [x] 0.6.2 Transport-specific errors (`TransportError`, `ConnectionError`, `TimeoutError`)
+  - [x] 0.6.3 Session-specific errors (`SessionError`, `HeartbeatError`)
+  - [x] 0.6.4 API errors (`ConsumerError`, `SubscriptionError`)
+- [x] **0.7 Event infrastructure**
+  - [x] 0.7.1 Typed event emitter (compatible with VS Code `EventEmitter` pattern)
+  - [x] 0.7.2 Disposable lifecycle pattern (implement `vscode.Disposable`)
+- [x] **0.8 Composition root skeleton**
+  - [x] 0.8.1 Service registry pattern or minimal DI container
+  - [x] 0.8.2 Wiring in `activate()` — instantiate and connect layers
+  - [x] 0.8.3 Cleanup in `deactivate()` — dispose all services
 
 ### Definition of Done
 
