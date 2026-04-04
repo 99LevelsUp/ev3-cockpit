@@ -219,16 +219,20 @@ describe('MockTransportProvider — filesystem', () => {
 		await assert.rejects(() => provider.send(key, { kind: 'fs:read', path: '/nope' }), /File not found/);
 	});
 
-	it('provides filesystem via getFilesystem()', () => {
+	it('checks file existence via send()', async () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
 			filesystem: [{ path: '/x', content: 'y' }],
 		}]));
 		const key = makeBrickKey(Transport.Mock, 'a');
-		const fs = provider.getFilesystem(key);
+		await provider.connect(key);
 
-		assert.ok(fs);
-		assert.equal(fs.read('/x'), 'y');
+		const exists = await provider.send(key, { kind: 'fs:exists', path: '/x' });
+		assert.equal(exists.kind, 'fs:exists');
+		assert.equal((exists as import('../contracts').FsExistsResponse).exists, true);
+
+		const missing = await provider.send(key, { kind: 'fs:exists', path: '/nope' });
+		assert.equal((missing as import('../contracts').FsExistsResponse).exists, false);
 	});
 });
 

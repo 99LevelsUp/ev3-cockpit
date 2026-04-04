@@ -21,6 +21,11 @@ interface MockBrickState {
  * Simulates brick discovery, connection, telemetry dynamics,
  * configurable errors, and periodic loss / recovery.
  */
+export interface MockTransportOptions {
+	/** Random number generator (0–1). Defaults to Math.random. Inject for deterministic tests. */
+	random?: () => number;
+}
+
 export class MockTransportProvider implements TransportProvider {
 	readonly transport = Transport.Mock;
 	readonly capabilities: TransportCapabilities = {
@@ -28,9 +33,11 @@ export class MockTransportProvider implements TransportProvider {
 	};
 
 	private readonly bricks = new Map<BrickKey, MockBrickState>();
+	private readonly random: () => number;
 	private disposed = false;
 
-	constructor(config: MockConfig) {
+	constructor(config: MockConfig, options?: MockTransportOptions) {
+		this.random = options?.random ?? Math.random;
 		for (const brickCfg of config.bricks) {
 			const key = makeBrickKey(Transport.Mock, brickCfg.id);
 			this.bricks.set(key, {
@@ -66,7 +73,7 @@ export class MockTransportProvider implements TransportProvider {
 		this.assertNotDisposed();
 		const state = this.requireBrick(brickKey);
 
-		if (state.config.error && Math.random() < state.config.error.connectFailRate) {
+		if (state.config.error && this.random() < state.config.error.connectFailRate) {
 			throw new ConnectionError(`Mock connect failure for ${brickKey}`);
 		}
 
@@ -92,7 +99,7 @@ export class MockTransportProvider implements TransportProvider {
 			throw new TransportError(`Brick ${brickKey} is not connected`);
 		}
 
-		if (state.config.error && Math.random() < state.config.error.sendFailRate) {
+		if (state.config.error && this.random() < state.config.error.sendFailRate) {
 			throw new TransportError(`Mock send failure for ${brickKey}`);
 		}
 
@@ -146,24 +153,6 @@ export class MockTransportProvider implements TransportProvider {
 		const state = this.requireBrick(brickKey);
 		state.connected = true;
 		return { brickKey, transport: Transport.Mock };
-	}
-
-	// ── Extra: direct access for testing ────────────────────────────
-
-	/** Get the filesystem for a mock brick (for test assertions). */
-	getFilesystem(brickKey: BrickKey): MockFilesystem | undefined {
-		return this.bricks.get(brickKey)?.filesystem;
-	}
-
-	/** Get current port values for a mock brick. */
-	getPortValues(brickKey: BrickKey): { motorPorts: PortState[]; sensorPorts: PortState[] } | undefined {
-		const state = this.bricks.get(brickKey);
-		if (!state) { return undefined; }
-		const now = Date.now();
-		return {
-			motorPorts: this.evaluatePorts(state.config.motorPorts, now),
-			sensorPorts: this.evaluatePorts(state.config.sensorPorts, now),
-		};
 	}
 
 	// ── Lifecycle ───────────────────────────────────────────────────

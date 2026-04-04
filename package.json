@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "publisher": "ev3dev",
   "license": "MIT",
   "repository": {
@@ -23,7 +23,6 @@
   "contributes": {},
   "scripts": {
     "compile": "tsc",
-    "copy-tests": "node scripts/copy-tests.cjs",
     "lint": "eslint src --ext .ts",
     "package": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=out/extension.js",
     "test:unit": "node scripts/run-unit-tests.cjs",

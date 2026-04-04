@@ -129,14 +129,7 @@ export class PresenceAggregator implements vscode.Disposable {
 		if (e.currentState === PresenceState.Removed) {
 			this.items.delete(e.brickKey);
 		} else {
-			const existing = this.items.get(e.brickKey);
-			this.items.set(e.brickKey, {
-				...e.item,
-				// Preserve local metadata that the scheduler doesn't know about
-				remembered: existing?.remembered ?? e.item.remembered,
-				favorite: existing?.favorite ?? e.item.favorite,
-				connected: existing?.connected ?? e.item.connected,
-			});
+			this.items.set(e.brickKey, this.mergeLocalMetadata(e.brickKey, e.item));
 		}
 		this.invalidateCache();
 		this.presenceChanged.fire(e);
@@ -145,20 +138,23 @@ export class PresenceAggregator implements vscode.Disposable {
 
 	private rebuildFromScheduler(): void {
 		const tracked = this.scheduler.getTrackedBricks();
-
-		// Update items from scheduler, preserving local metadata
 		for (const [key, item] of tracked) {
-			const existing = this.items.get(key);
-			this.items.set(key, {
-				...item,
-				remembered: existing?.remembered ?? item.remembered,
-				favorite: existing?.favorite ?? item.favorite,
-				connected: existing?.connected ?? item.connected,
-			});
+			this.items.set(key, this.mergeLocalMetadata(key, item));
 		}
-
 		this.invalidateCache();
 		this.emitListChanged();
+	}
+
+	/** Overlay incoming item with locally-owned metadata (favorite, connected, remembered). */
+	private mergeLocalMetadata(brickKey: BrickKey, incoming: DiscoveryItem): DiscoveryItem {
+		const existing = this.items.get(brickKey);
+		if (!existing) { return incoming; }
+		return {
+			...incoming,
+			remembered: existing.remembered ?? incoming.remembered,
+			favorite: existing.favorite ?? incoming.favorite,
+			connected: existing.connected ?? incoming.connected,
+		};
 	}
 
 	private invalidateCache(): void {

@@ -181,8 +181,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			}
 
 			this.scanCompleted.fire(undefined);
-		} catch {
-			// Provider scan failed — skip this cycle
+		} catch (err: unknown) {
+			console.warn(`[DiscoveryScheduler] ${provider.transport} scan failed:`, err);
 		}
 	}
 

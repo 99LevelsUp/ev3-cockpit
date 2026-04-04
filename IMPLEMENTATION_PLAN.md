@@ -29,7 +29,7 @@ Phase 0 is complete. All foundation work is done; implementation of Phase 1 star
 | Phase | Name | Status |
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
-| 1 | Transport contracts and discovery | ⬜ planned |
+| 1 | Transport contracts and discovery | 🔄 in progress |
 | 2 | Session runtime and lifecycle | ⬜ planned |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
 | 4 | Public API and filesystem services | ⬜ planned |
@@ -107,44 +107,44 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
 
 ### Tasks
 
-- [ ] **1.1 TransportProvider interface**
-  - [ ] 1.1.1 `discover()` — returns a list of discovered bricks for this transport
-  - [ ] 1.1.2 `connect(brickKey)` — establishes a connection, returns a session handle
-  - [ ] 1.1.3 `disconnect(brickKey)` — terminates the connection
-  - [ ] 1.1.4 `send(brickKey, command)` — sends a command to a connected brick
-  - [ ] 1.1.5 `recover(brickKey)` — attempts to re-establish a lost connection
-  - [ ] 1.1.6 `forget(brickKey)` — removes OS-level evidence where applicable (optional)
-  - [ ] 1.1.7 Transport capability flags (supports forget, supports signal info, etc.)
-- [ ] **1.2 DiscoveryItem data model**
-  - [ ] 1.2.1 Implement `DiscoveryItem` from contracts with all required fields
-  - [ ] 1.2.2 Transport-specific metadata extensions
-- [ ] **1.3 Provider registry**
-  - [ ] 1.3.1 Register/unregister transport providers
-  - [ ] 1.3.2 Enumerate active providers
-  - [ ] 1.3.3 Lookup provider by transport type
-- [ ] **1.4 Discovery scheduler**
-  - [ ] 1.4.1 Periodic polling loop per provider
-  - [ ] 1.4.2 Configurable scan interval per transport
-  - [ ] 1.4.3 Deduplication of discovery results
-  - [ ] 1.4.4 Timeout handling (`available` → `unavailable` after missed scans)
-  - [ ] 1.4.5 Removal timeout (`unavailable` → `removed` after extended absence)
-- [ ] **1.5 Presence Aggregator**
-  - [ ] 1.5.1 Unified discovery model across all providers
-  - [ ] 1.5.2 State machine per brick: `remembered` / `available` / `unavailable` / `removed`
-  - [ ] 1.5.3 Merge with remembered bricks from persistence
-  - [ ] 1.5.4 Stable ordering algorithm (by transport group, then by signal or brickKey)
-  - [ ] 1.5.5 Event emission on presence state changes
-  - [ ] 1.5.6 Read model for the discovery list (single observable collection)
-- [ ] **1.6 Mock Transport**
-  - [ ] 1.6.1 JSON configuration file schema (brick identity, sensors, motors, dynamics)
-  - [ ] 1.6.2 Configuration file loading and validation
-  - [ ] 1.6.3 Mock discovery (enumerate bricks from config)
-  - [ ] 1.6.4 Mock connect / disconnect
-  - [ ] 1.6.5 Mock value dynamics (static values, sine/triangle/square oscillators)
-  - [ ] 1.6.6 Mock error state simulation (configurable failures)
-  - [ ] 1.6.7 Mock loss and recovery simulation (configurable disappearance/reappearance)
-  - [ ] 1.6.8 Mock filesystem (in-memory file tree for API testing)
-  - [ ] 1.6.9 Mock brickKey generation (`mock:<id>` from config)
+- [x] **1.1 TransportProvider interface**
+  - [x] 1.1.1 `discover()` — returns a list of discovered bricks for this transport
+  - [x] 1.1.2 `connect(brickKey)` — establishes a connection, returns a session handle
+  - [x] 1.1.3 `disconnect(brickKey)` — terminates the connection
+  - [x] 1.1.4 `send(brickKey, command)` — sends a command to a connected brick
+  - [x] 1.1.5 `recover(brickKey)` — attempts to re-establish a lost connection
+  - [x] 1.1.6 `forget(brickKey)` — removes OS-level evidence where applicable (optional)
+  - [x] 1.1.7 Transport capability flags (supports forget, supports signal info, etc.)
+- [x] **1.2 DiscoveryItem data model**
+  - [x] 1.2.1 Implement `DiscoveryItem` from contracts with all required fields
+  - [x] 1.2.2 Transport-specific metadata extensions
+- [x] **1.3 Provider registry**
+  - [x] 1.3.1 Register/unregister transport providers
+  - [x] 1.3.2 Enumerate active providers
+  - [x] 1.3.3 Lookup provider by transport type
+- [x] **1.4 Discovery scheduler**
+  - [x] 1.4.1 Periodic polling loop per provider
+  - [x] 1.4.2 Configurable scan interval per transport
+  - [x] 1.4.3 Deduplication of discovery results
+  - [x] 1.4.4 Timeout handling (`available` → `unavailable` after missed scans)
+  - [x] 1.4.5 Removal timeout (`unavailable` → `removed` after extended absence)
+- [x] **1.5 Presence Aggregator**
+  - [x] 1.5.1 Unified discovery model across all providers
+  - [x] 1.5.2 State machine per brick: `remembered` / `available` / `unavailable` / `removed`
+  - [x] 1.5.3 Merge with remembered bricks from persistence
+  - [x] 1.5.4 Stable ordering algorithm (by transport group, then by signal or brickKey)
+  - [x] 1.5.5 Event emission on presence state changes
+  - [x] 1.5.6 Read model for the discovery list (single observable collection)
+- [x] **1.6 Mock Transport**
+  - [x] 1.6.1 JSON configuration file schema (brick identity, sensors, motors, dynamics)
+  - [x] 1.6.2 Configuration file loading and validation
+  - [x] 1.6.3 Mock discovery (enumerate bricks from config)
+  - [x] 1.6.4 Mock connect / disconnect
+  - [x] 1.6.5 Mock value dynamics (static values, sine/triangle/square oscillators)
+  - [x] 1.6.6 Mock error state simulation (configurable failures)
+  - [x] 1.6.7 Mock loss and recovery simulation (configurable disappearance/reappearance)
+  - [x] 1.6.8 Mock filesystem (in-memory file tree for API testing)
+  - [x] 1.6.9 Mock brickKey generation (`mock:<id>` from config)
 - [ ] **1.7 USB Transport (initial)**
   - [ ] 1.7.1 Library selection and platform testing (Windows + Linux)
   - [ ] 1.7.2 USB device enumeration for EV3
@@ -164,12 +164,12 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [ ] 1.9.4 Basic `send()` for command execution
   - [ ] 1.9.5 brickKey from MAC address
   - [ ] 1.9.6 Signal strength reporting where available
-- [ ] **1.10 Unit tests**
-  - [ ] 1.10.1 TransportProvider contract compliance tests (run against Mock)
-  - [ ] 1.10.2 Discovery scheduler tests (timing, dedup, timeout)
-  - [ ] 1.10.3 Presence Aggregator state machine tests
-  - [ ] 1.10.4 Stable ordering tests
-  - [ ] 1.10.5 Mock configuration loading tests
+- [x] **1.10 Unit tests**
+  - [x] 1.10.1 TransportProvider contract compliance tests (run against Mock)
+  - [x] 1.10.2 Discovery scheduler tests (timing, dedup, timeout)
+  - [x] 1.10.3 Presence Aggregator state machine tests
+  - [x] 1.10.4 Stable ordering tests
+  - [x] 1.10.5 Mock configuration loading tests
 
 ### Definition of Done
 
