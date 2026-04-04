@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# pre-commit hook — compile, lint, unit tests, host tests
+# Skips gracefully if the project is not yet bootstrapped.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if [ ! -f "package.json" ]; then
+  echo "[pre-commit] No package.json found — skipping checks."
+  exit 0
+fi
+
+if [ ! -d "node_modules" ]; then
+  echo "[pre-commit] node_modules not found — skipping checks (run npm install first)."
+  exit 0
+fi
+
+echo "[pre-commit] Compiling..."
+npm run compile
+
+echo "[pre-commit] Linting..."
+npm run lint
+
+echo "[pre-commit] Running unit tests..."
+npm run test:unit
+
+echo "[pre-commit] Running host tests..."
+npm run test:host
+
+echo "[pre-commit] All checks passed."

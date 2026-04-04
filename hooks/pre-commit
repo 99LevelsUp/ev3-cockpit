@@ -1,0 +1,10 @@
+#!/bin/sh
+# Skip version bump when amending a commit.
+case "${GIT_REFLOG_ACTION:-commit}" in
+    *amend*)
+        printf 'version bump skipped (amend)\n'
+        exit 0
+        ;;
+esac
+node scripts/bump-version.cjs || exit 1
+git add package.json

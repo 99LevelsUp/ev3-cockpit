@@ -1,0 +1,45 @@
+{
+  "name": "ev3-cockpit",
+  "displayName": "EV3 Cockpit",
+  "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
+  "version": "0.0.2",
+  "publisher": "ev3dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ev3dev/ev3-cockpit"
+  },
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=20.0.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "out/extension.js",
+  "contributes": {},
+  "scripts": {
+    "compile": "tsc",
+    "copy-tests": "powershell -Command \"if (-not (Test-Path 'out/__tests__')) { New-Item -ItemType Directory -Path 'out/__tests__' | Out-Null }; Copy-Item -Path 'src/__tests__/*.js' -Destination 'out/__tests__/' -Force\"",
+    "lint": "eslint src --ext .ts",
+    "package": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=out/extension.js",
+    "test:unit": "node --test out/__tests__/*.test.js",
+    "test:host": "node scripts/runTests.js",
+    "test:ci": "npm run compile && npm run copy-tests && npm run lint && npm run test:unit && npm run test:host",
+    "test:ci:release": "npm run compile && npm run copy-tests && npm run lint && npm run test:unit && npm run test:host && npm run package",
+    "prepare": "node scripts/install-hooks.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "esbuild": "^0.21.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {}
+}

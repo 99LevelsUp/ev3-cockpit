@@ -1,0 +1,21 @@
+out/
+artifacts/
+node_modules/
+.vscode-test/
+*.vsix
+*.js.map
+*.log
+*.logcls
+.claude/
+.codex/
+.vscode-bisect/
+.vscode-dev-extensions/
+.vscode-dev-profile/
+CLAUDE.md
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
