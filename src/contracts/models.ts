@@ -6,6 +6,11 @@ export interface SignalInfo {
     strength?: 'strong' | 'medium' | 'weak';
 }
 
+/**
+ * Invariant: when `presenceState === PresenceState.Remembered`, `remembered` is always `true`.
+ * The inverse does not hold — a brick can be `remembered: true` with `presenceState: Available`
+ * (a saved brick that is currently visible).
+ */
 export interface DiscoveryItem {
     brickKey: BrickKey;
     displayName: string;
