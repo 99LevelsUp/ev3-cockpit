@@ -1,11 +1,11 @@
-# EV3 Cockpit - Requirements
+# EVƎ Cockpit - Requirements
 
 > Version: 2026-04-02
 > Status: current product specification
 
 ## 1. Product Purpose
 
-EV3 Cockpit is a Visual Studio Code extension that:
+EVƎ Cockpit is a Visual Studio Code extension that:
 
 - discovers EV3 bricks available via `mock`, `usb`, `tcp`, and `bt`,
 - connects one or more bricks into the Cockpit runtime,

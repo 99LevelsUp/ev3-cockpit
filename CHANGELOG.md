@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to EV3 Cockpit are documented here.
+All notable changes to EVƎ Cockpit are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Versioning: patch bumps automatically on every commit via the pre-commit hook.

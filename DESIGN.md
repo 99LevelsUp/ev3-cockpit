@@ -1,4 +1,4 @@
-# EV3 Cockpit - Design
+# EVƎ Cockpit - Design
 
 > Version: 2026-04-02
 > Status: target design for new implementation
@@ -6,7 +6,7 @@
 
 ## 1. Design Goal
 
-This document describes the target architecture of EV3 Cockpit so that it:
+This document describes the target architecture of EVƎ Cockpit so that it:
 
 - meets the current requirements,
 - can be re-implemented from a clean foundation,
@@ -14,7 +14,7 @@ This document describes the target architecture of EV3 Cockpit so that it:
 
 ## 2. Product Model
 
-EV3 Cockpit has two primary roles:
+EVƎ Cockpit has two primary roles:
 
 - a panel UI for brick discovery, connection, and monitoring,
 - a runtime and public API for other extensions.

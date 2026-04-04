@@ -1,4 +1,4 @@
-# EV3 Cockpit - Implementation Plan
+# EVƎ Cockpit - Implementation Plan
 
 > Version: 2026-04-02
 > Repository state: after cleanup, only documentation remains; implementation starts fresh from scratch
