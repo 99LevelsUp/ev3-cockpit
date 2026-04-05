@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "ev3dev",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "out/extension.js",
+  "main": "./out/extension.js",
   "contributes": {},
   "scripts": {
     "compile": "tsc",

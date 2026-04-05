@@ -107,7 +107,7 @@ export class MockTransportProvider implements TransportProvider {
 
 		switch (command.kind) {
 		case 'battery':
-			return { kind: 'battery', level: state.config.batteryLevel, voltage: state.config.batteryVoltage };
+			return { kind: 'battery', level: state.config.battery.level, voltage: state.config.battery.voltage };
 
 		case 'ports':
 			return {
@@ -117,7 +117,8 @@ export class MockTransportProvider implements TransportProvider {
 			};
 
 		case 'buttons':
-			return { kind: 'buttons', state: state.config.buttons ?? {} };
+			// EV3 buttons are hardware constants — not configurable per brick.
+			return { kind: 'buttons', state: { left: false, right: false, up: false, down: false, enter: false, back: false } };
 
 		case 'info':
 			return { kind: 'info', displayName: state.config.displayName, firmwareVersion: state.config.firmwareVersion };
@@ -153,6 +154,13 @@ export class MockTransportProvider implements TransportProvider {
 		const state = this.requireBrick(brickKey);
 		state.connected = true;
 		return { brickKey, transport: Transport.Mock };
+	}
+
+	// ── Extra: direct access for testing ────────────────────────────
+
+	/** Get the filesystem for a mock brick (for test assertions). */
+	getFilesystem(brickKey: BrickKey): MockFilesystem | undefined {
+		return this.bricks.get(brickKey)?.filesystem;
 	}
 
 	// ── Lifecycle ───────────────────────────────────────────────────

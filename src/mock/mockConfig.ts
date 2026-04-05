@@ -2,6 +2,10 @@ import { Transport } from '../contracts';
 
 // ── Value dynamics ──────────────────────────────────────────────────
 
+export interface NoneDynamic {
+	readonly kind: 'none';
+}
+
 export interface StaticDynamic {
 	readonly kind: 'static';
 	readonly value: number | string;
@@ -29,10 +33,19 @@ export interface SquareDynamic {
 	readonly periodMs: number;
 }
 
-export type ValueDynamic = StaticDynamic | SineDynamic | TriangleDynamic | SquareDynamic;
+export type ValueDynamic = NoneDynamic | StaticDynamic | SineDynamic | TriangleDynamic | SquareDynamic;
 
 /** All valid dynamic kind values, derived from the ValueDynamic union. */
-export const VALID_DYNAMIC_KINDS: ReadonlyArray<ValueDynamic['kind']> = ['static', 'sine', 'triangle', 'square'];
+export const VALID_DYNAMIC_KINDS: ReadonlyArray<ValueDynamic['kind']> = ['none', 'static', 'sine', 'triangle', 'square'];
+
+// ── Battery configuration ───────────────────────────────────────────
+
+export interface MockBatteryConfig {
+	/** Battery level in percent (0–100). */
+	readonly level: number;
+	/** Battery voltage in volts. */
+	readonly voltage?: number;
+}
 
 // ── Port configuration ──────────────────────────────────────────────
 
@@ -70,23 +83,17 @@ export interface MockFileEntry {
 	readonly content: string;
 }
 
-// ── Button state ────────────────────────────────────────────────────
-
-export interface MockButtonConfig {
-	readonly [button: string]: boolean;
-}
-
 // ── Single brick configuration ──────────────────────────────────────
 
 export interface MockBrickConfig {
 	readonly id: string;
 	readonly displayName: string;
 	readonly firmwareVersion?: string;
-	readonly batteryLevel: number;
-	readonly batteryVoltage?: number;
+	readonly battery: MockBatteryConfig;
 	readonly motorPorts: MockPortConfig[];
 	readonly sensorPorts: MockPortConfig[];
-	readonly buttons?: MockButtonConfig;
+	/** ID of the master brick; undefined = standalone / master. */
+	readonly parentId?: string;
 	readonly error?: MockErrorConfig;
 	readonly loss?: MockLossConfig;
 	readonly filesystem?: MockFileEntry[];
@@ -129,8 +136,12 @@ function validateBrickConfig(raw: unknown): void {
 	if (typeof b.displayName !== 'string' || b.displayName.length === 0) {
 		throw new Error('Brick displayName must be a non-empty string');
 	}
-	if (typeof b.batteryLevel !== 'number' || b.batteryLevel < 0 || b.batteryLevel > 100) {
-		throw new Error('Brick batteryLevel must be a number between 0 and 100');
+	if (!b.battery || typeof b.battery !== 'object') {
+		throw new Error('Brick battery must be an object');
+	}
+	const battery = b.battery as Record<string, unknown>;
+	if (typeof battery.level !== 'number' || battery.level < 0 || battery.level > 100) {
+		throw new Error('Brick battery.level must be a number between 0 and 100');
 	}
 	if (!Array.isArray(b.motorPorts)) {
 		throw new Error('Brick motorPorts must be an array');

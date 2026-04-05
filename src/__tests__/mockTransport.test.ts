@@ -1,8 +1,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, makeBrickKey } from '../contracts';
-import type { BatteryResponse, PortsResponse, FsListResponse, FsReadResponse } from '../contracts';
+import { Transport, makeBrickKey } from '../contracts';
+import type { BatteryResponse, PortsResponse, ButtonsResponse, FsListResponse, FsReadResponse, FsExistsResponse } from '../contracts';
 import {
 	MockTransportProvider,
 	validateMockConfig,
@@ -17,7 +17,7 @@ function makeConfig(overrides?: Partial<import('../mock').MockBrickConfig>[]): M
 		bricks: (overrides ?? [{}]).map((o, i) => ({
 			id: o?.id ?? `brick-${i}`,
 			displayName: o?.displayName ?? `Brick ${i}`,
-			batteryLevel: o?.batteryLevel ?? 75,
+			battery: o?.battery ?? { level: 75 },
 			motorPorts: o?.motorPorts ?? [],
 			sensorPorts: o?.sensorPorts ?? [],
 			...o,
@@ -50,8 +50,6 @@ describe('MockTransportProvider — discovery', () => {
 			},
 		]));
 
-		// We can't easily control Date.now() in the mock, but we can verify
-		// the feature doesn't crash and returns 0 or 1 items
 		const result = await provider.discover();
 		assert.ok(result.items.length <= 1);
 	});
@@ -105,7 +103,7 @@ describe('MockTransportProvider — connect/disconnect', () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
 			error: { connectFailRate: 1.0, sendFailRate: 0 },
-		}]));
+		}]), { random: () => 0 });
 		const key = makeBrickKey(Transport.Mock, 'a');
 
 		await assert.rejects(() => provider.connect(key), /Mock connect failure/);
@@ -118,8 +116,7 @@ describe('MockTransportProvider — send', () => {
 	it('returns battery info', async () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
-			batteryLevel: 82,
-			batteryVoltage: 7.2,
+			battery: { level: 82, voltage: 7.2 },
 		}]));
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
@@ -132,15 +129,38 @@ describe('MockTransportProvider — send', () => {
 	it('returns port values', async () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
-			motorPorts: [{ port: 'A', peripheralType: 'motor', dynamic: { kind: 'static', value: 42 } }],
-			sensorPorts: [{ port: '1', peripheralType: 'color', dynamic: { kind: 'static', value: 3 } }],
+			motorPorts:  [{ port: 'A', peripheralType: 'motor',  dynamic: { kind: 'static', value: 42 } }],
+			sensorPorts: [{ port: '1', peripheralType: 'color',  dynamic: { kind: 'static', value: 3  } }],
 		}]));
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
 		const result = await provider.send(key, { kind: 'ports' }) as PortsResponse;
-		assert.equal(result.motorPorts[0].value, 42);
+		assert.equal(result.motorPorts[0].value,  42);
 		assert.equal(result.sensorPorts[0].value, 3);
+	});
+
+	it('returns undefined value for none dynamic', async () => {
+		const provider = new MockTransportProvider(makeConfig([{
+			id: 'a',
+			sensorPorts: [{ port: '1', peripheralType: 'none', dynamic: { kind: 'none' } }],
+		}]));
+		const key = makeBrickKey(Transport.Mock, 'a');
+		await provider.connect(key);
+
+		const result = await provider.send(key, { kind: 'ports' }) as PortsResponse;
+		assert.equal(result.sensorPorts[0].value, undefined);
+	});
+
+	it('returns hard-coded EV3 buttons regardless of config', async () => {
+		const provider = new MockTransportProvider(makeConfig([{ id: 'a' }]));
+		const key = makeBrickKey(Transport.Mock, 'a');
+		await provider.connect(key);
+
+		const result = await provider.send(key, { kind: 'buttons' }) as ButtonsResponse;
+		assert.deepEqual(result.state, {
+			left: false, right: false, up: false, down: false, enter: false, back: false,
+		});
 	});
 
 	it('throws when not connected', async () => {
@@ -154,7 +174,7 @@ describe('MockTransportProvider — send', () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
 			error: { connectFailRate: 0, sendFailRate: 1.0 },
-		}]));
+		}]), { random: () => 0 });
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
@@ -174,7 +194,6 @@ describe('MockTransportProvider — recover', () => {
 		const handle = await provider.recover(key);
 
 		assert.equal(handle.brickKey, key);
-		// Should be usable after recovery
 		const result = await provider.send(key, { kind: 'battery' });
 		assert.ok(result);
 	});
@@ -187,28 +206,31 @@ describe('MockTransportProvider — filesystem', () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
 			filesystem: [
-				{ path: '/home/robot/a.py', content: 'aaa' },
-				{ path: '/home/robot/b.py', content: 'bbb' },
-				{ path: '/other/c.py', content: 'ccc' },
+				{ path: '/home/root/lms2012/prjs/Proj/a.rbf', content: '' },
+				{ path: '/home/root/lms2012/prjs/Proj/b.rbf', content: '' },
+				{ path: '/other/c.rbf',                        content: '' },
 			],
 		}]));
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'fs:list', path: '/home/robot' }) as FsListResponse;
-		assert.deepEqual(result.entries, ['/home/robot/a.py', '/home/robot/b.py']);
+		const result = await provider.send(key, { kind: 'fs:list', path: '/home/root/lms2012/prjs/Proj' }) as FsListResponse;
+		assert.deepEqual(result.entries, [
+			'/home/root/lms2012/prjs/Proj/a.rbf',
+			'/home/root/lms2012/prjs/Proj/b.rbf',
+		]);
 	});
 
 	it('reads a file', async () => {
 		const provider = new MockTransportProvider(makeConfig([{
 			id: 'a',
-			filesystem: [{ path: '/test.txt', content: 'hello' }],
+			filesystem: [{ path: '/home/root/lms2012/prjs/Test/test.rbf', content: 'LEGO' }],
 		}]));
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'fs:read', path: '/test.txt' }) as FsReadResponse;
-		assert.equal(result.content, 'hello');
+		const result = await provider.send(key, { kind: 'fs:read', path: '/home/root/lms2012/prjs/Test/test.rbf' }) as FsReadResponse;
+		assert.equal(result.content, 'LEGO');
 	});
 
 	it('throws on missing file read', async () => {
@@ -227,12 +249,23 @@ describe('MockTransportProvider — filesystem', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const exists = await provider.send(key, { kind: 'fs:exists', path: '/x' });
-		assert.equal(exists.kind, 'fs:exists');
-		assert.equal((exists as import('../contracts').FsExistsResponse).exists, true);
+		const exists = await provider.send(key, { kind: 'fs:exists', path: '/x' }) as FsExistsResponse;
+		assert.equal(exists.exists, true);
 
-		const missing = await provider.send(key, { kind: 'fs:exists', path: '/nope' });
-		assert.equal((missing as import('../contracts').FsExistsResponse).exists, false);
+		const missing = await provider.send(key, { kind: 'fs:exists', path: '/nope' }) as FsExistsResponse;
+		assert.equal(missing.exists, false);
+	});
+
+	it('provides filesystem via getFilesystem()', () => {
+		const provider = new MockTransportProvider(makeConfig([{
+			id: 'a',
+			filesystem: [{ path: '/x', content: 'y' }],
+		}]));
+		const key = makeBrickKey(Transport.Mock, 'a');
+		const fs = provider.getFilesystem(key);
+
+		assert.ok(fs);
+		assert.equal(fs.read('/x'), 'y');
 	});
 });
 
@@ -254,7 +287,7 @@ describe('validateMockConfig', () => {
 		const config = validateMockConfig({
 			transport: 'mock',
 			bricks: [{
-				id: 'a', displayName: 'A', batteryLevel: 50,
+				id: 'a', displayName: 'A', battery: { level: 50 },
 				motorPorts: [], sensorPorts: [],
 			}],
 		});
@@ -272,14 +305,21 @@ describe('validateMockConfig', () => {
 	it('rejects brick without id', () => {
 		assert.throws(() => validateMockConfig({
 			transport: 'mock',
-			bricks: [{ displayName: 'X', batteryLevel: 50, motorPorts: [], sensorPorts: [] }],
+			bricks: [{ displayName: 'X', battery: { level: 50 }, motorPorts: [], sensorPorts: [] }],
 		}), /id must be/);
 	});
 
-	it('rejects batteryLevel out of range', () => {
+	it('rejects missing battery object', () => {
 		assert.throws(() => validateMockConfig({
 			transport: 'mock',
-			bricks: [{ id: 'a', displayName: 'A', batteryLevel: 150, motorPorts: [], sensorPorts: [] }],
-		}), /batteryLevel/);
+			bricks: [{ id: 'a', displayName: 'A', motorPorts: [], sensorPorts: [] }],
+		}), /battery must be/);
+	});
+
+	it('rejects battery.level out of range', () => {
+		assert.throws(() => validateMockConfig({
+			transport: 'mock',
+			bricks: [{ id: 'a', displayName: 'A', battery: { level: 150 }, motorPorts: [], sensorPorts: [] }],
+		}), /battery\.level/);
 	});
 });

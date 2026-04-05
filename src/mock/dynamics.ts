@@ -1,8 +1,11 @@
 import { ValueDynamic } from './mockConfig';
 
-/** Evaluate a dynamic value at a given timestamp. */
-export function evaluateDynamic(dynamic: ValueDynamic, now: number): number | string {
+/** Evaluate a dynamic value at a given timestamp. Returns undefined for `none` dynamics. */
+export function evaluateDynamic(dynamic: ValueDynamic, now: number): number | string | undefined {
 	switch (dynamic.kind) {
+	case 'none':
+		return undefined;
+
 	case 'static':
 		return dynamic.value;
 
