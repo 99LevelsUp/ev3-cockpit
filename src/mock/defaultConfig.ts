@@ -6,6 +6,27 @@ export const DEFAULT_MOCK_CONFIG: MockConfig = {
 	transport: Transport.Mock,
 	bricks: [
 
+		// ── Marvin ─────────────────────────────────────────────────────
+		// Hitchhiker's Guide to the Galaxy. Paranoid Android. Brain the size of a planet.
+		{
+			id: 'marvin',
+			displayName: 'Marvin',
+			firmwareVersion: 'V1.10E',
+			battery: { level: 3, voltage: 6.1 },
+			motorPorts: [
+				{ port: 'A', peripheralType: 'large-motor',  unit: 'deg', dynamic: { kind: 'triangle', min: -10, max: 10,  periodMs: 8000 } },
+				{ port: 'B', peripheralType: 'large-motor',  unit: 'deg', dynamic: { kind: 'triangle', min: -10, max: 10,  periodMs: 9000 } },
+			],
+			sensorPorts: [
+				{ port: '1', peripheralType: 'ultrasonic-sensor', unit: 'cm', dynamic: { kind: 'static', value: 0  } },
+				{ port: '2', peripheralType: 'touch-sensor',      unit: '',   dynamic: { kind: 'static', value: 0  } },
+			],
+			filesystem: [
+				{ path: '/home/root/lms2012/prjs/LifeTheUniverseAndEverything/LifeTheUniverseAndEverything.rbf', content: '' },
+				{ path: '/home/root/lms2012/prjs/LifeTheUniverseAndEverything/Answer.rbf',                       content: '' },
+			],
+		},
+
 		// ── Bender ─────────────────────────────────────────────────────
 		// Futurama. Bending unit, model 22.
 		{
