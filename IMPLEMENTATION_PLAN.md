@@ -153,7 +153,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [ ] 1.7.5 brickKey from serial number
 - [ ] **1.8 TCP Transport (initial)**
   - [ ] 1.8.1 mDNS / network discovery strategy
-  - [ ] 1.8.2 TCP socket connection to ev3dev
+  - [ ] 1.8.2 TCP socket connection to EV3 brick
   - [ ] 1.8.3 Implement `discover()` and `connect()`
   - [ ] 1.8.4 Basic `send()` for command execution
   - [ ] 1.8.5 brickKey from IP address or mDNS hostname
