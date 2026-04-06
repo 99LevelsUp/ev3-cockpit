@@ -97,7 +97,8 @@ Create a clean technical foundation on which further implementations can be laye
 - extension activates and deactivates cleanly,
 - `npm run compile` and `npm run lint` pass with zero errors,
 - shared contracts exist in `src/contracts/` with no dependency on UI or runtime,
-- unit tests validate basic type correctness.
+- unit tests validate basic type correctness,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 5. Phase 1 — Transport Contracts and Unified Discovery
 
@@ -176,7 +177,8 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
 - runtime can simultaneously display mock and real items,
 - the discovery list is stable and correctly ordered,
 - mock transport passes all contract compliance tests,
-- presence state transitions are fully tested.
+- presence state transitions are fully tested,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 6. Phase 2 — Session Runtime and Lifecycle
 
@@ -237,7 +239,8 @@ Build the source of truth for connected bricks.
 - switching the active brick does not interrupt other sessions,
 - reconnecting one brick does not break others,
 - explicit disconnect cleanly terminates all subscriptions,
-- all state transitions are covered by unit tests.
+- all state transitions are covered by unit tests,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 7. Phase 3 — Telemetry and Adaptive Throttling
 
@@ -292,7 +295,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 - subscribed brick receives telemetry only while a subscription is active,
 - minimal brick maintains only heartbeat and reconnect,
 - Cockpit remains responsive even with concurrent subscriptions,
-- adaptive throttling demonstrably scales frequency based on load.
+- adaptive throttling demonstrably scales frequency based on load,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 8. Phase 4 — Public API and Filesystem Services
 
@@ -358,7 +362,8 @@ Export a stable API for other extensions without giving them direct access to th
 - it receives state change events,
 - it can create a telemetry subscription,
 - it can use the basic filesystem API,
-- all API methods are covered by integration tests.
+- all API methods are covered by integration tests,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 9. Phase 5 — Cockpit Panel and UX
 
@@ -441,7 +446,8 @@ Build the main product UX on top of the finished runtime.
 - active brick matches the tabs,
 - discovery tab supports connect/focus/forget,
 - config mode changes runtime data through defined actions,
-- all smoke tests pass.
+- all smoke tests pass,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 10. Phase 6 — Persistence, Favorites, and Remembered Devices
 
@@ -495,7 +501,8 @@ Complete long-term Cockpit behavior across restarts.
 - remembered bricks are visible even offline,
 - forget correctly removes both local and OS metadata where the provider supports it,
 - auto-connect suppression works correctly after explicit disconnect,
-- all persistence operations are covered by unit tests.
+- all persistence operations are covered by unit tests,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 11. Phase 7 — Hardening, Tests, and Release Discipline
 
@@ -568,7 +575,8 @@ Regularly:
 - main lifecycle flows are covered by tests,
 - stress tests confirm stability under high load,
 - the team has a clear operational discipline,
-- release checklist is documented and followed.
+- release checklist is documented and followed,
+- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
 
 ## 12. Recommended Implementation Order
 
