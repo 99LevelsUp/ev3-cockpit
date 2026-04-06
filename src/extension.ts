@@ -6,11 +6,9 @@ import {
 } from './transports';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
-import { OutputChannelLogger } from './diagnostics';
 
 export function activate(context: vscode.ExtensionContext): void {
-	const channel = vscode.window.createOutputChannel('EVƎ Cockpit');
-	const logger = new OutputChannelLogger(channel);
+	const logger = vscode.window.createOutputChannel('EVƎ Cockpit', { log: true });
 	context.subscriptions.push(logger);
 
 	logger.info('EVƎ Cockpit activated');
