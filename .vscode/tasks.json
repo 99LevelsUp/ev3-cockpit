@@ -2,10 +2,10 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "build:dev",
 			"type": "npm",
-			"script": "watch:bundle",
-			"problemMatcher": "$tsc-watch",
-			"isBackground": true,
+			"script": "build:dev",
+			"problemMatcher": "$ts",
 			"presentation": {
 				"reveal": "never"
 			},

@@ -136,6 +136,49 @@ Supported providers:
 - `tcp`,
 - `bt`.
 
+#### 4.1.1 Internal Structure
+
+Physical transport providers (USB, TCP, BT) share a layered internal structure.
+Mock bypasses the protocol and adapter layers because it simulates responses directly.
+
+```mermaid
+graph LR
+    subgraph TransportProvider
+        CMD[BrickCommand]
+        CMD --> ENC[ev3Commands]
+        ENC --> PKT[ev3Packet]
+        PKT --> ADP[TransportAdapter]
+        ADP -->|raw bytes| BRICK[EV3 Brick]
+        BRICK -->|raw bytes| ADP
+        ADP --> DPKT[ev3Packet decode]
+        DPKT --> RESP[ev3Responses]
+        RESP --> RES[BrickResponse]
+    end
+```
+
+**Protocol layer** (`src/protocol/`): Pure functions with no I/O.
+
+- `ev3Bytecode` — encoding primitives (local constants, global variables, integer encoding).
+- `ev3Packet` — packet framing: `[length:2LE][counter:2LE][type:1B][payload]`. Encode and decode.
+- `ev3Commands` — maps `BrickCommand` to EV3 direct/system command bytecode.
+- `ev3Responses` — parses raw EV3 reply bytes into typed `BrickResponse`.
+
+**Transport adapter** (`TransportAdapter` interface): Raw I/O only.
+
+- `open()` — establish the physical connection.
+- `close()` — release the physical connection.
+- `sendPacket(packet)` — send framed bytes, receive framed reply.
+
+Concrete adapters:
+
+- `UsbHidAdapter` — USB HID via `node-hid`. 1025-byte reports (1 byte report ID + 1024 payload).
+- `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
+- `BtRfcommAdapter` — Bluetooth RFCOMM. Multi-backend on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus.
+
+**Transport guard**: Rate limiting (≤ 10 commands/second per brick), firmware freeze protection (one active transport at a time, 2-second switch cooldown), degradation tracking.
+
+**BT connection queue**: Windows RFCOMM allows only one active connection at a time. A serialized queue with 15-second inter-connection cooldown and exponential backoff on errors enforces this constraint.
+
 ### 4.2 Presence Aggregator
 
 The Presence Aggregator unifies discovery output from all providers into a single discovery model.

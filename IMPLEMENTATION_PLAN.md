@@ -15,22 +15,27 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0 is complete. All foundation work is done; implementation of Phase 1 starts from here.
+Phase 0, Phase 1, and Phase 2 are complete. Implementation of Phase 3 starts from here.
 
 - extension skeleton ✅
 - build and lint pipeline ✅
 - test runner infrastructure ✅
 - base folder structure (`src/contracts/`, etc.) ✅
 - shared contracts, error model, and event infrastructure ✅
-- implementation of transports, runtime, API, and UI ⬜ starts in Phase 1
+- EV3 protocol layer (bytecode, packets, commands, responses) ✅
+- transport adapters and providers (USB, TCP, BT) ✅
+- transport guard, BT connection queue, pending reply utilities ✅
+- session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
+- 197 unit tests passing ✅
+- implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
 
 | Phase | Name | Status |
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
-| 1 | Transport contracts and discovery | 🔄 in progress |
-| 2 | Session runtime and lifecycle | ⬜ planned |
+| 1 | Transport contracts and discovery | ✅ done |
+| 2 | Session runtime and lifecycle | ✅ done |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
 | 4 | Public API and filesystem services | ⬜ planned |
 | 5 | Cockpit panel and UX | ⬜ planned |
@@ -146,31 +151,48 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.6.7 Mock loss and recovery simulation (configurable disappearance/reappearance)
   - [x] 1.6.8 Mock filesystem (in-memory file tree for API testing)
   - [x] 1.6.9 Mock brickKey generation (`mock:<id>` from config)
-- [ ] **1.7 USB Transport (initial)**
-  - [ ] 1.7.1 Library selection and platform testing (Windows + Linux)
-  - [ ] 1.7.2 USB device enumeration for EV3
-  - [ ] 1.7.3 Implement `discover()` and `connect()`
-  - [ ] 1.7.4 Basic `send()` for command execution
-  - [ ] 1.7.5 brickKey from serial number
-- [ ] **1.8 TCP Transport (initial)**
-  - [ ] 1.8.1 mDNS / network discovery strategy
-  - [ ] 1.8.2 TCP socket connection to EV3 brick
-  - [ ] 1.8.3 Implement `discover()` and `connect()`
-  - [ ] 1.8.4 Basic `send()` for command execution
-  - [ ] 1.8.5 brickKey from IP address or mDNS hostname
-- [ ] **1.9 BT Transport (initial)**
-  - [ ] 1.9.1 Library selection and platform testing (Windows + Linux)
-  - [ ] 1.9.2 BT device enumeration for EV3
-  - [ ] 1.9.3 Implement `discover()` and `connect()`
-  - [ ] 1.9.4 Basic `send()` for command execution
-  - [ ] 1.9.5 brickKey from MAC address
-  - [ ] 1.9.6 Signal strength reporting where available
-- [x] **1.10 Unit tests**
-  - [x] 1.10.1 TransportProvider contract compliance tests (run against Mock)
-  - [x] 1.10.2 Discovery scheduler tests (timing, dedup, timeout)
-  - [x] 1.10.3 Presence Aggregator state machine tests
-  - [x] 1.10.4 Stable ordering tests
-  - [x] 1.10.5 Mock configuration loading tests
+- [x] **1.7 EV3 Protocol layer**
+  - [x] 1.7.1 Bytecode encoding primitives (`ev3Bytecode.ts` — lc0/lc1/lc2/lcs, gv0/gv1, uint16le/uint32le, concatBytes)
+  - [x] 1.7.2 Packet framing (`ev3Packet.ts` — encode/decode, command/reply type constants)
+  - [x] 1.7.3 Command builder (`ev3Commands.ts` — BrickCommand → { type, payload } for each kind)
+  - [x] 1.7.4 Response parser (`ev3Responses.ts` — raw reply → BrickResponse for each kind)
+  - [x] 1.7.5 Unit tests for encoding/decoding round-trips
+- [x] **1.8 Transport adapter interface and constants**
+  - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `sendPacket`)
+  - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
+  - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
+- [x] **1.9 USB Transport**
+  - [x] 1.9.1 `UsbHidAdapter` — node-hid, VID 0x0694 PID 0x0005, 1025-byte HID reports
+  - [x] 1.9.2 `UsbTransportProvider` — USB discovery (device enumeration), compose adapter + protocol
+  - [x] 1.9.3 brickKey from serial number (`usb:<serial>`)
+  - [x] 1.9.4 Lazy-load node-hid with try-catch fallback
+- [x] **1.10 TCP Transport**
+  - [x] 1.10.1 `TcpSocketAdapter` — TCP socket via Node.js `net`, length-prefixed stream
+  - [x] 1.10.2 `TcpTransportProvider` — UDP beacon discovery (port 3015, `dgram`), TCP connection (port 5555), VMTP1.0 unlock handshake
+  - [x] 1.10.3 brickKey from serial number or IP (`tcp:<serial>` or `tcp:<ip>`)
+  - [x] 1.10.4 Hybrid beacon + direct-IP recovery
+- [x] **1.11 BT Transport**
+  - [x] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator
+  - [x] 1.11.2 `BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket (Windows, requires dotnet)
+  - [x] 1.11.3 `BtWinsockBackend` — koffi FFI to ws2_32.dll AF_BTH (Windows, pure JS)
+  - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
+  - [x] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
+  - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
+  - [x] 1.11.7 `BtTransportProvider` — BT discovery (koffi bthprops.cpl + registry on Windows), compose adapter + protocol
+  - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
+  - [x] 1.11.9 Signal strength reporting where available
+  - [x] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
+- [x] **1.12 Transport unit tests**
+  - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
+  - [x] 1.12.2 Transport guard rate limiting tests
+  - [x] 1.12.3 BT connection queue serialization tests
+  - [x] 1.12.4 Contract compliance tests for USB/TCP/BT (using real bricks where available)
+- [x] **1.13 Unit tests (Mock and infrastructure)**
+  - [x] 1.13.1 TransportProvider contract compliance tests (run against Mock)
+  - [x] 1.13.2 Discovery scheduler tests (timing, dedup, timeout)
+  - [x] 1.13.3 Presence Aggregator state machine tests
+  - [x] 1.13.4 Stable ordering tests
+  - [x] 1.13.5 Mock configuration loading tests
 
 ### Definition of Done
 
@@ -188,50 +210,50 @@ Build the source of truth for connected bricks.
 
 ### Tasks
 
-- [ ] **2.1 Session data model**
-  - [ ] 2.1.1 `ConnectedSession` implementation with all fields from contracts
-  - [ ] 2.1.2 Session identity (brickKey + transport pair)
-  - [ ] 2.1.3 Session metadata (display name, last error, heartbeat state)
-- [ ] **2.2 Session Manager**
-  - [ ] 2.2.1 Session store (map of active sessions)
-  - [ ] 2.2.2 `connect(brickKey, transport)` flow — create session, call provider, transition states
-  - [ ] 2.2.3 `disconnect(brickKey)` flow — cleanup subscriptions, call provider, remove session
-  - [ ] 2.2.4 State machine enforcement (`connecting` → `connected` → `reconnecting` → `disconnected`)
-  - [ ] 2.2.5 Guard: only Cockpit UI can trigger connect/disconnect
-  - [ ] 2.2.6 Event emission on session state changes
-- [ ] **2.3 Foreground / background switching**
-  - [ ] 2.3.1 `setActiveBrick(brickKey)` — promote to foreground, demote previous
-  - [ ] 2.3.2 `clearActiveBrick()` — no brick is foreground (discovery tab shown)
-  - [ ] 2.3.3 Activity mode transitions (`foreground` ↔ `subscribed` ↔ `minimal`)
-  - [ ] 2.3.4 At most one foreground brick invariant
-- [ ] **2.4 Heartbeat**
-  - [ ] 2.4.1 Periodic heartbeat loop per connected session
-  - [ ] 2.4.2 Configurable heartbeat interval
-  - [ ] 2.4.3 Timeout detection — transition to `reconnecting` on missed heartbeats
-  - [ ] 2.4.4 Heartbeat state tracking in session model
-- [ ] **2.5 Reconnect logic**
-  - [ ] 2.5.1 Automatic reconnect on transport failure
-  - [ ] 2.5.2 Exponential backoff strategy
-  - [ ] 2.5.3 Maximum retry count or timeout
-  - [ ] 2.5.4 Transition to `disconnected` on permanent failure
-  - [ ] 2.5.5 Explicit disconnect always takes precedence over reconnect
-- [ ] **2.6 Command queue per brick**
-  - [ ] 2.6.1 FIFO queue implementation
-  - [ ] 2.6.2 Shared across all transport providers for the same brick
-  - [ ] 2.6.3 Queue depth tracking (for telemetry throttling in Phase 3)
-  - [ ] 2.6.4 Queue drain on disconnect
-- [ ] **2.7 Auto-connect suppression**
-  - [ ] 2.7.1 Track explicit disconnect per brick within the session
-  - [ ] 2.7.2 Suppress auto-connect for explicitly disconnected bricks
-  - [ ] 2.7.3 Reset suppression on new VS Code session
-- [ ] **2.8 Unit tests**
-  - [ ] 2.8.1 Session state machine transition tests
-  - [ ] 2.8.2 Connect / disconnect lifecycle tests (using Mock)
-  - [ ] 2.8.3 Multi-brick concurrent session tests
-  - [ ] 2.8.4 Foreground switching tests
-  - [ ] 2.8.5 Heartbeat timeout and reconnect tests
-  - [ ] 2.8.6 Explicit disconnect vs reconnect precedence tests
-  - [ ] 2.8.7 Command queue ordering and drain tests
+- [x] **2.1 Session data model**
+  - [x] 2.1.1 `ConnectedSession` implementation with all fields from contracts
+  - [x] 2.1.2 Session identity (brickKey + transport pair)
+  - [x] 2.1.3 Session metadata (display name, last error, heartbeat state)
+- [x] **2.2 Session Manager**
+  - [x] 2.2.1 Session store (map of active sessions)
+  - [x] 2.2.2 `connect(brickKey, transport)` flow — create session, call provider, transition states
+  - [x] 2.2.3 `disconnect(brickKey)` flow — cleanup subscriptions, call provider, remove session
+  - [x] 2.2.4 State machine enforcement (`connecting` → `connected` → `reconnecting` → `disconnected`)
+  - [x] 2.2.5 Guard: only Cockpit UI can trigger connect/disconnect
+  - [x] 2.2.6 Event emission on session state changes
+- [x] **2.3 Foreground / background switching**
+  - [x] 2.3.1 `setActiveBrick(brickKey)` — promote to foreground, demote previous
+  - [x] 2.3.2 `clearActiveBrick()` — no brick is foreground (discovery tab shown)
+  - [x] 2.3.3 Activity mode transitions (`foreground` ↔ `subscribed` ↔ `minimal`)
+  - [x] 2.3.4 At most one foreground brick invariant
+- [x] **2.4 Heartbeat**
+  - [x] 2.4.1 Periodic heartbeat loop per connected session
+  - [x] 2.4.2 Configurable heartbeat interval
+  - [x] 2.4.3 Timeout detection — transition to `reconnecting` on missed heartbeats
+  - [x] 2.4.4 Heartbeat state tracking in session model
+- [x] **2.5 Reconnect logic**
+  - [x] 2.5.1 Automatic reconnect on transport failure
+  - [x] 2.5.2 Exponential backoff strategy
+  - [x] 2.5.3 Maximum retry count or timeout
+  - [x] 2.5.4 Transition to `disconnected` on permanent failure
+  - [x] 2.5.5 Explicit disconnect always takes precedence over reconnect
+- [x] **2.6 Command queue per brick**
+  - [x] 2.6.1 FIFO queue implementation
+  - [x] 2.6.2 Shared across all transport providers for the same brick
+  - [x] 2.6.3 Queue depth tracking (for telemetry throttling in Phase 3)
+  - [x] 2.6.4 Queue drain on disconnect
+- [x] **2.7 Auto-connect suppression**
+  - [x] 2.7.1 Track explicit disconnect per brick within the session
+  - [x] 2.7.2 Suppress auto-connect for explicitly disconnected bricks
+  - [x] 2.7.3 Reset suppression on new VS Code session
+- [x] **2.8 Unit tests**
+  - [x] 2.8.1 Session state machine transition tests
+  - [x] 2.8.2 Connect / disconnect lifecycle tests (using Mock)
+  - [x] 2.8.3 Multi-brick concurrent session tests
+  - [x] 2.8.4 Foreground switching tests
+  - [x] 2.8.5 Heartbeat timeout and reconnect tests
+  - [x] 2.8.6 Explicit disconnect vs reconnect precedence tests
+  - [x] 2.8.7 Command queue ordering and drain tests
 
 ### Definition of Done
 
