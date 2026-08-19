@@ -167,7 +167,8 @@ graph LR
 
 - `open()` — establish the physical connection.
 - `close()` — release the physical connection.
-- `sendPacket(packet)` — send framed bytes, receive framed reply.
+- `send(packet, options?)` — send framed bytes, receive framed reply. `options` carries
+  `timeoutMs`, an `AbortSignal`, and the expected message counter.
 
 Concrete adapters:
 
@@ -302,7 +303,9 @@ Transport-specific `brickKey` definitions:
 
 - **USB**: Serial number (or VID:PID:Serial).
 - **BT**: MAC address.
-- **TCP**: IP address or mDNS hostname.
+- **TCP**: Serial number reported by the brick, falling back to the IP address when the
+  brick reports no serial. Keying on IP alone would break every TCP favorite on a DHCP
+  lease change.
 - **Mock**: Synthetic identifier from the JSON configuration (e.g., `mock:<id>` where `id` is defined in the config file).
 
 ### 5.2 Connected Session
@@ -357,7 +360,9 @@ Presence states:
 - `remembered` — the system knows about the brick from OS evidence or Cockpit persistence, but the brick is not currently visible. It exists in the list as an offline entry.
 - `available` — the brick is currently visible in discovery.
 - `unavailable` — the brick was visible but has temporarily disappeared; the system waits for it to return.
-- `removed` — the brick has disappeared definitively (timeout of `unavailable`); the record is discarded.
+- `removed` — the brick has disappeared definitively (timeout of `unavailable`). The entry is
+  retained for the rest of the session so that rediscovery stays distinguishable from a first
+  discovery — the two drive different auto-connect triggers.
 
 `remembered` and `removed` are equivalent from the user's perspective: the brick "does not exist". The difference is technical — `remembered` originates from evidence, `removed` from a timeout.
 
@@ -428,7 +433,8 @@ stateDiagram-v2
     Remembered --> Available : discovered
     Available --> Unavailable : timeout
     Unavailable --> Available : rediscovered
-    Unavailable --> [*] : removal timeout
+    Unavailable --> Removed : removal timeout
+    Removed --> Available : rediscovered
 
     Available --> Connecting : connect (manual or auto-connect favorite)
     Connecting --> BrickView : success
@@ -695,7 +701,8 @@ Each connected brick has its own tab.
 
 - left: icons of available transports for the brick (not necessarily the one it is connected through),
 - center: battery state,
-- right: star — **clickable**, toggles `favorite` on/off; shown only when `favorite: true`.
+- right: star — **clickable**, toggles `favorite` on/off; always shown, filled when
+  `favorite: true` and outlined otherwise.
 
 **Tab content — normal mode:**
 

@@ -203,7 +203,8 @@ Cockpit always has at most one active brick:
 - `brickKey` is a stable internal identifier within a given transport:
     - **USB**: Serial number (or VID:PID:Serial).
     - **BT**: MAC address.
-    - **TCP**: IP address or mDNS hostname.
+    - **TCP**: Serial number reported by the brick, falling back to the IP address when the
+      brick reports no serial.
 - `favorite` status and `auto-connect` are bound to the `(brickKey, transport)` pair.
 - Marking a brick as a favorite on one transport (e.g., BT) does not trigger auto-connect on another (e.g., USB).
 

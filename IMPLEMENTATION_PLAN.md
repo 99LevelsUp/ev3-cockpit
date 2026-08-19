@@ -1,7 +1,7 @@
 # EVƎ Cockpit - Implementation Plan
 
 > Version: 2026-04-02
-> Repository state: after cleanup, only documentation remains; implementation starts fresh from scratch
+> Repository state: Phases 0-2 implemented; Phase 3 is the next work item.
 
 This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete implementation order.
 
@@ -15,7 +15,10 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0, Phase 1, and Phase 2 are complete. Implementation of Phase 3 starts from here.
+Phase 0 is complete. Phases 1 and 2 are substantially complete but carry named gaps
+(1.6.10 mock config loading, 1.8.4 transport guard wiring, 1.8.5 send timeouts, 1.11 BT
+backends and discovery, 2.8.5/2.8.6 reconnect tests). Phase 3 work starts from here; the
+listed gaps are carried, not closed.
 
 - extension skeleton ✅
 - build and lint pipeline ✅
@@ -23,10 +26,10 @@ Phase 0, Phase 1, and Phase 2 are complete. Implementation of Phase 3 starts fro
 - base folder structure (`src/contracts/`, etc.) ✅
 - shared contracts, error model, and event infrastructure ✅
 - EV3 protocol layer (bytecode, packets, commands, responses) ✅
-- transport adapters and providers (USB, TCP, BT) ✅
-- transport guard, BT connection queue, pending reply utilities ✅
+- transport adapters and providers (USB, TCP; BT is SPP-only — see 1.11) ✅
+- transport guard (built, not yet wired into any provider — see 1.8.4), BT connection queue, pending reply utilities ✅
 - session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- 197 unit tests passing ✅
+- 186 unit tests + 3 extension-host integration tests passing ✅
 - implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
@@ -34,8 +37,8 @@ Phase 0, Phase 1, and Phase 2 are complete. Implementation of Phase 3 starts fro
 | Phase | Name | Status |
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
-| 1 | Transport contracts and discovery | ✅ done |
-| 2 | Session runtime and lifecycle | ✅ done |
+| 1 | Transport contracts and discovery | ⚠ gaps (1.6.10, 1.8.4, 1.8.5, 1.11) |
+| 2 | Session runtime and lifecycle | ⚠ gaps (2.8.5, 2.8.6) |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
 | 4 | Public API and filesystem services | ⬜ planned |
 | 5 | Cockpit panel and UX | ⬜ planned |
@@ -65,6 +68,7 @@ Create a clean technical foundation on which further implementations can be laye
   - [x] 0.3.2 VS Code extension host test runner (`npm run test:host`)
   - [x] 0.3.3 CI pipeline script (`npm run test:ci`)
   - [x] 0.3.4 Placeholder Playwright setup (`npm run test:pw:smoke`)
+  - [x] 0.3.5 `npm run test-smoke` — the per-change gate named in REQUIREMENTS §15 and 7.7.1
 - [x] **0.4 Base folder structure**
   - [x] 0.4.1 `src/contracts/` — shared types and contracts
   - [x] 0.4.2 `src/runtime/` — session manager, presence aggregator
@@ -103,7 +107,7 @@ Create a clean technical foundation on which further implementations can be laye
 - `npm run compile` and `npm run lint` pass with zero errors,
 - shared contracts exist in `src/contracts/` with no dependency on UI or runtime,
 - unit tests validate basic type correctness,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 5. Phase 1 — Transport Contracts and Unified Discovery
 
@@ -141,9 +145,10 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.5.4 Stable ordering algorithm (by transport group, then by signal or brickKey)
   - [x] 1.5.5 Event emission on presence state changes
   - [x] 1.5.6 Read model for the discovery list (single observable collection)
-- [x] **1.6 Mock Transport**
+- [ ] **1.6 Mock Transport** — config loading outstanding (1.6.10)
   - [x] 1.6.1 JSON configuration file schema (brick identity, sensors, motors, dynamics)
-  - [x] 1.6.2 Configuration file loading and validation
+  - [x] 1.6.2 Configuration schema validation (`validateMockConfig`)
+  - [ ] 1.6.10 Load the mock configuration from a workspace JSON file (REQUIREMENTS §13) — today `extension.ts` always uses `DEFAULT_MOCK_CONFIG`
   - [x] 1.6.3 Mock discovery (enumerate bricks from config)
   - [x] 1.6.4 Mock connect / disconnect
   - [x] 1.6.5 Mock value dynamics (static values, sine/triangle/square oscillators)
@@ -157,10 +162,12 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.3 Command builder (`ev3Commands.ts` — BrickCommand → { type, payload } for each kind)
   - [x] 1.7.4 Response parser (`ev3Responses.ts` — raw reply → BrickResponse for each kind)
   - [x] 1.7.5 Unit tests for encoding/decoding round-trips
-- [x] **1.8 Transport adapter interface and constants**
-  - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `sendPacket`)
+- [ ] **1.8 Transport adapter interface and constants** — guard unwired, send timeouts unimplemented
+  - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
   - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
+  - [ ] 1.8.4 Wire `TransportGuard` into the USB/TCP/BT providers — it is currently instantiated only in tests, so DESIGN §4.1 rate limiting is not enforced anywhere
+  - [ ] 1.8.5 Implement `SendOptions.timeoutMs` and `signal` in every adapter — both are declared in `transportAdapter.ts` and honoured by none, so a silent brick blocks the per-brick queue and its own heartbeat probe forever
 - [x] **1.9 USB Transport**
   - [x] 1.9.1 `UsbHidAdapter` — node-hid, VID 0x0694 PID 0x0005, 1025-byte HID reports
   - [x] 1.9.2 `UsbTransportProvider` — USB discovery (device enumeration), compose adapter + protocol
@@ -171,17 +178,19 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.10.2 `TcpTransportProvider` — UDP beacon discovery (port 3015, `dgram`), TCP connection (port 5555), VMTP1.0 unlock handshake
   - [x] 1.10.3 brickKey from serial number or IP (`tcp:<serial>` or `tcp:<ip>`)
   - [x] 1.10.4 Hybrid beacon + direct-IP recovery
-- [x] **1.11 BT Transport**
-  - [x] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator
-  - [x] 1.11.2 `BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket (Windows, requires dotnet)
-  - [x] 1.11.3 `BtWinsockBackend` — koffi FFI to ws2_32.dll AF_BTH (Windows, pure JS)
+- [ ] **1.11 BT Transport** — SPP backend only; discovery not wired
+  - [ ] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator (no such file or symbol exists)
+  - [ ] 1.11.2 `BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket (Windows, requires dotnet)
+  - [ ] 1.11.3 `BtWinsockBackend` — koffi FFI to ws2_32.dll AF_BTH (Windows, pure JS)
   - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
-  - [x] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
+  - [ ] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
-  - [x] 1.11.7 `BtTransportProvider` — BT discovery (koffi bthprops.cpl + registry on Windows), compose adapter + protocol
+  - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
+  - [ ] 1.11.7a BT discovery implementation (koffi bthprops.cpl + registry on Windows) — `extension.ts` registers the provider with no discovery function, so BT discovery returns an empty list
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
-  - [x] 1.11.9 Signal strength reporting where available
-  - [x] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
+  - [ ] 1.11.9 Signal strength reporting where available (`signalInfo` is read for ordering, never populated)
+  - [ ] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
+  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it
 - [x] **1.12 Transport unit tests**
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
@@ -200,7 +209,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
 - the discovery list is stable and correctly ordered,
 - mock transport passes all contract compliance tests,
 - presence state transitions are fully tested,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 6. Phase 2 — Session Runtime and Lifecycle
 
@@ -217,7 +226,8 @@ Build the source of truth for connected bricks.
 - [x] **2.2 Session Manager**
   - [x] 2.2.1 Session store (map of active sessions)
   - [x] 2.2.2 `connect(brickKey, transport)` flow — create session, call provider, transition states
-  - [x] 2.2.3 `disconnect(brickKey)` flow — cleanup subscriptions, call provider, remove session
+  - [x] 2.2.3 `disconnect(brickKey)` flow — call provider, drain the command queue, remove session
+        (subscription teardown is deferred: the registry is 3.3.5 and the subscribe API is 4.5)
   - [x] 2.2.4 State machine enforcement (`connecting` → `connected` → `reconnecting` → `disconnected`)
   - [x] 2.2.5 Guard: only Cockpit UI can trigger connect/disconnect
   - [x] 2.2.6 Event emission on session state changes
@@ -246,13 +256,13 @@ Build the source of truth for connected bricks.
   - [x] 2.7.1 Track explicit disconnect per brick within the session
   - [x] 2.7.2 Suppress auto-connect for explicitly disconnected bricks
   - [x] 2.7.3 Reset suppression on new VS Code session
-- [x] **2.8 Unit tests**
+- [ ] **2.8 Unit tests** — reconnect and disconnect-precedence tests missing
   - [x] 2.8.1 Session state machine transition tests
   - [x] 2.8.2 Connect / disconnect lifecycle tests (using Mock)
   - [x] 2.8.3 Multi-brick concurrent session tests
   - [x] 2.8.4 Foreground switching tests
-  - [x] 2.8.5 Heartbeat timeout and reconnect tests
-  - [x] 2.8.6 Explicit disconnect vs reconnect precedence tests
+  - [ ] 2.8.5 Heartbeat timeout and reconnect tests (only the heartbeat restart regression exists)
+  - [ ] 2.8.6 Explicit disconnect vs reconnect precedence tests
   - [x] 2.8.7 Command queue ordering and drain tests
 
 ### Definition of Done
@@ -260,9 +270,10 @@ Build the source of truth for connected bricks.
 - multiple bricks can be connected simultaneously,
 - switching the active brick does not interrupt other sessions,
 - reconnecting one brick does not break others,
-- explicit disconnect cleanly terminates all subscriptions,
+- explicit disconnect drains the command queue and removes the session
+  (subscription teardown becomes testable in Phase 4 and is that phase's gate),
 - all state transitions are covered by unit tests,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 7. Phase 3 — Telemetry and Adaptive Throttling
 
@@ -316,9 +327,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 - foreground brick has the fastest telemetry,
 - subscribed brick receives telemetry only while a subscription is active,
 - minimal brick maintains only heartbeat and reconnect,
-- Cockpit remains responsive even with concurrent subscriptions,
+- the telemetry scheduler sustains concurrent per-brick subscriptions in the multi-brick
+  test (3.7.6) without starving the foreground loop,
 - adaptive throttling demonstrably scales frequency based on load,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 8. Phase 4 — Public API and Filesystem Services
 
@@ -385,7 +397,7 @@ Export a stable API for other extensions without giving them direct access to th
 - it can create a telemetry subscription,
 - it can use the basic filesystem API,
 - all API methods are covered by integration tests,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 9. Phase 5 — Cockpit Panel and UX
 
@@ -469,7 +481,7 @@ Build the main product UX on top of the finished runtime.
 - discovery tab supports connect/focus/forget,
 - config mode changes runtime data through defined actions,
 - all smoke tests pass,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 10. Phase 6 — Persistence, Favorites, and Remembered Devices
 
@@ -525,7 +537,7 @@ Complete long-term Cockpit behavior across restarts.
 - forget correctly removes both local and OS metadata where the provider supports it,
 - auto-connect suppression works correctly after explicit disconnect,
 - all persistence operations are covered by unit tests,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 11. Phase 7 — Hardening, Tests, and Release Discipline
 
@@ -599,7 +611,7 @@ Regularly:
 - stress tests confirm stability under high load,
 - the team has a clear operational discipline,
 - release checklist is documented and followed,
-- **antipattern cleanup**: scan codebase for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.) and fix all detected issues until none remain.
+- **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
 ## 12. Recommended Implementation Order
 
