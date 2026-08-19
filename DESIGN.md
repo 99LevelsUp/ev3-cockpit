@@ -546,6 +546,13 @@ Categories are an explicit part of the public API and internal scheduling. A dep
 
 ### 9.2 Foreground Telemetry
 
+**Refresh budget.** The foreground rate is bounded from below by the transport, not only from
+above by throttling: the per-brick queue is strictly serial and a full frame is four round
+trips, so at the measured `COMMAND_RTT_MS` a naive implementation lands near 0.5 Hz on USB,
+0.25 Hz on TCP and 0.125 Hz on BT. Phase 3 must state a target and a floor per transport, and
+the panel must show a degraded-telemetry indicator below the floor rather than animating
+widgets that silently stop tracking.
+
 Foreground telemetry is for the active brick in the panel only.
 
 Contains:

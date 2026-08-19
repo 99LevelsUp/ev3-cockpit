@@ -124,7 +124,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.1.4 `send(brickKey, command)` — sends a command to a connected brick
   - [x] 1.1.5 `recover(brickKey)` — attempts to re-establish a lost connection
   - [x] 1.1.6 `forget(brickKey)` — removes OS-level evidence where applicable (optional)
-  - [x] 1.1.7 Transport capability flags (supports forget, supports signal info, etc.)
+  - [ ] 1.1.7 Transport capability flags. `TransportCapabilities` carries `supportsSignalInfo` only; `forget` support is inferred from optional-method presence, which 6.6.5 requires as an explicit flag
 - [x] **1.2 DiscoveryItem data model**
   - [x] 1.2.1 Implement `DiscoveryItem` from contracts with all required fields
   - [x] 1.2.2 Transport-specific metadata extensions
@@ -166,6 +166,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
   - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
+  - [ ] 1.8.4a Decide whether exceeding the rate limit rejects or applies backpressure. `checkRateLimit()` throws, and DESIGN §4.5 exempts explicit commands from throttling — so a chunked filesystem upload or a burst of config-mode writes would fail with an error rather than queue. No layer currently owns staying under the firmware-safety budget
   - [ ] 1.8.4 Wire `TransportGuard` into the USB/TCP/BT providers — it is currently instantiated only in tests, so DESIGN §4.1 rate limiting is not enforced anywhere
   - [ ] 1.8.5 Implement `SendOptions.timeoutMs` and `signal` in every adapter — both are declared in `transportAdapter.ts` and honoured by none, so a silent brick blocks the per-brick queue and its own heartbeat probe forever
 - [x] **1.9 USB Transport**
@@ -286,6 +287,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 
 - [ ] **3.1 Telemetry category definitions**
   - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
+  - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract
+  - [ ] 3.1.5 Batched or differential foreground read. A frame today costs four serial round trips (`ports`, `battery`, `buttons`, `info`) through a strictly serial per-brick queue: ~2 s on USB, ~4 s on TCP, ~8 s on BT at the measured `COMMAND_RTT_MS`. DESIGN §12.2's gyro arcs and distance bars are unusable at that rate
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
   - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
 - [ ] **3.2 Telemetry data models**
@@ -302,7 +305,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
   - [ ] 3.3.4 Mode switching on foreground/background transitions
   - [ ] 3.3.5 Subscription registry — track which categories are subscribed per brick
-- [ ] **3.4 Adaptive Throttling**
+- [ ] **3.4 Adaptive Throttling** — **gated**: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, reduce 3.4 to a fixed per-mode interval table plus the diagnostic readout and revisit after the Phase 7 stress tests
   - [ ] 3.4.1 Response latency measurement per command
   - [ ] 3.4.2 Queue depth monitoring from the command queue
   - [ ] 3.4.3 Frequency scaling algorithm (increase interval when latency/depth grows)
