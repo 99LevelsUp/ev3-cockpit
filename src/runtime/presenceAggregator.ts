@@ -145,15 +145,24 @@ export class PresenceAggregator implements vscode.Disposable {
 		this.emitListChanged();
 	}
 
-	/** Overlay incoming item with locally-owned metadata (favorite, connected, remembered). */
+	/**
+	 * Overlay incoming provider data with the metadata this list owns.
+	 *
+	 * These three fields are local state, not transport state: providers report them
+	 * as plain `false` and only {@link updateBrick} is allowed to change them. The
+	 * previous `existing.x ?? incoming.x` spelling read as "take the incoming value
+	 * when the local one is unset", but all three are required booleans, so `??`
+	 * never fell through and the local value always won. Same behaviour, stated
+	 * outright instead of resting on a coincidence.
+	 */
 	private mergeLocalMetadata(brickKey: BrickKey, incoming: DiscoveryItem): DiscoveryItem {
 		const existing = this.items.get(brickKey);
 		if (!existing) { return incoming; }
 		return {
 			...incoming,
-			remembered: existing.remembered ?? incoming.remembered,
-			favorite: existing.favorite ?? incoming.favorite,
-			connected: existing.connected ?? incoming.connected,
+			remembered: existing.remembered,
+			favorite: existing.favorite,
+			connected: existing.connected,
 		};
 	}
 

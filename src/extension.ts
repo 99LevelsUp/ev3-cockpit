@@ -5,6 +5,7 @@ import {
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider,
 } from './transports';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
+import { ConnectionState } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -67,6 +68,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	aggregator.onPresenceChanged(e => {
 		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState} → ${e.currentState}`);
 	});
+
+	// The discovery list owns `connected` locally, and nothing was telling it. Without
+	// this the flag stayed false for every brick no matter how many were connected --
+	// `updateBrick` had no caller outside the tests.
+	services.add(sessionManager.onSessionStateChange(e => {
+		aggregator.updateBrick(e.brickKey, {
+			connected: e.newState === ConnectionState.Connected,
+		});
+	}));
 
 	// Start discovery polling
 	scheduler.start();

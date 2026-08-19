@@ -323,3 +323,29 @@ describe('validateMockConfig', () => {
 		}), /battery\.level/);
 	});
 });
+
+describe('MockTransportProvider -- loss simulation', () => {
+	it('rejects sends while the brick is in its hidden phase', async () => {
+		// Regression: loss simulation only skipped the brick in discover(), so a
+		// connected brick kept answering commands while "gone". The heartbeat never
+		// missed, which made loss and reconnect unreachable from the one transport
+		// the suite can actually drive.
+		const provider = new MockTransportProvider(makeConfig([{
+			id: 'ghost',
+			displayName: 'Ghost',
+			// visibleMs 0 keeps the brick hidden for the whole cycle, so the test is
+			// deterministic rather than racing a timer.
+			loss: { enabled: true, visibleMs: 0, hiddenMs: 10_000 },
+		}]));
+
+		const key = makeBrickKey(Transport.Mock, 'ghost');
+		await provider.connect(key);
+
+		const scan = await provider.discover();
+		assert.equal(scan.items.length, 0, 'a hidden brick must not appear in discovery');
+
+		await assert.rejects(() => provider.send(key, { kind: 'battery' }), /unreachable/);
+
+		provider.dispose();
+	});
+});

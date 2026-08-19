@@ -345,6 +345,14 @@ export class SessionManager implements vscode.Disposable {
 				? await provider.recover(brickKey)
 				: await provider.connect(brickKey);
 
+			// disconnect() may have run while recover() was in flight: it deletes the
+			// session, but `resources` is a captured reference that stays alive. Without
+			// this check the just-reopened physical connection would belong to nobody.
+			if (this.sessions.get(brickKey) !== resources || resources.entry.explicitlyDisconnected) {
+				try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+				return;
+			}
+
 			resources.entry.setHandle(handle);
 			resources.entry.transition(ConnectionState.Connected);
 			resources.reconnect.reset();

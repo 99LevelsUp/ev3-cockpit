@@ -37,7 +37,15 @@ export type BrickCommand =
 
 // ── Response types ───────────────────────────────────────────────────
 
-export interface BatteryResponse { readonly kind: 'battery'; readonly level: number; readonly voltage?: number }
+export interface BatteryResponse {
+	readonly kind: 'battery';
+	/** Charge level in percent (0-100). */
+	readonly level: number;
+	/** Battery voltage in volts, where the transport reports it. */
+	readonly voltage?: number;
+	/** Battery current draw in amps, where the transport reports it. */
+	readonly currentAmps?: number;
+}
 export interface PortsResponse { readonly kind: 'ports'; readonly motorPorts: PortState[]; readonly sensorPorts: PortState[] }
 export interface ButtonsResponse { readonly kind: 'buttons'; readonly state: Record<string, boolean> }
 export interface InfoResponse { readonly kind: 'info'; readonly displayName: string; readonly firmwareVersion?: string }

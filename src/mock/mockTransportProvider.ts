@@ -105,6 +105,13 @@ export class MockTransportProvider implements TransportProvider {
 
 		const now = Date.now();
 
+		// A brick in its hidden phase is gone from the user's point of view. Answering
+		// sends anyway meant the heartbeat never missed, so loss and reconnect were
+		// unreachable from the mock -- the one transport the tests can drive.
+		if (this.isHidden(state, now)) {
+			throw new TransportError(`Mock brick ${brickKey} is currently unreachable.`);
+		}
+
 		switch (command.kind) {
 		case 'battery':
 			return { kind: 'battery', level: state.config.battery.level, voltage: state.config.battery.voltage };

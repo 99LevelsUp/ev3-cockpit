@@ -20,6 +20,7 @@ import { CommandQueue } from '../runtime/commandQueue';
 import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { TransportProvider } from '../contracts/transport';
 import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
@@ -562,5 +563,96 @@ describe('SessionManager', () => {
 
 		manager.dispose();
 		assert.equal(manager.getAllSessions().length, 0);
+	});
+});
+
+// ===================================================================
+// SessionManager -- reconnect and disconnect precedence
+// ===================================================================
+
+/**
+ * Provider whose sends always fail (so the heartbeat misses) and whose recover()
+ * hangs until the test releases it. `openConnections` is the leak detector:
+ * connect and a released recover each open one, disconnect closes one.
+ */
+function createStallableProvider(): {
+	provider: TransportProvider;
+	openConnections: () => number;
+	recoverStarted: () => boolean;
+	releaseRecover: () => void;
+} {
+	let open = 0;
+	let started = false;
+	let release: (() => void) | undefined;
+
+	const provider: TransportProvider = {
+		transport: Transport.Mock,
+		capabilities: { supportsSignalInfo: false },
+		discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+		connect: (brickKey) => {
+			open += 1;
+			return Promise.resolve({ brickKey, transport: Transport.Mock });
+		},
+		recover: (brickKey) => new Promise((resolve) => {
+			started = true;
+			release = () => {
+				open += 1;
+				resolve({ brickKey, transport: Transport.Mock });
+			};
+		}),
+		disconnect: () => {
+			if (open > 0) { open -= 1; }
+			return Promise.resolve();
+		},
+		send: () => Promise.reject(new Error('brick gone')),
+		dispose: () => { /* nothing to release */ },
+	};
+
+	return {
+		provider,
+		openConnections: () => open,
+		recoverStarted: () => started,
+		releaseRecover: () => release?.(),
+	};
+}
+
+describe('SessionManager -- reconnect and disconnect precedence', () => {
+	it('explicit disconnect during an in-flight recover does not leak the connection', async () => {
+		// Regression: attemptReconnect captured `resources` and, after awaiting
+		// recover(), wrote to it without checking the session still existed. A
+		// disconnect landing inside that await left the reopened physical connection
+		// owned by nobody -- nothing would ever close it.
+		const stallable = createStallableProvider();
+		const reg = new ProviderRegistry();
+		reg.register(stallable.provider);
+
+		const manager = new SessionManager({
+			providerRegistry: reg,
+			heartbeatIntervalMs: 3000,
+			heartbeatMissThreshold: 1,
+			reconnectBaseMs: 20,
+			reconnectMaxMs: 50,
+			reconnectMaxAttempts: 5,
+		});
+
+		const key = makeBrickKey(Transport.Mock, 'stall');
+		await manager.connect(key, Transport.Mock, 'Stalling brick');
+		assert.equal(stallable.openConnections(), 1);
+
+		// Heartbeat misses, the session goes to reconnecting, recover() starts and hangs.
+		await waitFor(() => stallable.recoverStarted(), 8000);
+		assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Reconnecting);
+
+		await manager.disconnect(key);
+		assert.equal(manager.getSession(key), undefined);
+
+		// Recovery now completes, too late to matter.
+		stallable.releaseRecover();
+		await waitFor(() => stallable.openConnections() === 0, 4000);
+
+		assert.equal(stallable.openConnections(), 0, 'recovered connection was left open');
+		assert.equal(manager.getSession(key), undefined, 'disconnected session came back');
+
+		manager.dispose();
 	});
 });

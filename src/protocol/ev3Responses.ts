@@ -81,10 +81,14 @@ function parseBattery(payload: Uint8Array): BatteryResponse {
 	if (payload.length < 4) {
 		return { kind: 'battery', level: 0 };
 	}
-	const current = readFloat32le(payload, 0);
-	// Convert battery current to approximate percentage (EV3 range ~0.0 to ~0.5A)
-	const level = Math.round(Math.min(100, Math.max(0, current * 200)));
-	return { kind: 'battery', level, voltage: current };
+	const currentAmps = readFloat32le(payload, 0);
+	// The command asks for GET_IBATT, so this is current draw, not charge. Current
+	// tracks motor load rather than remaining capacity, which makes the level below
+	// an approximation at best: an idle brick reads near 0 and a loaded one reads
+	// high. Plan task 1.7.6 switches this to GET_LBATT once the subcode is confirmed
+	// against a real brick. Reporting it as `voltage` was simply the wrong unit.
+	const level = Math.round(Math.min(100, Math.max(0, currentAmps * 200)));
+	return { kind: 'battery', level, currentAmps };
 }
 
 function parsePorts(payload: Uint8Array): PortsResponse {
