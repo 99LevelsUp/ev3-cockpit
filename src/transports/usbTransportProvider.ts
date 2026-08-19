@@ -15,6 +15,7 @@ import { TransportError, ConnectionError } from '../errors/CockpitError';
 import { UsbHidAdapter, UsbHidAdapterOptions } from './usbHidAdapter';
 import { USB } from './transportConstants';
 import { sendCommandViaAdapter } from './protocolBridge';
+import { listLegoUsbDevices } from './usbNodeUsb';
 
 // ── node-hid discovery (duck-typed) ─────────────────────────────────
 
@@ -43,15 +44,6 @@ function tryLoadNodeHid(): NodeHidModule | undefined {
 	return undefined;
 }
 
-// ── Generic USB product names that don't reflect the brick's real name ──
-
-const GENERIC_PRODUCT_NAMES = new Set([
-	'Xfer data to and from EV3 brick',
-]);
-
-/** Timeout for a single name-resolution probe (ms). */
-const NAME_PROBE_TIMEOUT_MS = 1500;
-
 // ── Session tracking ────────────────────────────────────────────────
 
 interface UsbSession {
@@ -67,46 +59,47 @@ export class UsbTransportProvider implements TransportProvider {
 	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false };
 
 	private readonly sessions = new Map<BrickKey, UsbSession>();
-	/** Last known display name per serial — shown while a new probe is in flight. */
-	private readonly lastKnownNames = new Map<string, string>();
-	/** Serials currently being probed — prevents concurrent probes for the same brick. */
-	private readonly probing = new Set<string>();
 	private disposed = false;
+	/** Guard against concurrent discover() calls overlapping on the same device. */
+	private discovering = false;
 
 	async discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
+		if (this.discovering) {
+			return { transport: Transport.USB, items: [] };
+		}
+		this.discovering = true;
+		try {
+			return await this.doDiscover();
+		} finally {
+			this.discovering = false;
+		}
+	}
+
+	private async doDiscover(): Promise<DiscoveryScanResult> {
 		const hid = tryLoadNodeHid();
 		if (!hid) {
 			return { transport: Transport.USB, items: [] };
 		}
 
-		const devices = hid.devices(USB.VENDOR_ID, USB.PRODUCT_ID);
-		const items: DiscoveryItem[] = [];
+		// Read product strings directly from USB hardware via libusb — bypasses Windows USB descriptor cache.
+		// Falls back to dev.product (node-hid) which is correct on Linux/macOS where no cache exists.
+		const nodeUsbDevices = await listLegoUsbDevices().catch(() => []);
+		const nameBySerial = new Map(
+			nodeUsbDevices
+				.filter(d => d.serialNumber)
+				.map(d => [d.serialNumber!.toLowerCase(), d.product])
+		);
+
+		const devices = hid.devices(USB.VENDOR_ID, USB.PRODUCT_ID)
+			.filter(dev => Boolean(dev.path && dev.serialNumber));
 		const now = Date.now();
+		const items: DiscoveryItem[] = [];
 
 		for (const dev of devices) {
-			if (!dev.path) { continue; }
-			const serial = dev.serialNumber?.trim().toUpperCase() || dev.path;
-			const serialLower = serial.toLowerCase();
+			const serial = dev.serialNumber!.trim().toUpperCase();
 			const brickKey = makeBrickKey(Transport.USB, serial);
-
-			let displayName: string;
-			if (!GENERIC_PRODUCT_NAMES.has(dev.product ?? '')) {
-				// USB descriptor already contains the real brick name
-				displayName = dev.product || `EV3 [${serial}]`;
-			} else if (this.probing.has(serialLower)) {
-				// Probe already in flight from a previous scan cycle —
-				// show last known name, or skip entirely if this brick was never seen before
-				if (!this.lastKnownNames.has(serialLower)) { continue; }
-				displayName = this.lastKnownNames.get(serialLower)!;
-			} else if (this.sessions.has(brickKey)) {
-				// Brick is connected — session manager owns the current name
-				displayName = this.lastKnownNames.get(serialLower) ?? `EV3 [${serial}]`;
-			} else {
-				// Probe the brick to get its real name
-				displayName = await this.probeDisplayName(dev.path, serialLower) ?? `EV3 [${serial}]`;
-			}
-
+			const displayName = nameBySerial.get(serial.toLowerCase()) ?? dev.product?.trim() ?? serial;
 			items.push({
 				brickKey,
 				displayName,
@@ -130,6 +123,7 @@ export class UsbTransportProvider implements TransportProvider {
 		}
 
 		const serial = this.extractSerial(brickKey);
+
 		const options: UsbHidAdapterOptions = serial
 			? { path: `serial:${serial.toLowerCase()}` }
 			: {};
@@ -175,36 +169,6 @@ export class UsbTransportProvider implements TransportProvider {
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
-
-	/**
-	 * Opens the HID device briefly, sends an `info` command, and caches the
-	 * brick's configured display name. The device is closed immediately after.
-	 * The brick remains `available` (not connected) from the caller's perspective.
-	 */
-	private async probeDisplayName(path: string, serialLower: string): Promise<string | undefined> {
-		this.probing.add(serialLower);
-		const adapter = new UsbHidAdapter({ path: `serial:${serialLower}` });
-		try {
-			const timeoutSignal = AbortSignal.timeout(NAME_PROBE_TIMEOUT_MS);
-			await adapter.open();
-			const response = await Promise.race([
-				sendCommandViaAdapter(adapter, { kind: 'info' }, 1, 'USB-probe'),
-				new Promise<never>((_, reject) =>
-					timeoutSignal.addEventListener('abort', () => reject(new Error('probe timeout')), { once: true })
-				),
-			]);
-			if (response.kind === 'info' && response.displayName) {
-				this.lastKnownNames.set(serialLower, response.displayName);
-				return response.displayName;
-			}
-		} catch {
-			// Probe failed — caller falls back to serial-based name
-		} finally {
-			await adapter.close().catch(() => { /* best-effort close */ });
-			this.probing.delete(serialLower);
-		}
-		return undefined;
-	}
 
 	private extractSerial(brickKey: BrickKey): string | undefined {
 		const parts = brickKey.split(':');

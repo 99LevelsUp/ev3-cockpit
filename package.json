@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -24,8 +24,8 @@
   "scripts": {
     "compile": "tsc",
     "lint": "eslint src --ext .ts",
-    "build:dev": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=out/extension.js --sourcemap",
-    "package": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=out/extension.js",
+    "build:dev": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js --sourcemap",
+    "package": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js",
     "test:unit": "node scripts/run-unit-tests.cjs",
     "test:host": "node scripts/runTests.js",
     "test:ci": "npm run compile && npm run lint && npm run test:unit && npm run test:host",
@@ -33,7 +33,7 @@
     "test:pw:smoke": "playwright test tests/smoke.spec.ts",
     "package:vsix": "vsce package",
     "watch": "tsc --watch",
-    "watch:bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=out/extension.js --sourcemap --watch",
+    "watch:bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js --sourcemap --watch",
     "prepare": "node scripts/install-hooks.cjs"
   },
   "devDependencies": {
@@ -51,7 +51,8 @@
     "koffi": "2.15.1",
     "node-hid": "3.3.0",
     "regkey": "2.3.3",
-    "serialport": "13.0.0"
+    "serialport": "13.0.0",
+    "usb": "^2.17.0"
   },
   "dependencies": {}
 }

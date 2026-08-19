@@ -42,6 +42,7 @@ export const DEFAULT_MOCK_CONFIG: MockConfig = {
 				{ port: '1', peripheralType: 'touch-sensor',       unit: '',   dynamic: { kind: 'static', value: 0 } },
 				{ port: '2', peripheralType: 'color-sensor',       unit: '',   dynamic: { kind: 'square', low: 0, high: 7, periodMs: 3000 } },
 			],
+			loss: { enabled: true, visibleMs: 15000, hiddenMs: 5000 },
 			filesystem: [
 				{ path: '/home/root/lms2012/prjs/BiteMyShinyMetal/BiteMyShinyMetal.rbf', content: '' },
 				{ path: '/home/root/lms2012/prjs/BiteMyShinyMetal/beer.rbf',             content: '' },
@@ -85,7 +86,6 @@ export const DEFAULT_MOCK_CONFIG: MockConfig = {
 				{ port: '1', peripheralType: 'ultrasonic-sensor', unit: 'cm', dynamic: { kind: 'sine', min: 5, max: 255, periodMs: 2000 } },
 				{ port: '2', peripheralType: 'color-sensor',      unit: '',   dynamic: { kind: 'none' } },
 			],
-			loss: { enabled: true, visibleMs: 15000, hiddenMs: 5000 },
 			filesystem: [
 				{ path: '/home/root/lms2012/prjs/Judgment/Judgment.rbf',       content: '' },
 				{ path: '/home/root/lms2012/prjs/Judgment/TargetLock.rbf',     content: '' },

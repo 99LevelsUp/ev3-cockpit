@@ -49,38 +49,43 @@ export class TcpTransportProvider implements TransportProvider {
 
 	private readonly options: TcpTransportProviderOptions;
 	private readonly sessions = new Map<BrickKey, TcpSession>();
+	private beaconSocket?: dgram.Socket;
+	private readonly beaconCache = new Map<string, { info: TcpDiscoveryInfo; receivedAt: number }>();
 	private disposed = false;
 
 	constructor(options?: TcpTransportProviderOptions) {
 		this.options = options ?? {};
+		this.startBeaconListener();
 	}
 
-	async discover(): Promise<DiscoveryScanResult> {
+	discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
-		const items: DiscoveryItem[] = [];
 		const now = Date.now();
+		const items: DiscoveryItem[] = [];
+		const hostFilter = this.options.host;
 
-		try {
-			const beacons = await this.scanBeacons();
-			for (const beacon of beacons) {
-				const brickKey = makeBrickKey(Transport.TCP, beacon.serialNumber || beacon.ip);
-				items.push({
-					brickKey,
-					displayName: beacon.name || `EV3 [${beacon.ip}]`,
-					transport: Transport.TCP,
-					presenceState: PresenceState.Available,
-					remembered: false,
-					connected: this.sessions.has(brickKey),
-					favorite: false,
-					availableTransports: [Transport.TCP],
-					lastSeenAt: now,
-				});
+		for (const [key, entry] of this.beaconCache) {
+			if (now - entry.receivedAt > TCP.BEACON_FRESH_MS) {
+				this.beaconCache.delete(key);
+				continue;
 			}
-		} catch {
-			// Discovery failures are non-fatal — return empty list.
+			if (hostFilter && entry.info.ip !== hostFilter) { continue; }
+			const { info } = entry;
+			const brickKey = makeBrickKey(Transport.TCP, info.serialNumber || info.ip);
+			items.push({
+				brickKey,
+				displayName: info.name || `EV3 [${info.ip}]`,
+				transport: Transport.TCP,
+				presenceState: PresenceState.Available,
+				remembered: false,
+				connected: this.sessions.has(brickKey),
+				favorite: false,
+				availableTransports: [Transport.TCP],
+				lastSeenAt: entry.receivedAt,
+			});
 		}
 
-		return { transport: Transport.TCP, items };
+		return Promise.resolve({ transport: Transport.TCP, items });
 	}
 
 	async connect(brickKey: BrickKey): Promise<SessionHandle> {
@@ -124,6 +129,8 @@ export class TcpTransportProvider implements TransportProvider {
 
 	dispose(): void {
 		this.disposed = true;
+		try { this.beaconSocket?.close(); } catch { /* socket may already be dead */ }
+		this.beaconSocket = undefined;
 		for (const [, session] of this.sessions) {
 			void session.adapter.close();
 		}
@@ -147,48 +154,28 @@ export class TcpTransportProvider implements TransportProvider {
 		};
 	}
 
-	private scanBeacons(): Promise<TcpDiscoveryInfo[]> {
-		const port = this.options.discoveryPort ?? TCP.BEACON_PORT;
-		const timeoutMs = this.options.discoveryTimeoutMs ?? TCP.BEACON_TIMEOUT_MS;
-		const hostFilter = this.options.host;
+	private startBeaconListener(): void {
+		const socket = dgram.createSocket('udp4');
 
-		return new Promise<TcpDiscoveryInfo[]>((resolve, reject) => {
-			const results = new Map<string, TcpDiscoveryInfo>();
-			const socket = dgram.createSocket('udp4');
-
-			const timeout = setTimeout(() => {
-				cleanup();
-				resolve([...results.values()]);
-			}, timeoutMs);
-
-			const onError = (error: Error) => {
-				cleanup();
-				reject(error);
-			};
-
-			const onMessage = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
-				if (hostFilter && rinfo.address !== hostFilter) {
-					return;
-				}
-				const parsed = this.parseBeacon(msg.toString('utf8'), rinfo.address);
-				if (!parsed) { return; }
-				const key = `${parsed.ip}:${parsed.port}:${parsed.serialNumber}:${parsed.name}`;
-				if (!results.has(key)) {
-					results.set(key, parsed);
-				}
-			};
-
-			const cleanup = () => {
-				clearTimeout(timeout);
-				socket.removeListener('error', onError);
-				socket.removeListener('message', onMessage);
-				try { socket.close(); } catch { /* already closed */ }
-			};
-
-			socket.once('error', onError);
-			socket.on('message', onMessage);
-			socket.bind(port);
+		socket.on('message', (msg, rinfo) => {
+			const parsed = this.parseBeacon(msg.toString('utf8'), rinfo.address);
+			if (!parsed) { return; }
+			const key = `${parsed.ip}:${parsed.serialNumber || parsed.ip}`;
+			this.beaconCache.set(key, { info: parsed, receivedAt: Date.now() });
 		});
+
+		socket.on('error', (err: NodeJS.ErrnoException) => {
+			// Swallow — on Windows, UDP sockets receive spurious ICMP errors.
+			// On non-recoverable bind failure (EADDRINUSE), release the reference
+			// so dispose() doesn't try to close a broken socket.
+			if (err.code === 'EADDRINUSE' && this.beaconSocket === socket) {
+				this.beaconSocket = undefined;
+				try { socket.close(); } catch { /* ignore */ }
+			}
+		});
+
+		socket.bind(this.options.discoveryPort ?? TCP.BEACON_PORT);
+		this.beaconSocket = socket;
 	}
 
 	private parseBeacon(message: string, senderIp: string): TcpDiscoveryInfo | undefined {

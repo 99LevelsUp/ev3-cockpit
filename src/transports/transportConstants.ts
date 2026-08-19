@@ -46,6 +46,8 @@ export const TCP = {
 	DISCOVERY_INTERVAL_MS: 5000,
 	/** ACK byte sent to EV3 after beacon received. */
 	BEACON_ACK: 0x00,
+	/** How long a received beacon remains fresh (ms). */
+	BEACON_FRESH_MS: 15_000,
 } as const;
 
 // ── Bluetooth ───────────────────────────────────────────────────────
