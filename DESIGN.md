@@ -365,7 +365,8 @@ Presence states:
 - `unavailable` — the brick was visible but has temporarily disappeared; the system waits for it to return.
 - `removed` — the brick has disappeared definitively (timeout of `unavailable`). The entry is
   retained for the rest of the session so that rediscovery stays distinguishable from a first
-  discovery — the two drive different auto-connect triggers.
+  discovery — the two drive different auto-connect triggers. **Not yet implemented**: both
+  `discoveryScheduler` and `presenceAggregator` currently delete the entry (plan task 6.4.0).
 
 `remembered` and `removed` are equivalent from the user's perspective: the brick "does not exist". The difference is technical — `remembered` originates from evidence, `removed` from a timeout.
 

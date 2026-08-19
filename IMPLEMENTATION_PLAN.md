@@ -16,9 +16,9 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 ## 2. Current Starting State
 
 Phase 0 is complete. Phases 1 and 2 are substantially complete but carry named gaps
-(1.6.10 mock config loading, 1.8.4 transport guard wiring, 1.8.5 send timeouts, 1.11 BT
-backends and discovery, 2.8.5/2.8.6 reconnect tests). Phase 3 work starts from here; the
-listed gaps are carried, not closed.
+(1.6.10 mock config loading, 1.7.6 battery subcode, 1.8.4 transport guard wiring, 1.8.5 send
+timeouts, 1.11 BT backends and discovery, 1.12.4 per-transport contract tests). Phase 2 is
+complete. Phase 3 work starts from here; the listed gaps are carried, not closed.
 
 - extension skeleton ✅
 - build and lint pipeline ✅
@@ -38,7 +38,7 @@ listed gaps are carried, not closed.
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
 | 1 | Transport contracts and discovery | ⚠ gaps (1.6.10, 1.8.4, 1.8.5, 1.11) |
-| 2 | Session runtime and lifecycle | ⚠ gaps (2.8.5, 2.8.6) |
+| 2 | Session runtime and lifecycle | ✅ done |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
 | 4 | Public API and filesystem services | ⬜ planned |
 | 5 | Cockpit panel and UX | ⬜ planned |
@@ -162,6 +162,8 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.3 Command builder (`ev3Commands.ts` — BrickCommand → { type, payload } for each kind)
   - [x] 1.7.4 Response parser (`ev3Responses.ts` — raw reply → BrickResponse for each kind)
   - [x] 1.7.5 Unit tests for encoding/decoding round-trips
+  - [ ] 1.7.6 Battery: read charge level with `GET_LBATT` instead of deriving it from `GET_IBATT`. Current draw tracks motor load, not remaining capacity, so the reported level is near zero on an idle brick and high under load. Needs the subcode confirmed against a real brick — this repo's `UI_READ_SUB` table already diverges from the published lms2012 values for `GET_PRESS` and `GET_SDCARD`
+  - [ ] 1.7.7 `parseFsList` skips 4 header bytes while its own comment documents 2, and the sibling `parseFsRead` skips 6 for the same `[status][size][handle]` shape. One of the three is wrong; a truncated or empty file list is the symptom. Confirm against a real brick
 - [ ] **1.8 Transport adapter interface and constants** — guard unwired, send timeouts unimplemented
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
@@ -193,17 +195,17 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [ ] 1.11.9 Signal strength reporting where available (`signalInfo` is read for ordering, never populated)
   - [ ] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
   - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it
-- [x] **1.12 Transport unit tests**
+- [ ] **1.12 Transport unit tests** — no per-transport contract tests yet (1.12.4)
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
   - [x] 1.12.3 BT connection queue serialization tests
-  - [x] 1.12.4 Contract compliance tests for USB/TCP/BT (using real bricks where available)
+  - [ ] 1.12.4 Contract compliance tests for USB/TCP/BT (using real bricks where available) — no USB, TCP or BT provider test file exists; only the mock is covered (1.13.1)
 - [x] **1.13 Unit tests (Mock and infrastructure)**
   - [x] 1.13.1 TransportProvider contract compliance tests (run against Mock)
   - [x] 1.13.2 Discovery scheduler tests (timing, dedup, timeout)
   - [x] 1.13.3 Presence Aggregator state machine tests
   - [x] 1.13.4 Stable ordering tests
-  - [x] 1.13.5 Mock configuration loading tests
+  - [x] 1.13.5 Mock configuration **validation** tests (`validateMockConfig`); loading tests belong with 1.6.10
 
 ### Definition of Done
 
@@ -258,13 +260,13 @@ Build the source of truth for connected bricks.
   - [x] 2.7.1 Track explicit disconnect per brick within the session
   - [x] 2.7.2 Suppress auto-connect for explicitly disconnected bricks
   - [x] 2.7.3 Reset suppression on new VS Code session
-- [ ] **2.8 Unit tests** — reconnect and disconnect-precedence tests missing
+- [x] **2.8 Unit tests**
   - [x] 2.8.1 Session state machine transition tests
   - [x] 2.8.2 Connect / disconnect lifecycle tests (using Mock)
   - [x] 2.8.3 Multi-brick concurrent session tests
   - [x] 2.8.4 Foreground switching tests
-  - [ ] 2.8.5 Heartbeat timeout and reconnect tests (only the heartbeat restart regression exists)
-  - [ ] 2.8.6 Explicit disconnect vs reconnect precedence tests
+  - [x] 2.8.5 Heartbeat timeout and reconnect tests
+  - [x] 2.8.6 Explicit disconnect vs reconnect precedence tests
   - [x] 2.8.7 Command queue ordering and drain tests
 
 ### Definition of Done
@@ -305,7 +307,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
   - [ ] 3.3.4 Mode switching on foreground/background transitions
   - [ ] 3.3.5 Subscription registry — track which categories are subscribed per brick
-- [ ] **3.4 Adaptive Throttling** — **gated**: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, reduce 3.4 to a fixed per-mode interval table plus the diagnostic readout and revisit after the Phase 7 stress tests
+- [ ] **3.4 Adaptive Throttling** — **gated**: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
   - [ ] 3.4.1 Response latency measurement per command
   - [ ] 3.4.2 Queue depth monitoring from the command queue
   - [ ] 3.4.3 Frequency scaling algorithm (increase interval when latency/depth grows)
@@ -348,13 +350,13 @@ Export a stable API for other extensions without giving them direct access to th
 
 ### Tasks
 
-- [ ] **4.1 API surface type definitions**
-  - [ ] 4.1.1 `ConnectedBrickSnapshot` — public representation of a connected brick
-  - [ ] 4.1.2 `BrickStateChangeEvent` — state transition event for consumers
-  - [ ] 4.1.3 `ActiveBrickSnapshot` — currently active brick or null
-  - [ ] 4.1.4 `TelemetrySnapshot` (API version) — category-specific data snapshot
-  - [ ] 4.1.5 `TelemetryEvent` (API version) — incremental telemetry update
-  - [ ] 4.1.6 `FilesystemEvent` — filesystem operation result
+- [x] **4.1 API surface type definitions** — all six already exist in `src/contracts/api.ts`
+  - [x] 4.1.1 `ConnectedBrickSnapshot` — public representation of a connected brick
+  - [x] 4.1.2 `BrickStateChangeEvent` — state transition event for consumers
+  - [x] 4.1.3 `ActiveBrickSnapshot` — currently active brick or null
+  - [x] 4.1.4 `TelemetrySnapshot` (API version) — category-specific data snapshot
+  - [x] 4.1.5 `TelemetryEvent` (API version) — incremental telemetry update
+  - [x] 4.1.6 `FilesystemEvent` — filesystem operation result
 - [ ] **4.2 Consumer registration**
   - [ ] 4.2.1 `registerConsumer(name)` — register a dependent extension, return consumer handle
   - [ ] 4.2.2 `unregisterConsumer(handle)` — cleanup all subscriptions for this consumer
@@ -515,6 +517,7 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.3.3 Update discovery list star indicator
   - [ ] 6.3.4 Favorite is bound to (brickKey, transport) — not cross-transport
 - [ ] **6.4 Auto-connect on favorite discovery**
+  - [ ] 6.4.0 Retain `removed` entries for the session. DESIGN §6.1 requires it so that rediscovery stays distinguishable from first discovery, but `discoveryScheduler.incrementMiss` and `presenceAggregator.handlePresenceChange` both delete the entry — 6.4.1 and 6.4.3 are indistinguishable until this lands
   - [ ] 6.4.1 Trigger on `removed` → `available` (rediscovery within session)
   - [ ] 6.4.2 Trigger on `remembered` → `available` (session start)
   - [ ] 6.4.3 Trigger on `[*]` → `available` (first discovery in session)

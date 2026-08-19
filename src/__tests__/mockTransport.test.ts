@@ -50,8 +50,21 @@ describe('MockTransportProvider — discovery', () => {
 			},
 		]));
 
-		const result = await provider.discover();
-		assert.ok(result.items.length <= 1);
+		// visibleMs 0 pins the brick in its hidden phase, so this is a real
+		// assertion rather than the previous `length <= 1` with one brick configured,
+		// which held whatever the provider did.
+		const hidden = new MockTransportProvider(makeConfig([{
+			id: 'lossy', displayName: 'Lossy',
+			loss: { enabled: true, visibleMs: 0, hiddenMs: 10_000 },
+		}]));
+		assert.equal((await hidden.discover()).items.length, 0);
+		hidden.dispose();
+
+		// A brick with loss disabled must still be listed.
+		assert.equal((await provider.discover()).items.length >= 0, true);
+		const always = new MockTransportProvider(makeConfig([{ id: 'steady', displayName: 'Steady' }]));
+		assert.equal((await always.discover()).items.length, 1);
+		always.dispose();
 	});
 
 	it('generates mock:id brickKeys', async () => {
