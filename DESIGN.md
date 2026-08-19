@@ -488,6 +488,11 @@ Implementation model:
 - Cockpit simultaneously removes local persisted metadata (including `favorite`),
 - forgetting is only permitted where the provider can safely perform it.
 
+For USB bricks on Windows, "OS-level evidence" includes the BT registry entry at
+`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\{mac}` — this is the
+source of the brick's display name (USB name resolution reads it). Forget must delete this
+entry in addition to BT unpairing; otherwise the stale name survives across renames.
+
 ## 8. Favorites and Persistence
 
 ### 8.1 Persistence Location

@@ -509,7 +509,8 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.6.1 Trash action in discovery list for remembered offline bricks
   - [ ] 6.6.2 Delete all local persisted metadata (including `favorite`)
   - [ ] 6.6.3 OS-level unpair where the provider supports it
-  - [ ] 6.6.4 Provider capability check before offering forget action
+  - [ ] 6.6.4 USB provider (Windows): delete `BTHPORT\Parameters\Devices\{mac}` registry entry — this is the source of the display name; without deletion the stale name survives renames
+  - [ ] 6.6.5 Provider capability check before offering forget action
 - [ ] **6.7 Unit tests**
   - [ ] 6.7.1 globalState adapter read/write/migration tests
   - [ ] 6.7.2 Favorite toggle persistence tests
