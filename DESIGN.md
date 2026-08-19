@@ -66,7 +66,10 @@ If the discovery tab is in the foreground or the panel is not visible, no brick 
 
 ### 3.3 Multiple Connected Sessions
 
-Multiple bricks can be connected simultaneously.
+Multiple bricks can be connected simultaneously, subject to a per-transport session ceiling.
+USB, TCP and mock are unbounded. Windows RFCOMM permits one active BT connection, so BT has a
+ceiling of one; a connect request beyond a transport's ceiling must fail with a stated reason
+rather than queue indefinitely.
 
 Inactive connected bricks:
 

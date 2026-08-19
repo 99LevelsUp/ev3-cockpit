@@ -185,6 +185,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
   - [ ] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
+  - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3 'multiple bricks connected simultaneously'
   - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
   - [ ] 1.11.7a BT discovery implementation (koffi bthprops.cpl + registry on Windows) — `extension.ts` registers the provider with no discovery function, so BT discovery returns an empty list
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
@@ -291,7 +292,11 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.2.1 `TelemetrySnapshot` — full state at a point in time for a category
   - [ ] 3.2.2 `TelemetryEvent` — incremental change within a category
   - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp)
-- [ ] **3.3 Telemetry scheduler**
+  - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory
+  - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
+- [ ] **3.3 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, latency and queue-depth thresholds, placed alongside the empirical values in
+  `transportConstants.ts`. Must be derived from the existing `MAX_COMMANDS_PER_SEC = 10` per-brick guard and per-transport RTT: over BT (`COMMAND_RTT_MS = 2000`) a full ports+battery+buttons+system refresh is already several seconds, which no document acknowledges.
+- [ ] **3.3b Telemetry scheduler**
   - [ ] 3.3.1 Foreground loop — fastest frequency, full `ports` + `system` data
   - [ ] 3.3.2 Subscribed loop — per-category, reduced frequency
   - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
@@ -449,7 +454,7 @@ Build the main product UX on top of the finished runtime.
   - [ ] 5.6.3 Active brick read model drives tab content
 - [ ] **5.7 Config mode**
   - [ ] 5.7.1 Gear icon toggles between normal and config mode (same tab)
-  - [ ] 5.7.2 Editable brick name with auto-save
+  - [ ] 5.7.2 Editable brick name with auto-save (depends on 3.2.4 — the protocol has no name-write command)
   - [ ] 5.7.3 System and technical information display (read-only)
   - [ ] 5.7.4 Visual style toggle (`numeric` / `visual`)
   - [ ] 5.7.5 Status bar configuration
