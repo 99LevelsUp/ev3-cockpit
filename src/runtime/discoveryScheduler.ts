@@ -65,6 +65,13 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	private readonly tracked = new Map<BrickKey, TrackedBrick>();
 	private readonly timers = new Map<Transport, ReturnType<typeof setInterval>>();
 	private readonly subscriptions: vscode.Disposable[] = [];
+	/**
+	 * Transports with a scan already running. `setInterval` fires regardless of
+	 * whether the previous scan finished, and a slow transport (a BT inquiry runs for
+	 * tens of seconds) would stack scans that each count misses independently --
+	 * enough to walk a brick that is sitting right there to `Unavailable`.
+	 */
+	private readonly scansInFlight = new Set<Transport>();
 	private polling = false;
 
 	private readonly presenceChanged: TypedEvent<PresenceChangeEvent>;
@@ -120,10 +127,15 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 	/** Run one discovery cycle for all providers (useful for testing). */
 	async scanOnce(): Promise<void> {
-		const providers = this.registry.all();
-		const results = await Promise.allSettled(
-			providers.map(p => p.discover())
-		);
+		const providers = this.registry.all().filter(p => !this.scansInFlight.has(p.transport));
+		for (const p of providers) { this.scansInFlight.add(p.transport); }
+
+		let results: PromiseSettledResult<DiscoveryScanResult>[];
+		try {
+			results = await Promise.allSettled(providers.map(p => p.discover()));
+		} finally {
+			for (const p of providers) { this.scansInFlight.delete(p.transport); }
+		}
 
 		// Collect all brickKeys seen in this cycle
 		const seenKeys = new Set<BrickKey>();
@@ -153,6 +165,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 	dispose(): void {
 		this.stop();
+		this.scansInFlight.clear();
 		this.tracked.clear();
 		this.presenceChanged.dispose();
 		this.scanCompleted.dispose();
@@ -185,6 +198,10 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	}
 
 	private async scanProvider(provider: TransportProvider): Promise<void> {
+		if (this.scansInFlight.has(provider.transport)) {
+			return;
+		}
+		this.scansInFlight.add(provider.transport);
 		try {
 			const result = await provider.discover();
 			const seenKeys = new Set<BrickKey>();
@@ -200,6 +217,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			this.scanCompleted.fire(undefined);
 		} catch (error: unknown) {
 			this.scanFailed.fire({ transport: provider.transport, error });
+		} finally {
+			this.scansInFlight.delete(provider.transport);
 		}
 	}
 

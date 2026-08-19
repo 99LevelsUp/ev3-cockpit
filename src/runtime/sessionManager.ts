@@ -113,6 +113,18 @@ export class SessionManager implements vscode.Disposable {
 
 		try {
 			const handle = await provider.connect(brickKey);
+
+			// disconnect() may have run while the provider was still connecting. It
+			// removed this session, and the provider had not registered its own yet, so
+			// the disconnect it forwarded was a no-op. Proceeding here would leave the
+			// connection the provider just opened with nobody tracking it -- and the
+			// Disconnected -> Connected transition below would throw anyway. The user
+			// asked to disconnect, so abandoning the connect attempt is the answer.
+			if (this.sessions.get(brickKey) !== resources || entry.explicitlyDisconnected) {
+				try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+				return;
+			}
+
 			entry.setHandle(handle);
 			entry.transition(ConnectionState.Connected);
 			this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Connected);
@@ -181,7 +193,7 @@ export class SessionManager implements vscode.Disposable {
 		if (previous) {
 			const prevResources = this.sessions.get(previous);
 			if (prevResources) {
-				prevResources.entry.setActiveMode(ActivityMode.Subscribed);
+				this.demote(prevResources);
 			}
 		}
 
@@ -201,11 +213,26 @@ export class SessionManager implements vscode.Disposable {
 
 		const prevResources = this.sessions.get(previous);
 		if (prevResources) {
-			prevResources.entry.setActiveMode(ActivityMode.Subscribed);
+			this.demote(prevResources);
 		}
 
 		this.activeBrickKey = undefined;
 		this._onActiveBrickChange.fire({ previousBrickKey: previous, newBrickKey: undefined });
+	}
+
+	/**
+	 * Drop a brick out of foreground into whichever background mode it has earned.
+	 *
+	 * DESIGN 9.3 scopes subscribed telemetry to bricks with a live API subscription
+	 * and 9.4 makes minimal the base mode, so demoting straight to subscribed put
+	 * every backgrounded brick into a mode that schedules telemetry nobody asked for.
+	 */
+	private demote(resources: SessionResources): void {
+		resources.entry.setActiveMode(
+			resources.entry.subscribedCategories.length > 0
+				? ActivityMode.Subscribed
+				: ActivityMode.Minimal
+		);
 	}
 
 	/** Get the current foreground brick key. */

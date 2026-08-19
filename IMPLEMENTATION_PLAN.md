@@ -15,10 +15,13 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0 is complete. Phases 1 and 2 are substantially complete but carry named gaps
-(1.6.10 mock config loading, 1.7.6 battery subcode, 1.8.4 transport guard wiring, 1.8.5 send
-timeouts, 1.11 BT backends and discovery, 1.12.4 per-transport contract tests). Phase 2 is
-complete. Phase 3 work starts from here; the listed gaps are carried, not closed.
+Phase 0 and Phase 2 are complete. Phase 1 is substantially complete but carries named gaps:
+1.6.10 mock config loading, 1.7.6 battery subcode, 1.7.7 filesystem list header, 1.7.8 motor
+tacho addressing (disputed), 1.8.4 transport guard wiring, 1.8.4a rate-limit policy, 1.8.5
+send timeouts, 1.11 BT backends and discovery, 1.12.4 per-transport contract tests. Phase 3 work starts from here; those gaps are carried, not closed.
+
+This list is the single enumeration of Phase 1's open work — the Phase Overview table below
+points here rather than repeating it, because the duplicate copy drifted twice during review.
 
 - extension skeleton ✅
 - build and lint pipeline ✅
@@ -37,7 +40,7 @@ complete. Phase 3 work starts from here; the listed gaps are carried, not closed
 | Phase | Name | Status |
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
-| 1 | Transport contracts and discovery | ⚠ gaps (1.6.10, 1.8.4, 1.8.5, 1.11) |
+| 1 | Transport contracts and discovery | ⚠ gaps (see §2) |
 | 2 | Session runtime and lifecycle | ✅ done |
 | 3 | Telemetry and adaptive throttling | ⬜ planned |
 | 4 | Public API and filesystem services | ⬜ planned |
@@ -156,13 +159,14 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.6.7 Mock loss and recovery simulation (configurable disappearance/reappearance)
   - [x] 1.6.8 Mock filesystem (in-memory file tree for API testing)
   - [x] 1.6.9 Mock brickKey generation (`mock:<id>` from config)
-- [x] **1.7 EV3 Protocol layer**
+- [ ] **1.7 EV3 Protocol layer** — battery subcode, filesystem-list header and motor tacho addressing outstanding (1.7.6, 1.7.7, 1.7.8)
   - [x] 1.7.1 Bytecode encoding primitives (`ev3Bytecode.ts` — lc0/lc1/lc2/lcs, gv0/gv1, uint16le/uint32le, concatBytes)
   - [x] 1.7.2 Packet framing (`ev3Packet.ts` — encode/decode, command/reply type constants)
   - [x] 1.7.3 Command builder (`ev3Commands.ts` — BrickCommand → { type, payload } for each kind)
   - [x] 1.7.4 Response parser (`ev3Responses.ts` — raw reply → BrickResponse for each kind)
   - [x] 1.7.5 Unit tests for encoding/decoding round-trips
   - [ ] 1.7.6 Battery: read charge level with `GET_LBATT` instead of deriving it from `GET_IBATT`. Current draw tracks motor load, not remaining capacity, so the reported level is near zero on an idle brick and high under load. Needs the subcode confirmed against a real brick — this repo's `UI_READ_SUB` table already diverges from the published lms2012 values for `GET_PRESS` and `GET_SDCARD`
+  - [ ] 1.7.8 **Disputed, needs hardware.** A reviewer reported that `buildPortsCommand`'s `OUTPUT_GET_COUNT` calls pass motor indexes 0-3 where the firmware expects an `NOS` bit field, which would misattribute every motor tacho value. Against that: `opOUTPUT_GET_COUNT(LAYER, NO, *TACHO)` takes a single output number, and the bit-field form belongs to `OUTPUT_SPEED`/`START`/`STOP`/`RESET`. Left as shipped rather than changed on an unverified claim — confirm by reading a known tacho value off a real brick
   - [ ] 1.7.7 `parseFsList` skips 4 header bytes while its own comment documents 2, and the sibling `parseFsRead` skips 6 for the same `[status][size][handle]` shape. One of the three is wrong; a truncated or empty file list is the symptom. Confirm against a real brick
 - [ ] **1.8 Transport adapter interface and constants** — guard unwired, send timeouts unimplemented
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
@@ -188,7 +192,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
   - [ ] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
-  - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3 'multiple bricks connected simultaneously'
+  - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3, which requires a connect beyond a transport's ceiling to "fail with a stated reason rather than queue indefinitely". The one-slot BT ceiling is correct and stays; only the unbounded wait is the defect
   - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
   - [ ] 1.11.7a BT discovery implementation (koffi bthprops.cpl + registry on Windows) — `extension.ts` registers the provider with no discovery function, so BT discovery returns an empty list
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
@@ -271,7 +275,7 @@ Build the source of truth for connected bricks.
 
 ### Definition of Done
 
-- multiple bricks can be connected simultaneously,
+- multiple bricks can be connected simultaneously, up to each transport's session ceiling (DESIGN §3.3),
 - switching the active brick does not interrupt other sessions,
 - reconnecting one brick does not break others,
 - explicit disconnect drains the command queue and removes the session
@@ -299,9 +303,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp)
   - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory
   - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
-- [ ] **3.3 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, latency and queue-depth thresholds, placed alongside the empirical values in
-  `transportConstants.ts`. Must be derived from the existing `MAX_COMMANDS_PER_SEC = 10` per-brick guard and per-transport RTT: over BT (`COMMAND_RTT_MS = 2000`) a full ports+battery+buttons+system refresh is already several seconds, which no document acknowledges.
-- [ ] **3.3b Telemetry scheduler**
+- [ ] **3.3 Telemetry scheduler**
   - [ ] 3.3.1 Foreground loop — fastest frequency, full `ports` + `system` data
   - [ ] 3.3.2 Subscribed loop — per-category, reduced frequency
   - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
@@ -331,6 +333,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.7.4 Stale snapshot expiry tests
   - [ ] 3.7.5 Read model aggregation tests
   - [ ] 3.7.6 Multi-brick concurrent telemetry tests
+- [ ] **3.8 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, a **per-transport foreground target and floor** (DESIGN §9.2), latency and queue-depth thresholds, placed alongside the empirical values in
+  `transportConstants.ts`. Must be derived from the existing `MAX_COMMANDS_PER_SEC = 10` per-brick guard and per-transport RTT: over BT (`COMMAND_RTT_MS = 2000`) a full ports+battery+buttons+system refresh is already several seconds, which no document acknowledges.
 
 ### Definition of Done
 
@@ -444,6 +448,7 @@ Build the main product UX on top of the finished runtime.
   - [ ] 5.4.5 Motor ports (A–D) — peripheral icon + measured value
   - [ ] 5.4.6 Sensor ports (1–4) — peripheral icon + measured value
   - [ ] 5.4.7 Disconnected peripheral indication
+  - [ ] 5.4.8 Degraded-telemetry indicator — the status bar shows a degraded state when the achieved foreground refresh rate falls below the per-transport floor (DESIGN §9.2)
 - [ ] **5.5 Value display modes**
   - [ ] 5.5.1 Numeric style — exact text value as returned by the sensor
   - [ ] 5.5.2 Visual style — per-peripheral graphical elements:

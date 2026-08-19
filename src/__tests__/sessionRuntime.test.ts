@@ -452,14 +452,19 @@ describe('SessionManager', () => {
 		assert.equal(manager.getActiveBrickKey(), keyA);
 		assert.equal(manager.getSession(keyA)?.activeMode, ActivityMode.Foreground);
 
+		// A brick nobody subscribed to falls to Minimal, not Subscribed. This test used
+		// to assert Subscribed, which locked in the bug: DESIGN 9.3 scopes that mode to
+		// bricks with a live API subscription and 9.4 makes Minimal the base mode.
+		// The Subscribed branch of demote() becomes testable once the subscription API
+		// lands (plan 3.3.5 registry, 4.5 API); there is no way to create one today.
 		manager.setActiveBrick(keyB);
 		assert.equal(manager.getActiveBrickKey(), keyB);
-		assert.equal(manager.getSession(keyA)?.activeMode, ActivityMode.Subscribed);
+		assert.equal(manager.getSession(keyA)?.activeMode, ActivityMode.Minimal);
 		assert.equal(manager.getSession(keyB)?.activeMode, ActivityMode.Foreground);
 
 		manager.clearActiveBrick();
 		assert.equal(manager.getActiveBrickKey(), undefined);
-		assert.equal(manager.getSession(keyB)?.activeMode, ActivityMode.Subscribed);
+		assert.equal(manager.getSession(keyB)?.activeMode, ActivityMode.Minimal);
 	});
 
 	it('fires active brick change event', async () => {
