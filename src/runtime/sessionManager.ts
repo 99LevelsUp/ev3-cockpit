@@ -121,7 +121,7 @@ export class SessionManager implements vscode.Disposable {
 			// Disconnected -> Connected transition below would throw anyway. The user
 			// asked to disconnect, so abandoning the connect attempt is the answer.
 			if (this.sessions.get(brickKey) !== resources || entry.explicitlyDisconnected) {
-				try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+				await this.releaseUnownedConnection(brickKey, provider);
 				return;
 			}
 
@@ -376,7 +376,7 @@ export class SessionManager implements vscode.Disposable {
 			// session, but `resources` is a captured reference that stays alive. Without
 			// this check the just-reopened physical connection would belong to nobody.
 			if (this.sessions.get(brickKey) !== resources || resources.entry.explicitlyDisconnected) {
-				try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+				await this.releaseUnownedConnection(brickKey, provider);
 				return;
 			}
 
@@ -393,6 +393,23 @@ export class SessionManager implements vscode.Disposable {
 	}
 
 	// ── Internal: Cleanup ───────────────────────────────────────────
+
+	/**
+	 * Close a connection whose session no longer exists.
+	 *
+	 * Providers key their sessions by `brickKey` and nothing else, so a blind
+	 * `provider.disconnect(brickKey)` would close whatever currently holds that key.
+	 * When a slow connect is abandoned and a second connect for the same brick has
+	 * since succeeded, that is the live connection -- disconnecting it would leave
+	 * SessionManager reporting a brick as connected over a socket it just closed. So
+	 * release only while the key is genuinely unowned.
+	 */
+	private async releaseUnownedConnection(brickKey: BrickKey, provider: TransportProvider): Promise<void> {
+		if (this.sessions.has(brickKey)) {
+			return;
+		}
+		try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+	}
 
 	private wireExecutor(resources: SessionResources, provider: TransportProvider): void {
 		resources.commandQueue.setExecutor(

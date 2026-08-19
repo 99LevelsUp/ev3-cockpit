@@ -25,19 +25,7 @@ import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
 
-/**
- * Polls until `predicate` holds. Throws once `timeoutMs` elapses, so a broken
- * condition fails the test with a clear message instead of hanging the run.
- */
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (!predicate()) {
-		if (Date.now() > deadline) {
-			throw new Error(`Condition not met within ${timeoutMs}ms.`);
-		}
-		await new Promise<void>((r) => setTimeout(r, 25));
-	}
-}
+import { waitFor } from './waitFor';
 
 // ═══════════════════════════════════════════════════════════════════════
 // SessionEntry — state machine
@@ -657,6 +645,62 @@ describe('SessionManager -- reconnect and disconnect precedence', () => {
 
 		assert.equal(stallable.openConnections(), 0, 'recovered connection was left open');
 		assert.equal(manager.getSession(key), undefined, 'disconnected session came back');
+
+		manager.dispose();
+	});
+});
+
+describe('SessionManager -- abandoned connect must not touch a newer session', () => {
+	it('leaves a newer connection for the same brick alone', async () => {
+		// Regression on the round-3 fix. Abandoning a slow connect closed the provider
+		// connection by brickKey alone. Providers key sessions by brickKey and nothing
+		// else, so once a second connect for the same brick had succeeded, that cleanup
+		// closed the live socket while SessionManager still reported the brick connected.
+		let open = false;
+		let connectCalls = 0;
+		let releaseFirst: (() => void) | undefined;
+
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+			connect: (brickKey) => {
+				connectCalls += 1;
+				if (connectCalls === 1) {
+					return new Promise((resolve) => {
+						releaseFirst = () => {
+							open = true;
+							resolve({ brickKey, transport: Transport.Mock });
+						};
+					});
+				}
+				open = true;
+				return Promise.resolve({ brickKey, transport: Transport.Mock });
+			},
+			disconnect: () => { open = false; return Promise.resolve(); },
+			send: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			dispose: () => { /* nothing to release */ },
+		};
+
+		const reg = new ProviderRegistry();
+		reg.register(provider);
+		const manager = new SessionManager({ providerRegistry: reg });
+
+		const key = makeBrickKey(Transport.Mock, 'contested');
+
+		const first = manager.connect(key, Transport.Mock);
+		await waitFor(() => releaseFirst !== undefined, 2000);
+
+		await manager.disconnect(key);
+		await manager.connect(key, Transport.Mock);
+		assert.equal(open, true, 'second connect should be open');
+
+		// The abandoned first connect now completes.
+		releaseFirst!();
+		await first;
+
+		assert.equal(open, true, 'the newer connection was closed by the abandoned one');
+		assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected);
 
 		manager.dispose();
 	});

@@ -73,6 +73,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	 */
 	private readonly scansInFlight = new Set<Transport>();
 	private polling = false;
+	/** Set by dispose(). A scan still in flight must not fire on disposed emitters. */
+	private disposed = false;
 
 	private readonly presenceChanged: TypedEvent<PresenceChangeEvent>;
 	private readonly scanCompleted: TypedEvent<undefined>;
@@ -140,6 +142,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		// Collect all brickKeys seen in this cycle
 		const seenKeys = new Set<BrickKey>();
 
+		if (this.disposed) { return; }
+
 		results.forEach((result, index) => {
 			if (result.status === 'fulfilled') {
 				this.processScanResult(result.value, seenKeys);
@@ -148,8 +152,10 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			}
 		});
 
-		// Increment miss counts for bricks not seen in this cycle
-		this.processMisses(seenKeys);
+		// Only transports this cycle actually scanned may accrue misses. Counting a
+		// transport that was skipped for an in-flight scan would mark bricks absent
+		// purely because nobody looked for them.
+		this.processMisses(seenKeys, new Set(providers.map(p => p.transport)));
 
 		this.scanCompleted.fire(undefined);
 	}
@@ -164,6 +170,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.stop();
 		this.scansInFlight.clear();
 		this.tracked.clear();
@@ -204,6 +211,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		this.scansInFlight.add(provider.transport);
 		try {
 			const result = await provider.discover();
+			if (this.disposed) { return; }
 			const seenKeys = new Set<BrickKey>();
 			this.processScanResult(result, seenKeys);
 
@@ -260,8 +268,9 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		}
 	}
 
-	private processMisses(seenKeys: Set<BrickKey>): void {
+	private processMisses(seenKeys: Set<BrickKey>, scannedTransports: Set<Transport>): void {
 		for (const [brickKey, tracked] of this.tracked) {
+			if (!scannedTransports.has(tracked.item.transport)) { continue; }
 			if (!seenKeys.has(brickKey)) {
 				this.incrementMiss(brickKey, tracked);
 			}

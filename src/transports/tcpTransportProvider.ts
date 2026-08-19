@@ -62,10 +62,16 @@ export class TcpTransportProvider implements TransportProvider {
 	discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
 		if (this.beaconBindError) {
+			// The port may since have been freed, so try again before giving up -- a
+			// one-off collision at startup must not disable TCP discovery for the rest
+			// of the session. The error still surfaces for this scan.
+			const previous = this.beaconBindError;
+			this.beaconBindError = undefined;
+			this.startBeaconListener();
 			return Promise.reject(new TransportError(
 				`TCP beacon port ${this.options.discoveryPort ?? TCP.BEACON_PORT} is unavailable: `
-				+ this.beaconBindError.message,
-				this.beaconBindError
+				+ previous.message + ' (rebinding for the next scan)',
+				previous
 			));
 		}
 		const now = Date.now();

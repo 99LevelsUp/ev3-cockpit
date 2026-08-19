@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { Transport, PresenceState, makeBrickKey, BrickKey, DiscoveryItem } from '../contracts';
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, TransportCapabilities, BrickCommand, BrickResponse } from '../contracts';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { waitFor } from './waitFor';
 import { DiscoveryScheduler, PresenceChangeEvent } from '../runtime/discoveryScheduler';
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -268,6 +269,72 @@ describe('DiscoveryScheduler — auto-start on late registration', () => {
 		// Verify the timer was created by checking scanOnce still works
 		await scheduler.scanOnce();
 		assert.equal(scheduler.getTrackedBricks().size, 1);
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+});
+
+describe('DiscoveryScheduler -- skipped transports must not accrue misses', () => {
+	it('does not count a miss for a transport whose scan was already in flight', async () => {
+		// Regression on the round-3 in-flight guard. It skipped a transport whose scan was
+		// still running, but processMisses then walked every tracked brick regardless -- so
+		// a brick was marked absent purely because nobody had looked for it.
+		const key = makeBrickKey(Transport.Mock, 'slow-brick');
+		let discoverCalls = 0;
+		let releaseSecond: (() => void) | undefined;
+
+		const item: DiscoveryItem = {
+			brickKey: key,
+			displayName: 'Slow brick',
+			transport: Transport.Mock,
+			presenceState: PresenceState.Available,
+			remembered: false,
+			connected: false,
+			favorite: false,
+			availableTransports: [Transport.Mock],
+			lastSeenAt: 0,
+		};
+
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			discover: () => {
+				discoverCalls += 1;
+				if (discoverCalls === 1) {
+					return Promise.resolve({ transport: Transport.Mock, items: [item] });
+				}
+				return new Promise((resolve) => {
+					releaseSecond = () => resolve({ transport: Transport.Mock, items: [item] });
+				});
+			},
+			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.Mock }),
+			disconnect: () => Promise.resolve(),
+			send: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			dispose: () => { /* nothing to release */ },
+		};
+
+		const registry = new ProviderRegistry();
+		registry.register(provider);
+		// One missed scan is enough to leave Available, so the assertion is sharp.
+		const scheduler = new DiscoveryScheduler(registry, { unavailableAfterMisses: 1 });
+
+		await scheduler.scanOnce();
+		assert.equal(scheduler.getTrackedBricks().get(key)?.presenceState, PresenceState.Available);
+
+		const inFlight = scheduler.scanOnce();
+		await waitFor(() => releaseSecond !== undefined, 2000);
+
+		// This cycle finds the transport busy and scans nothing at all.
+		await scheduler.scanOnce();
+		assert.equal(
+			scheduler.getTrackedBricks().get(key)?.presenceState,
+			PresenceState.Available,
+			'a transport nobody scanned must not cost its bricks a miss'
+		);
+
+		releaseSecond!();
+		await inFlight;
 
 		scheduler.dispose();
 		registry.dispose();

@@ -120,8 +120,15 @@ export class BtTransportProvider implements TransportProvider {
 					lastSeenAt: now,
 				});
 			}
-		} catch {
-			// Discovery failures are non-fatal.
+		} catch (error) {
+			// Reporting an empty scan here would be a lie the scheduler acts on: it
+			// would count a miss against every tracked BT brick and walk them toward
+			// Unavailable, while onScanFailed stayed silent. A failed scan is not an
+			// empty one.
+			throw new TransportError(
+				`BT discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+				error
+			);
 		}
 
 		return { transport: Transport.BT, items };
