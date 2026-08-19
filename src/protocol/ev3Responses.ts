@@ -152,7 +152,11 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 	if (payload.length < 1) {
 		return { kind: 'fs:list', entries: [] };
 	}
-	// System reply payload: [status:1][handle:1][listing...]
+	// The skip count and the reply shape do not agree, and neither has been checked
+	// against a real brick: LIST_FILES should answer [status:1][listSize:4][handle:1],
+	// which is the 6 bytes parseFsRead skips for the same shape — not 4. A wrong skip
+	// truncates the first entry or empties the list. Plan task 1.7.7 settles it on
+	// hardware; until then this stays as shipped rather than guessed at.
 	const listing = Buffer.from(payload.subarray(4)).toString('utf8');
 	const entries = listing.split('\n').filter(e => e.length > 0);
 	return { kind: 'fs:list', entries };
@@ -172,7 +176,11 @@ function parseFsWrite(_payload: Uint8Array): FsWriteResponse {
 }
 
 function parseFsExists(_payload: Uint8Array): FsExistsResponse {
-	// If LIST_FILES succeeded (no error thrown), path exists
+	// Existence is inferred from LIST_FILES not erroring, which cannot tell an empty
+	// directory from a missing path — both come back without an error and with no
+	// entries. The mock answers correctly because it queries its own tree, so the
+	// gap is invisible in tests and only appears against real hardware. Phase 4
+	// filesystem work needs a real existence probe, not this.
 	return { kind: 'fs:exists', exists: true };
 }
 

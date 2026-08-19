@@ -15,7 +15,7 @@ import { DiscoveryItem, PresenceState } from '../contracts';
 function makeStubProvider(transport: Transport, disposed?: { value: boolean }): TransportProvider {
 	return {
 		transport,
-		capabilities: { supportsSignalInfo: false } satisfies TransportCapabilities,
+		capabilities: { supportsSignalInfo: false, supportsForget: false } satisfies TransportCapabilities,
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items: [] }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },

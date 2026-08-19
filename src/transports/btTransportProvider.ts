@@ -76,7 +76,10 @@ export interface BtTransportProviderOptions {
  */
 export class BtTransportProvider implements TransportProvider {
 	readonly transport = Transport.BT;
-	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false };
+	// supportsForget stays false until forget() actually unpairs at the OS level.
+	// Today it disconnects and drops the preferred-backend cache entry, which leaves
+	// the pairing in place -- see plan task 6.6.6.
+	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
 
 	private readonly backends: Map<BtBackend, BtAdapterFactory>;
 	private readonly discoverDevices?: BtDiscoveryFunction;

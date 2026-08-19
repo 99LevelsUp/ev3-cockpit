@@ -26,7 +26,7 @@ function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryI
 function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): TransportProvider {
 	return {
 		transport,
-		capabilities: { supportsSignalInfo: false },
+		capabilities: { supportsSignalInfo: false, supportsForget: false },
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },

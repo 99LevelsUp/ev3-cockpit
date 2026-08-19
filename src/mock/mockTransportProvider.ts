@@ -29,6 +29,7 @@ export interface MockTransportOptions {
 export class MockTransportProvider implements TransportProvider {
 	readonly transport = Transport.Mock;
 	readonly capabilities: TransportCapabilities = {
+		supportsForget: false,
 		supportsSignalInfo: false,
 	};
 

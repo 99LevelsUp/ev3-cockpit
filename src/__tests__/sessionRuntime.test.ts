@@ -587,7 +587,7 @@ function createStallableProvider(): {
 
 	const provider: TransportProvider = {
 		transport: Transport.Mock,
-		capabilities: { supportsSignalInfo: false },
+		capabilities: { supportsSignalInfo: false, supportsForget: false },
 		discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
 		connect: (brickKey) => {
 			open += 1;

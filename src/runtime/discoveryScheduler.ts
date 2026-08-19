@@ -27,6 +27,12 @@ const DEFAULT_OPTIONS: DiscoverySchedulerOptions = {
 
 // ── Events ──────────────────────────────────────────────────────────
 
+/** A provider's discovery scan failed. */
+export interface ScanFailedEvent {
+	readonly transport: Transport;
+	readonly error: unknown;
+}
+
 export interface PresenceChangeEvent {
 	readonly brickKey: BrickKey;
 	readonly previousState: PresenceState;
@@ -63,11 +69,18 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 	private readonly presenceChanged: TypedEvent<PresenceChangeEvent>;
 	private readonly scanCompleted: TypedEvent<undefined>;
+	private readonly scanFailed: TypedEvent<ScanFailedEvent>;
 
 	/** Fired whenever a brick's presence state changes. */
 	readonly onPresenceChanged: vscode.Event<PresenceChangeEvent>;
 	/** Fired after each full scan cycle completes. */
 	readonly onScanCompleted: vscode.Event<undefined>;
+	/**
+	 * Fired when a provider's scan throws. A failing provider still costs its bricks
+	 * a missed scan, so without this a transport could go dark and march every brick
+	 * to `Removed` with nothing surfaced anywhere.
+	 */
+	readonly onScanFailed: vscode.Event<ScanFailedEvent>;
 
 	constructor(registry: ProviderRegistry, options?: Partial<DiscoverySchedulerOptions>) {
 		this.registry = registry;
@@ -75,8 +88,10 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 		this.presenceChanged = createTypedEvent<PresenceChangeEvent>();
 		this.scanCompleted = createTypedEvent<undefined>();
+		this.scanFailed = createTypedEvent<ScanFailedEvent>();
 		this.onPresenceChanged = this.presenceChanged.event;
 		this.onScanCompleted = this.scanCompleted.event;
+		this.onScanFailed = this.scanFailed.event;
 
 		this.subscriptions.push(
 			registry.onProviderRegistered(p => {
@@ -113,12 +128,13 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		// Collect all brickKeys seen in this cycle
 		const seenKeys = new Set<BrickKey>();
 
-		for (const result of results) {
+		results.forEach((result, index) => {
 			if (result.status === 'fulfilled') {
 				this.processScanResult(result.value, seenKeys);
+			} else {
+				this.scanFailed.fire({ transport: providers[index].transport, error: result.reason });
 			}
-			// Rejected providers are silently skipped — their bricks will miss scans.
-		}
+		});
 
 		// Increment miss counts for bricks not seen in this cycle
 		this.processMisses(seenKeys);
@@ -140,6 +156,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		this.tracked.clear();
 		this.presenceChanged.dispose();
 		this.scanCompleted.dispose();
+		this.scanFailed.dispose();
 		for (const s of this.subscriptions) { s.dispose(); }
 		this.subscriptions.length = 0;
 	}
@@ -181,8 +198,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			}
 
 			this.scanCompleted.fire(undefined);
-		} catch (err: unknown) {
-			console.warn(`[DiscoveryScheduler] ${provider.transport} scan failed:`, err);
+		} catch (error: unknown) {
+			this.scanFailed.fire({ transport: provider.transport, error });
 		}
 	}
 

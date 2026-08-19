@@ -25,7 +25,7 @@ function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryI
 function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): TransportProvider {
 	return {
 		transport,
-		capabilities: { supportsSignalInfo: false } satisfies TransportCapabilities,
+		capabilities: { supportsSignalInfo: false, supportsForget: false } satisfies TransportCapabilities,
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
@@ -229,7 +229,7 @@ describe('DiscoveryScheduler — error resilience', () => {
 		const registry = new ProviderRegistry();
 		const failingProvider: TransportProvider = {
 			transport: Transport.Mock,
-			capabilities: { supportsSignalInfo: false },
+			capabilities: { supportsSignalInfo: false, supportsForget: false },
 			async discover(): Promise<DiscoveryScanResult> { throw new Error('scan failed'); },
 			async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport: Transport.Mock }; },
 			async disconnect(): Promise<void> { /* noop */ },
@@ -239,9 +239,16 @@ describe('DiscoveryScheduler — error resilience', () => {
 		registry.register(failingProvider);
 
 		const scheduler = new DiscoveryScheduler(registry);
+		const failures: string[] = [];
+		scheduler.onScanFailed(e => failures.push(e.transport));
+
 		// Should not throw
 		await scheduler.scanOnce();
 		assert.equal(scheduler.getTrackedBricks().size, 0);
+
+		// A silently skipped provider is indistinguishable from a transport with no
+		// bricks, while its tracked bricks keep accruing misses toward Removed.
+		assert.deepEqual(failures, [Transport.Mock]);
 
 		scheduler.dispose();
 		registry.dispose();

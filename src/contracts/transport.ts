@@ -13,6 +13,12 @@ export interface SessionHandle {
 export interface TransportCapabilities {
 	/** Provider can report signal strength info. */
 	readonly supportsSignalInfo: boolean;
+	/**
+	 * Provider can remove OS-level evidence of a brick (unpair, drop a registry
+	 * entry). Declared rather than inferred from `forget` being present, so the UI
+	 * can decide whether to offer the action without probing for a method.
+	 */
+	readonly supportsForget: boolean;
 }
 
 /** Result of a single discovery scan for one transport. */

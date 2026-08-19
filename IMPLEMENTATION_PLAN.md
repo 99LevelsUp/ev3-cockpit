@@ -29,7 +29,7 @@ complete. Phase 3 work starts from here; the listed gaps are carried, not closed
 - transport adapters and providers (USB, TCP; BT is SPP-only — see 1.11) ✅
 - transport guard (built, not yet wired into any provider — see 1.8.4), BT connection queue, pending reply utilities ✅
 - session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- 186 unit tests + 3 extension-host integration tests passing ✅
+- 188 unit tests + 3 extension-host integration tests passing ✅
 - implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
@@ -124,7 +124,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.1.4 `send(brickKey, command)` — sends a command to a connected brick
   - [x] 1.1.5 `recover(brickKey)` — attempts to re-establish a lost connection
   - [x] 1.1.6 `forget(brickKey)` — removes OS-level evidence where applicable (optional)
-  - [ ] 1.1.7 Transport capability flags. `TransportCapabilities` carries `supportsSignalInfo` only; `forget` support is inferred from optional-method presence, which 6.6.5 requires as an explicit flag
+  - [x] 1.1.7 Transport capability flags (`supportsSignalInfo`, `supportsForget`)
 - [x] **1.2 DiscoveryItem data model**
   - [x] 1.2.1 Implement `DiscoveryItem` from contracts with all required fields
   - [x] 1.2.2 Transport-specific metadata extensions
@@ -533,7 +533,8 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.6.2 Delete all local persisted metadata (including `favorite`)
   - [ ] 6.6.3 OS-level unpair where the provider supports it
   - [ ] 6.6.4 USB provider (Windows): delete `BTHPORT\Parameters\Devices\{mac}` registry entry — this is the source of the display name; without deletion the stale name survives renames
-  - [ ] 6.6.5 Provider capability check before offering forget action
+  - [ ] 6.6.5 Provider capability check before offering forget action (`capabilities.supportsForget`)
+  - [ ] 6.6.6 BT `forget()` must unpair at the OS level. It currently disconnects and drops the preferred-backend cache entry, leaving the pairing intact, which is why `supportsForget` is declared `false` for BT
 - [ ] **6.7 Unit tests**
   - [ ] 6.7.1 globalState adapter read/write/migration tests
   - [ ] 6.7.2 Favorite toggle persistence tests

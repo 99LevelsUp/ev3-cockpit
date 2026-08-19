@@ -78,6 +78,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		});
 	}));
 
+	services.add(scheduler.onScanFailed(e => {
+		logger.error(`Discovery scan failed on ${e.transport}`,
+			e.error instanceof Error ? e.error : new Error(String(e.error)));
+	}));
+
 	// Start discovery polling
 	scheduler.start();
 	logger.info('Discovery scheduler started');

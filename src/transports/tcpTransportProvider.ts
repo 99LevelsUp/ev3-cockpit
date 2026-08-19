@@ -45,11 +45,12 @@ export interface TcpTransportProviderOptions {
  */
 export class TcpTransportProvider implements TransportProvider {
 	readonly transport = Transport.TCP;
-	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false };
+	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
 
 	private readonly options: TcpTransportProviderOptions;
 	private readonly sessions = new Map<BrickKey, TcpSession>();
 	private beaconSocket?: dgram.Socket;
+	private beaconBindError?: Error;
 	private readonly beaconCache = new Map<string, { info: TcpDiscoveryInfo; receivedAt: number }>();
 	private disposed = false;
 
@@ -60,6 +61,13 @@ export class TcpTransportProvider implements TransportProvider {
 
 	discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
+		if (this.beaconBindError) {
+			return Promise.reject(new TransportError(
+				`TCP beacon port ${this.options.discoveryPort ?? TCP.BEACON_PORT} is unavailable: `
+				+ this.beaconBindError.message,
+				this.beaconBindError
+			));
+		}
 		const now = Date.now();
 		const items: DiscoveryItem[] = [];
 		const hostFilter = this.options.host;
@@ -169,6 +177,10 @@ export class TcpTransportProvider implements TransportProvider {
 			// On non-recoverable bind failure (EADDRINUSE), release the reference
 			// so dispose() doesn't try to close a broken socket.
 			if (err.code === 'EADDRINUSE' && this.beaconSocket === socket) {
+				// Nothing will ever arrive on this socket. Recording it lets discover()
+				// report the transport as broken instead of returning an empty list
+				// forever, which reads identically to "no bricks on the network".
+				this.beaconBindError = err;
 				this.beaconSocket = undefined;
 				try { socket.close(); } catch { /* ignore */ }
 			}
