@@ -11,6 +11,8 @@ node_modules/
 .vscode-bisect/
 .vscode-dev-extensions/
 .vscode-dev-profile/
+.obsidian/
+.claudian/
 CLAUDE.md
 
 # Playwright

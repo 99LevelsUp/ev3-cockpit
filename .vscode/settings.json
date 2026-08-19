@@ -8,5 +8,11 @@
 	},
 	"files.exclude": {
 		"out": false
-	}
+	},
+	"files.watcherExclude": {
+		"**/node_modules/**": true,
+		"**/out/**": true,
+		"**/.git/**": true
+	},
+	"json.schemaDownload.enable": false
 }
