@@ -110,8 +110,13 @@ export class HeartbeatMonitor {
 		} catch (error) {
 			this.consecutiveMisses += 1;
 			if (this.consecutiveMisses >= this.missThreshold) {
+				// Stop before handing off. The loop is over either way, but
+				// leaving _running true would make the start() that follows a
+				// successful reconnect a silent no-op, and the session would
+				// never be probed again.
+				this.stop();
 				this.onFailure?.(error);
-				return; // Don't schedule next — let reconnect logic handle it
+				return;
 			}
 		}
 

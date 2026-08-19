@@ -24,6 +24,20 @@ import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
 
+/**
+ * Polls until `predicate` holds. Throws once `timeoutMs` elapses, so a broken
+ * condition fails the test with a clear message instead of hanging the run.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() > deadline) {
+			throw new Error(`Condition not met within ${timeoutMs}ms.`);
+		}
+		await new Promise<void>((r) => setTimeout(r, 25));
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // SessionEntry — state machine
 // ═══════════════════════════════════════════════════════════════════════
@@ -166,11 +180,17 @@ describe('CommandQueue', () => {
 		});
 
 		assert.equal(queue.depth, 0);
+		assert.equal(queue.busy, false);
+
+		// drain() runs synchronously up to its first await, so by the time send()
+		// returns the first command has already been shifted off and is in flight.
 		void queue.send({ kind: 'battery' });
-		// After the first send kicks off processing, depth should be 0 (shifted)
-		// but if we queue more while processing...
+		assert.equal(queue.depth, 0);
+		assert.equal(queue.busy, true);
+
+		// The second command finds the queue busy and waits — that is what depth counts.
 		void queue.send({ kind: 'ports' });
-		assert.equal(queue.depth >= 0, true); // At least 0 after shift
+		assert.equal(queue.depth, 1);
 	});
 
 	it('rejects after dispose', async () => {
@@ -222,6 +242,36 @@ describe('HeartbeatMonitor', () => {
 		monitor.start();
 		monitor.start(); // Should be idempotent
 		assert.equal(monitor.running, true);
+		monitor.stop();
+	});
+
+	it('stops the loop when the miss threshold is reached, so it can be restarted', async () => {
+		// Regression: the threshold branch used to return without clearing the
+		// running flag. The start() that follows a successful reconnect then
+		// no-opped, and the session was never probed again — a second loss went
+		// undetected forever.
+		let probeCount = 0;
+		let failures = 0;
+		const monitor = new HeartbeatMonitor({
+			intervalMs: 3000,
+			missThreshold: 1,
+			probe: () => {
+				probeCount += 1;
+				return Promise.reject(new Error('brick gone'));
+			},
+			onFailure: () => { failures += 1; },
+		});
+
+		monitor.start();
+		await waitFor(() => failures === 1, 6000);
+
+		assert.equal(monitor.running, false, 'monitor must stop itself on failure');
+
+		// Simulates SessionManager restarting the heartbeat after a reconnect.
+		monitor.start();
+		assert.equal(monitor.misses, 0, 'restart must clear the miss counter');
+
+		await waitFor(() => probeCount === 2, 6000);
 		monitor.stop();
 	});
 });
