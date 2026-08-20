@@ -570,8 +570,13 @@ roughly 25 Hz — far above anything the panel needs. An earlier version of this
 USB at 0.5 Hz; that came from `USB.COMMAND_RTT_MS: 500`, a constant no code ever read and
 which was about 50x pessimistic.
 
-TCP and BT remain **unmeasured**: no brick has answered over TCP here (no UDP beacon ever
-arrives) and BT discovery is not wired. Their constants are estimates, marked as such.
+Bluetooth SPP measures at **121 ms** worst case over 30 exchanges, averaging 55-70 ms, so a
+four-command frame is about 240 ms or roughly 4 Hz. Slower than USB by an order of magnitude,
+and still usable for the panel. The RFCOMM connect itself took 4851 ms, which is the cost
+worth designing around on that transport — not the per-command latency.
+
+TCP remains **unmeasured**: no UDP beacon has ever arrived on this host, so discovery cannot
+find a brick and its constants are still estimates.
 
 Phase 3 still owes a target and a floor per transport, and the panel still owes a
 degraded-telemetry indicator below that floor — but on the evidence so far the floor binds
