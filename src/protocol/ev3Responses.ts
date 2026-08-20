@@ -159,8 +159,14 @@ function parseInfo(payload: Uint8Array): InfoResponse {
 // ── System command parsers ──────────────────────────────────────────
 
 function parseFsList(payload: Uint8Array): FsListResponse {
-	if (payload.length < 1) {
-		return { kind: 'fs:list', entries: [] };
+	// Anything shorter than the header is a malformed reply, not an empty directory.
+	// Returning an empty list for it made a corrupted exchange indistinguishable from
+	// a directory that genuinely holds nothing.
+	if (payload.length < SYSTEM_REPLY_HEADER_BYTES) {
+		throw new TransportError(
+			`Malformed fs:list reply: expected at least ${SYSTEM_REPLY_HEADER_BYTES} bytes, `
+			+ `got ${payload.length}.`
+		);
 	}
 	// Measured against a real brick: the reply payload is
 	//   [0] system command echo (0x99 LIST_FILES)
@@ -176,11 +182,15 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 }
 
 function parseFsRead(payload: Uint8Array): FsReadResponse {
-	if (payload.length < 1) {
-		return { kind: 'fs:read', content: '' };
+	// Same reasoning as fs:list: too short to hold the header means malformed, not empty.
+	if (payload.length < SYSTEM_REPLY_HEADER_BYTES) {
+		throw new TransportError(
+			`Malformed fs:read reply: expected at least ${SYSTEM_REPLY_HEADER_BYTES} bytes, `
+			+ `got ${payload.length}.`
+		);
 	}
 	// Same 7-byte header as the listing reply, with the size field naming the file
-	// rather than the listing. Skipping 6 left the handle byte glued to the content.
+	// rather than the listing.
 	const content = Buffer.from(payload.subarray(SYSTEM_REPLY_HEADER_BYTES)).toString('utf8');
 	return { kind: 'fs:read', content };
 }
