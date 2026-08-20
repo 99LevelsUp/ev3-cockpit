@@ -9,6 +9,7 @@ import { ConnectionState, ActivityMode, TelemetryCategory, Transport } from '../
 import { BrickKey } from '../contracts/brickKey';
 import { HeartbeatState, ConnectedSession } from '../contracts/models';
 import { SessionHandle } from '../contracts/transport';
+import { InvalidTransitionError } from '../errors/CockpitError';
 
 /** Valid state transitions for the connection state machine. */
 const VALID_TRANSITIONS: Record<string, Set<string>> = {
@@ -54,7 +55,7 @@ export class SessionEntry {
 	transition(target: ConnectionState): void {
 		const allowed = VALID_TRANSITIONS[this._connectionState];
 		if (!allowed?.has(target)) {
-			throw new Error(
+			throw new InvalidTransitionError(
 				`Invalid session transition: ${this._connectionState} → ${target} for ${this.brickKey}`
 			);
 		}

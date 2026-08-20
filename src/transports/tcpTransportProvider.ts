@@ -6,7 +6,7 @@
  */
 
 import {
-	Transport, BrickKey, makeBrickKey,
+	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
 	PresenceState,
@@ -154,8 +154,7 @@ export class TcpTransportProvider implements TransportProvider {
 	// ── Internal ────────────────────────────────────────────────────
 
 	private buildAdapterOptions(brickKey: BrickKey): TcpAdapterOptions {
-		const parts = brickKey.split(':');
-		const identifier = parts.length > 1 ? parts.slice(1).join(':') : '';
+		const identifier = brickKeyId(brickKey) ?? '';
 		const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(identifier);
 
 		return {
