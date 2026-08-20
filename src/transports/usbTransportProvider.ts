@@ -92,7 +92,10 @@ export class UsbTransportProvider implements TransportProvider {
 		);
 
 		const devices = hid.devices(USB.VENDOR_ID, USB.PRODUCT_ID)
-			.filter(dev => Boolean(dev.path && dev.serialNumber));
+			// Trim in the filter, not just at the key: makeBrickKey throws on a blank
+			// identifier now, and one device with a whitespace-only serial would take the
+			// entire scan down with it instead of dropping itself.
+			.filter(dev => Boolean(dev.path && dev.serialNumber?.trim()));
 		const now = Date.now();
 		const items: DiscoveryItem[] = [];
 

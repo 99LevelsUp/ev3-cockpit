@@ -133,16 +133,25 @@ export class BtSppAdapter implements TransportAdapter {
 			return Promise.race([work, expiry]).finally(() => { if (timer) { clearTimeout(timer); } });
 		};
 
-		await deadline(new Promise<void>((resolve, reject) => {
-			port.open((err) => {
-				if (err) { reject(err); } else { resolve(); }
-			});
-		}), 'open');
+		try {
+			await deadline(new Promise<void>((resolve, reject) => {
+				port.open((err) => {
+					if (err) { reject(err); } else { resolve(); }
+				});
+			}), 'open');
+		} catch (error) {
+			// The deadline can win the race while serialport's open is still in flight, and
+			// the callback may hand us an opened port after we have already thrown. Nothing
+			// holds a reference to it at that point, so close it here on the local variable:
+			// this.port is not assigned yet, which makes this.close() the wrong instrument.
+			port.close(() => { /* the handle is going away either way */ });
+			throw error;
+		}
 
 		// Adopt the port before anything that can still fail. It used to be assigned only
 		// after the DTR and settle steps, so a failed DTR left an open OS handle with no
-		// reference: close() bailed out on the missing field, and on Windows the next open
-		// of that COM port failed with access-denied until the extension host restarted.
+		// reference: close() bails out on a missing port, and on Windows the next open of
+		// that COM port then failed with access-denied until the extension host restarted.
 		this.port = port;
 
 		try {
