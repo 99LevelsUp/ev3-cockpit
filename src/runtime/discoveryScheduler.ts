@@ -35,7 +35,8 @@ export interface ScanFailedEvent {
 
 export interface PresenceChangeEvent {
 	readonly brickKey: BrickKey;
-	readonly previousState: PresenceState;
+	/** Undefined when the brick was not tracked before -- a first discovery. */
+	readonly previousState: PresenceState | undefined;
 	readonly currentState: PresenceState;
 	readonly item: DiscoveryItem;
 }
@@ -241,7 +242,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 				this.tracked.set(item.brickKey, { item: newItem, missCount: 0 });
 				this.presenceChanged.fire({
 					brickKey: item.brickKey,
-					previousState: PresenceState.Removed, // was not tracked
+					previousState: undefined, // never tracked before -- not the same as Removed
 					currentState: PresenceState.Available,
 					item: newItem,
 				});

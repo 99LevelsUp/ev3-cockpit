@@ -16,6 +16,7 @@ import { CommandQueue } from './commandQueue';
 import { HeartbeatMonitor } from './heartbeatMonitor';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { AlreadyConnectedError, NotConnectedError, NoProviderError } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 
 // ── Events ──────────────────────────────────────────────────────────
@@ -88,12 +89,12 @@ export class SessionManager implements vscode.Disposable {
 	/** Connect to a brick via the specified transport. */
 	async connect(brickKey: BrickKey, transport: Transport, displayName?: string): Promise<void> {
 		if (this.sessions.has(brickKey)) {
-			throw new Error(`Brick ${brickKey} is already connected.`);
+			throw new AlreadyConnectedError(`Brick ${brickKey} is already connected.`);
 		}
 
 		const provider = this.providerRegistry.get(transport);
 		if (!provider) {
-			throw new Error(`No transport provider registered for "${transport}".`);
+			throw new NoProviderError(`No transport provider registered for "${transport}".`);
 		}
 
 		// Clear auto-connect suppression on explicit connect
@@ -181,7 +182,7 @@ export class SessionManager implements vscode.Disposable {
 	setActiveBrick(brickKey: BrickKey): void {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
-			throw new Error(`Brick ${brickKey} is not connected.`);
+			throw new NotConnectedError(`Brick ${brickKey} is not connected.`);
 		}
 
 		const previous = this.activeBrickKey;
@@ -246,7 +247,7 @@ export class SessionManager implements vscode.Disposable {
 	send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
-			return Promise.reject(new Error(`Brick ${brickKey} is not connected.`));
+			return Promise.reject(new NotConnectedError(`Brick ${brickKey} is not connected.`));
 		}
 		return resources.commandQueue.send(command);
 	}

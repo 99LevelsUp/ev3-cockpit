@@ -1,11 +1,13 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey } from '../contracts/index';
+import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId } from '../contracts/index';
 import {
 	CockpitError, ErrorCode,
 	TransportError, ConnectionError, TimeoutError,
 	SessionError, HeartbeatError, ConsumerError, SubscriptionError,
+	AlreadyConnectedError, NotConnectedError, NoProviderError,
+	InvalidTransitionError, QueueUnavailableError,
 } from '../errors/index';
 
 describe('Transport enum', () => {
@@ -89,5 +91,77 @@ describe('CockpitError', () => {
 		const cause = new Error('root');
 		const err = new TransportError('wrap', cause);
 		assert.equal(err.cause, cause);
+	});
+});
+
+// ===================================================================
+// brickKey -- round-tripping and malformed input
+// ===================================================================
+
+describe('brickKey', () => {
+	it('round-trips a plain identifier', () => {
+		const key = makeBrickKey(Transport.USB, '00165342D9F2');
+		assert.equal(brickKeyTransport(key), Transport.USB);
+		assert.equal(brickKeyId(key), '00165342D9F2');
+	});
+
+	it('round-trips a Bluetooth MAC, whose colons collide with the separator', () => {
+		// Splitting on every colon instead of the first would truncate this to '00'.
+		const key = makeBrickKey(Transport.BT, '00:16:53:42:D9:F2');
+		assert.equal(key, 'bt:00:16:53:42:D9:F2');
+		assert.equal(brickKeyTransport(key), Transport.BT);
+		assert.equal(brickKeyId(key), '00:16:53:42:D9:F2');
+	});
+
+	it('preserves case, because only the transport knows if its id is case-insensitive', () => {
+		assert.equal(brickKeyId(makeBrickKey(Transport.Mock, 'brick-a')), 'brick-a');
+	});
+
+	it('trims surrounding whitespace', () => {
+		assert.equal(brickKeyId(makeBrickKey(Transport.TCP, '  192.168.0.5  ')), '192.168.0.5');
+	});
+
+	it('rejects an empty or blank identifier', () => {
+		assert.throws(() => makeBrickKey(Transport.USB, ''), /empty identifier/);
+		assert.throws(() => makeBrickKey(Transport.USB, '   '), /empty identifier/);
+	});
+
+	it('reports undefined for malformed keys rather than guessing', () => {
+		assert.equal(brickKeyTransport('nonsense'), undefined);
+		assert.equal(brickKeyTransport(':abc'), undefined);
+		assert.equal(brickKeyTransport('nosuchtransport:abc'), undefined);
+		assert.equal(brickKeyId('nonsense'), undefined);
+		assert.equal(brickKeyId('usb:'), undefined);
+	});
+});
+
+// ===================================================================
+// Typed errors -- callers must be able to branch
+// ===================================================================
+
+describe('typed errors', () => {
+	it('carries the cause through the standard Error mechanism', () => {
+		const root = new Error('socket closed');
+		const err = new TransportError('send failed', root);
+		// Passed to super(message, { cause }) rather than shadowed by an own property,
+		// so debuggers and util.inspect follow the chain.
+		assert.equal(err.cause, root);
+	});
+
+	it('gives each session failure mode its own distinguishable code', () => {
+		const cases: Array<[CockpitError, string]> = [
+			[new AlreadyConnectedError('x'), 'already_connected'],
+			[new NotConnectedError('x'), 'not_connected'],
+			[new NoProviderError('x'), 'no_provider'],
+			[new InvalidTransitionError('x'), 'invalid_transition'],
+			[new QueueUnavailableError('x'), 'queue_unavailable'],
+		];
+		for (const [err, code] of cases) {
+			assert.equal(err.code, code);
+			assert.ok(err instanceof SessionError, `${err.name} should be a SessionError`);
+			assert.ok(err instanceof CockpitError);
+		}
+		// The codes must be distinct, or branching on them is pointless.
+		assert.equal(new Set(cases.map(([, c]) => c)).size, cases.length);
 	});
 });

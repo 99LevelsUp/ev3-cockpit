@@ -5,7 +5,7 @@
  * the USB adapter for raw I/O, and the protocol layer for command encoding/response parsing.
  */
 
-import { Transport, BrickKey, makeBrickKey } from '../contracts';
+import { Transport, BrickKey, makeBrickKey, brickKeyId } from '../contracts';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
@@ -171,8 +171,7 @@ export class UsbTransportProvider implements TransportProvider {
 	// ── Internal ────────────────────────────────────────────────────
 
 	private extractSerial(brickKey: BrickKey): string | undefined {
-		const parts = brickKey.split(':');
-		const serial = parts.length > 1 ? parts.slice(1).join(':') : undefined;
+		const serial = brickKeyId(brickKey);
 		return serial && /^[0-9a-f]{12}$/i.test(serial) ? serial : undefined;
 	}
 

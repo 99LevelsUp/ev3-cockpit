@@ -11,7 +11,7 @@
  */
 
 import {
-	Transport, BrickKey, makeBrickKey,
+	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
 	PresenceState,
@@ -251,8 +251,7 @@ export class BtTransportProvider implements TransportProvider {
 	}
 
 	private extractMac(brickKey: BrickKey): string | undefined {
-		const parts = brickKey.split(':');
-		const mac = parts.length > 1 ? parts.slice(1).join(':') : undefined;
+		const mac = brickKeyId(brickKey);
 		return mac && mac.replace(/[:-]/g, '').length >= 12 ? mac : undefined;
 	}
 
