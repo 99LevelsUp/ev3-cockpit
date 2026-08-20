@@ -7,7 +7,11 @@
  */
 
 export interface SendOptions {
-	/** Per-command timeout in milliseconds. */
+	/**
+	 * Round-trip budget in milliseconds. Defaults to the transport's
+	 * `SEND_TIMEOUT_MS`. On expiry the send rejects with `TimeoutError` and the
+	 * adapter discards the exchange so the next send starts clean.
+	 */
 	timeoutMs?: number;
 	/** Abort signal for cooperative cancellation. */
 	signal?: AbortSignal;

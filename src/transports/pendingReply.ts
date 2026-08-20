@@ -2,8 +2,10 @@
  * Shared pending-reply logic used by USB HID, TCP, and Bluetooth transport adapters.
  *
  * Handles EV3 message counter matching, length-prefixed packet extraction,
- * and drain loops for receive buffers.
+ * drain loops for receive buffers, and the round-trip timeout every adapter needs.
  */
+
+import { TimeoutError, TransportError } from '../errors/CockpitError';
 
 /** State for a single outstanding send-and-wait-for-reply operation. */
 export interface PendingReply {
@@ -27,6 +29,60 @@ export function getMessageCounter(packet: Uint8Array): number {
 		return -1;
 	}
 	return new DataView(packet.buffer, packet.byteOffset, packet.byteLength).getUint16(2, true);
+}
+
+/** Everything an adapter needs to arm one outstanding exchange. */
+export interface PendingReplySetup {
+	resolve: (packet: Uint8Array) => void;
+	reject: (error: unknown) => void;
+	/**
+	 * Abandons the exchange and lets the adapter recover: drop the pending latch and
+	 * discard whatever is in the receive buffer. Without the discard, a partial frame
+	 * from the abandoned exchange stays put and the *next* reply is parsed starting
+	 * from it — one timeout would silently corrupt every exchange after it.
+	 */
+	fail: (error: unknown) => void;
+	/** Round-trip budget. Zero or less disables the timer. */
+	timeoutMs: number;
+	signal?: AbortSignal;
+	expectedMessageCounter?: number;
+	/** Transport name used in error messages, e.g. `USB`. */
+	transport: string;
+}
+
+/**
+ * Arms a pending reply with a round-trip timeout and abort wiring.
+ *
+ * All three adapters had the same hand-rolled version of this without the timer, so
+ * a brick that stopped answering left the exchange pending forever and the adapter
+ * permanently unusable — every later send rejected with "already has in-flight
+ * request". Keeping the timer here means one implementation rather than three.
+ */
+export function createPendingReply(setup: PendingReplySetup): PendingReply {
+	const { resolve, reject, fail, timeoutMs, signal, expectedMessageCounter, transport } = setup;
+
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const onAbort = () => fail(new TransportError(`${transport} send aborted.`));
+
+	const cleanup = () => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
+		signal?.removeEventListener('abort', onAbort);
+	};
+
+	if (timeoutMs > 0) {
+		timer = setTimeout(() => {
+			fail(new TimeoutError(
+				`${transport} send timed out after ${timeoutMs} ms with no matching reply.`
+			));
+		}, timeoutMs);
+		timer.unref?.();
+	}
+	signal?.addEventListener('abort', onAbort, { once: true });
+
+	return { resolve, reject, cleanup, expectedMessageCounter };
 }
 
 /** Maximum packets to consume per drain call to prevent CPU spin. */
