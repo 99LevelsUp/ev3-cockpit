@@ -16,7 +16,7 @@ import {
 	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS,
 } from './ev3Packet';
 import { INFO_LAYOUT } from './ev3Commands';
-import { TransportError } from '../errors/CockpitError';
+import { ProtocolError } from '../errors/CockpitError';
 
 // ── Sensor/motor type names ─────────────────────────────────────────
 
@@ -87,13 +87,16 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 function parseBattery(payload: Uint8Array): BatteryResponse {
 	// Global layout from buildBatteryCommand: [0..3] volts, [4..7] amps, [8] percent.
 	if (payload.length < 9) {
-		throw new TransportError(
+		throw new ProtocolError(
 			`Malformed battery reply: expected 9 bytes, got ${payload.length}.`
 		);
 	}
 	return {
 		kind: 'battery',
-		level: payload[8],
+		// The contract says 0-100 and Phase 4 renders it as a percentage. The clamp
+		// left with the old current-draw heuristic it belonged to; the layout was
+		// measured on one firmware, so keep the range enforced at the boundary.
+		level: Math.min(100, Math.max(0, payload[8])),
 		voltage: readFloat32le(payload, 0),
 		currentAmps: readFloat32le(payload, 4),
 	};
@@ -163,7 +166,7 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 	// Returning an empty list for it made a corrupted exchange indistinguishable from
 	// a directory that genuinely holds nothing.
 	if (payload.length < SYSTEM_REPLY_HEADER_BYTES) {
-		throw new TransportError(
+		throw new ProtocolError(
 			`Malformed fs:list reply: expected at least ${SYSTEM_REPLY_HEADER_BYTES} bytes, `
 			+ `got ${payload.length}.`
 		);
@@ -184,7 +187,7 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 function parseFsRead(payload: Uint8Array): FsReadResponse {
 	// Same reasoning as fs:list: too short to hold the header means malformed, not empty.
 	if (payload.length < SYSTEM_REPLY_HEADER_BYTES) {
-		throw new TransportError(
+		throw new ProtocolError(
 			`Malformed fs:read reply: expected at least ${SYSTEM_REPLY_HEADER_BYTES} bytes, `
 			+ `got ${payload.length}.`
 		);
@@ -216,12 +219,16 @@ function parseFsDelete(_payload: Uint8Array): FsDeleteResponse {
 
 function validateReply(reply: Ev3Packet, commandKind: string): void {
 	if (reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-		throw new TransportError(`EV3 direct command error for '${commandKind}'`);
+		throw new ProtocolError(`EV3 direct command error for '${commandKind}'`);
 	}
 	if (reply.type === EV3_REPLY.SYSTEM_REPLY_ERROR) {
-		const status = reply.payload.length > 0 ? reply.payload[0] : 0xff;
+		// payload[0] is the echoed system command, payload[1] the status — the same
+		// layout the parsers below skip with SYSTEM_REPLY_HEADER_BYTES. Reading [0]
+		// here reported every failure as the command byte, so an ILLEGAL_PATH came out
+		// as '0x99' and lost the one piece of information the error carried.
+		const status = reply.payload.length > 1 ? reply.payload[1] : 0xff;
 		const statusName = Object.entries(EV3_SYSTEM_STATUS)
 			.find(([, v]) => v === status)?.[0] ?? `0x${status.toString(16)}`;
-		throw new TransportError(`EV3 system command error for '${commandKind}': ${statusName}`);
+		throw new ProtocolError(`EV3 system command error for '${commandKind}': ${statusName}`);
 	}
 }

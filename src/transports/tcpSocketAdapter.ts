@@ -61,10 +61,17 @@ export function parseBeaconMessage(message: string): BeaconFields | undefined {
 		map.set(line.slice(0, index).trim().toLowerCase(), line.slice(index + 1).trim());
 	}
 
-	const serialNumber = map.get('serial-number') ?? '';
+	// These are free-form lines from a datagram anyone on the subnet can send, and
+	// `name` reaches the log and the brick picker verbatim. Bound the length and drop
+	// control characters so the network cannot forge log lines or pad the list.
+	const clean = (value: string): string =>
+		// eslint-disable-next-line no-control-regex
+		value.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, TCP.BEACON_NAME_MAX);
+
+	const serialNumber = clean(map.get('serial-number') ?? '');
 	const portRaw = map.get('port') ?? '';
-	const protocol = map.get('protocol') ?? 'WiFi';
-	const name = map.get('name') ?? '';
+	const protocol = clean(map.get('protocol') ?? 'WiFi');
+	const name = clean(map.get('name') ?? '');
 	const parsedPort = Number.parseInt(portRaw, 10);
 	if (!Number.isFinite(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
 		return undefined;

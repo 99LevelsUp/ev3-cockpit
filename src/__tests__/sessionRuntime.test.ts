@@ -18,6 +18,7 @@ import { SessionEntry } from '../runtime/sessionEntry';
 import { SessionManager } from '../runtime/sessionManager';
 import { CommandQueue } from '../runtime/commandQueue';
 import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
+import { ProtocolError } from '../errors/CockpitError';
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { TransportProvider } from '../contracts/transport';
@@ -261,6 +262,38 @@ describe('HeartbeatMonitor', () => {
 		assert.equal(monitor.misses, 0, 'restart must clear the miss counter');
 
 		await waitFor(() => probeCount === 2, 6000);
+		monitor.stop();
+	});
+
+	it('does not count an unparseable reply as a missed heartbeat', async () => {
+		// The probe is the battery command, so a firmware whose payload layout differs
+		// rejects every tick. Counted as a miss it reconnects, succeeds, resets the
+		// backoff, and loops forever — a brick that should merely lose telemetry becomes
+		// unusable instead. A reply that arrived proves the link is alive.
+		let probeCount = 0;
+		let failures = 0;
+		const anomalies: unknown[] = [];
+		const monitor = new HeartbeatMonitor({
+			intervalMs: 3000,
+			missThreshold: 1,
+			probe: () => {
+				probeCount += 1;
+				return Promise.reject(new ProtocolError('Malformed battery reply'));
+			},
+			onFailure: () => { failures += 1; },
+			isLinkFailure: (error) => !(error instanceof ProtocolError),
+			onAnomaly: (error) => { anomalies.push(error); },
+		});
+
+		monitor.start();
+		await waitFor(() => anomalies.length >= 1, 6000);
+
+		assert.equal(failures, 0, 'a parse failure must not report link loss');
+		assert.equal(monitor.running, true, 'the monitor must keep probing');
+		assert.equal(monitor.misses, 0, 'a parse failure must not accumulate misses');
+
+		// Still counts a genuine link failure, so the distinction did not disable detection.
+		await waitFor(() => probeCount >= 2, 6000);
 		monitor.stop();
 	});
 });

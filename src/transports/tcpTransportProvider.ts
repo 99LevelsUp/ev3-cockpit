@@ -8,7 +8,7 @@
 import {
 	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
-	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
+	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse, SendCommandOptions,
 	PresenceState,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
@@ -26,11 +26,17 @@ const BEACON_PROBE = Buffer.from([0x00]);
  * Derives the broadcast address for an interface, or undefined when the mask makes
  * one meaningless — a /32 as VPN adapters commonly report.
  */
-function toBroadcastAddress(address: string, netmask: string): string | undefined {
+export function toBroadcastAddress(address: string, netmask: string): string | undefined {
 	const a = address.split('.').map(Number);
 	const m = netmask.split('.').map(Number);
 	if (a.length !== 4 || m.length !== 4 || a.some(isNaN) || m.some(isNaN)) { return undefined; }
+	// /32 has no broadcast address, and an all-zero mask would produce the limited
+	// broadcast 255.255.255.255 — some tunnel adapters report 0.0.0.0 while connecting,
+	// and blasting every attached network is not what this is for.
 	if (m.every(part => part === 255)) { return undefined; }
+	if (m.every(part => part === 0)) { return undefined; }
+	// Narrower than /8 keeps the probe on plausible LAN segments.
+	if (m[0] !== 255) { return undefined; }
 	return a.map((part, i) => (part & m[i]) | (~m[i] & 0xff)).join('.');
 }
 
@@ -68,6 +74,8 @@ export class TcpTransportProvider implements TransportProvider {
 	private beaconSocket?: dgram.Socket;
 	private beaconBindError?: Error;
 	private beaconPrimeTimer?: ReturnType<typeof setInterval>;
+	private beaconSocketReady = false;
+	private lastScanAt = 0;
 	/** Local IPv4 addresses, so the provider ignores the echo of its own probe. */
 	private readonly localAddresses = new Set<string>();
 	private readonly beaconCache = new Map<string, { info: TcpDiscoveryInfo; receivedAt: number }>();
@@ -84,6 +92,10 @@ export class TcpTransportProvider implements TransportProvider {
 
 	discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
+		// Priming starts on the first scan and stops once scanning does. Running it from
+		// construction meant every window held inbound UDP 3015 open on every attached
+		// network for the whole session, whether or not anyone was looking for a brick.
+		this.ensureBeaconPriming();
 		if (this.beaconBindError) {
 			// The port may since have been freed, so try again before giving up -- a
 			// one-off collision at startup must not disable TCP discovery for the rest
@@ -153,7 +165,11 @@ export class TcpTransportProvider implements TransportProvider {
 		await session.adapter.close();
 	}
 
-	async send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
+	async send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse> {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
@@ -161,7 +177,7 @@ export class TcpTransportProvider implements TransportProvider {
 		}
 
 		session.messageCounter = (session.messageCounter + 1) & 0xffff;
-		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'TCP');
+		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'TCP', options);
 	}
 
 	dispose(): void {
@@ -196,7 +212,7 @@ export class TcpTransportProvider implements TransportProvider {
 			// Falling back to adapter-side discovery here cannot work: while this
 			// provider is listening it owns the beacon port, so the adapter's own bind
 			// fails with EADDRINUSE and the caller gets that instead of the real reason.
-			throw new TransportError(
+			throw new ConnectionError(
 				`No address known for ${brickKey}. Its beacon has expired — wait for the next `
 				+ 'announcement, or configure a host explicitly.'
 			);
@@ -221,12 +237,7 @@ export class TcpTransportProvider implements TransportProvider {
 			if (this.localAddresses.has(rinfo.address)) { return; }
 			const parsed = this.parseBeacon(msg.toString('utf8'), rinfo.address);
 			if (!parsed) { return; }
-			// Keyed by identity alone. Keying on address-and-serial meant a brick that
-			// changed address appeared twice, and an address DHCP moved between bricks
-			// kept the previous owner listed until its entry aged out — at which point
-			// connecting the stale row opened whichever brick now holds that address.
-			const key = (parsed.serialNumber || parsed.ip).toLowerCase();
-			this.beaconCache.set(key, { info: parsed, receivedAt: Date.now() });
+			this.acceptBeacon(parsed);
 		});
 
 		socket.on('error', (err: NodeJS.ErrnoException) => {
@@ -250,21 +261,110 @@ export class TcpTransportProvider implements TransportProvider {
 			// leave an interval broadcasting on a closed socket for the life of the process.
 			if (this.disposed) { return; }
 			try { socket.setBroadcast(true); } catch { /* not fatal */ }
-			this.primeBeaconPath(socket, port);
-			this.beaconPrimeTimer = setInterval(
-				() => this.primeBeaconPath(socket, port),
-				TCP.BEACON_PRIME_INTERVAL_MS
-			);
-			this.beaconPrimeTimer.unref?.();
+			this.beaconSocketReady = true;
 		});
 		this.beaconSocket = socket;
 	}
 
+	/**
+	 * Records a beacon, treating its contents as untrusted.
+	 *
+	 * Everything here arrived in a datagram anyone on the subnet can send, and
+	 * `connect()` later takes both the address and the port from this cache. So a
+	 * forged announcement claiming a real brick's serial would decide where a user's
+	 * "connect to my brick" actually goes, and the VMTP unlock handshake authenticates
+	 * nothing that would catch it. Three rules follow:
+	 *
+	 * - the serial must look like an EV3's (12 hex digits, which is its BT MAC), so
+	 *   arbitrary strings cannot occupy the identity space;
+	 * - a still-fresh identity is never silently repointed at a different address —
+	 *   the incumbent wins and the conflict is recorded, because the alternative is
+	 *   last-writer-wins on an attacker-chosen key;
+	 * - the map is capped, or one datagram per invented serial fills it.
+	 *
+	 * This is defence in depth, not a complete answer: identity is still unverified
+	 * until a session checks `COM_GET / GET_ID` against the serial it asked for.
+	 */
+	private acceptBeacon(info: TcpDiscoveryInfo): void {
+		const serial = (info.serialNumber ?? '').toLowerCase();
+		if (!/^[0-9a-f]{12}$/.test(serial)) {
+			return;
+		}
+
+		const existing = this.beaconCache.get(serial);
+		const now = Date.now();
+		if (existing && now - existing.receivedAt <= TCP.BEACON_FRESH_MS
+			&& existing.info.ip !== info.ip) {
+			this.beaconConflicts.set(serial, now);
+			return;
+		}
+
+		if (!existing && this.beaconCache.size >= TCP.BEACON_CACHE_MAX) {
+			let oldestKey: string | undefined;
+			let oldestAt = Infinity;
+			for (const [k, v] of this.beaconCache) {
+				if (v.receivedAt < oldestAt) { oldestAt = v.receivedAt; oldestKey = k; }
+			}
+			if (oldestKey !== undefined) { this.beaconCache.delete(oldestKey); }
+		}
+
+		this.beaconCache.set(serial, { info, receivedAt: now });
+	}
+
+	/**
+	 * Serials seen announcing from more than one address while both claims were fresh,
+	 * against the time we saw the clash.
+	 *
+	 * Timestamped rather than a bare set: a brick that takes a new DHCP lease inside
+	 * the freshness window looks exactly like a spoof, and a conflict that never
+	 * expired would make an ordinary lease renewal take that brick permanently out of
+	 * service. It expires on the same clock as the cache entry that caused it.
+	 */
+	private readonly beaconConflicts = new Map<string, number>();
+
 	/** Freshest cached beacon for this identity, if it is still within the window. */
 	private findCachedBeacon(serialNumber: string): TcpDiscoveryInfo | undefined {
-		const entry = this.beaconCache.get(serialNumber.toLowerCase());
+		const key = serialNumber.toLowerCase();
+		// Two addresses claimed this identity, so we cannot tell which is the brick —
+		// but only while the clash is recent. Past the freshness window the older claim
+		// would have expired from the cache anyway, and holding the conflict beyond it
+		// would keep a re-addressed brick unreachable for the provider's whole life.
+		const conflictAt = this.beaconConflicts.get(key);
+		if (conflictAt !== undefined) {
+			if (Date.now() - conflictAt <= TCP.BEACON_FRESH_MS) { return undefined; }
+			this.beaconConflicts.delete(key);
+		}
+		const entry = this.beaconCache.get(key);
 		if (!entry) { return undefined; }
 		return Date.now() - entry.receivedAt > TCP.BEACON_FRESH_MS ? undefined : entry.info;
+	}
+
+	/**
+	 * Starts the prime loop on demand, and lets it lapse when scanning stops.
+	 *
+	 * The loop exists to keep the host firewall's inbound mapping open, so running it
+	 * unconditionally from construction also keeps port 3015 reachable from every host
+	 * on every attached subnet for as long as the editor is open. Tying it to actual
+	 * discovery bounds that exposure to the time a user is genuinely looking.
+	 */
+	private ensureBeaconPriming(): void {
+		this.lastScanAt = Date.now();
+		const socket = this.beaconSocket;
+		if (!socket || !this.beaconSocketReady || this.beaconPrimeTimer) { return; }
+
+		const port = this.options.discoveryPort ?? TCP.BEACON_PORT;
+		this.primeBeaconPath(socket, port);
+		this.beaconPrimeTimer = setInterval(() => {
+			if (Date.now() - this.lastScanAt > TCP.BEACON_FRESH_MS) {
+				if (this.beaconPrimeTimer) {
+					clearInterval(this.beaconPrimeTimer);
+					this.beaconPrimeTimer = undefined;
+				}
+				return;
+			}
+			this.primeBeaconPath(socket, port);
+		}, TCP.BEACON_PRIME_INTERVAL_MS);
+		this.beaconPrimeTimer.unref?.();
 	}
 
 	/**

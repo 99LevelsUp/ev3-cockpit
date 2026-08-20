@@ -23,6 +23,18 @@ export interface HeartbeatMonitorOptions {
 	onSuccess?: HeartbeatSuccessCallback;
 	/** Called when miss threshold is reached. */
 	onFailure?: HeartbeatFailureCallback;
+	/**
+	 * Decides whether a probe rejection means the link is gone.
+	 *
+	 * Defaults to treating every rejection as a link failure. A probe that fails
+	 * because the reply could not be parsed proves the opposite — the brick
+	 * answered — and must not count toward the miss threshold, or a firmware whose
+	 * payload layout differs would be reconnected forever instead of merely losing
+	 * telemetry.
+	 */
+	isLinkFailure?: (error: unknown) => boolean;
+	/** Called for a probe rejection that `isLinkFailure` rejected as a miss. */
+	onAnomaly?: HeartbeatFailureCallback;
 }
 
 /**
@@ -38,6 +50,8 @@ export class HeartbeatMonitor {
 	private readonly probe: () => Promise<void>;
 	private readonly onSuccess?: HeartbeatSuccessCallback;
 	private readonly onFailure?: HeartbeatFailureCallback;
+	private readonly isLinkFailure?: (error: unknown) => boolean;
+	private readonly onAnomaly?: HeartbeatFailureCallback;
 
 	private timer?: NodeJS.Timeout;
 	private consecutiveMisses = 0;
@@ -52,6 +66,8 @@ export class HeartbeatMonitor {
 		this.probe = options.probe;
 		this.onSuccess = options.onSuccess;
 		this.onFailure = options.onFailure;
+		this.isLinkFailure = options.isLinkFailure;
+		this.onAnomaly = options.onAnomaly;
 	}
 
 	get running(): boolean {
@@ -108,6 +124,14 @@ export class HeartbeatMonitor {
 			this.consecutiveMisses = 0;
 			this.onSuccess?.();
 		} catch (error) {
+			if (this.isLinkFailure && !this.isLinkFailure(error)) {
+				// A reply arrived and we could not read it. The link is verifiably alive,
+				// so this is not a miss — but the caller still needs to hear about it.
+				this.consecutiveMisses = 0;
+				this.onAnomaly?.(error);
+				this.scheduleNext();
+				return;
+			}
 			this.consecutiveMisses += 1;
 			if (this.consecutiveMisses >= this.missThreshold) {
 				// Stop before handing off. The loop is over either way, but

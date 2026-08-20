@@ -16,6 +16,7 @@ import {
 	createPendingReply
 } from './pendingReply';
 import { BT } from './transportConstants';
+import { TimeoutError } from '../errors/CockpitError';
 
 // ── serialport interfaces (duck-typed to avoid hard import) ─────────
 
@@ -115,25 +116,52 @@ export class BtSppAdapter implements TransportAdapter {
 			autoOpen: false
 		});
 
-		await new Promise<void>((resolve, reject) => {
+		// Opening an RFCOMM port can hang, and the caller is holding the only BT
+		// connection slot while it does. This was the one adapter whose open() had no
+		// deadline: TCP already races its handshake timeout and USB's open is synchronous.
+		const deadline = <T>(work: Promise<T>, step: string): Promise<T> => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const expiry = new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new TimeoutError(
+						`BT SPP ${step} on ${this.portPath} timed out after ${BT.CONNECT_TIMEOUT_MS} ms.`
+					)),
+					BT.CONNECT_TIMEOUT_MS
+				);
+				timer.unref?.();
+			});
+			return Promise.race([work, expiry]).finally(() => { if (timer) { clearTimeout(timer); } });
+		};
+
+		await deadline(new Promise<void>((resolve, reject) => {
 			port.open((err) => {
 				if (err) { reject(err); } else { resolve(); }
 			});
-		});
+		}), 'open');
 
-		if (this.assertDtr) {
-			await new Promise<void>((resolve, reject) => {
-				port.set({ dtr: true }, (err) => {
-					if (err) { reject(err); } else { resolve(); }
-				});
-			});
-		}
-
-		if (this.postOpenDelayMs > 0) {
-			await new Promise<void>((resolve) => setTimeout(resolve, this.postOpenDelayMs));
-		}
-
+		// Adopt the port before anything that can still fail. It used to be assigned only
+		// after the DTR and settle steps, so a failed DTR left an open OS handle with no
+		// reference: close() bailed out on the missing field, and on Windows the next open
+		// of that COM port failed with access-denied until the extension host restarted.
 		this.port = port;
+
+		try {
+			if (this.assertDtr) {
+				await deadline(new Promise<void>((resolve, reject) => {
+					port.set({ dtr: true }, (err) => {
+						if (err) { reject(err); } else { resolve(); }
+					});
+				}), 'DTR assert');
+			}
+
+			if (this.postOpenDelayMs > 0) {
+				await new Promise<void>((resolve) => setTimeout(resolve, this.postOpenDelayMs));
+			}
+		} catch (error) {
+			await this.close().catch(() => { /* best effort */ });
+			throw error;
+		}
+
 		this.receiveBuffer = Buffer.alloc(0);
 		this._isOpen = true;
 

@@ -13,7 +13,7 @@
 import {
 	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
-	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
+	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse, SendCommandOptions,
 	PresenceState,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
@@ -173,7 +173,11 @@ export class BtTransportProvider implements TransportProvider {
 		}
 	}
 
-	async send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
+	async send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse> {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
@@ -181,7 +185,7 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		session.messageCounter = (session.messageCounter + 1) & 0xffff;
-		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'BT');
+		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'BT', options);
 	}
 
 	async recover(brickKey: BrickKey): Promise<SessionHandle> {
