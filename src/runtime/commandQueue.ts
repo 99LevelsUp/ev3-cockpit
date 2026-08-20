@@ -6,6 +6,7 @@
  */
 
 import { BrickCommand, BrickResponse } from '../contracts/transport';
+import { QueueUnavailableError } from '../errors/CockpitError';
 
 /** A queued command with its resolve/reject callbacks. */
 interface QueuedCommand {
@@ -44,10 +45,10 @@ export class CommandQueue {
 	/** Enqueue a command. Returns a promise that resolves with the response. */
 	send(command: BrickCommand): Promise<BrickResponse> {
 		if (this._disposed) {
-			return Promise.reject(new Error('Command queue has been disposed.'));
+			return Promise.reject(new QueueUnavailableError('Command queue has been disposed.'));
 		}
 		if (!this.executor) {
-			return Promise.reject(new Error('Command queue has no executor.'));
+			return Promise.reject(new QueueUnavailableError('Command queue has no executor.'));
 		}
 
 		return new Promise<BrickResponse>((resolve, reject) => {
@@ -67,7 +68,7 @@ export class CommandQueue {
 	/** Dispose the queue, rejecting all pending commands. */
 	dispose(): void {
 		this._disposed = true;
-		this.drainWith(new Error('Command queue disposed.'));
+		this.drainWith(new QueueUnavailableError('Command queue disposed.'));
 		this.executor = undefined;
 	}
 

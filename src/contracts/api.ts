@@ -8,10 +8,17 @@ export interface ConnectedBrickSnapshot {
     connectionState: ConnectionState;
 }
 
+/**
+ * Public mirror of the runtime's session state change.
+ *
+ * Field names match `SessionStateChangeEvent` deliberately: the two describe the
+ * same event, and `currentState` here against `newState` there was a rename
+ * waiting to confuse a consumer.
+ */
 export interface BrickStateChangeEvent {
     brickKey: BrickKey;
     previousState: ConnectionState;
-    currentState: ConnectionState;
+    newState: ConnectionState;
 }
 
 export interface ActiveBrickSnapshot {
