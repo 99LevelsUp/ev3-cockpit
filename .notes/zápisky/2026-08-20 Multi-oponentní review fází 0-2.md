@@ -151,10 +151,70 @@ Plán tvrdil hotovou práci, která v kódu není:
 - [ ] **`parseFsWrite`** — implementovat chunkovaný protokol (bez cihly bych hádal
       byte layout), nebo nechat hlasitě selhat a přenechat fázi 4 s hardwarem?
 
+## Kolo 6 — oprava, která nikam nedosáhla
+
+Tři nálezy kola 6 byly **moje vlastní opravy z kola 5, které nedosáhly kódu**. Ne
+špatné opravy (to byl vzor kol 2 a 4) — opravy, které v diffu vypadají hotově a
+nemají žádný efekt:
+
+| Oprava z kola 5 | Proč nedosáhla |
+|---|---|
+| `BT.CONNECT_TIMEOUT_MS` 6000 → 15000 (změřeno na hardwaru) | konstantu nečetl žádný kód; `BtSppAdapter.open()` neměl deadline vůbec a držel při tom jediný RFCOMM slot |
+| `sendCommandViaAdapter(..., options)` | `TransportProvider.send` options nepřijímal, takže je neměl kdo předat |
+| layout system reply změřen a zdokumentován | `validateReply` dál čítal `payload[0]` (echo příkazu) místo `[1]` — každá chyba FS se hlásila jako `0x99` |
+
+Zvlášť u té první: hodnotu jsem v témže kole **změřil na cihle**, což dalo falešný
+pocit, že je věc vyřešená. Poznámka: `COMMAND_RTT_MS` je bez čtenáře **dál** —
+úmyslně, prvním čtenářem bude úkol 3.8.
+
+### Konvergence dvou oponentů
+
+Reliability i api-contract došli **nezávisle** ke stejné vadě, a je to nejcennější
+nález kola. Řetěz: `parseBattery` od kola 5 hází výjimku na krátký payload →
+heartbeat probe **je** ten battery příkaz → `handleHeartbeatFailure` bere každé
+odmítnutí jako ztrátu linky → Reconnecting → reconnect uspěje → `reconnect.reset()`
+smaže počítadlo pokusů → **nekonečná smyčka**. Moje kontrola délky z kola 5 udělala
+ze špatného procenta baterie nepoužitelnou cihlu.
+
+Opraveno typovaným `ProtocolError` a `HeartbeatMonitor.isLinkFailure`. Kontrola
+patří do monitoru, ne do session manageru: `onFailure` je **terminální** (`tick()`
+volá `stop()` před předáním), takže „zůstaň Connected" v manageru by session nechalo
+navždy bez probu. To je přesně ta chyba, kterou opravoval commit `bcddd55`.
+
+### Další opravy kola 6
+
+- BT `open()` adoptuje port **před** DTR krokem — selhaný assert dřív nechal otevřený
+  OS handle bez reference, `close()` na chybějícím poli skončil a další otevření toho
+  COM portu padalo na access-denied až do restartu hostitele
+- `beaconConflicts` je timestampovaná mapa s expirací na hodinách cache — obnovení
+  DHCP leasu uvnitř freshness okna dřív vyřadilo cihlu **natrvalo**
+- `BatteryResponse.level` zpátky clampnutý na 0–100; bound odešel s heuristikou,
+  ke které patřil
+- `createPendingReply` řeší už zrušený signál místo vyčkání celého budgetu
+- první spatření cihly loguje `new`, ne `undefined`
+
+### Nové testy
+
+`beaconDiscovery.test.ts` — beacon byl jediné místo, kam do provideru vstupují
+nedůvěryhodné síťové byty, a netestovalo ho nic. Plus heartbeat rozlišení a battery
+clamp. **222 unit testů zelených**, compile i lint čisté.
+
+Zásadní o testech: off-by-one ve `validateReply` přežil proto, že test posílal jen
+status byte a matchoval `/system command error/` — assertoval **existenci** chyby,
+ne její obsah. Teď assertuje rozřešené jméno `ILLEGAL_PATH`.
+
+### Externí pokrytí kola 6 — částečné
+
+Jen **codex**. `mimo`, `gemini` a `qwen` jsou nainstalované, ale blokuje je
+lean-ctx shell allowlist (i při volání plnou cestou — kontroluje se název). Allowlist
+je Petrova bezpečnostní konfigurace, tak jsem ji nerozvolňoval; kdo chce širší
+pokrytí, spustí `lean-ctx allow mimo gemini qwen`. `nemotron` vrátil prázdný výstup
+(22 B), `deepseek` v tomto kole nespuštěn.
+
 ## Viz také
 
 - [[Plán implementace]] · [[Architektura]] · [[Požadavky]]
 - `docs/ideation/2026-04-28-design-review-ideation.md` — ideace, ze které vyšly
   pre-fáze-3 blockery
 - Commity: `865a9a0` `732d6a8` `3bba7f4` `ca45bb9` `32a93d4` `e9d416b` `bf4996a`
-  `5485137` `dfd0667` `bcddd55`
+  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6`
