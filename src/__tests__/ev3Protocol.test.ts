@@ -371,12 +371,22 @@ describe('ev3Responses — parseResponse', () => {
 		}, /direct command error/i);
 	});
 
-	it('holds battery level inside the documented 0-100 range', () => {
-		// The contract promises a percentage and Phase 4 will render it as one. The
-		// clamp used to live with the current-draw heuristic and left when the real
-		// GET_LBATT read replaced it, so an unexpected byte reached consumers raw.
+	it('refuses a battery level outside the documented 0-100 range', () => {
+		// An earlier version of this test asserted the value was clamped to 100. That
+		// is worse than it looks: it reports a false *full* battery and lets the
+		// heartbeat succeed, hiding the layout change. Refusing is only affordable
+		// because a ProtocolError no longer takes the session down.
 		const payload = new Uint8Array(9);
 		payload[8] = 200;
+		assert.throws(
+			() => parseResponse({ kind: 'battery' }, makeReply(EV3_REPLY.DIRECT_REPLY, payload)),
+			/not a percentage/,
+		);
+	});
+
+	it('accepts a battery level at the top of the range', () => {
+		const payload = new Uint8Array(9);
+		payload[8] = 100;
 		const result = parseResponse(
 			{ kind: 'battery' },
 			makeReply(EV3_REPLY.DIRECT_REPLY, payload),
