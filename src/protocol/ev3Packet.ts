@@ -5,6 +5,8 @@
  * where `bodyLength = 2 (counter) + 1 (type) + payload.length`.
  */
 
+import { ProtocolError } from '../errors/CockpitError';
+
 // ── Packet structure ────────────────────────────────────────────────
 
 export interface Ev3Packet {
@@ -178,14 +180,14 @@ export function encodeEv3Packet(
  */
 export function decodeEv3Packet(packet: Uint8Array): Ev3Packet {
 	if (packet.length < MIN_PACKET_BYTES) {
-		throw new Error(`Invalid EV3 packet: expected at least ${MIN_PACKET_BYTES} bytes, got ${packet.length}`);
+		throw new ProtocolError(`Invalid EV3 packet: expected at least ${MIN_PACKET_BYTES} bytes, got ${packet.length}`);
 	}
 
 	const view = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
 	const declaredBodyLength = view.getUint16(0, true);
 	const actualBodyLength = packet.length - 2;
 	if (declaredBodyLength !== actualBodyLength) {
-		throw new Error(
+		throw new ProtocolError(
 			`Invalid EV3 packet length: declared body ${declaredBodyLength}, actual body ${actualBodyLength}`
 		);
 	}

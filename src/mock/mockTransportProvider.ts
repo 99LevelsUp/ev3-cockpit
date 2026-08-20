@@ -2,7 +2,7 @@ import {
 	Transport, PresenceState, BrickKey, makeBrickKey,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, PortState,
-	BrickCommand, BrickResponse,
+	BrickCommand, BrickResponse, SendCommandOptions,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors';
 import { MockConfig, MockBrickConfig, MockPortConfig } from './mockConfig';
@@ -92,8 +92,17 @@ export class MockTransportProvider implements TransportProvider {
 	// ── Send ────────────────────────────────────────────────────────
 
 	// eslint-disable-next-line @typescript-eslint/require-await
-	async send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
+	async send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse> {
 		this.assertNotDisposed();
+		// The real adapters reject an aborted send before dispatch. A mock that
+		// answers anyway teaches Phase 4 consumers the wrong contract.
+		if (options?.signal?.aborted) {
+			throw new TransportError(`Mock send to ${brickKey} was aborted.`);
+		}
 		const state = this.requireBrick(brickKey);
 
 		if (!state.connected) {
