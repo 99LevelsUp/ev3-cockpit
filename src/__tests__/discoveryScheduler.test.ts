@@ -340,3 +340,57 @@ describe('DiscoveryScheduler -- skipped transports must not accrue misses', () =
 		registry.dispose();
 	});
 });
+
+describe('DiscoveryScheduler — a failed scan is not a scan', () => {
+	it('does not accrue misses for a transport whose scan rejected', async () => {
+		// A provider that rejects has told us nothing about its bricks. Treating that as
+		// "scanned, found nothing" marks them absent for a reason that has nothing to do
+		// with the bricks — the same defect as counting a transport that was skipped for
+		// an in-flight scan, one step over. Reachable now that useDiscovery:false rejects.
+		const item = makeItem('aaa', Transport.TCP);
+		let failNext = false;
+
+		const provider: TransportProvider = {
+			transport: Transport.TCP,
+			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			discover(): Promise<DiscoveryScanResult> {
+				return failNext
+					? Promise.reject(new Error('TCP discovery is disabled for this provider'))
+					: Promise.resolve({ transport: Transport.TCP, items: [item] });
+			},
+			async connect(brickKey: BrickKey): Promise<SessionHandle> {
+				return { brickKey, transport: Transport.TCP };
+			},
+			async disconnect(): Promise<void> { /* noop */ },
+			async send(): Promise<BrickResponse> { return { kind: 'battery', level: 0 }; },
+			dispose(): void { /* noop */ },
+		};
+
+		const registry = new ProviderRegistry();
+		registry.register(provider);
+		// One miss demotes and two remove, so three failed scans would evict the brick
+		// entirely if a rejected scan counted as one.
+		const scheduler = new DiscoveryScheduler(registry, {
+			unavailableAfterMisses: 1,
+			removedAfterMisses: 2,
+		});
+
+		await scheduler.scanOnce();
+		assert.equal(scheduler.getTrackedBricks().size, 1, 'the brick was seen once');
+
+		// Every scan now rejects. The brick must survive: nobody looked for it.
+		failNext = true;
+		await scheduler.scanOnce();
+		await scheduler.scanOnce();
+		await scheduler.scanOnce();
+
+		assert.equal(
+			scheduler.getTrackedBricks().get(makeBrickKey(Transport.TCP, 'aaa'))?.presenceState,
+			PresenceState.Available,
+			'a transport that could not answer must not report its bricks absent'
+		);
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+});

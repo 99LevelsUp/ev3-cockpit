@@ -137,14 +137,9 @@ Plán tvrdil hotovou práci, která v kódu není:
 
 ### Rozhodnutí pro Petra
 
-- [ ] **`useDiscovery: false` — tiché prázdno, nebo chyba?** Dva oponenti nezávisle
-      (correctness P3, api-contract P2) chtějí, aby `discover()` skončil pojmenovanou
-      chybou: prázdný seznam navždy je nerozlišitelný od „na síti nejsou cihly", což je
-      přesně ta nejednoznačnost, kvůli které existuje větev `beaconBindError`. Proti
-      tomu: vypnutí discovery je **vědomá volba volajícího**, ne nehoda jako selhaný
-      bind. Nerozhodl jsem to sám, protože nový test `beaconDiscovery.test.ts` přibil
-      opak (prázdný seznam) — a přepnout chování tichou úpravou testu je právě ten
-      způsob, jak se rozhodnutí ztratí.
+- [x] **`useDiscovery: false`** — rozhodnuto pro **pojmenovanou chybu**, v souladu
+      s oponenty. Zapracováno; implementace odhalila vadu v `DiscoveryScheduler`
+      (odmítnutý scan se počítal jako miss) — viz níže.
 - [ ] **Fáze 5 závisí na fázi 6** — 5.4.3, 5.5.3 a 5.3.5 potřebují storage, kterou
       staví fáze 6, ale §12 fixuje pořadí 5 před 6. Přesunout persistenci dopředu,
       nebo ty UI úkoly dozadu?
@@ -312,6 +307,43 @@ plné pokrytí, spustí `lean-ctx allow mimo gemini qwen` a kolo se dá zopakova
 Takže: **žádný přežívající blocker ani major**, ale shoda napříč dodavateli chybí —
 signál, který u těchto modelů odděluje reálnou vadu od halucinace, je tu tenčí než
 v kolech 1–5.
+
+## Rozhodnutí vlastníka: pojmenovaná chyba
+
+Petr se přiklonil k oponentům. `discover()` na provideru s `useDiscovery: false` teď
+odmítá s `TransportError`, který ten stav pojmenuje, místo aby vracel prázdný seznam.
+Můj test, který přibíjel opak, je obrácený.
+
+### Co se tím odhalilo
+
+Implementace toho rozhodnutí odhalila **reálnou vadu v `DiscoveryScheduler`**, kterou
+by jinak nenašlo nic. Komentář nad `processMisses` tvrdil:
+
+> Only transports this cycle actually scanned may accrue misses.
+
+…ale ta množina se stavěla ze **všech** providerů v cyklu — `new Set(providers.map(…))`
+— tedy včetně těch, jejichž scan **odmítl**. Odmítnutý scan ale není scan: transport
+o svých cihlách neřekl nic, a přesto se to počítalo jako „naskenováno, nic nenalezeno"
+a cihly se demotovaly až k odstranění.
+
+Je to **tatáž vada, kterou opravovalo kolo 4**, jen o krok dál. Tehdejší oprava pokryla
+„transport přeskočený kvůli běžícímu scanu" a na „transport, jehož scan selhal" nedošla.
+Do teď to nebylo dosažitelné, protože žádný provider rutinně neodmítal — a přesně to
+tohle rozhodnutí změnilo. Kdyby se pojmenovaná chyba zavedla bez téhle opravy, provider
+s vypnutým discovery by po třech cyklech vymazal své cihly.
+
+Oba nové testy **ověřeny, že rozlišují** — a tentokrát reverzním patchem, ne
+`git checkout`. Bez opravy padají na „a transport that could not answer must not report
+its bricks absent".
+
+`test:ci` exit 0, **226 testů zelených**.
+
+### Allowlist
+
+Petr povolil `lean-ctx allow mimo gemini qwen`. Zjištění při tom: `gemini` a `qwen`
+v allowlistu **už byly** — přidal se jen `mimo`. Můj předchozí závěr, že blokuje
+všechny tři, byla domněnka z jednoho selhání `mimo`; gemini ani qwen jsem reálně
+nezkusil. Příští kolo tedy může jet plnou matici dodavatelů.
 
 ## Viz také
 

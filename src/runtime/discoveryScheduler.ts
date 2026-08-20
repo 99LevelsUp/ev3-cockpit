@@ -145,18 +145,21 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 		if (this.disposed) { return; }
 
+		// Only transports that actually answered may accrue misses. Two ways to fail
+		// that test: skipped for a scan already in flight, or the scan rejected. Both
+		// mean nobody looked, and counting either marks bricks absent for a reason that
+		// has nothing to do with the bricks. An earlier fix covered only the first.
+		const answered = new Set<Transport>();
 		results.forEach((result, index) => {
 			if (result.status === 'fulfilled') {
+				answered.add(providers[index].transport);
 				this.processScanResult(result.value, seenKeys);
 			} else {
 				this.scanFailed.fire({ transport: providers[index].transport, error: result.reason });
 			}
 		});
 
-		// Only transports this cycle actually scanned may accrue misses. Counting a
-		// transport that was skipped for an in-flight scan would mark bricks absent
-		// purely because nobody looked for them.
-		this.processMisses(seenKeys, new Set(providers.map(p => p.transport)));
+		this.processMisses(seenKeys, answered);
 
 		this.scanCompleted.fire(undefined);
 	}
