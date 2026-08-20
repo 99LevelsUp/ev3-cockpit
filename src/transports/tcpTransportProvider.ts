@@ -54,7 +54,14 @@ export interface TcpTransportProviderOptions {
 	host?: string;
 	/** Default TCP port (default: 5555). */
 	port?: number;
-	/** Enable UDP beacon discovery (default: true). */
+	/**
+	 * Enable UDP beacon discovery (default: true).
+	 *
+	 * When false the provider binds nothing and broadcasts nothing, and `discover()`
+	 * rejects with a `TransportError` naming that. It deliberately does not resolve
+	 * with an empty list: that reads identically to "no bricks on this network" and
+	 * would leave the scheduler polling a provider that can never answer.
+	 */
 	useDiscovery?: boolean;
 	/** UDP discovery port (default: 3015). */
 	discoveryPort?: number;
@@ -92,6 +99,16 @@ export class TcpTransportProvider implements TransportProvider {
 
 	discover(): Promise<DiscoveryScanResult> {
 		this.assertNotDisposed();
+		if (this.options.useDiscovery === false) {
+			// Say so rather than resolving empty. A caller cannot tell silence from an
+			// empty network, and the scheduler would keep scanning a provider that has
+			// nothing listening — the same ambiguity the bind-failure branch below fixes.
+			return Promise.reject(new TransportError(
+				'TCP discovery is disabled for this provider (useDiscovery: false), so no '
+				+ 'beacon listener is bound. Connect by host instead, or construct the '
+				+ 'provider with discovery enabled.'
+			));
+		}
 		// Priming starts on the first scan and stops once scanning does. Running it from
 		// construction meant every window held inbound UDP 3015 open on every attached
 		// network for the whole session, whether or not anyone was looking for a brick.
