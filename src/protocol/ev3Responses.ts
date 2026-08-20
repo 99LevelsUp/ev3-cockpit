@@ -91,12 +91,20 @@ function parseBattery(payload: Uint8Array): BatteryResponse {
 			`Malformed battery reply: expected 9 bytes, got ${payload.length}.`
 		);
 	}
+	// The contract promises 0-100 and Phase 4 renders it as a percentage. Clamping
+	// an out-of-range byte would report a false full battery and let the heartbeat
+	// succeed, hiding exactly the layout change this error exists to surface — and
+	// the layout was measured on one firmware. Refusing costs nothing now that a
+	// ProtocolError no longer tears the session down.
+	if (payload[8] > 100) {
+		throw new ProtocolError(
+			`Battery level out of range: ${payload[8]} is not a percentage. `
+			+ 'The reply layout does not match this firmware.'
+		);
+	}
 	return {
 		kind: 'battery',
-		// The contract says 0-100 and Phase 4 renders it as a percentage. The clamp
-		// left with the old current-draw heuristic it belonged to; the layout was
-		// measured on one firmware, so keep the range enforced at the boundary.
-		level: Math.min(100, Math.max(0, payload[8])),
+		level: payload[8],
 		voltage: readFloat32le(payload, 0),
 		currentAmps: readFloat32le(payload, 4),
 	};
