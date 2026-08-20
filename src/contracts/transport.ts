@@ -21,6 +21,20 @@ export interface TransportCapabilities {
 	readonly supportsForget: boolean;
 }
 
+/** Per-command overrides a caller may pass through a provider to the adapter. */
+export interface SendCommandOptions {
+	/**
+	 * Round-trip budget in milliseconds; omit to get the transport's own value.
+	 *
+	 * Zero or less disables the timeout entirely, so the send waits indefinitely.
+	 * That is a sentinel, not "do not wait" — spell an immediate give-up with an
+	 * already-aborted `signal`.
+	 */
+	readonly timeoutMs?: number;
+	/** Abort signal for cooperative cancellation. */
+	readonly signal?: AbortSignal;
+}
+
 /** Result of a single discovery scan for one transport. */
 export interface DiscoveryScanResult {
 	readonly transport: Transport;
@@ -107,8 +121,17 @@ export interface TransportProvider extends vscode.Disposable {
 	/** Terminate the connection to the brick. */
 	disconnect(brickKey: BrickKey): Promise<void>;
 
-	/** Send a typed command to a connected brick and receive a typed response. */
-	send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse>;
+	/**
+	 * Sends a typed command to a connected brick and receives a typed response.
+	 *
+	 * `options` reaches the adapter, so a caller can set a round-trip budget or pass
+	 * an abort signal. Omitting it uses the transport's default.
+	 */
+	send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse>;
 
 	/**
 	 * Attempt to re-establish a lost connection.

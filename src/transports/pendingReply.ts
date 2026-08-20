@@ -72,6 +72,13 @@ export function createPendingReply(setup: PendingReplySetup): PendingReply {
 		signal?.removeEventListener('abort', onAbort);
 	};
 
+	if (signal?.aborted) {
+		// addEventListener never fires for a signal that has already aborted, so without
+		// this the exchange would sit out the full budget before failing.
+		queueMicrotask(() => fail(new TransportError(`${transport} send aborted.`)));
+		return { resolve, reject, cleanup, expectedMessageCounter };
+	}
+
 	if (timeoutMs > 0) {
 		timer = setTimeout(() => {
 			fail(new TimeoutError(

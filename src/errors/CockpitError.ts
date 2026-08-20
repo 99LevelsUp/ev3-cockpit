@@ -3,6 +3,9 @@ export const ErrorCode = {
 	TransportFailed: 'transport_failed',
 	ConnectionFailed: 'connection_failed',
 	Timeout: 'timeout',
+	/** The brick answered, but not in a shape we can parse. The link is alive. */
+	ProtocolFailed: 'protocol_failed',
+	InvalidBrickKey: 'invalid_brick_key',
 	// Session
 	SessionFailed: 'session_failed',
 	HeartbeatFailed: 'heartbeat_failed',
@@ -42,6 +45,27 @@ export class ConnectionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.ConnectionFailed, message, cause);
 		this.name = 'ConnectionError';
+	}
+}
+
+/**
+ * The brick replied, but the reply could not be parsed or framed.
+ *
+ * Distinct from `TransportError` on purpose: this one proves the link works. The
+ * heartbeat relies on the difference — see `HeartbeatMonitorOptions.isLinkFailure`.
+ */
+export class ProtocolError extends CockpitError {
+	constructor(message: string, cause?: unknown) {
+		super(ErrorCode.ProtocolFailed, message, cause);
+		this.name = 'ProtocolError';
+	}
+}
+
+/** An identifier that cannot form a brick key. */
+export class InvalidBrickKeyError extends CockpitError {
+	constructor(message: string, cause?: unknown) {
+		super(ErrorCode.InvalidBrickKey, message, cause);
+		this.name = 'InvalidBrickKeyError';
 	}
 }
 

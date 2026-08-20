@@ -1,4 +1,5 @@
 import { Transport } from './enums';
+import { InvalidBrickKeyError } from '../errors/CockpitError';
 
 /** Stable identifier for a brick within a given transport. Never based on displayName. */
 export type BrickKey = string & { readonly __brand: 'BrickKey' };
@@ -24,7 +25,9 @@ const SEPARATOR = ':';
 export function makeBrickKey(transport: Transport, id: string): BrickKey {
 	const trimmed = id.trim();
 	if (trimmed.length === 0) {
-		throw new Error(`Cannot build a brick key for ${transport} from an empty identifier.`);
+		throw new InvalidBrickKeyError(
+			`Cannot build a brick key for ${transport} from an empty identifier.`
+		);
 	}
 	return `${transport}${SEPARATOR}${trimmed}` as BrickKey;
 }

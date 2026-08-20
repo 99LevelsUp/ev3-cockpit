@@ -72,6 +72,15 @@ export const TCP = {
 	 * UDP mapping lifetime, which is short.
 	 */
 	BEACON_PRIME_INTERVAL_MS: 4000,
+	/**
+	 * Most beacons held at once.
+	 *
+	 * Anything on the subnet can announce, so without a cap one datagram per invented
+	 * serial grows the map and fills the brick list with attacker-chosen strings.
+	 */
+	BEACON_CACHE_MAX: 64,
+	/** Longest accepted brick name in a beacon; the brick's own field holds 16. */
+	BEACON_NAME_MAX: 32,
 	/** TCP keepalive interval (ms). */
 	KEEPALIVE_MS: 3000,
 	/** Discovery scan interval (ms). */
