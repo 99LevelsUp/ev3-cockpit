@@ -75,13 +75,26 @@ export const BT = {
 	SPP_UUID: '00001101-0000-1000-8000-00805f9b34fb',
 	/** Discovery scan interval (ms) — BT discovery is slow. */
 	DISCOVERY_INTERVAL_MS: 10000,
-	/** Connection timeout (ms). */
-	CONNECT_TIMEOUT_MS: 6000,
-	/** Expected command round-trip time (ms). **Not measured** — BT discovery is not
-	 * wired yet, so no exchange has ever run over this transport. */
-	COMMAND_RTT_MS: 2000,
-	/** Round-trip budget before a send is abandoned (ms). Estimate, see above. */
-	SEND_TIMEOUT_MS: 8000,
+	/**
+	 * RFCOMM connection timeout (ms).
+	 *
+	 * A measured open took 4851 ms, so the previous 6000 left only a 1.2x margin and
+	 * would have failed a normal connect under any extra latency.
+	 */
+	CONNECT_TIMEOUT_MS: 15000,
+	/**
+	 * Measured worst-case command round trip (ms).
+	 *
+	 * 121 ms observed over 30 exchanges via SPP on firmware V1.10E, averaging 55-70 ms.
+	 * The previous value of 2000 was ~16x pessimistic and read by no code.
+	 */
+	COMMAND_RTT_MS: 130,
+	/**
+	 * Round-trip budget before a send is abandoned (ms). Roughly 16x the measured
+	 * round trip — more headroom than the other transports get, because RFCOMM is
+	 * the least predictable of the three.
+	 */
+	SEND_TIMEOUT_MS: 2000,
 	/** Mandatory cooldown between sequential RFCOMM connections (ms). */
 	INTER_CONNECTION_COOLDOWN_MS: 15000,
 	/** Recovery cooldown after RFCOMM error (ms, base value). */
