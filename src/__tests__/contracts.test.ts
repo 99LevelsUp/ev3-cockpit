@@ -100,17 +100,17 @@ describe('CockpitError', () => {
 
 describe('brickKey', () => {
 	it('round-trips a plain identifier', () => {
-		const key = makeBrickKey(Transport.USB, '001653F00C0C');
+		const key = makeBrickKey(Transport.USB, '001653AABBCC');
 		assert.equal(brickKeyTransport(key), Transport.USB);
-		assert.equal(brickKeyId(key), '001653F00C0C');
+		assert.equal(brickKeyId(key), '001653AABBCC');
 	});
 
 	it('round-trips a Bluetooth MAC, whose colons collide with the separator', () => {
 		// Splitting on every colon instead of the first would truncate this to '00'.
-		const key = makeBrickKey(Transport.BT, '00:16:53:F0:0C:0C');
-		assert.equal(key, 'bt:00:16:53:F0:0C:0C');
+		const key = makeBrickKey(Transport.BT, '00:16:53:AA:BB:CC');
+		assert.equal(key, 'bt:00:16:53:AA:BB:CC');
 		assert.equal(brickKeyTransport(key), Transport.BT);
-		assert.equal(brickKeyId(key), '00:16:53:F0:0C:0C');
+		assert.equal(brickKeyId(key), '00:16:53:AA:BB:CC');
 	});
 
 	it('preserves case, because only the transport knows if its id is case-insensitive', () => {

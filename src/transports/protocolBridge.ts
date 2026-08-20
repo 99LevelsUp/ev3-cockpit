@@ -10,6 +10,7 @@ import { buildCommand, EncodedCommand } from '../protocol/ev3Commands';
 import { encodeEv3Packet, decodeEv3Packet } from '../protocol/ev3Packet';
 import { parseResponse } from '../protocol/ev3Responses';
 import { getMessageCounter as getMsgCounter } from './pendingReply';
+import { SendOptions } from './transportAdapter';
 
 /** Encode a BrickCommand into { type, payload } ready for packet framing. */
 export function encodeCommand(command: BrickCommand): EncodedCommand {
@@ -39,15 +40,21 @@ export function getMessageCounter(rawPacket: Uint8Array): number {
  * Eliminates duplicate send logic across USB / TCP / BT providers.
  */
 export async function sendCommandViaAdapter(
-	adapter: { send(packet: Uint8Array, options?: { expectedMessageCounter?: number }): Promise<Uint8Array> },
+	adapter: { send(packet: Uint8Array, options?: SendOptions): Promise<Uint8Array> },
 	command: BrickCommand,
 	messageCounter: number,
 	transportLabel: string,
+	/**
+	 * Forwarded to the adapter. Without this the `timeoutMs` and `signal` on
+	 * {@link SendOptions} were unreachable from every provider, so a caller could set
+	 * them and silently get the default.
+	 */
+	options?: Omit<SendOptions, 'expectedMessageCounter'>,
 ): Promise<BrickResponse> {
 	const { type, payload } = encodeCommand(command);
 	const packet = encodePacket(messageCounter, type, payload);
 
-	const reply = await adapter.send(packet, { expectedMessageCounter: messageCounter });
+	const reply = await adapter.send(packet, { ...options, expectedMessageCounter: messageCounter });
 	const counter = getMessageCounter(reply);
 	if (counter !== messageCounter) {
 		throw new Error(
