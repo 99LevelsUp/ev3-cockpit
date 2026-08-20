@@ -51,11 +51,27 @@ export const TCP = {
 	BEACON_TIMEOUT_MS: 4000,
 	/** Timeout for VMTP1.0 unlock handshake (ms). */
 	UNLOCK_TIMEOUT_MS: 2000,
-	/** Expected command round-trip time (ms). **Not measured** — no brick has been
-	 * reachable over TCP to check it. Treat as an estimate. */
-	COMMAND_RTT_MS: 1000,
-	/** Round-trip budget before a send is abandoned (ms). Estimate, see above. */
-	SEND_TIMEOUT_MS: 3000,
+	/**
+	 * Measured worst-case command round trip (ms).
+	 *
+	 * 58 ms observed over 40 exchanges against a brick on Wi-Fi, averaging 33 ms.
+	 * Samples alternate between roughly 15 ms and 50 ms, which looks like delayed
+	 * ACK on the brick side; `setNoDelay` is already on at this end. The previous
+	 * value of 1000 was ~17x pessimistic and read by no code.
+	 */
+	COMMAND_RTT_MS: 60,
+	/** Round-trip budget before a send is abandoned (ms), ~17x the measured value. */
+	SEND_TIMEOUT_MS: 1000,
+	/**
+	 * How often to send a datagram that keeps the inbound beacon path open (ms).
+	 *
+	 * A host firewall that filters unsolicited inbound UDP drops the brick's beacon
+	 * outright, and Windows does that by default: the brick broadcasts every 5 s and
+	 * nothing arrives. Sending outbound first puts the socket into the firewall's
+	 * stateful table, after which the beacons come through. Kept under the firewall's
+	 * UDP mapping lifetime, which is short.
+	 */
+	BEACON_PRIME_INTERVAL_MS: 4000,
 	/** TCP keepalive interval (ms). */
 	KEEPALIVE_MS: 3000,
 	/** Discovery scan interval (ms). */

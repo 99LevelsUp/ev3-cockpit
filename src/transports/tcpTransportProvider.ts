@@ -17,6 +17,22 @@ import { TCP } from './transportConstants';
 import { sendCommandViaAdapter } from './protocolBridge';
 
 import * as dgram from 'node:dgram';
+import * as os from 'node:os';
+
+/** One harmless byte, sent only to open the inbound path. */
+const BEACON_PROBE = Buffer.from([0x00]);
+
+/**
+ * Derives the broadcast address for an interface, or undefined when the mask makes
+ * one meaningless — a /32 as VPN adapters commonly report.
+ */
+function toBroadcastAddress(address: string, netmask: string): string | undefined {
+	const a = address.split('.').map(Number);
+	const m = netmask.split('.').map(Number);
+	if (a.length !== 4 || m.length !== 4 || a.some(isNaN) || m.some(isNaN)) { return undefined; }
+	if (m.every(part => part === 255)) { return undefined; }
+	return a.map((part, i) => (part & m[i]) | (~m[i] & 0xff)).join('.');
+}
 
 // ── Session tracking ────────────────────────────────────────────────
 
@@ -51,6 +67,9 @@ export class TcpTransportProvider implements TransportProvider {
 	private readonly sessions = new Map<BrickKey, TcpSession>();
 	private beaconSocket?: dgram.Socket;
 	private beaconBindError?: Error;
+	private beaconPrimeTimer?: ReturnType<typeof setInterval>;
+	/** Local IPv4 addresses, so the provider ignores the echo of its own probe. */
+	private readonly localAddresses = new Set<string>();
 	private readonly beaconCache = new Map<string, { info: TcpDiscoveryInfo; receivedAt: number }>();
 	private disposed = false;
 
@@ -143,6 +162,10 @@ export class TcpTransportProvider implements TransportProvider {
 
 	dispose(): void {
 		this.disposed = true;
+		if (this.beaconPrimeTimer) {
+			clearInterval(this.beaconPrimeTimer);
+			this.beaconPrimeTimer = undefined;
+		}
 		try { this.beaconSocket?.close(); } catch { /* socket may already be dead */ }
 		this.beaconSocket = undefined;
 		for (const [, session] of this.sessions) {
@@ -157,11 +180,20 @@ export class TcpTransportProvider implements TransportProvider {
 		const identifier = brickKeyId(brickKey) ?? '';
 		const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(identifier);
 
+		// A key built from a serial carries no address, but this provider already heard
+		// the beacon that named it — so answer from the cache rather than asking the
+		// adapter to rediscover. It cannot: this provider holds the beacon port, so the
+		// adapter's own listener would never bind, and connect failed every time a
+		// brick was found by discovery rather than configured by hand.
+		const cached = isIp ? undefined : this.findCachedBeacon(identifier);
+		const host = isIp ? identifier : (cached?.ip ?? this.options.host ?? '');
+
 		return {
-			host: isIp ? identifier : (this.options.host ?? ''),
-			port: this.options.port ?? TCP.PORT,
+			host,
+			port: this.options.port ?? cached?.port ?? TCP.PORT,
 			serialNumber: isIp ? '' : identifier,
-			useDiscovery: this.options.useDiscovery ?? true,
+			// Only fall back to adapter-side discovery when no address could be resolved.
+			useDiscovery: host ? false : (this.options.useDiscovery ?? true),
 			discoveryPort: this.options.discoveryPort ?? TCP.BEACON_PORT,
 			discoveryTimeoutMs: this.options.discoveryTimeoutMs ?? TCP.BEACON_TIMEOUT_MS,
 		};
@@ -171,6 +203,8 @@ export class TcpTransportProvider implements TransportProvider {
 		const socket = dgram.createSocket('udp4');
 
 		socket.on('message', (msg, rinfo) => {
+			// Our own broadcast probe comes back to us; it is not a brick.
+			if (this.localAddresses.has(rinfo.address)) { return; }
 			const parsed = this.parseBeacon(msg.toString('utf8'), rinfo.address);
 			if (!parsed) { return; }
 			const key = `${parsed.ip}:${parsed.serialNumber || parsed.ip}`;
@@ -191,8 +225,60 @@ export class TcpTransportProvider implements TransportProvider {
 			}
 		});
 
-		socket.bind(this.options.discoveryPort ?? TCP.BEACON_PORT);
+		const port = this.options.discoveryPort ?? TCP.BEACON_PORT;
+		socket.bind(port, () => {
+			try { socket.setBroadcast(true); } catch { /* not fatal */ }
+			this.primeBeaconPath(socket, port);
+			this.beaconPrimeTimer = setInterval(
+				() => this.primeBeaconPath(socket, port),
+				TCP.BEACON_PRIME_INTERVAL_MS
+			);
+			this.beaconPrimeTimer.unref?.();
+		});
 		this.beaconSocket = socket;
+	}
+
+	/**
+	 * Sends a one-byte datagram to each local subnet's broadcast address.
+	 *
+	 * The brick broadcasts its beacon every 5 seconds whether or not anyone is
+	 * listening, but a host firewall filtering unsolicited inbound UDP drops it —
+	 * measured on a default Windows install, where the brick was announcing the whole
+	 * time and discovery saw nothing for half an hour. Sending outbound first puts
+	 * this socket in the firewall's stateful table and the beacons arrive.
+	 *
+	 * This changes no firewall configuration; it is the ordinary outbound-then-inbound
+	 * pattern any discovery client uses.
+	 */
+	/** Freshest cached beacon whose serial matches, if it is still within the window. */
+	private findCachedBeacon(serialNumber: string): TcpDiscoveryInfo | undefined {
+		const wanted = serialNumber.toLowerCase();
+		const now = Date.now();
+		for (const entry of this.beaconCache.values()) {
+			if (now - entry.receivedAt > TCP.BEACON_FRESH_MS) { continue; }
+			if ((entry.info.serialNumber ?? '').toLowerCase() === wanted) { return entry.info; }
+		}
+		return undefined;
+	}
+
+	private primeBeaconPath(socket: dgram.Socket, port: number): void {
+		for (const target of this.broadcastTargets()) {
+			socket.send(BEACON_PROBE, port, target, () => { /* best effort */ });
+		}
+	}
+
+	/** Broadcast address of every non-internal IPv4 interface. */
+	private broadcastTargets(): string[] {
+		const targets: string[] = [];
+		for (const list of Object.values(os.networkInterfaces())) {
+			for (const iface of list ?? []) {
+				if (iface.family !== 'IPv4' || iface.internal) { continue; }
+				this.localAddresses.add(iface.address);
+				const broadcast = toBroadcastAddress(iface.address, iface.netmask);
+				if (broadcast) { targets.push(broadcast); }
+			}
+		}
+		return targets;
 	}
 
 	private parseBeacon(message: string, senderIp: string): TcpDiscoveryInfo | undefined {
