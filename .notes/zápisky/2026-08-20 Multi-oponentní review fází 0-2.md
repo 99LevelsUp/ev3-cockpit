@@ -240,10 +240,59 @@ scan** místo aby vypadlo samo. Filtr teď trimuje.
 
 `test:ci` (včetně host testů) exit 0, 222 testů zelených.
 
+## Kola 8–9 — jedno místo, čtyři pokusy
+
+Codex dal na kolo 6 `FAIL` se čtyřmi MAJOR. Jeden z nich (`BtSppAdapter.open()` osiřelý
+port při timeoutu) už byl opravený v `f484889` **nezávisle** — codex a advisor na něj
+přišli každý sám, což je nejužitečnější druh souhlasu. Zbylé tři byly znovu tentýž
+podpis „nedosáhlo všech míst":
+
+- `ev3Packet.ts` házel bare `Error` na rozbité rámování. To je **nejčistší** případ
+  „cihla odpověděla a neumíme to přečíst" — a typování ho minulo, takže heartbeat ho
+  čítal jako ztrátu linky. Přesně to, co typování mělo zastavit.
+- `mockTransportProvider` je **čtvrtý** implementátor `TransportProvider.send` a options
+  nepřijímal. Tady to vadí víc než u reálného transportu: proti mocku se vyvíjí fáze 4,
+  takže kontrakt, který mock tiše ignoruje, se konzumenti naučí špatně.
+- `parseBattery` clampoval `level` na 0–100. Tady si dva oponenti **protiřečili**:
+  api-contract chtěl vynutit dokumentovaný rozsah, codex namítl, že clamp reportuje
+  falešně **plnou** baterii a nechá heartbeat uspět, čímž skryje právě tu změnu layoutu.
+  Codex má pravdu a odmítnutí splní obojí — rozsah je vynucený na hranici a anomálie je
+  vidět. Bezpečné **jen** díky práci kola 6; před ní by to shodilo session.
+
+### To jedno místo
+
+`BtSppAdapter.open()` timeout cesta byla opravená **třikrát špatně**, každý pokus jinak:
+
+| Pokus | Co bylo špatně |
+|---|---|
+| 1 (kolo 6) | `this.port` se přiřazoval po DTR kroku → selhaný assert nechal handle bez reference |
+| 2 (kolo 7) | ošetřena DTR cesta, ale open krok racoval deadline **před** přiřazením a mimo try → leak jen přestěhován |
+| 3 (kolo 7) | `port.close()` v catchi je **no-op** — open ještě letí, serialport odpoví „Port is not open", a callback handle osiří chvíli poté |
+
+Čtvrtý pokus (`30ccc1b`) přestal hádat: **kdo reálně skončí s otevřeným portem, ten ho
+zavře.** Callback ho uvolní, když dorazí až po vypršení; catch ho uvolní, když
+`port.isOpen` ukáže, že dorazil o chlup dřív.
+
+Příčina toho opakování je jednoduchá — **ta cesta neměla test**, a neměla ho proto, že
+adaptér si port konstruoval přes `require` bez jakéhokoli seamu. Přidané
+`connectTimeoutMs` a `serialPortFactory` (obě opt-in, defaulty nezměněné) to řeší.
+`connectTimeoutMs` je zároveň **druhý čtenář** `BT.CONNECT_TIMEOUT_MS`, což je po tom,
+co první přišel až po review, samo o sobě poznámky hodné.
+
+Nový test byl **ověřen, že rozlišuje**: s odebranou pojistkou padá s „the late arrival
+must be released, not leaked". Zelený test, který projde tak i tak, je přesně to, co
+nechalo přežít off-by-one ve `validateReply` — o dva commity dřív.
+
+Vedlejší chyba, kterou si zapisuju: `git checkout <file>` použitý na odklizení schválně
+rozbitého kódu vrátil soubor na HEAD, tedy **smazal i tu opravu**. Rozbíjet kód kvůli
+verifikaci testu chce reverzní patch, ne checkout.
+
+`test:ci` (včetně host testů) exit 0, **225 testů zelených**.
+
 ## Viz také
 
 - [[Plán implementace]] · [[Architektura]] · [[Požadavky]]
 - `docs/ideation/2026-04-28-design-review-ideation.md` — ideace, ze které vyšly
   pre-fáze-3 blockery
 - Commity: `865a9a0` `732d6a8` `3bba7f4` `ca45bb9` `32a93d4` `e9d416b` `bf4996a`
-  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6` `f2ee41e`
+  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6` `f2ee41e` `f484889` `c347275` `30ccc1b`
