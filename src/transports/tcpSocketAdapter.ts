@@ -14,7 +14,8 @@ import {
 	PendingReply,
 	drainPendingReply,
 	rejectPendingReply,
-	extractLengthPrefixedPacket
+	extractLengthPrefixedPacket,
+	createPendingReply
 } from './pendingReply';
 import { TCP } from './transportConstants';
 
@@ -182,20 +183,21 @@ export class TcpSocketAdapter implements TransportAdapter {
 			throw new TransportError('TCP send aborted before dispatch.');
 		}
 
-		return new Promise<Uint8Array>((resolve, reject) => {
-			const signal = options?.signal;
-			const onAbort = () => {
-				this.doRejectPendingReply(new TransportError('TCP send aborted.'));
-			};
-			const cleanup = () => signal?.removeEventListener('abort', onAbort);
-			signal?.addEventListener('abort', onAbort, { once: true });
+		// EV3 is strictly request-reply on this channel, so nothing legitimate is in
+		// the buffer between exchanges. A late fragment from an abandoned exchange is,
+		// and it would desync every reply after it.
+		this.receiveBuffer = Buffer.alloc(0);
 
-			this.pendingReply = {
+		return new Promise<Uint8Array>((resolve, reject) => {
+			this.pendingReply = createPendingReply({
 				resolve,
 				reject,
-				cleanup,
-				expectedMessageCounter: options?.expectedMessageCounter
-			};
+				fail: (error) => this.failExchange(error),
+				timeoutMs: options?.timeoutMs ?? TCP.SEND_TIMEOUT_MS,
+				signal: options?.signal,
+				expectedMessageCounter: options?.expectedMessageCounter,
+				transport: 'TCP',
+			});
 
 			socket.write(Buffer.from(packet), (error?: Error | null) => {
 				if (error) {
@@ -279,6 +281,9 @@ export class TcpSocketAdapter implements TransportAdapter {
 			const onConnect = () => {
 				cleanup();
 				socket.setNoDelay(true);
+				// KEEPALIVE_MS had been declared and never applied, so a half-open
+				// connection stayed invisible until a send timed out.
+				socket.setKeepAlive(true, TCP.KEEPALIVE_MS);
 				resolve(socket);
 			};
 
@@ -410,6 +415,15 @@ export class TcpSocketAdapter implements TransportAdapter {
 			throw new TransportError('TCP adapter is not open.');
 		}
 		return this.socket;
+	}
+
+	/**
+	 * Abandon the current exchange and leave the adapter usable: drop the latch and
+	 * discard the buffer, so a late or partial frame cannot bleed into the next send.
+	 */
+	private failExchange(error: unknown): void {
+		this.receiveBuffer = Buffer.alloc(0);
+		this.doRejectPendingReply(error);
 	}
 
 	private doRejectPendingReply(error: unknown): void {

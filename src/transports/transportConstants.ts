@@ -21,8 +21,21 @@ export const USB = {
 	REPORT_ID: 0,
 	/** Discovery scan interval (ms). */
 	DISCOVERY_INTERVAL_MS: 1200,
-	/** Expected command round-trip time (ms). */
-	COMMAND_RTT_MS: 500,
+	/**
+	 * Measured worst-case command round trip (ms).
+	 *
+	 * 9 ms observed over 40 exchanges on firmware V1.10E, including the `ports`
+	 * command's 16 sub-operations. The previous value of 500 was ~50x pessimistic and
+	 * was never read by any code.
+	 */
+	COMMAND_RTT_MS: 10,
+	/**
+	 * Round-trip budget before a send is abandoned (ms).
+	 *
+	 * Roughly 100x the measured round trip: this detects a dead link, it is not a
+	 * performance target, so it stays far above normal jitter.
+	 */
+	SEND_TIMEOUT_MS: 1000,
 	/** Maximum safe command rate (commands per second). */
 	MAX_COMMANDS_PER_SEC: 10,
 } as const;
@@ -38,8 +51,11 @@ export const TCP = {
 	BEACON_TIMEOUT_MS: 4000,
 	/** Timeout for VMTP1.0 unlock handshake (ms). */
 	UNLOCK_TIMEOUT_MS: 2000,
-	/** Expected command round-trip time (ms). */
+	/** Expected command round-trip time (ms). **Not measured** — no brick has been
+	 * reachable over TCP to check it. Treat as an estimate. */
 	COMMAND_RTT_MS: 1000,
+	/** Round-trip budget before a send is abandoned (ms). Estimate, see above. */
+	SEND_TIMEOUT_MS: 3000,
 	/** TCP keepalive interval (ms). */
 	KEEPALIVE_MS: 3000,
 	/** Discovery scan interval (ms). */
@@ -61,8 +77,11 @@ export const BT = {
 	DISCOVERY_INTERVAL_MS: 10000,
 	/** Connection timeout (ms). */
 	CONNECT_TIMEOUT_MS: 6000,
-	/** Expected command round-trip time (ms). */
+	/** Expected command round-trip time (ms). **Not measured** — BT discovery is not
+	 * wired yet, so no exchange has ever run over this transport. */
 	COMMAND_RTT_MS: 2000,
+	/** Round-trip budget before a send is abandoned (ms). Estimate, see above. */
+	SEND_TIMEOUT_MS: 8000,
 	/** Mandatory cooldown between sequential RFCOMM connections (ms). */
 	INTER_CONNECTION_COOLDOWN_MS: 15000,
 	/** Recovery cooldown after RFCOMM error (ms, base value). */

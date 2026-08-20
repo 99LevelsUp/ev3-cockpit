@@ -32,7 +32,7 @@ points here rather than repeating it, because the duplicate copy drifted twice d
 - transport adapters and providers (USB, TCP; BT is SPP-only — see 1.11) ✅
 - transport guard (built, not yet wired into any provider — see 1.8.4), BT connection queue, pending reply utilities ✅
 - session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- 202 unit tests + 3 extension-host integration tests passing ✅
+- 207 unit tests + 3 extension-host integration tests passing ✅
 - implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
@@ -176,7 +176,8 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
   - [ ] 1.8.4a Decide whether exceeding the rate limit rejects or applies backpressure. `checkRateLimit()` throws, and DESIGN §4.5 exempts explicit commands from throttling — so a chunked filesystem upload or a burst of config-mode writes would fail with an error rather than queue. No layer currently owns staying under the firmware-safety budget
   - [ ] 1.8.4 Wire `TransportGuard` into the USB/TCP/BT providers — it is currently instantiated only in tests, so DESIGN §4.1 rate limiting is not enforced anywhere
-  - [ ] 1.8.5 Implement `SendOptions.timeoutMs` and `signal` in every adapter — both are declared in `transportAdapter.ts` and honoured by none, so a silent brick blocks the per-brick queue and its own heartbeat probe forever
+  - [x] 1.8.5a Round-trip and receive timeouts in every adapter, with recovery. Shared `createPendingReply` arms the timer and abort wiring; `send()` discards the receive buffer so an abandoned exchange cannot desync the next one. Verified on hardware: a forced timeout is followed by three successful commands on the same adapter
+  - [ ] 1.8.5b Transfer-level deadline for chunked filesystem operations — belongs to the file-transfer service, not the adapter: 100 chunks each inside their own budget can still add up to minutes of apparent success
 - [x] **1.9 USB Transport**
   - [x] 1.9.1 `UsbHidAdapter` — node-hid, VID 0x0694 PID 0x0005, 1025-byte HID reports
   - [x] 1.9.2 `UsbTransportProvider` — USB discovery (device enumeration), compose adapter + protocol
@@ -296,7 +297,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 - [ ] **3.1 Telemetry category definitions**
   - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
   - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
-  - [ ] 3.1.5 Batched or differential foreground read. A frame today costs four serial round trips (`ports`, `battery`, `buttons`, `info`) through a strictly serial per-brick queue: ~2 s on USB, ~4 s on TCP, ~8 s on BT at the measured `COMMAND_RTT_MS`. DESIGN §12.2's gyro arcs and distance bars are unusable at that rate
+  - [ ] 3.1.5 Batched or differential foreground read — **reassess before building.** The premise was that four serial round trips make the frame rate unusable. Measured on USB it is 9 ms per round trip, so a frame is ~40 ms (~25 Hz) and there is no problem to solve there. The case survives only for TCP and BT, both still unmeasured. Measure those first; if they are also fast, close this
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
   - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
 - [ ] **3.2 Telemetry data models**

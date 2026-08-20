@@ -10,7 +10,8 @@ import { TransportError } from '../errors/CockpitError';
 import {
 	PendingReply,
 	drainPendingReply,
-	rejectPendingReply
+	rejectPendingReply,
+	createPendingReply
 } from './pendingReply';
 import { USB } from './transportConstants';
 
@@ -146,20 +147,21 @@ export class UsbHidAdapter implements TransportAdapter {
 			throw new TransportError('USB send aborted before dispatch.');
 		}
 
-		return new Promise<Uint8Array>((resolve, reject) => {
-			const signal = options?.signal;
-			const onAbort = () => {
-				this.doRejectPendingReply(new TransportError('USB send aborted.'));
-			};
-			const cleanup = () => signal?.removeEventListener('abort', onAbort);
-			signal?.addEventListener('abort', onAbort, { once: true });
+		// EV3 is strictly request-reply on this channel, so nothing legitimate is in
+		// the buffer between exchanges. A late fragment from an abandoned exchange is,
+		// and it would desync every reply after it.
+		this.receiveBuffer = Buffer.alloc(0);
 
-			this.pendingReply = {
+		return new Promise<Uint8Array>((resolve, reject) => {
+			this.pendingReply = createPendingReply({
 				resolve,
 				reject,
-				cleanup,
-				expectedMessageCounter: options?.expectedMessageCounter
-			};
+				fail: (error) => this.failExchange(error),
+				timeoutMs: options?.timeoutMs ?? USB.SEND_TIMEOUT_MS,
+				signal: options?.signal,
+				expectedMessageCounter: options?.expectedMessageCounter,
+				transport: 'USB',
+			});
 
 			try {
 				device.write(this.formatWriteBuffer(packet));
@@ -288,6 +290,15 @@ export class UsbHidAdapter implements TransportAdapter {
 
 	private doDrainPendingReply(): void {
 		this.pendingReply = drainPendingReply(this.pendingReply, () => this.extractNextPacket());
+	}
+
+	/**
+	 * Abandon the current exchange and leave the adapter usable: drop the latch and
+	 * discard the buffer, so a late or partial frame cannot bleed into the next send.
+	 */
+	private failExchange(error: unknown): void {
+		this.receiveBuffer = Buffer.alloc(0);
+		this.doRejectPendingReply(error);
 	}
 
 	private doRejectPendingReply(error: unknown): void {

@@ -562,10 +562,20 @@ Categories are an explicit part of the public API and internal scheduling. A dep
 
 **Refresh budget.** The foreground rate is bounded from below by the transport, not only from
 above by throttling: the per-brick queue is strictly serial and a full frame is four round
-trips, so at the measured `COMMAND_RTT_MS` a naive implementation lands near 0.5 Hz on USB,
-0.25 Hz on TCP and 0.125 Hz on BT. Phase 3 must state a target and a floor per transport, and
-the panel must show a degraded-telemetry indicator below the floor rather than animating
-widgets that silently stop tracking.
+trips (`ports`, `battery`, `buttons`, `info`).
+
+Measured on USB, firmware V1.10E: **9 ms** worst case over 40 exchanges, including the
+`ports` command's 16 sub-operations. A four-command frame is therefore about 40 ms, or
+roughly 25 Hz — far above anything the panel needs. An earlier version of this section put
+USB at 0.5 Hz; that came from `USB.COMMAND_RTT_MS: 500`, a constant no code ever read and
+which was about 50x pessimistic.
+
+TCP and BT remain **unmeasured**: no brick has answered over TCP here (no UDP beacon ever
+arrives) and BT discovery is not wired. Their constants are estimates, marked as such.
+
+Phase 3 still owes a target and a floor per transport, and the panel still owes a
+degraded-telemetry indicator below that floor — but on the evidence so far the floor binds
+on the slow transports, not on USB.
 
 Foreground telemetry is for the active brick in the panel only.
 
