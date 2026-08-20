@@ -137,6 +137,14 @@ Plán tvrdil hotovou práci, která v kódu není:
 
 ### Rozhodnutí pro Petra
 
+- [ ] **`useDiscovery: false` — tiché prázdno, nebo chyba?** Dva oponenti nezávisle
+      (correctness P3, api-contract P2) chtějí, aby `discover()` skončil pojmenovanou
+      chybou: prázdný seznam navždy je nerozlišitelný od „na síti nejsou cihly", což je
+      přesně ta nejednoznačnost, kvůli které existuje větev `beaconBindError`. Proti
+      tomu: vypnutí discovery je **vědomá volba volajícího**, ne nehoda jako selhaný
+      bind. Nerozhodl jsem to sám, protože nový test `beaconDiscovery.test.ts` přibil
+      opak (prázdný seznam) — a přepnout chování tichou úpravou testu je právě ten
+      způsob, jak se rozhodnutí ztratí.
 - [ ] **Fáze 5 závisí na fázi 6** — 5.4.3, 5.5.3 a 5.3.5 potřebují storage, kterou
       staví fáze 6, ale §12 fixuje pořadí 5 před 6. Přesunout persistenci dopředu,
       nebo ty UI úkoly dozadu?
@@ -211,10 +219,31 @@ je Petrova bezpečnostní konfigurace, tak jsem ji nerozvolňoval; kdo chce šir
 pokrytí, spustí `lean-ctx allow mimo gemini qwen`. `nemotron` vrátil prázdný výstup
 (22 B), `deepseek` v tomto kole nespuštěn.
 
+## Kolo 7 — audit vlny oprav z kola 6
+
+Podle vlastního pravidla [[review-fixes-need-own-audit]]: každá vlna oprav dostane
+potvrzovací kolo. Kolo 7 auditovalo diff `212fca6` a **našlo jednu opravu, která
+leak jen přestěhovala**.
+
+`BtSppAdapter.open()`: DTR cesta je krytá správně (`close()` se řídí `this.port`,
+ne `_isOpen`, takže catch větev port skutečně zavře). Ale **open krok** racuje
+deadline *před* přiřazením `this.port` a *mimo* try. Když vyhraje časovač, funkce
+vyhodí TimeoutError — a serialport callback může port otevřít až potom. Osiřelý OS
+handle, tedy přesně ten access-denied symptom, který oprava měla odstranit, jen
+přesunutý z DTR cesty na timeout cestu. Opraveno catchem, který zavírá **lokální**
+proměnnou (`this.port` v tom bodě ještě není, takže `this.close()` je špatný nástroj).
+
+Druhý nález, na kterém se sešli dva oponenti nezávisle: `makeBrickKey` teď hází na
+prázdný identifikátor a volá se **uvnitř** discovery smyčky, zatímco filtr testoval
+jen truthiness. Jedno HID zařízení se serialem z bílých znaků by shodilo **celý USB
+scan** místo aby vypadlo samo. Filtr teď trimuje.
+
+`test:ci` (včetně host testů) exit 0, 222 testů zelených.
+
 ## Viz také
 
 - [[Plán implementace]] · [[Architektura]] · [[Požadavky]]
 - `docs/ideation/2026-04-28-design-review-ideation.md` — ideace, ze které vyšly
   pre-fáze-3 blockery
 - Commity: `865a9a0` `732d6a8` `3bba7f4` `ca45bb9` `32a93d4` `e9d416b` `bf4996a`
-  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6`
+  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6` `f2ee41e`
