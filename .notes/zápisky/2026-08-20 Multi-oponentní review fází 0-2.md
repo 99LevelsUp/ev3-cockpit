@@ -289,10 +289,34 @@ verifikaci testu chce reverzní patch, ne checkout.
 
 `test:ci` (včetně host testů) exit 0, **225 testů zelených**.
 
+## Konvergenční brána
+
+Codex na `30ccc1b` vrátil **`VERDICT: PASS`, `FINDINGS: none`** — po třech předchozích
+odmítnutích téhož místa. Explicitně dostal za úkol posoudit i to, jestli test rozlišuje,
+a jestli neexistuje třetí pořadí, které ani jedna větev nekryje.
+
+**Brána je ale uzavřená úzce a je fér to pojmenovat.** Protokol cross-CLI review
+vyžaduje jednomyslné READY od **různých dodavatelů** — a to se v tomto kole nepodařilo:
+
+| Oponent | Stav |
+|---|---|
+| codex | PASS (po 3 kolech FAIL) — jediný, kdo dojel celý cyklus |
+| correctness, api-contract, reliability, security | nálezy dodány a zapracovány (interní, ne nezávislý dodavatel) |
+| testing reviewer | **spadl** na session limit, výstup 0 B |
+| nemotron | **prázdný výstup** (22 B) |
+| mimo, gemini, qwen | **nespuštěny** — blokuje lean-ctx shell allowlist (kontroluje název i u plné cesty) |
+
+Allowlist je Petrova bezpečnostní konfigurace, tak jsem ji nerozvolňoval. Kdo chce
+plné pokrytí, spustí `lean-ctx allow mimo gemini qwen` a kolo se dá zopakovat.
+
+Takže: **žádný přežívající blocker ani major**, ale shoda napříč dodavateli chybí —
+signál, který u těchto modelů odděluje reálnou vadu od halucinace, je tu tenčí než
+v kolech 1–5.
+
 ## Viz také
 
 - [[Plán implementace]] · [[Architektura]] · [[Požadavky]]
 - `docs/ideation/2026-04-28-design-review-ideation.md` — ideace, ze které vyšly
   pre-fáze-3 blockery
 - Commity: `865a9a0` `732d6a8` `3bba7f4` `ca45bb9` `32a93d4` `e9d416b` `bf4996a`
-  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6` `f2ee41e` `f484889` `c347275` `30ccc1b`
+  `5485137` `dfd0667` `bcddd55` `e365c35` `ab05d6d` `212fca6` `f2ee41e` `f484889` `c347275` `30ccc1b` `6696f85`
