@@ -16,8 +16,8 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 ## 2. Current Starting State
 
 Phase 0 and Phase 2 are complete. Phase 1 is substantially complete but carries named gaps:
-1.6.10 mock config loading, 1.8.4 transport guard wiring, 1.8.4a rate-limit policy, 1.8.5b
-transfer-level filesystem deadline, 1.11 BT backends and discovery (1.11.7a discovery wiring,
+1.6.10 mock config loading, 1.8.4 transport guard wiring,
+1.11 BT backends and discovery (1.11.7a discovery wiring,
 1.11.12 bounded ceiling failure), 1.12.4 per-transport contract tests. Phase 3 work starts
 from here; those gaps are carried, not closed.
 
@@ -171,14 +171,20 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.7 System reply header is 7 bytes — command echo, status, uint32 size, handle — measured on a real brick (`99 08 42 00 00 00 00` before the listing). `parseFsList` skipped 4 and glued three stray bytes to the first entry; `parseFsRead` skipped 6 and glued the handle to the content. Both now use one named constant
   - [x] 1.7.9 Buttons: `opUI_BUTTON` (0x83) subcode `PRESSED` (0x09). The shipped command asked `opUI_READ` for 0x0d, which is `GET_ADDRESS` — a real brick answered the whole command with an error, so button telemetry never worked outside the mock
   - [x] 1.7.10 The info command reads the brick's own name via `opCOM_GET` (0xD3) / `GET_BRICKNAME` (0x0D), and `InfoResponse` gained `osVersion` so the kernel string keeps a home of its own. Verified on three bricks, each reporting its own name. The earlier failed probe used 0xD5, which is `opCOM_TEST`
-- [ ] **1.8 Transport adapter interface and constants** — guard unwired (1.8.4), rate-limit policy undecided (1.8.4a); transfer-level filesystem deadline deferred to 1.8.5b
+- [ ] **1.8 Transport adapter interface and constants** — only 1.8.4 (guard wiring) remains open; 1.8.4a and 1.8.5b are resolved
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
-  - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
-  - [ ] 1.8.4a Decide whether exceeding the rate limit rejects or applies backpressure. `checkRateLimit()` throws, and DESIGN §4.5 exempts explicit commands from throttling — so a chunked filesystem upload or a burst of config-mode writes would fail with an error rather than queue. No layer currently owns staying under the firmware-safety budget
+  - [x] 1.8.3 Transport guard (pathological-caller backstop, firmware freeze protection, degradation tracking). The ≤ 10 cmd/s figure it was built against had no basis and is retired: measured sustained rates are USB 176, TCP 62, BT 11 per second with no degradation at any of them (DESIGN §9.2)
+  - [x] 1.8.4a **Resolved: reject.** Measurement showed commands are strictly serial, so no
+    transport can be pushed past its own round trip — pacing would only mask a caller bug.
+    Where the backstop is enforced is still open while `TransportGuard` is unwired (1.8.4)
   - [ ] 1.8.4 Wire `TransportGuard` into the USB/TCP/BT providers — it is currently instantiated only in tests, so DESIGN §4.1 rate limiting is not enforced anywhere
   - [x] 1.8.5a Round-trip and receive timeouts in every adapter, with recovery. Shared `createPendingReply` arms the timer and abort wiring; `send()` discards the receive buffer so an abandoned exchange cannot desync the next one. Verified on hardware: a forced timeout is followed by three successful commands on the same adapter
-  - [ ] 1.8.5b Transfer-level deadline for chunked filesystem operations — belongs to the file-transfer service, not the adapter: 100 chunks each inside their own budget can still add up to minutes of apparent success
+  - [x] 1.8.5b **Reframed as stall detection** (4.6.3): with per-chunk progress reporting, a
+    total-time cap would reject legitimately slow Bluetooth transfers, so the signal is “no
+    progress for N seconds” instead — which also keeps it in the transfer service rather than
+    the adapter, where 100 chunks each inside their own budget added up to minutes of
+    apparent success
 - [x] **1.9 USB Transport**
   - [x] 1.9.1 `UsbHidAdapter` — node-hid, VID 0x0694 PID 0x0005, 1025-byte HID reports
   - [x] 1.9.2 `UsbTransportProvider` — USB discovery (device enumeration), compose adapter + protocol
@@ -386,13 +392,36 @@ Export a stable API for other extensions without giving them direct access to th
   - [ ] 4.5.3 `unsubscribeTelemetry(subscriptionId)` — cancel a subscription
   - [ ] 4.5.4 Auto-cancel on brick disconnect
   - [ ] 4.5.5 Integration with telemetry scheduler mode transitions
-- [ ] **4.6 Filesystem services**
-  - [ ] 4.6.1 `uploadFile(brickKey, localPath, remotePath)` — upload a file to the brick
-  - [ ] 4.6.2 `downloadFile(brickKey, remotePath, localPath)` — download a file from the brick
-  - [ ] 4.6.3 `executeRbf(brickKey, remotePath)` — execute a program on the brick
-  - [ ] 4.6.4 `listFiles(brickKey, remotePath)` — list files in a directory
-  - [ ] 4.6.5 `readFile(brickKey, remotePath)` — read file content
-  - [ ] 4.6.6 Error handling for unavailable bricks or failed operations
+- [ ] **4.6 Filesystem services** — scope and behaviour are settled in
+  `docs/plans/2026-08-20-1740-feat-filesystem-layer-plan.md`; the protocol survey behind it is
+  `docs/ideation/2026-08-20-filesystem-protocol-survey.md`. That contract replaces the five
+  operations this section used to list, which came from what seemed obvious rather than from
+  what the protocol offers
+  - [ ] 4.6.1 `FileTransferService` above the command layer — chunked upload and download via
+    `CONTINUE_DOWNLOAD` / `CONTINUE_UPLOAD`, which are declared but never sent today, so
+    `fs:write` drops content and `fs:read` truncates while both report success (R1)
+  - [ ] 4.6.2 Progress reporting and cancellation, no size ceiling — Bluetooth is bandwidth-bound
+    at ~11 KB/s, and whether a slow transfer is worth waiting for is the consumer's call (R2, R3)
+  - [ ] 4.6.3 Stall detection per transport — replaces the total-time deadline this plan called
+    1.8.5b: with progress visible, “no progress for N seconds” is the signal that matters (R3)
+  - [ ] 4.6.4 Per-transport chunk size — USB takes the report payload; TCP and BT take the largest
+    the firmware accepts, which is unmeasured (R4)
+  - [ ] 4.6.5 `list` with `CONTINUE_LIST_FILES` paging, and file-versus-directory distinction (R5)
+  - [ ] 4.6.6 `read` for a file of any size (R6)
+  - [ ] 4.6.7 `exists` from `opFILENAME/EXIST` instead of listing the parent and searching (R7)
+  - [ ] 4.6.8 `size` from `opFILENAME/TOTALSIZE`; `freeSpace` from `opFILE/GET_POOL` (R8, R9)
+  - [ ] 4.6.9 `move` via `opFILE/MOVE` — the protocol has no rename system command, so this is
+    the only primitive for it (R10)
+  - [ ] 4.6.10 `makeDirectory`, `removeDirectory`, and `remove` — a populated directory is
+    refused with a named error; recursive removal exists and is never the default (R11, R12)
+  - [ ] 4.6.11 Path length guard — the firmware truncates a path silently at 60 bytes, so an
+    over-length path must be rejected before a packet is sent or the brick acts on a different
+    path than the caller named (R13)
+  - [ ] 4.6.12 Mock parity — partial-transfer failure, cancellation, populated-directory refusal,
+    and over-length path rejection all reproducible against the mock (R15)
+  - [ ] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
+    survey found, including `BEGIN_GETFILE` / `CONTINUE_GETFILE`. Log tailing itself is deferred
+    until a consumer wants it, but the opcodes are recorded so the capability is not lost again
 - [ ] **4.7 API export**
   - [ ] 4.7.1 Export typed API object from `extension.ts` `activate()` return value
   - [ ] 4.7.2 Ensure API is fully initialized before any consumer can use it
