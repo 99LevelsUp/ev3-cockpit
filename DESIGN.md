@@ -575,8 +575,25 @@ four-command frame is about 240 ms or roughly 4 Hz. Slower than USB by an order 
 and still usable for the panel. The RFCOMM connect itself took 4851 ms, which is the cost
 worth designing around on that transport — not the per-command latency.
 
-TCP remains **unmeasured**: no UDP beacon has ever arrived on this host, so discovery cannot
-find a brick and its constants are still estimates.
+TCP measures at **58 ms** worst case over 40 exchanges against a brick on Wi-Fi, averaging
+33 ms, so a four-command frame is about 130 ms or roughly 7 Hz. Connect plus the VMTP unlock
+handshake takes 273 ms.
+
+All three transports are now measured, and in every case the constant that had been sitting
+in `transportConstants.ts` was pessimistic by more than an order of magnitude: USB by ~50x,
+TCP by ~17x, BT by ~16x. None of them was read by any code, which is why nobody noticed.
+
+**Beacon discovery needs an outbound datagram first.** The brick broadcasts its announcement
+to the subnet broadcast address every 5 seconds whenever Wi-Fi is up — the firmware enables
+this on AP association and only stops it on shutdown or an AP search, never because a client
+is connected. A host firewall that filters unsolicited inbound UDP therefore drops it, and
+Windows does exactly that by default: measured here, the brick announced for half an hour
+while discovery saw nothing, and an exclusive bind proved no other process held the port.
+The provider now sends a one-byte datagram to each interface's broadcast address every few
+seconds, which puts its socket in the firewall's stateful table and lets the announcements
+through. This changes no firewall configuration; it is the ordinary
+outbound-before-inbound pattern, and without it TCP discovery cannot work on a stock
+Windows install.
 
 Phase 3 still owes a target and a floor per transport, and the panel still owes a
 degraded-telemetry indicator below that floor — but on the evidence so far the floor binds
