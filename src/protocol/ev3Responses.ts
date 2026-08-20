@@ -16,6 +16,7 @@ import {
 	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS,
 } from './ev3Packet';
 import { INFO_LAYOUT } from './ev3Commands';
+import { TransportError } from '../errors/CockpitError';
 
 // ── Sensor/motor type names ─────────────────────────────────────────
 
@@ -39,6 +40,12 @@ const SENSOR_PORT_LABELS = ['1', '2', '3', '4'];
 const MOTOR_PORT_LABELS = ['A', 'B', 'C', 'D'];
 
 const BUTTON_NAMES = ['up', 'enter', 'down', 'right', 'left', 'back'];
+
+/**
+ * Bytes before the data in a system-command reply payload: the command echo, the
+ * status byte, a uint32 size and a handle. Verified against a real brick.
+ */
+const SYSTEM_REPLY_HEADER_BYTES = 7;
 
 // ── Public interface ────────────────────────────────────────────────
 
@@ -78,17 +85,18 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 // ── Direct command parsers ──────────────────────────────────────────
 
 function parseBattery(payload: Uint8Array): BatteryResponse {
-	if (payload.length < 4) {
-		return { kind: 'battery', level: 0 };
+	// Global layout from buildBatteryCommand: [0..3] volts, [4..7] amps, [8] percent.
+	if (payload.length < 9) {
+		throw new TransportError(
+			`Malformed battery reply: expected 9 bytes, got ${payload.length}.`
+		);
 	}
-	const currentAmps = readFloat32le(payload, 0);
-	// The command asks for GET_IBATT, so this is current draw, not charge. Current
-	// tracks motor load rather than remaining capacity, which makes the level below
-	// an approximation at best: an idle brick reads near 0 and a loaded one reads
-	// high. Plan task 1.7.6 switches this to GET_LBATT once the subcode is confirmed
-	// against a real brick. Reporting it as `voltage` was simply the wrong unit.
-	const level = Math.round(Math.min(100, Math.max(0, currentAmps * 200)));
-	return { kind: 'battery', level, currentAmps };
+	return {
+		kind: 'battery',
+		level: payload[8],
+		voltage: readFloat32le(payload, 0),
+		currentAmps: readFloat32le(payload, 4),
+	};
 }
 
 function parsePorts(payload: Uint8Array): PortsResponse {
@@ -152,12 +160,15 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 	if (payload.length < 1) {
 		return { kind: 'fs:list', entries: [] };
 	}
-	// The skip count and the reply shape do not agree, and neither has been checked
-	// against a real brick: LIST_FILES should answer [status:1][listSize:4][handle:1],
-	// which is the 6 bytes parseFsRead skips for the same shape — not 4. A wrong skip
-	// truncates the first entry or empties the list. Plan task 1.7.7 settles it on
-	// hardware; until then this stays as shipped rather than guessed at.
-	const listing = Buffer.from(payload.subarray(4)).toString('utf8');
+	// Measured against a real brick: the reply payload is
+	//   [0] system command echo (0x99 LIST_FILES)
+	//   [1] status
+	//   [2..5] list size, uint32
+	//   [6] handle
+	//   [7..] the listing
+	// Skipping 4 left three stray bytes glued to the first entry, which is exactly
+	// what a directory listing beginning "\0\0\0tetris 22/" looked like.
+	const listing = Buffer.from(payload.subarray(SYSTEM_REPLY_HEADER_BYTES)).toString('utf8');
 	const entries = listing.split('\n').filter(e => e.length > 0);
 	return { kind: 'fs:list', entries };
 }
@@ -166,8 +177,9 @@ function parseFsRead(payload: Uint8Array): FsReadResponse {
 	if (payload.length < 1) {
 		return { kind: 'fs:read', content: '' };
 	}
-	// System reply: [status:1][fileSize:4][handle:1][data...]
-	const content = Buffer.from(payload.subarray(6)).toString('utf8');
+	// Same 7-byte header as the listing reply, with the size field naming the file
+	// rather than the listing. Skipping 6 left the handle byte glued to the content.
+	const content = Buffer.from(payload.subarray(SYSTEM_REPLY_HEADER_BYTES)).toString('utf8');
 	return { kind: 'fs:read', content };
 }
 
@@ -192,12 +204,12 @@ function parseFsDelete(_payload: Uint8Array): FsDeleteResponse {
 
 function validateReply(reply: Ev3Packet, commandKind: string): void {
 	if (reply.type === EV3_REPLY.DIRECT_REPLY_ERROR) {
-		throw new Error(`EV3 direct command error for '${commandKind}'`);
+		throw new TransportError(`EV3 direct command error for '${commandKind}'`);
 	}
 	if (reply.type === EV3_REPLY.SYSTEM_REPLY_ERROR) {
 		const status = reply.payload.length > 0 ? reply.payload[0] : 0xff;
 		const statusName = Object.entries(EV3_SYSTEM_STATUS)
 			.find(([, v]) => v === status)?.[0] ?? `0x${status.toString(16)}`;
-		throw new Error(`EV3 system command error for '${commandKind}': ${statusName}`);
+		throw new TransportError(`EV3 system command error for '${commandKind}': ${statusName}`);
 	}
 }
