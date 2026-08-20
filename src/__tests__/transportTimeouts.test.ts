@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as net from 'node:net';
 
+import { BtSppAdapter } from '../transports/btSppAdapter';
 import { createPendingReply } from '../transports/pendingReply';
 import { TcpSocketAdapter } from '../transports/tcpSocketAdapter';
 import { TimeoutError, TransportError } from '../errors/CockpitError';
@@ -168,5 +169,66 @@ describe('TcpSocketAdapter — timeout and recovery', () => {
 			await adapter.close().catch(() => { /* best effort */ });
 			await brick.close();
 		}
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// BtSppAdapter — the open deadline
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('BtSppAdapter open deadline', () => {
+	/** A port whose open() never calls back until the test lets it. */
+	function slowPort() {
+		let release: (() => void) | undefined;
+		const port = {
+			isOpen: false,
+			closed: 0,
+			open(cb?: (err?: Error | null) => void) {
+				release = () => { port.isOpen = true; cb?.(null); };
+			},
+			close(cb?: (err?: Error | null) => void) {
+				port.closed += 1;
+				port.isOpen = false;
+				cb?.(null);
+			},
+			write() { return true; },
+			on() { return port; },
+			removeAllListeners() { return port; },
+			set(_o: { dtr?: boolean }, cb?: (err?: Error | null) => void) { cb?.(null); },
+		};
+		return { port, open: () => release?.() };
+	}
+
+	it('gives up on a port that never opens', async () => {
+		const { port } = slowPort();
+		const adapter = new BtSppAdapter({
+			portPath: 'COM-TEST',
+			connectTimeoutMs: 60,
+			serialPortFactory: () => port as never,
+		});
+
+		await assert.rejects(() => adapter.open(), /timed out/);
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('releases a port that opens after the deadline passed', async () => {
+		// The failure this pins has now been mis-fixed three times. Closing in the catch
+		// is a no-op — open is still in flight, serialport answers "Port is not open" —
+		// and the handle is orphaned when the callback lands a moment later. On Windows
+		// that COM port then refuses every later open until the extension host restarts.
+		const { port, open } = slowPort();
+		const adapter = new BtSppAdapter({
+			portPath: 'COM-TEST',
+			connectTimeoutMs: 60,
+			serialPortFactory: () => port as never,
+		});
+
+		await assert.rejects(() => adapter.open(), /timed out/);
+		assert.equal(port.closed, 0, 'nothing to close while the open is still in flight');
+
+		// serialport finally answers, long after we stopped waiting.
+		open();
+		assert.equal(port.closed, 1, 'the late arrival must be released, not leaked');
+		assert.equal(port.isOpen, false);
 	});
 });
