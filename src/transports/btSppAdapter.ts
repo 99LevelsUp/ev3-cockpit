@@ -57,6 +57,20 @@ export interface BtSppAdapterOptions {
 	assertDtr?: boolean;
 	/** Post-open delay in ms for firmware settling (default: 120). */
 	postOpenDelayMs?: number;
+	/** Deadline for open and DTR assert (default: `BT.CONNECT_TIMEOUT_MS`). */
+	connectTimeoutMs?: number;
+	/**
+	 * Overrides how the serial port is constructed.
+	 *
+	 * Exists so the open deadline can be tested without a paired brick: the timeout
+	 * path has been fixed wrongly three times, each time for a different reason, and
+	 * every one of those would have been caught by a test.
+	 */
+	serialPortFactory?: (options: {
+		path: string;
+		baudRate: number;
+		autoOpen: boolean;
+	}) => SerialPortLike;
 }
 
 function loadSerialPort(): SerialPortConstructor {
@@ -83,6 +97,8 @@ export class BtSppAdapter implements TransportAdapter {
 	private readonly baudRate: number;
 	private readonly assertDtr: boolean;
 	private readonly postOpenDelayMs: number;
+	private readonly connectTimeoutMs: number;
+	private readonly serialPortFactory?: BtSppAdapterOptions['serialPortFactory'];
 
 	private port?: SerialPortLike;
 	private _isOpen = false;
@@ -98,6 +114,8 @@ export class BtSppAdapter implements TransportAdapter {
 		this.baudRate = options.baudRate ?? DEFAULT_BAUD_RATE;
 		this.assertDtr = options.assertDtr ?? false;
 		this.postOpenDelayMs = options.postOpenDelayMs ?? DEFAULT_POST_OPEN_DELAY_MS;
+		this.connectTimeoutMs = options.connectTimeoutMs ?? BT.CONNECT_TIMEOUT_MS;
+		this.serialPortFactory = options.serialPortFactory;
 	}
 
 	get isOpen(): boolean {
@@ -109,12 +127,14 @@ export class BtSppAdapter implements TransportAdapter {
 			return;
 		}
 
-		const SerialPort = loadSerialPort();
-		const port = new SerialPort({
+		const portOptions = {
 			path: this.portPath,
 			baudRate: this.baudRate,
-			autoOpen: false
-		});
+			autoOpen: false,
+		};
+		const port = this.serialPortFactory
+			? this.serialPortFactory(portOptions)
+			: new (loadSerialPort())(portOptions);
 
 		// Opening an RFCOMM port can hang, and the caller is holding the only BT
 		// connection slot while it does. This was the one adapter whose open() had no
@@ -124,27 +144,43 @@ export class BtSppAdapter implements TransportAdapter {
 			const expiry = new Promise<never>((_, reject) => {
 				timer = setTimeout(
 					() => reject(new TimeoutError(
-						`BT SPP ${step} on ${this.portPath} timed out after ${BT.CONNECT_TIMEOUT_MS} ms.`
+						`BT SPP ${step} on ${this.portPath} timed out after ${this.connectTimeoutMs} ms.`
 					)),
-					BT.CONNECT_TIMEOUT_MS
+					this.connectTimeoutMs
 				);
 				timer.unref?.();
 			});
 			return Promise.race([work, expiry]).finally(() => { if (timer) { clearTimeout(timer); } });
 		};
 
+		// Releasing the port on timeout is harder than it looks, and the two previous
+		// attempts at it were both wrong. Closing inside the catch is a no-op: open is
+		// still in flight, so serialport just answers "Port is not open" and the OS
+		// handle is orphaned when the open callback succeeds a moment later. So the
+		// party that actually ends up holding an opened port is the one that closes it.
+		let abandoned = false;
+		const releaseOrphan = () => {
+			// Callback signature only; the handle is going away either way.
+			port.close(() => { /* nothing left to report to */ });
+		};
+
 		try {
 			await deadline(new Promise<void>((resolve, reject) => {
 				port.open((err) => {
-					if (err) { reject(err); } else { resolve(); }
+					if (err) { reject(err); return; }
+					if (abandoned) {
+						// We gave up before this landed, and nothing references the port now.
+						releaseOrphan();
+						return;
+					}
+					resolve();
 				});
 			}), 'open');
 		} catch (error) {
-			// The deadline can win the race while serialport's open is still in flight, and
-			// the callback may hand us an opened port after we have already thrown. Nothing
-			// holds a reference to it at that point, so close it here on the local variable:
-			// this.port is not assigned yet, which makes this.close() the wrong instrument.
-			port.close(() => { /* the handle is going away either way */ });
+			abandoned = true;
+			// Covers the other ordering: the port opened between the timer firing and this
+			// line, so the callback saw abandoned === false and left it to us.
+			if (port.isOpen) { releaseOrphan(); }
 			throw error;
 		}
 
