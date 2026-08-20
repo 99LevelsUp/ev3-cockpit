@@ -746,14 +746,24 @@ The Cockpit UI will not contain a file explorer or browse workflow.
 
 The filesystem is designed as a service for API consumers.
 
-The first version provides:
+The layer covers **every operation the protocol offers**, not a chosen subset. The full
+contract — requirements, flows, and the operations deliberately excluded — is
+`docs/plans/2026-08-20-1740-feat-filesystem-layer-plan.md`, built on the firmware-verified
+survey in `docs/ideation/2026-08-20-filesystem-protocol-survey.md`.
 
-- `uploadFile`,
-- `downloadFile`,
-- `executeRbf`,
-- basic read/list operations over an explicit `folder` and `file`.
+In outline: chunked upload and download with progress and cancellation and no size ceiling;
+list, read, exists, size, and free space; make and remove directories; move, which is the
+protocol's only rename primitive and has no system command at all.
 
-More extensive deployment workflows (e.g. full-folder sync) are deferred to a later version.
+An earlier revision of this section listed `uploadFile`, `downloadFile`, `executeRbf` and
+“basic read/list”. That list came from what seemed obvious rather than from the protocol:
+the firmware exposes seventeen system commands and thirty-two `opFILE` subcodes, and rename,
+free space, and a real existence check were missing because nobody had looked.
+
+Three operations in range are deliberately excluded because they are not filesystem work:
+`ENTERFWUPDATE` (a bricking hazard), `BLUETOOTHPIN` (a pairing credential), and
+`WRITEMAILBOX` (VM messaging). Full-folder sync and log tailing are deferred, the latter
+with its opcodes declared so the capability is not lost again.
 
 ## 12. Cockpit UI Design
 
