@@ -9,7 +9,7 @@
 import { BrickCommand } from '../contracts';
 import { concatBytes, uint16le, uint32le, lc0, cString, gv0, gv1 } from './ev3Bytecode';
 import {
-	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB,
+	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
 	INPUT_DEVICE_SUB,
 } from './ev3Packet';
 
@@ -21,13 +21,15 @@ const SYSTEM_LIST_CHUNK_SIZE = 1012;
 
 // ── Capability probe (info command) ─────────────────────────────────
 
+const LEN_BRICK_NAME = 16;
 const LEN_OS_VERS = 16;
 const LEN_HW_VERS = 8;
 const LEN_FW_VERS = 8;
 const LEN_OS_BUILD = 12;
 const LEN_FW_BUILD = 12;
 
-const OFF_OS_VERS = 0;
+const OFF_BRICK_NAME = 0;
+const OFF_OS_VERS = OFF_BRICK_NAME + LEN_BRICK_NAME;
 const OFF_HW_VERS = OFF_OS_VERS + LEN_OS_VERS;
 const OFF_FW_VERS = OFF_HW_VERS + LEN_HW_VERS;
 const OFF_OS_BUILD = OFF_FW_VERS + LEN_FW_VERS;
@@ -36,8 +38,8 @@ const TOTAL_INFO_BYTES = OFF_FW_BUILD + LEN_FW_BUILD;
 
 /** Lengths and offsets for info reply parsing (exported for ev3Responses). */
 export const INFO_LAYOUT = {
-	LEN_OS_VERS, LEN_HW_VERS, LEN_FW_VERS, LEN_OS_BUILD, LEN_FW_BUILD,
-	OFF_OS_VERS, OFF_HW_VERS, OFF_FW_VERS, OFF_OS_BUILD, OFF_FW_BUILD,
+	LEN_BRICK_NAME, LEN_OS_VERS, LEN_HW_VERS, LEN_FW_VERS, LEN_OS_BUILD, LEN_FW_BUILD,
+	OFF_BRICK_NAME, OFF_OS_VERS, OFF_HW_VERS, OFF_FW_VERS, OFF_OS_BUILD, OFF_FW_BUILD,
 	TOTAL_INFO_BYTES,
 } as const;
 
@@ -181,21 +183,28 @@ function buildButtonsCommand(): EncodedCommand {
 	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: concatBytes(...ops) };
 }
 
-/** Info: reads firmware version, OS version, HW version, builds. */
+/**
+ * Info: the brick's own name, plus firmware, OS and hardware versions.
+ *
+ * The name comes from opCOM_GET / GET_BRICKNAME. It used to be absent entirely and
+ * `displayName` carried the OS version instead, so a brick called AAA reported
+ * itself as "Linux 2.6.33-rc".
+ */
 function buildInfoCommand(): EncodedCommand {
 	const ops: Uint8Array[] = [uint16le(TOTAL_INFO_BYTES)];
 
-	const readString = (sub: number, len: number, off: number) => {
-		ops.push(new Uint8Array([EV3_OPCODE.UI_READ, sub]));
+	const readString = (opcode: number, sub: number, len: number, off: number) => {
+		ops.push(new Uint8Array([opcode, sub]));
 		ops.push(lc0(len));
 		if (off < 32) { ops.push(gv0(off)); } else { ops.push(gv1(off)); }
 	};
 
-	readString(UI_READ_SUB.GET_OS_VERS, LEN_OS_VERS, OFF_OS_VERS);
-	readString(UI_READ_SUB.GET_HW_VERS, LEN_HW_VERS, OFF_HW_VERS);
-	readString(UI_READ_SUB.GET_FW_VERS, LEN_FW_VERS, OFF_FW_VERS);
-	readString(UI_READ_SUB.GET_OS_BUILD, LEN_OS_BUILD, OFF_OS_BUILD);
-	readString(UI_READ_SUB.GET_FW_BUILD, LEN_FW_BUILD, OFF_FW_BUILD);
+	readString(EV3_OPCODE.COM_GET, COM_GET_SUB.GET_BRICKNAME, LEN_BRICK_NAME, OFF_BRICK_NAME);
+	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_OS_VERS, LEN_OS_VERS, OFF_OS_VERS);
+	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_HW_VERS, LEN_HW_VERS, OFF_HW_VERS);
+	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_FW_VERS, LEN_FW_VERS, OFF_FW_VERS);
+	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_OS_BUILD, LEN_OS_BUILD, OFF_OS_BUILD);
+	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_FW_BUILD, LEN_FW_BUILD, OFF_FW_BUILD);
 
 	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: concatBytes(...ops) };
 }

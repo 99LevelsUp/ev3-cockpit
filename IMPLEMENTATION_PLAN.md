@@ -32,7 +32,7 @@ points here rather than repeating it, because the duplicate copy drifted twice d
 - transport adapters and providers (USB, TCP; BT is SPP-only — see 1.11) ✅
 - transport guard (built, not yet wired into any provider — see 1.8.4), BT connection queue, pending reply utilities ✅
 - session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- 188 unit tests + 3 extension-host integration tests passing ✅
+- 202 unit tests + 3 extension-host integration tests passing ✅
 - implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
@@ -169,7 +169,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.8 `OUTPUT_GET_COUNT`'s second argument is an **output number** (0-3), not an `NOS` bit field. Resolved with a large motor on port A: the shipped `buildPortsCommand` reported `{ port: 'A', peripheralType: 'large-motor', value: 342, unit: 'deg' }`, which is the tacho read with argument 0. The reviewer claim is refuted and the code stands unchanged
   - [x] 1.7.7 System reply header is 7 bytes — command echo, status, uint32 size, handle — measured on a real brick (`99 08 42 00 00 00 00` before the listing). `parseFsList` skipped 4 and glued three stray bytes to the first entry; `parseFsRead` skipped 6 and glued the handle to the content. Both now use one named constant
   - [x] 1.7.9 Buttons: `opUI_BUTTON` (0x83) subcode `PRESSED` (0x09). The shipped command asked `opUI_READ` for 0x0d, which is `GET_ADDRESS` — a real brick answered the whole command with an error, so button telemetry never worked outside the mock
-  - [ ] 1.7.10 `parseInfo` puts the OS version in `displayName`: a brick named BBB reports `"Linux 2.6.33-rc"`. The info command never asks for the brick's name and `InfoResponse` has no field for it, so 5.7.2 (editable brick name) has nothing to read. `opCOM_GET` subcode 0x0d was probed and is not `GET_BRICKNAME`; the right subcode still needs finding
+  - [x] 1.7.10 The info command reads the brick's own name via `opCOM_GET` (0xD3) / `GET_BRICKNAME` (0x0D), and `InfoResponse` gained `osVersion` so the kernel string keeps a home of its own. Verified on three bricks, each reporting its own name. The earlier failed probe used 0xD5, which is `opCOM_TEST`
 - [ ] **1.8 Transport adapter interface and constants** — guard unwired, send timeouts unimplemented
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
@@ -303,7 +303,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.2.1 `TelemetrySnapshot` — full state at a point in time for a category
   - [ ] 3.2.2 `TelemetryEvent` — incremental change within a category
   - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp)
-  - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory
+  - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory. The opcode is known: `opCOM_SET` (0xD4) with `SET_BRICKNAME` (0x08), both already declared in `ev3Packet.ts`; the read side (1.7.10) confirms the matching getter works
   - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
 - [ ] **3.3 Telemetry scheduler**
   - [ ] 3.3.1 Foreground loop — fastest frequency, full `ports` + `system` data

@@ -243,6 +243,14 @@ describe('ev3Commands — buildCommand', () => {
 		assert.equal(globalBytes, 6);
 	});
 
+	it('asks the brick for its own name, not the OS version', () => {
+		// A brick called AAA used to report itself as 'Linux 2.6.33-rc' because the
+		// command never asked for the name. opCOM_GET / GET_BRICKNAME does.
+		const result = buildCommand({ kind: 'info' });
+		assert.equal(result.payload[2], 0xd3, 'expected opCOM_GET');
+		assert.equal(result.payload[3], 0x0d, 'expected GET_BRICKNAME subcode');
+	});
+
 	it('reads buttons through opUI_BUTTON, not opUI_READ', () => {
 		// A real brick rejects the whole command when button state is requested as
 		// opUI_READ subcode 0x0d (which is GET_ADDRESS), so this asserts the opcode.
@@ -256,7 +264,8 @@ describe('ev3Commands — buildCommand', () => {
 		const result = buildCommand({ kind: 'info' });
 		assert.equal(result.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
 		const globalBytes = readUint16le(result.payload, 0);
-		assert.equal(globalBytes, 56); // 16+8+8+12+12
+		// brick name 16 + OS 16 + HW 8 + FW 8 + OS build 12 + FW build 12
+		assert.equal(globalBytes, 72);
 	});
 
 	it('builds fs:list as system command', () => {

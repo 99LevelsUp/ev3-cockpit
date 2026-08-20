@@ -144,13 +144,15 @@ function parseButtons(payload: Uint8Array): ButtonsResponse {
 }
 
 function parseInfo(payload: Uint8Array): InfoResponse {
+	const brickName = readFixedCString(payload, INFO_LAYOUT.OFF_BRICK_NAME, INFO_LAYOUT.LEN_BRICK_NAME);
 	const osVersion = readFixedCString(payload, INFO_LAYOUT.OFF_OS_VERS, INFO_LAYOUT.LEN_OS_VERS);
 	const fwVersion = readFixedCString(payload, INFO_LAYOUT.OFF_FW_VERS, INFO_LAYOUT.LEN_FW_VERS);
-	// Use OS version as displayName if available
 	return {
 		kind: 'info',
-		displayName: osVersion || 'EV3',
+		// The brick's name, not the kernel version this used to report.
+		displayName: brickName || 'EV3',
 		firmwareVersion: fwVersion || undefined,
+		osVersion: osVersion || undefined,
 	};
 }
 

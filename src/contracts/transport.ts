@@ -54,7 +54,14 @@ export interface BatteryResponse {
 }
 export interface PortsResponse { readonly kind: 'ports'; readonly motorPorts: PortState[]; readonly sensorPorts: PortState[] }
 export interface ButtonsResponse { readonly kind: 'buttons'; readonly state: Record<string, boolean> }
-export interface InfoResponse { readonly kind: 'info'; readonly displayName: string; readonly firmwareVersion?: string }
+export interface InfoResponse {
+	readonly kind: 'info';
+	/** The brick's own user-visible name, as set on the brick itself. */
+	readonly displayName: string;
+	readonly firmwareVersion?: string;
+	/** Linux kernel version string reported by the brick. */
+	readonly osVersion?: string;
+}
 export interface FsListResponse { readonly kind: 'fs:list'; readonly entries: string[] }
 export interface FsReadResponse { readonly kind: 'fs:read'; readonly content: string }
 export interface FsWriteResponse { readonly kind: 'fs:write' }
