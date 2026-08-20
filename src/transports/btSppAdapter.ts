@@ -12,8 +12,10 @@ import {
 	PendingReply,
 	drainPendingReply,
 	rejectPendingReply,
-	extractLengthPrefixedPacket
+	extractLengthPrefixedPacket,
+	createPendingReply
 } from './pendingReply';
+import { BT } from './transportConstants';
 
 // ── serialport interfaces (duck-typed to avoid hard import) ─────────
 
@@ -192,20 +194,21 @@ export class BtSppAdapter implements TransportAdapter {
 			throw new TransportError('BT SPP send aborted before dispatch.');
 		}
 
-		return new Promise<Uint8Array>((resolve, reject) => {
-			const signal = options?.signal;
-			const onAbort = () => {
-				this.doRejectPendingReply(new TransportError('BT SPP send aborted.'));
-			};
-			const cleanup = () => signal?.removeEventListener('abort', onAbort);
-			signal?.addEventListener('abort', onAbort, { once: true });
+		// EV3 is strictly request-reply on this channel, so nothing legitimate is in
+		// the buffer between exchanges. A late fragment from an abandoned exchange is,
+		// and it would desync every reply after it.
+		this.receiveBuffer = Buffer.alloc(0);
 
-			this.pendingReply = {
+		return new Promise<Uint8Array>((resolve, reject) => {
+			this.pendingReply = createPendingReply({
 				resolve,
 				reject,
-				cleanup,
-				expectedMessageCounter: options?.expectedMessageCounter
-			};
+				fail: (error) => this.failExchange(error),
+				timeoutMs: options?.timeoutMs ?? BT.SEND_TIMEOUT_MS,
+				signal: options?.signal,
+				expectedMessageCounter: options?.expectedMessageCounter,
+				transport: 'BT SPP',
+			});
 
 			this.port!.write(Buffer.from(packet), (error?: Error | null) => {
 				if (error) {
@@ -230,6 +233,15 @@ export class BtSppAdapter implements TransportAdapter {
 		}
 		this.receiveBuffer = result.remaining;
 		return result.packet;
+	}
+
+	/**
+	 * Abandon the current exchange and leave the adapter usable: drop the latch and
+	 * discard the buffer, so a late or partial frame cannot bleed into the next send.
+	 */
+	private failExchange(error: unknown): void {
+		this.receiveBuffer = Buffer.alloc(0);
+		this.doRejectPendingReply(error);
 	}
 
 	private doRejectPendingReply(error: unknown): void {
