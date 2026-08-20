@@ -55,6 +55,7 @@ export const EV3_SYSTEM = {
 
 export const EV3_OPCODE = {
 	UI_READ: 0x81,
+	UI_BUTTON: 0x83,
 	INPUT_DEVICE: 0x99,
 	INPUT_READ_SI: 0x9a,
 	INPUT_DEVICE_LIST: 0x98,
@@ -67,9 +68,14 @@ export const EV3_OPCODE = {
 	PROGRAM_STOP: 0x02,
 } as const;
 
-/** Subcodes for opUI_READ. */
+/** Subcodes for opUI_READ. Values marked (verified) were read off a real brick. */
 export const UI_READ_SUB = {
+	/** Battery voltage, float32 (verified). */
+	GET_VBATT: 0x01,
+	/** Battery current draw in amps, float32 (verified). */
 	GET_IBATT: 0x02,
+	/** Battery charge level in percent, one byte (verified). */
+	GET_LBATT: 0x12,
 	GET_OS_VERS: 0x03,
 	GET_IMOTOR: 0x07,
 	GET_HW_VERS: 0x09,
@@ -78,6 +84,18 @@ export const UI_READ_SUB = {
 	GET_OS_BUILD: 0x0c,
 	GET_PRESS: 0x0d,
 	GET_SDCARD: 0x1d,
+} as const;
+
+/**
+ * Subcodes for opUI_BUTTON.
+ *
+ * Button state is not an opUI_READ subcode. Asking opUI_READ for 0x0d (which is
+ * GET_ADDRESS) made the firmware answer with an error — confirmed against a real
+ * brick, where PRESSED under opUI_BUTTON answers correctly.
+ */
+export const UI_BUTTON_SUB = {
+	/** Is the given button currently pressed: one byte, 0 or 1 (verified). */
+	PRESSED: 0x09,
 } as const;
 
 /** Subcodes for opINPUT_DEVICE. */
