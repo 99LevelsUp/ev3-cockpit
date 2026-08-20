@@ -11,6 +11,7 @@ import { encodeEv3Packet, decodeEv3Packet } from '../protocol/ev3Packet';
 import { parseResponse } from '../protocol/ev3Responses';
 import { getMessageCounter as getMsgCounter } from './pendingReply';
 import { SendOptions } from './transportAdapter';
+import { ProtocolError } from '../errors/CockpitError';
 
 /** Encode a BrickCommand into { type, payload } ready for packet framing. */
 export function encodeCommand(command: BrickCommand): EncodedCommand {
@@ -57,7 +58,9 @@ export async function sendCommandViaAdapter(
 	const reply = await adapter.send(packet, { ...options, expectedMessageCounter: messageCounter });
 	const counter = getMessageCounter(reply);
 	if (counter !== messageCounter) {
-		throw new Error(
+		// A framing failure, not a lost link — typed so the heartbeat does not
+		// reconnect a brick that is answering.
+		throw new ProtocolError(
 			`${transportLabel} reply counter mismatch: expected ${messageCounter}, got ${counter}.`
 		);
 	}

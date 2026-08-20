@@ -16,7 +16,9 @@ import { CommandQueue } from './commandQueue';
 import { HeartbeatMonitor } from './heartbeatMonitor';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
-import { AlreadyConnectedError, NotConnectedError, NoProviderError } from '../errors/CockpitError';
+import {
+	AlreadyConnectedError, NotConnectedError, NoProviderError, ProtocolError,
+} from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 
 // ── Events ──────────────────────────────────────────────────────────
@@ -304,6 +306,19 @@ export class SessionManager implements vscode.Disposable {
 			},
 			onFailure: (error) => {
 				this.handleHeartbeatFailure(brickKey, error);
+			},
+			// The probe is the battery command, so a firmware whose payload layout differs
+			// rejects every single tick. Counted as a miss that reconnects on success and
+			// resets the backoff, it would loop forever and make the brick unusable rather
+			// than merely un-metered.
+			isLinkFailure: (error) => !(error instanceof ProtocolError),
+			onAnomaly: (error) => {
+				const resources = this.sessions.get(brickKey);
+				if (resources) {
+					resources.entry.setError(error instanceof Error ? error.message : String(error));
+					// The reply arrived, so the link is confirmed alive.
+					resources.entry.setHeartbeatState('ok');
+				}
 			},
 		});
 	}

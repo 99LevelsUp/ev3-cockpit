@@ -8,7 +8,7 @@
 import { Transport, BrickKey, makeBrickKey, brickKeyId } from '../contracts';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle,
-	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse,
+	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse, SendCommandOptions,
 	PresenceState
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
@@ -149,7 +149,11 @@ export class UsbTransportProvider implements TransportProvider {
 		await session.adapter.close();
 	}
 
-	async send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
+	async send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse> {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
@@ -157,7 +161,7 @@ export class UsbTransportProvider implements TransportProvider {
 		}
 
 		session.messageCounter = (session.messageCounter + 1) & 0xffff;
-		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'USB');
+		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'USB', options);
 	}
 
 	dispose(): void {

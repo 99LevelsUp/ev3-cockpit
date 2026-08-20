@@ -66,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			e.items.map(i => i.displayName));
 	});
 	aggregator.onPresenceChanged(e => {
-		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState} → ${e.currentState}`);
+		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState ?? 'new'} → ${e.currentState}`);
 	});
 
 	// The discovery list owns `connected` locally, and nothing was telling it. Without

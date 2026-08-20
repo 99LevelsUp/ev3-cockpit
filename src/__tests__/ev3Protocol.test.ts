@@ -7,7 +7,7 @@ import {
 } from '../protocol/ev3Bytecode';
 import {
 	encodeEv3Packet, decodeEv3Packet, extractLengthPrefixedPacket,
-	EV3_COMMAND, EV3_REPLY,
+	EV3_COMMAND, EV3_REPLY, EV3_SYSTEM, EV3_SYSTEM_STATUS,
 } from '../protocol/ev3Packet';
 import { buildCommand } from '../protocol/ev3Commands';
 import { parseResponse } from '../protocol/ev3Responses';
@@ -371,13 +371,33 @@ describe('ev3Responses — parseResponse', () => {
 		}, /direct command error/i);
 	});
 
-	it('throws on system reply error', () => {
+	it('holds battery level inside the documented 0-100 range', () => {
+		// The contract promises a percentage and Phase 4 will render it as one. The
+		// clamp used to live with the current-draw heuristic and left when the real
+		// GET_LBATT read replaced it, so an unexpected byte reached consumers raw.
+		const payload = new Uint8Array(9);
+		payload[8] = 200;
+		const result = parseResponse(
+			{ kind: 'battery' },
+			makeReply(EV3_REPLY.DIRECT_REPLY, payload),
+		) as { level: number };
+		assert.equal(result.level, 100);
+	});
+
+	it('names the status from a system reply error', () => {
+		// The payload opens with the echoed system command, so the status is the second
+		// byte. Asserting the resolved *name* is the point: the earlier version of this
+		// test passed a bare status byte and matched only /system command error/, which
+		// let the parser read the command echo as the status for as long as it existed.
 		assert.throws(() => {
 			parseResponse(
 				{ kind: 'fs:list', path: '/bad' },
-				makeReply(EV3_REPLY.SYSTEM_REPLY_ERROR, new Uint8Array([0x06])),
+				makeReply(
+					EV3_REPLY.SYSTEM_REPLY_ERROR,
+					new Uint8Array([EV3_SYSTEM.LIST_FILES, EV3_SYSTEM_STATUS.ILLEGAL_PATH]),
+				),
 			);
-		}, /system command error/i);
+		}, /system command error for 'fs:list': ILLEGAL_PATH/);
 	});
 
 	it('parses fs:write response', () => {

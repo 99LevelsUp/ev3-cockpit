@@ -11,6 +11,8 @@ export interface SendOptions {
 	 * Round-trip budget in milliseconds. Defaults to the transport's
 	 * `SEND_TIMEOUT_MS`. On expiry the send rejects with `TimeoutError` and the
 	 * adapter discards the exchange so the next send starts clean.
+	 *
+	 * Zero or less disables the timer entirely and the send waits indefinitely.
 	 */
 	timeoutMs?: number;
 	/** Abort signal for cooperative cancellation. */
