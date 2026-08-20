@@ -36,8 +36,13 @@ export const USB = {
 	 * performance target, so it stays far above normal jitter.
 	 */
 	SEND_TIMEOUT_MS: 1000,
-	/** Maximum safe command rate (commands per second). */
-	MAX_COMMANDS_PER_SEC: 10,
+	/**
+	 * Sustained command rate measured over 600 back-to-back commands.
+	 *
+	 * Not a safety ceiling — an observed capability. No error and no latency drift
+	 * at this rate, so the limit is the round trip, not the firmware.
+	 */
+	MAX_COMMANDS_PER_SEC: 176,
 } as const;
 
 // ── TCP ─────────────────────────────────────────────────────────────
@@ -60,6 +65,11 @@ export const TCP = {
 	 * value of 1000 was ~17x pessimistic and read by no code.
 	 */
 	COMMAND_RTT_MS: 60,
+	/**
+	 * Sustained command rate measured over 600 back-to-back commands: 61.7/s at a
+	 * 16 ms median, no drift and no errors.
+	 */
+	MAX_COMMANDS_PER_SEC: 62,
 	/** Round-trip budget before a send is abandoned (ms), ~17x the measured value. */
 	SEND_TIMEOUT_MS: 1000,
 	/**
@@ -115,6 +125,16 @@ export const BT = {
 	 */
 	COMMAND_RTT_MS: 130,
 	/**
+	 * Sustained command rate measured over 600 back-to-back commands: 10.7/s at a
+	 * 102 ms median, no drift.
+	 *
+	 * The one transport where the old global 10 cmd/s figure was about right, and by
+	 * coincidence: SPP's round trip lands there on its own. Note the link is also
+	 * bandwidth-bound at 115200 baud (~11 KB/s), so a chunked transfer over BT is
+	 * limited by payload size as much as by command count.
+	 */
+	MAX_COMMANDS_PER_SEC: 11,
+	/**
 	 * Round-trip budget before a send is abandoned (ms). Roughly 16x the measured
 	 * round trip — more headroom than the other transports get, because RFCOMM is
 	 * the least predictable of the three.
@@ -133,8 +153,22 @@ export const BT = {
 // ── Firmware safety ─────────────────────────────────────────────────
 
 export const FIRMWARE_SAFETY = {
-	/** Maximum commands per second per brick (across all transports). */
-	MAX_COMMANDS_PER_SEC: 10,
+	/**
+	 * Backstop command rate per brick, transport-agnostic.
+	 *
+	 * This was 10 for every transport, on no recorded basis. Measured sustained rates
+	 * are USB 176, TCP 62, BT 11 commands per second — so the old figure was 17x
+	 * pessimistic on USB, 6x on TCP, and roughly right on BT only because BT's round
+	 * trip happens to land there. None of the three showed an error or any latency
+	 * drift at its own ceiling.
+	 *
+	 * Commands are strictly serial — each adapter holds one in-flight exchange — so a
+	 * transport cannot exceed 1/RTT however hard a caller pushes. That makes each
+	 * transport self-limiting and this value a guard against a pathological caller
+	 * (a retry storm, a runaway loop), not a meter on normal traffic. Prefer the
+	 * per-transport `MAX_COMMANDS_PER_SEC` when the transport is known.
+	 */
+	MAX_COMMANDS_PER_SEC: 200,
 	/** Minimum heartbeat interval (ms) — below this risks firmware stress. */
 	MIN_HEARTBEAT_INTERVAL_MS: 3000,
 	/** Cooldown between transport mode switches (ms). */

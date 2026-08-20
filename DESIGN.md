@@ -179,7 +179,13 @@ Concrete adapters:
 - `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
 - `BtRfcommAdapter` — Bluetooth RFCOMM. Multi-backend on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus.
 
-**Transport guard**: Rate limiting (≤ 10 commands/second per brick), firmware freeze protection (one active transport at a time, 2-second switch cooldown), degradation tracking.
+**Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
+brick), firmware freeze protection (one active transport at a time, 2-second switch
+cooldown), degradation tracking. It is deliberately **not** a meter on normal traffic:
+commands are strictly serial, so each transport is already self-limiting at its own round
+trip — measured at 176, 62 and 11 commands per second for USB, TCP and BT, with no error
+and no latency drift at any of them. The guard exists for a retry storm or a runaway
+loop, not for the rates a working caller can reach.
 
 **BT connection queue**: Windows RFCOMM allows only one active connection at a time. A serialized queue with 15-second inter-connection cooldown and exponential backoff on errors enforces this constraint.
 
@@ -596,22 +602,35 @@ through. This changes no firewall configuration; it is the ordinary
 outbound-before-inbound pattern, and without it TCP discovery cannot work on a stock
 Windows install.
 
-**The firmware guard binds before any of those rates.** §4.1 caps a brick at 10 commands per
-second, and a frame is four commands, so the reachable frame rate is **2.5 Hz on every
-transport** — and the heartbeat probe draws on the same budget. The 25 Hz, 7 Hz and 4 Hz
-figures above are transport ceilings, not achievable rates.
+**The transport is the binding constraint, not a guard.** Sustained command rates were
+measured per transport over 600 back-to-back commands: **USB 176/s** (6 ms median),
+**TCP 62/s** (16 ms), **BT 10.7/s** (102 ms). No transport produced a single error or any
+latency drift at its own rate, and all three recovered clean. At four commands per
+telemetry frame that is **~44 Hz on USB, ~15 Hz on TCP, ~2.7 Hz on BT**.
 
-This corrects a conclusion an earlier revision of this section drew. Having measured USB at
-9 ms, it read that as "far above anything the panel needs" and treated the refresh problem as
-solved on USB. It is not: the guard, not the round trip, is the binding constraint, and it
-binds equally everywhere. What the measurements did retire is the claim that the *transport*
-makes the panel unusable.
+This section has now been wrong twice about the same thing, in opposite directions, and the
+second time is more instructive than the first.
 
-Two consequences follow. Phase 3's per-transport target and floor (3.8) must be derived from
-the 10 commands/second budget, with RTT only as the lower-bound check. And batching the frame
-into one multi-opcode command (3.1.5) stops being an optimisation for slow transports and
-becomes the mechanism that buys frame rate back: metered as one command instead of four, the
-same budget allows four times the frames on every transport.
+The first revision measured USB round trips, read 9 ms as "far above anything the panel
+needs", and declared the refresh problem solved. Two independent reviewers then caught a
+real inconsistency — §4.1 capped a brick at 10 commands per second, which would have made
+the reachable frame rate 2.5 Hz everywhere and the transport ceilings irrelevant — and this
+section was rewritten to say the guard binds first.
+
+That resolution was wrong, because the 10 came from nowhere. It appeared in
+`FIRMWARE_SAFETY` with no recorded basis, was read by a guard that was never wired, and
+measurement puts it 17x low on USB and 6x low on TCP. It matches BT only by coincidence:
+SPP's round trip happens to land at about ten exchanges a second. **A consistency argument
+cannot tell you which of two inconsistent numbers is the wrong one** — the reviewers were
+right that the documents contradicted each other, and resolving it toward the unmeasured
+side was the error.
+
+Two consequences follow. Phase 3's per-transport target and floor (3.8) derive from the
+**measured per-transport rate**, not from one global budget; USB and TCP have ample room and
+BT does not. And batching the frame into one multi-opcode command (3.1.5) stays worth doing,
+but for a narrower reason than the previous revision claimed: it is what makes **BT**
+usable, taking it from ~2.7 Hz to ~10 Hz. On USB and TCP it is an optimisation, not a
+prerequisite.
 
 Phase 3 still owes that target and floor, and the panel still owes a degraded-telemetry
 indicator below the floor.
