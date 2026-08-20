@@ -187,7 +187,10 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.10.1 `TcpSocketAdapter` — TCP socket via Node.js `net`, length-prefixed stream
   - [x] 1.10.2 `TcpTransportProvider` — UDP beacon discovery (port 3015, `dgram`), TCP connection (port 5555), VMTP1.0 unlock handshake
   - [x] 1.10.3 brickKey from serial number or IP (`tcp:<serial>` or `tcp:<ip>`)
-  - [x] 1.10.4 Hybrid beacon + direct-IP recovery
+  - [x] 1.10.4 Hybrid beacon + direct-IP recovery. Connect now resolves the address from the
+        provider's own beacon cache; it used to hand the adapter a bare serial with
+        `useDiscovery: true`, and the adapter could never bind the beacon port because the
+        provider already held it — so connecting to a brick found by discovery always failed
 - [ ] **1.11 BT Transport** — SPP backend only; discovery not wired
   - [ ] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator (no such file or symbol exists)
   - [ ] 1.11.2 `BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket (Windows, requires dotnet)
