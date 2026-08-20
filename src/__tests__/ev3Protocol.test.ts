@@ -243,6 +243,15 @@ describe('ev3Commands — buildCommand', () => {
 		assert.equal(globalBytes, 6);
 	});
 
+	it('reads buttons through opUI_BUTTON, not opUI_READ', () => {
+		// A real brick rejects the whole command when button state is requested as
+		// opUI_READ subcode 0x0d (which is GET_ADDRESS), so this asserts the opcode.
+		const result = buildCommand({ kind: 'buttons' });
+		assert.equal(result.payload[2], 0x83, 'expected opUI_BUTTON');
+		assert.equal(result.payload[3], 0x09, 'expected PRESSED subcode');
+		assert.ok(!result.payload.includes(0x81), 'opUI_READ must not appear');
+	});
+
 	it('builds info command as direct command with reply', () => {
 		const result = buildCommand({ kind: 'info' });
 		assert.equal(result.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
@@ -273,16 +282,51 @@ describe('ev3Responses — parseResponse', () => {
 		return { messageCounter: 1, type, payload };
 	}
 
-	it('parses battery response', () => {
-		const payload = new Uint8Array(4);
-		new DataView(payload.buffer).setFloat32(0, 0.35, true);
+	it('parses battery response as percent, volts and amps', () => {
+		// Layout measured on a real brick: [0..3] volts, [4..7] amps, [8] percent.
+		// The values are the ones that brick actually reported.
+		const payload = new Uint8Array(9);
+		const view = new DataView(payload.buffer);
+		view.setFloat32(0, 8.3598, true);
+		view.setFloat32(4, 0.1433, true);
+		payload[8] = 100;
+
 		const result = parseResponse(
 			{ kind: 'battery' },
 			makeReply(EV3_REPLY.DIRECT_REPLY, payload),
-		);
+		) as { kind: string; level: number; voltage?: number; currentAmps?: number };
+
 		assert.equal(result.kind, 'battery');
-		assert.ok((result as { level: number }).level > 0);
+		// Charge, not current x 200 — that heuristic reported 29 % for this brick.
+		assert.equal(result.level, 100);
+		assert.ok(Math.abs((result.voltage ?? 0) - 8.3598) < 0.001);
+		assert.ok(Math.abs((result.currentAmps ?? 0) - 0.1433) < 0.001);
 	});
+
+	it('rejects a truncated battery reply instead of reporting 0 %', () => {
+		assert.throws(
+			() => parseResponse({ kind: 'battery' }, makeReply(EV3_REPLY.DIRECT_REPLY, new Uint8Array(4))),
+			/Malformed battery reply/
+		);
+	});
+
+	it('parses a listing past the 7-byte system reply header', () => {
+		// Real reply began 99 08 42 00 00 00 00 then the listing. Skipping 4 left
+		// three stray bytes glued to the first entry.
+		const header = new Uint8Array([0x99, 0x08, 0x42, 0x00, 0x00, 0x00, 0x00]);
+		const listing = Buffer.from('tetris/\nSUMO/\n', 'utf8');
+		const payload = new Uint8Array(header.length + listing.length);
+		payload.set(header, 0);
+		payload.set(listing, header.length);
+
+		const result = parseResponse(
+			{ kind: 'fs:list', path: '/x/' },
+			makeReply(EV3_REPLY.SYSTEM_REPLY, payload),
+		) as { entries: string[] };
+
+		assert.deepEqual(result.entries, ['tetris/', 'SUMO/']);
+	});
+
 
 	it('parses buttons response', () => {
 		const payload = new Uint8Array([1, 0, 0, 0, 1, 0]);

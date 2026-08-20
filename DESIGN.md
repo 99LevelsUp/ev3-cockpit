@@ -498,10 +498,23 @@ Implementation model:
 - Cockpit simultaneously removes local persisted metadata (including `favorite`),
 - forgetting is only permitted where the provider can safely perform it.
 
-For USB bricks on Windows, "OS-level evidence" includes the BT registry entry at
-`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\{mac}` — this is the
-source of the brick's display name (USB name resolution reads it). Forget must delete this
-entry in addition to BT unpairing; otherwise the stale name survives across renames.
+"OS-level evidence" on Windows includes the BT registry entry at
+`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\{mac}`. Forget must
+delete it in addition to BT unpairing, because the `Name` value there goes stale and
+survives a rename — measured on two paired bricks whose real names were AAA and BBB while
+the registry still held `"EV3"` and `"B"`.
+
+That entry is **not** the source of a USB brick's display name, despite an earlier note here
+saying so. USB name resolution reads libusb string descriptors straight off the device and
+gets the current name; it is `node-hid`'s cached `product` string that goes stale, reporting
+the generic `"Xfer data to and from EV3 brick"` for two of three bricks where libusb
+returned AAA, BBB and CCC correctly. So the stale-name problem is real, and it belongs to
+the Bluetooth path once BT discovery is wired (1.11.7a).
+
+A related measurement worth recording: an EV3's USB serial number **is** its Bluetooth MAC
+with the separators removed — the BTHPORT subkey names matched the USB serials exactly. Any
+future cross-transport identity work can relate `usb:001653518739` to `bt:00:16:53:51:87:39`
+by normalising the string, with no on-brick probe involved.
 
 ## 8. Favorites and Persistence
 

@@ -9,7 +9,7 @@
 import { BrickCommand } from '../contracts';
 import { concatBytes, uint16le, uint32le, lc0, cString, gv0, gv1 } from './ev3Bytecode';
 import {
-	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB,
+	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB,
 	INPUT_DEVICE_SUB,
 } from './ev3Packet';
 
@@ -86,13 +86,24 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 
 // ── Direct commands ─────────────────────────────────────────────────
 
-/** Battery level: reads battery current as float32. */
+/**
+ * Battery: charge level, voltage and current in one round trip.
+ *
+ * Global layout: [0..3] volts float32, [4..7] amps float32, [8] level percent.
+ *
+ * This used to ask only for GET_IBATT and report `current * 200` as the level. On a
+ * brick reading 100 % that produced 29 %, because current draw tracks motor load
+ * rather than remaining charge. GET_LBATT answers the actual question.
+ *
+ * The floats sit at offsets 0 and 4 with the single byte last: putting the byte
+ * first left both floats unaligned and the firmware rejected the whole command.
+ */
 function buildBatteryCommand(): EncodedCommand {
-	// 4 bytes global: float32 battery current
 	const payload = concatBytes(
-		uint16le(4),
-		new Uint8Array([EV3_OPCODE.UI_READ, UI_READ_SUB.GET_IBATT]),
-		gv0(0),
+		uint16le(9),
+		new Uint8Array([EV3_OPCODE.UI_READ, UI_READ_SUB.GET_VBATT]), gv0(0),
+		new Uint8Array([EV3_OPCODE.UI_READ, UI_READ_SUB.GET_IBATT]), gv0(4),
+		new Uint8Array([EV3_OPCODE.UI_READ, UI_READ_SUB.GET_LBATT]), gv0(8),
 	);
 	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload };
 }
@@ -150,14 +161,19 @@ function buildPortsCommand(): EncodedCommand {
 	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: concatBytes(...ops) };
 }
 
-/** Buttons: reads which button is currently pressed. */
+/**
+ * Buttons: one byte per button, in BUTTON_NAMES order.
+ *
+ * This asked opUI_READ for subcode 0x0d, which is GET_ADDRESS, not a button read —
+ * a real brick answered the whole command with an error, so button telemetry never
+ * worked outside the mock. opUI_BUTTON with PRESSED is the right opcode.
+ */
 function buildButtonsCommand(): EncodedCommand {
-	// 6 bytes global: one byte per button (up, enter, down, right, left, back)
 	const ops: Uint8Array[] = [uint16le(6)];
 	const buttonIds = [1, 2, 3, 4, 5, 6]; // UP, ENTER, DOWN, RIGHT, LEFT, BACK
 
 	for (let i = 0; i < buttonIds.length; i++) {
-		ops.push(new Uint8Array([EV3_OPCODE.UI_READ, UI_READ_SUB.GET_PRESS]));
+		ops.push(new Uint8Array([EV3_OPCODE.UI_BUTTON, UI_BUTTON_SUB.PRESSED]));
 		ops.push(lc0(buttonIds[i]));
 		ops.push(gv0(i));
 	}
