@@ -56,6 +56,8 @@ export const EV3_SYSTEM = {
 export const EV3_OPCODE = {
 	UI_READ: 0x81,
 	UI_BUTTON: 0x83,
+	COM_GET: 0xd3,
+	COM_SET: 0xd4,
 	INPUT_DEVICE: 0x99,
 	INPUT_READ_SI: 0x9a,
 	INPUT_DEVICE_LIST: 0x98,
@@ -82,8 +84,27 @@ export const UI_READ_SUB = {
 	GET_FW_VERS: 0x0a,
 	GET_FW_BUILD: 0x0b,
 	GET_OS_BUILD: 0x0c,
-	GET_PRESS: 0x0d,
-	GET_SDCARD: 0x1d,
+	/** 0x1e per the firmware enum. This table previously said 0x1d, which is GET_POWER. */
+	GET_SDCARD: 0x1e,
+} as const;
+
+/**
+ * Subcodes for opCOM_GET.
+ *
+ * Values from `lms2012/source/bytecodes.h` (`COM_GET_SUBCODE`). `GET_BRICKNAME` was
+ * verified against three bricks, each returning its own name.
+ */
+export const COM_GET_SUB = {
+	/** Bluetooth MAC of this brick. */
+	GET_ID: 0x0c,
+	/** The brick's user-visible name. */
+	GET_BRICKNAME: 0x0d,
+} as const;
+
+/** Subcodes for opCOM_SET (`COM_SET_SUBCODE` in the firmware). */
+export const COM_SET_SUB = {
+	/** Rename the brick. Needed by plan task 3.2.4; not wired into a command yet. */
+	SET_BRICKNAME: 0x08,
 } as const;
 
 /**
