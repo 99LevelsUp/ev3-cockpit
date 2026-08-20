@@ -75,7 +75,11 @@ export class TcpTransportProvider implements TransportProvider {
 
 	constructor(options?: TcpTransportProviderOptions) {
 		this.options = options ?? {};
-		this.startBeaconListener();
+		// A provider told not to discover has no business binding the beacon port or
+		// broadcasting every few seconds. It used to do both regardless.
+		if (this.options.useDiscovery ?? true) {
+			this.startBeaconListener();
+		}
 	}
 
 	discover(): Promise<DiscoveryScanResult> {
@@ -188,12 +192,22 @@ export class TcpTransportProvider implements TransportProvider {
 		const cached = isIp ? undefined : this.findCachedBeacon(identifier);
 		const host = isIp ? identifier : (cached?.ip ?? this.options.host ?? '');
 
+		if (!host) {
+			// Falling back to adapter-side discovery here cannot work: while this
+			// provider is listening it owns the beacon port, so the adapter's own bind
+			// fails with EADDRINUSE and the caller gets that instead of the real reason.
+			throw new TransportError(
+				`No address known for ${brickKey}. Its beacon has expired — wait for the next `
+				+ 'announcement, or configure a host explicitly.'
+			);
+		}
+
 		return {
 			host,
 			port: this.options.port ?? cached?.port ?? TCP.PORT,
 			serialNumber: isIp ? '' : identifier,
-			// Only fall back to adapter-side discovery when no address could be resolved.
-			useDiscovery: host ? false : (this.options.useDiscovery ?? true),
+			// The address is resolved, so the adapter must not try to discover again.
+			useDiscovery: false,
 			discoveryPort: this.options.discoveryPort ?? TCP.BEACON_PORT,
 			discoveryTimeoutMs: this.options.discoveryTimeoutMs ?? TCP.BEACON_TIMEOUT_MS,
 		};
@@ -207,7 +221,11 @@ export class TcpTransportProvider implements TransportProvider {
 			if (this.localAddresses.has(rinfo.address)) { return; }
 			const parsed = this.parseBeacon(msg.toString('utf8'), rinfo.address);
 			if (!parsed) { return; }
-			const key = `${parsed.ip}:${parsed.serialNumber || parsed.ip}`;
+			// Keyed by identity alone. Keying on address-and-serial meant a brick that
+			// changed address appeared twice, and an address DHCP moved between bricks
+			// kept the previous owner listed until its entry aged out — at which point
+			// connecting the stale row opened whichever brick now holds that address.
+			const key = (parsed.serialNumber || parsed.ip).toLowerCase();
 			this.beaconCache.set(key, { info: parsed, receivedAt: Date.now() });
 		});
 
@@ -227,6 +245,10 @@ export class TcpTransportProvider implements TransportProvider {
 
 		const port = this.options.discoveryPort ?? TCP.BEACON_PORT;
 		socket.bind(port, () => {
+			// dispose() may have run while the bind was still in flight. It cannot clear a
+			// timer this callback has not created yet, so without this the provider would
+			// leave an interval broadcasting on a closed socket for the life of the process.
+			if (this.disposed) { return; }
 			try { socket.setBroadcast(true); } catch { /* not fatal */ }
 			this.primeBeaconPath(socket, port);
 			this.beaconPrimeTimer = setInterval(
@@ -236,6 +258,13 @@ export class TcpTransportProvider implements TransportProvider {
 			this.beaconPrimeTimer.unref?.();
 		});
 		this.beaconSocket = socket;
+	}
+
+	/** Freshest cached beacon for this identity, if it is still within the window. */
+	private findCachedBeacon(serialNumber: string): TcpDiscoveryInfo | undefined {
+		const entry = this.beaconCache.get(serialNumber.toLowerCase());
+		if (!entry) { return undefined; }
+		return Date.now() - entry.receivedAt > TCP.BEACON_FRESH_MS ? undefined : entry.info;
 	}
 
 	/**
@@ -250,18 +279,8 @@ export class TcpTransportProvider implements TransportProvider {
 	 * This changes no firewall configuration; it is the ordinary outbound-then-inbound
 	 * pattern any discovery client uses.
 	 */
-	/** Freshest cached beacon whose serial matches, if it is still within the window. */
-	private findCachedBeacon(serialNumber: string): TcpDiscoveryInfo | undefined {
-		const wanted = serialNumber.toLowerCase();
-		const now = Date.now();
-		for (const entry of this.beaconCache.values()) {
-			if (now - entry.receivedAt > TCP.BEACON_FRESH_MS) { continue; }
-			if ((entry.info.serialNumber ?? '').toLowerCase() === wanted) { return entry.info; }
-		}
-		return undefined;
-	}
-
 	private primeBeaconPath(socket: dgram.Socket, port: number): void {
+		if (this.disposed) { return; }
 		for (const target of this.broadcastTargets()) {
 			socket.send(BEACON_PROBE, port, target, () => { /* best effort */ });
 		}

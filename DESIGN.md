@@ -513,8 +513,9 @@ the Bluetooth path once BT discovery is wired (1.11.7a).
 
 A related measurement worth recording: an EV3's USB serial number **is** its Bluetooth MAC
 with the separators removed — the BTHPORT subkey names matched the USB serials exactly. Any
-future cross-transport identity work can relate `usb:001653518739` to `bt:00:16:53:51:87:39`
-by normalising the string, with no on-brick probe involved.
+future cross-transport identity work can relate `usb:001653AABBCC` to `bt:00:16:53:AA:BB:CC`
+by normalising the string, with no on-brick probe involved. (Identifiers here are
+placeholders on the real LEGO OUI; actual device serials stay out of the repository.)
 
 ## 8. Favorites and Persistence
 
@@ -595,9 +596,25 @@ through. This changes no firewall configuration; it is the ordinary
 outbound-before-inbound pattern, and without it TCP discovery cannot work on a stock
 Windows install.
 
-Phase 3 still owes a target and a floor per transport, and the panel still owes a
-degraded-telemetry indicator below that floor — but on the evidence so far the floor binds
-on the slow transports, not on USB.
+**The firmware guard binds before any of those rates.** §4.1 caps a brick at 10 commands per
+second, and a frame is four commands, so the reachable frame rate is **2.5 Hz on every
+transport** — and the heartbeat probe draws on the same budget. The 25 Hz, 7 Hz and 4 Hz
+figures above are transport ceilings, not achievable rates.
+
+This corrects a conclusion an earlier revision of this section drew. Having measured USB at
+9 ms, it read that as "far above anything the panel needs" and treated the refresh problem as
+solved on USB. It is not: the guard, not the round trip, is the binding constraint, and it
+binds equally everywhere. What the measurements did retire is the claim that the *transport*
+makes the panel unusable.
+
+Two consequences follow. Phase 3's per-transport target and floor (3.8) must be derived from
+the 10 commands/second budget, with RTT only as the lower-bound check. And batching the frame
+into one multi-opcode command (3.1.5) stops being an optimisation for slow transports and
+becomes the mechanism that buys frame rate back: metered as one command instead of four, the
+same budget allows four times the frames on every transport.
+
+Phase 3 still owes that target and floor, and the panel still owes a degraded-telemetry
+indicator below the floor.
 
 Foreground telemetry is for the active brick in the panel only.
 

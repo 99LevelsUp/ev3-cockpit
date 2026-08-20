@@ -1,6 +1,6 @@
 # EVƎ Cockpit - Implementation Plan
 
-> Version: 2026-04-02
+> Version: 2026-08-20
 > Repository state: Phases 0-2 implemented; Phase 3 is the next work item.
 
 This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete implementation order.
@@ -16,9 +16,10 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 ## 2. Current Starting State
 
 Phase 0 and Phase 2 are complete. Phase 1 is substantially complete but carries named gaps:
-1.6.10 mock config loading, 1.7.6 battery subcode, 1.7.7 filesystem list header, 1.7.8 motor
-tacho addressing (disputed), 1.8.4 transport guard wiring, 1.8.4a rate-limit policy, 1.8.5
-send timeouts, 1.11 BT backends and discovery, 1.12.4 per-transport contract tests. Phase 3 work starts from here; those gaps are carried, not closed.
+1.6.10 mock config loading, 1.8.4 transport guard wiring, 1.8.4a rate-limit policy, 1.8.5b
+transfer-level filesystem deadline, 1.11 BT backends and discovery (1.11.7a discovery wiring,
+1.11.12 bounded ceiling failure), 1.12.4 per-transport contract tests. Phase 3 work starts
+from here; those gaps are carried, not closed.
 
 This list is the single enumeration of Phase 1's open work — the Phase Overview table below
 points here rather than repeating it, because the duplicate copy drifted twice during review.
@@ -159,7 +160,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.6.7 Mock loss and recovery simulation (configurable disappearance/reappearance)
   - [x] 1.6.8 Mock filesystem (in-memory file tree for API testing)
   - [x] 1.6.9 Mock brickKey generation (`mock:<id>` from config)
-- [ ] **1.7 EV3 Protocol layer** — battery subcode, filesystem-list header and motor tacho addressing outstanding (1.7.6, 1.7.7, 1.7.8)
+- [x] **1.7 EV3 Protocol layer**
   - [x] 1.7.1 Bytecode encoding primitives (`ev3Bytecode.ts` — lc0/lc1/lc2/lcs, gv0/gv1, uint16le/uint32le, concatBytes)
   - [x] 1.7.2 Packet framing (`ev3Packet.ts` — encode/decode, command/reply type constants)
   - [x] 1.7.3 Command builder (`ev3Commands.ts` — BrickCommand → { type, payload } for each kind)
@@ -170,7 +171,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.7 System reply header is 7 bytes — command echo, status, uint32 size, handle — measured on a real brick (`99 08 42 00 00 00 00` before the listing). `parseFsList` skipped 4 and glued three stray bytes to the first entry; `parseFsRead` skipped 6 and glued the handle to the content. Both now use one named constant
   - [x] 1.7.9 Buttons: `opUI_BUTTON` (0x83) subcode `PRESSED` (0x09). The shipped command asked `opUI_READ` for 0x0d, which is `GET_ADDRESS` — a real brick answered the whole command with an error, so button telemetry never worked outside the mock
   - [x] 1.7.10 The info command reads the brick's own name via `opCOM_GET` (0xD3) / `GET_BRICKNAME` (0x0D), and `InfoResponse` gained `osVersion` so the kernel string keeps a home of its own. Verified on three bricks, each reporting its own name. The earlier failed probe used 0xD5, which is `opCOM_TEST`
-- [ ] **1.8 Transport adapter interface and constants** — guard unwired, send timeouts unimplemented
+- [ ] **1.8 Transport adapter interface and constants** — guard unwired (1.8.4), rate-limit policy undecided (1.8.4a); transfer-level filesystem deadline deferred to 1.8.5b
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
   - [x] 1.8.3 Transport guard (rate limiting ≤ 10 cmd/s, firmware freeze protection, degradation tracking)
@@ -187,6 +188,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.10.1 `TcpSocketAdapter` — TCP socket via Node.js `net`, length-prefixed stream
   - [x] 1.10.2 `TcpTransportProvider` — UDP beacon discovery (port 3015, `dgram`), TCP connection (port 5555), VMTP1.0 unlock handshake
   - [x] 1.10.3 brickKey from serial number or IP (`tcp:<serial>` or `tcp:<ip>`)
+  - [x] 1.10.5 Beacon path priming — a one-byte datagram to each interface's broadcast address every few seconds. Without it a host firewall filtering unsolicited inbound UDP drops the brick's announcement and discovery finds nothing; see DESIGN §9.2
   - [x] 1.10.4 Hybrid beacon + direct-IP recovery. Connect now resolves the address from the
         provider's own beacon cache; it used to hand the adapter a bare serial with
         `useDiscovery: true`, and the adapter could never bind the beacon port because the
@@ -300,7 +302,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 - [ ] **3.1 Telemetry category definitions**
   - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
   - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
-  - [ ] 3.1.5 Batched or differential foreground read — **reassess before building.** The premise was that four serial round trips make the frame rate unusable. Measured on USB it is 9 ms per round trip, so a frame is ~40 ms (~25 Hz) and there is no problem to solve there. The case survives only for TCP and BT, both still unmeasured. Measure those first; if they are also fast, close this
+  - [ ] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the `MAX_COMMANDS_PER_SEC = 10` guard in DESIGN §4.1: at four commands per frame that is 2.5 Hz on every transport, heartbeat included. Batching four reads into one command is what buys that back fourfold. Open question for the owner: does the guard budget count only telemetry, or explicit commands and the heartbeat too?
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
   - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
 - [ ] **3.2 Telemetry data models**
@@ -340,7 +342,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.7.5 Read model aggregation tests
   - [ ] 3.7.6 Multi-brick concurrent telemetry tests
 - [ ] **3.8 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, a **per-transport foreground target and floor** (DESIGN §9.2), latency and queue-depth thresholds, placed alongside the empirical values in
-  `transportConstants.ts`. Must be derived from the existing `MAX_COMMANDS_PER_SEC = 10` per-brick guard and per-transport RTT: over BT (`COMMAND_RTT_MS = 2000`) a full ports+battery+buttons+system refresh is already several seconds, which no document acknowledges.
+  `transportConstants.ts`. Derive them from the `MAX_COMMANDS_PER_SEC = 10` per-brick guard, which binds first on every transport, using the measured round trips recorded in DESIGN §9.2 (USB 9 ms, TCP 58 ms, BT 121 ms worst case) only as the lower-bound check. This is also the first code to read `COMMAND_RTT_MS`, which until now no code did.
 
 ### Definition of Done
 
@@ -543,7 +545,7 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.6.1 Trash action in discovery list for remembered offline bricks
   - [ ] 6.6.2 Delete all local persisted metadata (including `favorite`)
   - [ ] 6.6.3 OS-level unpair where the provider supports it
-  - [ ] 6.6.4 USB provider (Windows): delete `BTHPORT\Parameters\Devices\{mac}` registry entry — this is the source of the display name; without deletion the stale name survives renames
+  - [ ] 6.6.4 BT provider (Windows): delete the `BTHPORT\Parameters\Devices\{mac}` registry entry alongside unpairing — its `Name` value goes stale and survives a rename (DESIGN §7.3). The USB path is unaffected: libusb string descriptors return the current name. Consider whether 6.6.6 absorbs this entirely rather than leaving two units on the same registry key
   - [ ] 6.6.5 Provider capability check before offering forget action (`capabilities.supportsForget`)
   - [ ] 6.6.6 BT `forget()` must unpair at the OS level. It currently disconnects and drops the preferred-backend cache entry, leaving the pairing intact, which is why `supportsForget` is declared `false` for BT
 - [ ] **6.7 Unit tests**
