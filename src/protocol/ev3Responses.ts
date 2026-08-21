@@ -9,9 +9,11 @@ import {
 	BrickCommand, BrickResponse,
 	BatteryResponse, PortsResponse, ButtonsResponse, InfoResponse,
 	FsListResponse, FsReadResponse, FsWriteResponse, FsExistsResponse, FsDeleteResponse,
+	FsBeginWriteResponse, FsContinueWriteResponse, FsBeginReadResponse,
+	FsContinueReadResponse, FsCloseHandleResponse,
 	PortState,
 } from '../contracts';
-import { readFloat32le, readInt32le, readFixedCString } from './ev3Bytecode';
+import { readFloat32le, readInt32le, readUint32le, readFixedCString } from './ev3Bytecode';
 import {
 	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS,
 } from './ev3Packet';
@@ -77,6 +79,16 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 		return parseFsWrite(reply.payload);
 	case 'fs:exists':
 		return parseFsExists(reply.payload);
+	case 'fs:beginWrite':
+		return parseFsBeginWrite(reply.payload);
+	case 'fs:continueWrite':
+		return parseFsContinueWrite(reply.payload);
+	case 'fs:beginRead':
+		return parseFsBeginRead(reply.payload);
+	case 'fs:continueRead':
+		return parseFsContinueRead(reply.payload);
+	case 'fs:closeHandle':
+		return parseFsCloseHandle(reply.payload);
 	case 'fs:delete':
 		return parseFsDelete(reply.payload);
 	}
@@ -217,6 +229,82 @@ function parseFsExists(_payload: Uint8Array): FsExistsResponse {
 	// gap is invisible in tests and only appears against real hardware. Phase 4
 	// filesystem work needs a real existence probe, not this.
 	return { kind: 'fs:exists', exists: true };
+}
+
+/**
+ * Reads the `[echo][status]` prefix every system reply opens with.
+ *
+ * `END_OF_FILE` is deliberately not an error: the firmware sets it as a status on an
+ * ordinary SYSTEM_REPLY (its error paths set `CmdType` to SYSTEM_REPLY_ERROR instead),
+ * and it is how a transfer learns it has reached the last chunk.
+ */
+function transferStatus(payload: Uint8Array, kind: string): number {
+	if (payload.length < 2) {
+		throw new ProtocolError(
+			`Malformed ${kind} reply: expected at least 2 bytes, got ${payload.length}.`
+		);
+	}
+	return payload[1];
+}
+
+function parseFsBeginWrite(payload: Uint8Array): FsBeginWriteResponse {
+	const status = transferStatus(payload, 'fs:beginWrite');
+	if (payload.length < 3) {
+		throw new ProtocolError('BEGIN_DOWNLOAD reply carried no file handle.');
+	}
+	return {
+		kind: 'fs:beginWrite',
+		handle: payload[2],
+		endOfFile: status === EV3_SYSTEM_STATUS.END_OF_FILE,
+	};
+}
+
+function parseFsContinueWrite(payload: Uint8Array): FsContinueWriteResponse {
+	const status = transferStatus(payload, 'fs:continueWrite');
+	if (payload.length < 3) {
+		throw new ProtocolError('CONTINUE_DOWNLOAD reply carried no file handle.');
+	}
+	return {
+		kind: 'fs:continueWrite',
+		handle: payload[2],
+		endOfFile: status === EV3_SYSTEM_STATUS.END_OF_FILE,
+	};
+}
+
+function parseFsBeginRead(payload: Uint8Array): FsBeginReadResponse {
+	// [0] echo, [1] status, [2..5] total size, [6] handle, [7..] payload
+	const status = transferStatus(payload, 'fs:beginRead');
+	if (payload.length < 7) {
+		throw new ProtocolError(
+			`Malformed BEGIN_UPLOAD reply: expected at least 7 bytes, got ${payload.length}.`
+		);
+	}
+	return {
+		kind: 'fs:beginRead',
+		totalBytes: readUint32le(payload, 2),
+		handle: payload[6],
+		endOfFile: status === EV3_SYSTEM_STATUS.END_OF_FILE,
+		chunk: payload.subarray(7),
+	};
+}
+
+function parseFsContinueRead(payload: Uint8Array): FsContinueReadResponse {
+	// [0] echo, [1] status, [2] handle, [3..] payload — no size, unlike BEGIN_UPLOAD
+	const status = transferStatus(payload, 'fs:continueRead');
+	if (payload.length < 3) {
+		throw new ProtocolError('CONTINUE_UPLOAD reply carried no file handle.');
+	}
+	return {
+		kind: 'fs:continueRead',
+		handle: payload[2],
+		endOfFile: status === EV3_SYSTEM_STATUS.END_OF_FILE,
+		chunk: payload.subarray(3),
+	};
+}
+
+function parseFsCloseHandle(payload: Uint8Array): FsCloseHandleResponse {
+	transferStatus(payload, 'fs:closeHandle');
+	return { kind: 'fs:closeHandle' };
 }
 
 function parseFsDelete(_payload: Uint8Array): FsDeleteResponse {

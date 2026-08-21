@@ -164,7 +164,18 @@ export class UsbHidAdapter implements TransportAdapter {
 			});
 
 			try {
-				device.write(this.formatWriteBuffer(packet));
+				const report = this.formatWriteBuffer(packet);
+				const written = device.write(report);
+				// A short write is silent corruption, not a slow path: the OS drops the tail
+				// and the brick still advances its file pointer by the length we declared, so
+				// a truncated upload reports success and lands zero padding.
+				if (typeof written === 'number' && written < report.length) {
+					throw new TransportError(
+						`USB HID write delivered ${written} of ${report.length} bytes. `
+						+ `Packets must stay within ${USB.MAX_WRITE_PACKET_BYTES} bytes on this `
+						+ 'transport.'
+					);
+				}
 				this.doDrainPendingReply();
 			} catch (error) {
 				this.doRejectPendingReply(error);
@@ -235,14 +246,17 @@ export class UsbHidAdapter implements TransportAdapter {
 	}
 
 	private formatWriteBuffer(packet: Uint8Array): number[] {
-		const maxPayload = this.reportSize - 1;
-		if (packet.length > maxPayload) {
+		if (packet.length > USB.MAX_WRITE_PACKET_BYTES) {
 			throw new TransportError(
-				`USB packet too large for HID report (payload=${packet.length}, max=${maxPayload}).`
+				`USB packet of ${packet.length} bytes exceeds the `
+				+ `${USB.MAX_WRITE_PACKET_BYTES} bytes a HID write delivers on this transport. `
+				+ 'Split it, or move bulk transfer to the libusb path.'
 			);
 		}
 
-		const report = new Array<number>(this.reportSize).fill(0);
+		// Sized to what actually goes out rather than to REPORT_SIZE: handing the OS a
+		// 1025-byte report it truncates to 65 is what hid this for so long.
+		const report = new Array<number>(USB.MAX_WRITE_PACKET_BYTES + 1).fill(0);
 		report[0] = this.reportId & 0xff;
 		for (let i = 0; i < packet.length; i += 1) {
 			report[i + 1] = packet[i];

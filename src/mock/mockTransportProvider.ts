@@ -9,6 +9,9 @@ import { MockConfig, MockBrickConfig, MockPortConfig } from './mockConfig';
 import { evaluateDynamic } from './dynamics';
 import { MockFilesystem } from './mockFilesystem';
 
+/** The one handle the mock hands out; it stores whole files and has no handle table. */
+const MOCK_FILE_HANDLE = 1;
+
 interface MockBrickState {
 	readonly config: MockBrickConfig;
 	readonly filesystem: MockFilesystem;
@@ -150,6 +153,51 @@ export class MockTransportProvider implements TransportProvider {
 			}
 			return { kind: 'fs:read', content };
 		}
+
+		// Handle-level transfer steps. The mock keeps no handle table — it stores whole
+		// files — so a transfer completes in its first step. These cases exist so a
+		// consumer sees the same command surface, and so the exhaustive switch does not
+		// silently lose a case when the union grows.
+		case 'fs:beginWrite':
+			state.filesystem.write(
+				command.path,
+				Buffer.from(command.chunk).toString('utf8'),
+			);
+			return {
+				kind: 'fs:beginWrite',
+				handle: MOCK_FILE_HANDLE,
+				endOfFile: command.chunk.length >= command.totalBytes,
+			};
+
+		case 'fs:continueWrite':
+			return { kind: 'fs:continueWrite', handle: command.handle, endOfFile: true };
+
+		case 'fs:beginRead': {
+			const whole = state.filesystem.read(command.path);
+			if (whole === undefined) {
+				throw new TransportError(`File not found: ${command.path}`);
+			}
+			const body = Buffer.from(whole, 'utf8');
+			const chunk = body.subarray(0, command.wantBytes);
+			return {
+				kind: 'fs:beginRead',
+				handle: MOCK_FILE_HANDLE,
+				totalBytes: body.length,
+				endOfFile: chunk.length >= body.length,
+				chunk: new Uint8Array(chunk),
+			};
+		}
+
+		case 'fs:continueRead':
+			return {
+				kind: 'fs:continueRead',
+				handle: command.handle,
+				endOfFile: true,
+				chunk: new Uint8Array(0),
+			};
+
+		case 'fs:closeHandle':
+			return { kind: 'fs:closeHandle' };
 
 		case 'fs:write':
 			state.filesystem.write(command.path, command.content);

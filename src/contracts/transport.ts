@@ -53,7 +53,21 @@ export type BrickCommand =
 	| { readonly kind: 'fs:read'; readonly path: string }
 	| { readonly kind: 'fs:write'; readonly path: string; readonly content: string }
 	| { readonly kind: 'fs:exists'; readonly path: string }
-	| { readonly kind: 'fs:delete'; readonly path: string };
+	| { readonly kind: 'fs:delete'; readonly path: string }
+	// Handle-level transfer steps. The FileTransferService sequences these; callers
+	// wanting a whole file use the service, not these directly.
+	| {
+		readonly kind: 'fs:beginWrite';
+		readonly path: string;
+		/** Total size of the file being written, which the brick preallocates. */
+		readonly totalBytes: number;
+		/** First chunk, carried by BEGIN_DOWNLOAD itself. */
+		readonly chunk: Uint8Array;
+	}
+	| { readonly kind: 'fs:continueWrite'; readonly handle: number; readonly chunk: Uint8Array }
+	| { readonly kind: 'fs:beginRead'; readonly path: string; readonly wantBytes: number }
+	| { readonly kind: 'fs:continueRead'; readonly handle: number; readonly wantBytes: number }
+	| { readonly kind: 'fs:closeHandle'; readonly handle: number };
 
 // ── Response types ───────────────────────────────────────────────────
 
@@ -82,8 +96,40 @@ export interface FsWriteResponse { readonly kind: 'fs:write' }
 export interface FsExistsResponse { readonly kind: 'fs:exists'; readonly exists: boolean }
 export interface FsDeleteResponse { readonly kind: 'fs:delete'; readonly deleted: boolean }
 
+/** Shared shape of every handle-level transfer reply. */
+export interface FsTransferStep {
+	/** Brick-assigned file handle. Invalid once `endOfFile` is true. */
+	readonly handle: number;
+	/**
+	 * The brick reported END_OF_FILE for this step.
+	 *
+	 * On a write it means the declared size has been received; on a read, that this
+	 * chunk is the last. Either way the firmware has already closed the handle.
+	 */
+	readonly endOfFile: boolean;
+}
+
+export interface FsBeginWriteResponse extends FsTransferStep { readonly kind: 'fs:beginWrite' }
+export interface FsContinueWriteResponse extends FsTransferStep { readonly kind: 'fs:continueWrite' }
+export interface FsBeginReadResponse extends FsTransferStep {
+	readonly kind: 'fs:beginRead';
+	/** Total file size the brick reports, so a caller can size its buffer. */
+	readonly totalBytes: number;
+	readonly chunk: Uint8Array;
+}
+export interface FsContinueReadResponse extends FsTransferStep {
+	readonly kind: 'fs:continueRead';
+	readonly chunk: Uint8Array;
+}
+export interface FsCloseHandleResponse { readonly kind: 'fs:closeHandle' }
+
 /** Union of all possible brick responses. Narrow on `kind` to access typed fields. */
 export type BrickResponse =
+	| FsBeginWriteResponse
+	| FsContinueWriteResponse
+	| FsBeginReadResponse
+	| FsContinueReadResponse
+	| FsCloseHandleResponse
 	| BatteryResponse
 	| PortsResponse
 	| ButtonsResponse
