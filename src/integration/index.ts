@@ -48,6 +48,37 @@ const tests: IntegrationTest[] = [
 			assert.equal(ext.isActive, true);
 		},
 	},
+	{
+		name: 'filesystem commands are registered and declared',
+		fn: async () => {
+			const ext = vscode.extensions.getExtension(EXTENSION_ID);
+			assert.ok(ext);
+			await ext.activate();
+
+			const registered = await vscode.commands.getCommands(true);
+			const declared = (ext.packageJSON as {
+				contributes?: { commands?: { command: string }[] };
+			}).contributes?.commands ?? [];
+
+			assert.ok(declared.length > 0, 'package.json contributes no commands');
+
+			// Both directions: a command declared but not registered fails when invoked,
+			// and one registered but not declared never appears in the palette. Neither
+			// shows up in a unit test.
+			for (const { command } of declared) {
+				assert.ok(
+					registered.includes(command),
+					`${command} is declared in package.json but not registered`
+				);
+			}
+			for (const command of registered.filter((c) => c.startsWith('ev3-cockpit.'))) {
+				assert.ok(
+					declared.some((d) => d.command === command),
+					`${command} is registered but missing from package.json`
+				);
+			}
+		},
+	},
 ];
 
 export async function run(): Promise<void> {

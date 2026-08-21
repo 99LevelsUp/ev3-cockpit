@@ -4,6 +4,10 @@ import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider,
 } from './transports';
+import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
+
+/** Where the brick keeps user projects. The one path worth a default. */
+const PROJECTS_PATH = '/home/root/lms2012/prjs';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
 import { ConnectionState } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
@@ -93,6 +97,51 @@ export function activate(context: vscode.ExtensionContext): void {
 		logger.error('Initial discovery scan failed',
 			err instanceof Error ? err : new Error(String(err)));
 	});
+
+	// ── Filesystem ──────────────────────────────────────────────
+	// Palette commands are diagnostics, not the primary UX (DESIGN §14). They exist here
+	// so the filesystem layer has a consumer before the API and panel arrive, and so it
+	// can be exercised by hand against a real brick.
+	const withActiveFilesystem = async (
+		what: string,
+		body: (fs: BrickFilesystem, brickKey: string) => Promise<void>,
+	): Promise<void> => {
+		const brickKey = sessionManager.getActiveBrickKey();
+		if (!brickKey) {
+			void vscode.window.showWarningMessage(
+				`EV\u018E Cockpit: no active brick, so ${what} has nothing to talk to.`);
+			return;
+		}
+		try {
+			await body(createBrickFilesystem(sessionManager, brickKey), brickKey);
+		} catch (error) {
+			const err = error instanceof Error ? error : new Error(String(error));
+			logger.error(`${what} failed on ${brickKey}`, err);
+			void vscode.window.showErrorMessage(`EV\u018E Cockpit: ${what} failed — ${err.message}`);
+		}
+	};
+
+	services.add(vscode.commands.registerCommand('ev3-cockpit.listProjects', () =>
+		withActiveFilesystem('listing projects', async (fs, brickKey) => {
+			const entries = await fs.files.list(PROJECTS_PATH);
+			logger.info(`Files on ${brickKey} at ${PROJECTS_PATH} (${entries.length}):`);
+			for (const e of entries) {
+				const size = e.bytes === undefined ? '' : ` ${e.bytes} B`;
+				logger.info(`  ${e.kind === 'directory' ? '[dir] ' : '      '}${e.name}${size}`);
+			}
+			logger.show(true);
+		})));
+
+	services.add(vscode.commands.registerCommand('ev3-cockpit.showStorage', () =>
+		withActiveFilesystem('reading storage', async (fs, brickKey) => {
+			const usage = await fs.files.storage();
+			const used = usage.totalKb - usage.freeKb;
+			void vscode.window.showInformationMessage(
+				`EV\u018E ${brickKey}: ${usage.freeKb} KB free of ${usage.totalKb} KB `
+				+ `(${used} KB used).`);
+		})));
+
+	logger.info('Filesystem commands registered');
 
 	// Phase 3+: telemetry runtime, public API, UI panel wired here.
 }
