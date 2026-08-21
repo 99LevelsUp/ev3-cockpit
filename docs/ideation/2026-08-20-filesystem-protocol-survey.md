@@ -132,6 +132,24 @@ brick and checking the result rather than the call.
 | `TOTALSIZE` (17) gives bytes | Kilobytes, rounded up: a 3-byte file measures 1. `cMemoryFindSize` ends with `Size = (Size + (KB - 1)) / KB`. Exact bytes come from a listing entry. |
 | Its file count is 1 for a file | Zero. The firmware only counts while walking a directory. |
 
+A fifth entry was wrong in a way that took a descriptor dump to see. The survey treated the
+**64-byte USB packet ceiling as a `node-hid` limitation** and libusb as a throughput
+optimisation. Both halves were wrong:
+
+- The ceiling is a **defect in the brick's own HID report descriptor**, which declares
+  `Report Count 0` for both the input and the output report. Windows derives no usable
+  report length from that, while the interrupt endpoints underneath advertise
+  `wMaxPacketSize` 1024. Nothing layered above HID could ever have lifted it.
+- It was a **correctness** problem, not a speed one. `copy` and `move` carry two paths and
+  do not fit 64 bytes at all, so those two operations were unavailable over USB.
+- A libusb interrupt transfer must be **exactly** `wMaxPacketSize`. A 16-byte write fails
+  with `LIBUSB_ERROR_IO`; padded to 1024 the same packet succeeds. Reads return full-length
+  too, so a reply is located by its length prefix. Neither behaviour is documented anywhere
+  the survey looked — both came from walking transfer sizes until one worked.
+
+Over libusb the same brick writes at 201 KB/s and reads at 325 KB/s, against 6.8 KB/s over
+HID, which makes USB the fastest transport for bulk work rather than the slowest.
+
 Two further facts worth keeping:
 
 - **`DEL_SUBFOLDER` (24) takes an index, not a name.** The by-name recursive delete is

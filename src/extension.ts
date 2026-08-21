@@ -29,8 +29,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	registry.register(mockProvider);
 	logger.info(`Mock transport registered (${DEFAULT_MOCK_CONFIG.bricks.length} brick(s))`);
 
-	// USB transport (lazy-loads node-hid; returns empty list if unavailable)
-	const usbProvider = services.add(new UsbTransportProvider());
+	// USB transport: discovery over node-hid, connections over libusb where it can claim
+	// the interface. The provider logs which backend each connection landed on, because a
+	// HID fallback is a degraded link rather than an equivalent one.
+	const usbProvider = services.add(new UsbTransportProvider({ log: logger }));
 	registry.register(usbProvider);
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -39,6 +41,18 @@ export function activate(context: vscode.ExtensionContext): void {
 		logger.info(`USB transport registered — node-hid OK, ${found} EV3 device(s) visible`);
 	} catch (e) {
 		logger.warn(`USB transport registered — node-hid unavailable in extension host: ${e instanceof Error ? e.message : String(e)}`);
+	}
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		require('usb');
+		logger.info('USB transport — libusb available, full 1024-byte frames');
+	} catch (e) {
+		// Worth saying at activation rather than at the first failed copy: without libusb
+		// every USB link runs at 64 bytes a packet, where copy and move do not fit.
+		logger.warn(
+			'USB transport — libusb unavailable, USB links will fall back to 64-byte HID '
+			+ `packets: ${e instanceof Error ? e.message : String(e)}`
+		);
 	}
 
 	// TCP transport (UDP beacon discovery on port 3015, connects on port 5555)
