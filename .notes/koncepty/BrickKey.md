@@ -21,9 +21,9 @@ transport:id
 
 | Transport | Formát | Příklad |
 | --------- | ------ | ------- |
-| USB | `usb:<serial>` | `usb:0170SBB1` |
+| USB | `usb:<serial>` | `usb:001653AABBCC` |
 | BT | `bt:<mac>` | `bt:00:16:53:AB:CD:EF` |
-| TCP | `tcp:<serial>` nebo `tcp:<ip>` | `tcp:0170SBB1` nebo `tcp:192.168.1.42` |
+| TCP | `tcp:<serial>` nebo `tcp:<ip>` | `tcp:001653AABBCC` nebo `tcp:192.168.1.42` |
 | Mock | `mock:<id>` | `mock:my-brick` |
 
 ## Klíčové vlastnosti
