@@ -228,10 +228,14 @@ describe('MockTransportProvider — filesystem', () => {
 		await provider.connect(key);
 
 		const result = await provider.executeCommand(key, { kind: 'fs:list', path: '/home/root/lms2012/prjs/Proj' }) as FsListResponse;
+		// Bare names, kinds and byte sizes — what a real listing carries. This used to
+		// assert full paths, a shape no brick produces, which would have taught a
+		// consumer developing against the mock the wrong contract.
 		assert.deepEqual(result.entries, [
-			'/home/root/lms2012/prjs/Proj/a.rbf',
-			'/home/root/lms2012/prjs/Proj/b.rbf',
+			{ name: 'a.rbf', kind: 'file', bytes: 0 },
+			{ name: 'b.rbf', kind: 'file', bytes: 0 },
 		]);
+		assert.equal(result.complete, true);
 	});
 
 	it('reads a file', async () => {

@@ -165,7 +165,51 @@ export class MockTransportProvider implements TransportProvider {
 			return { kind: 'info', displayName: state.config.displayName, firmwareVersion: state.config.firmwareVersion };
 
 		case 'fs:list':
-			return { kind: 'fs:list', entries: state.filesystem.list(command.path || '/') };
+			// The mock has no packet ceiling, so a listing is always complete.
+			return {
+				kind: 'fs:list',
+				complete: true,
+				entries: state.filesystem.list(command.path || '/'),
+			};
+
+		case 'fs:size': {
+			const body = state.filesystem.read(command.path);
+			if (body === undefined) {
+				throw new TransportError(`File not found: ${command.path}`);
+			}
+			// Kilobytes rounded up, as the firmware reports them.
+			const bytes = Buffer.byteLength(body, 'utf8');
+			return { kind: 'fs:size', files: 1, kilobytes: Math.ceil(bytes / 1024) };
+		}
+
+		case 'fs:freeSpace':
+			// Plausible figures for a stock brick, so a consumer's arithmetic is exercised.
+			return { kind: 'fs:freeSpace', totalKb: 6000, freeKb: 4000 };
+
+		case 'fs:makeDirectory':
+			state.filesystem.makeDirectory(command.path);
+			return { kind: 'fs:makeDirectory', exists: true };
+
+		case 'fs:copy': {
+			const body = state.filesystem.read(command.from);
+			if (body === undefined) {
+				throw new TransportError(`File not found: ${command.from}`);
+			}
+			// A copy, matching the firmware: the source stays.
+			state.filesystem.write(command.to, body);
+			return { kind: 'fs:copy' };
+		}
+
+		case 'fs:removeTree':
+			state.filesystem.removeTree(command.path);
+			return { kind: 'fs:removeTree' };
+
+		case 'fs:listContinue':
+			// The mock always reports a listing complete, so reaching here means the
+			// caller ignored `complete` — worth saying so rather than answering emptily.
+			throw new TransportError(
+				'The mock returns every listing in one reply; there is nothing to continue.'
+			);
 
 		case 'fs:read': {
 			const content = state.filesystem.read(command.path);

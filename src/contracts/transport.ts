@@ -75,7 +75,20 @@ export type BrickCommand =
 	| { readonly kind: 'fs:continueWrite'; readonly handle: number; readonly chunk: Uint8Array }
 	| { readonly kind: 'fs:beginRead'; readonly path: string; readonly wantBytes: number }
 	| { readonly kind: 'fs:continueRead'; readonly handle: number; readonly wantBytes: number }
-	| { readonly kind: 'fs:closeHandle'; readonly handle: number };
+	| { readonly kind: 'fs:closeHandle'; readonly handle: number }
+	| { readonly kind: 'fs:size'; readonly path: string }
+	| { readonly kind: 'fs:freeSpace' }
+	| { readonly kind: 'fs:makeDirectory'; readonly path: string }
+	/** Copies rather than moves: the firmware's MOVE subcode leaves the source. */
+	| { readonly kind: 'fs:copy'; readonly from: string; readonly to: string }
+	/** Recursive delete. `fs:delete` refuses a populated directory; this does not. */
+	| { readonly kind: 'fs:removeTree'; readonly path: string }
+	/** Continues a listing the brick could not fit in one reply. */
+	| {
+		readonly kind: 'fs:listContinue';
+		readonly handle: number;
+		readonly wantBytes: number;
+	};
 
 // ── Response types ───────────────────────────────────────────────────
 
@@ -98,7 +111,35 @@ export interface InfoResponse {
 	/** Linux kernel version string reported by the brick. */
 	readonly osVersion?: string;
 }
-export interface FsListResponse { readonly kind: 'fs:list'; readonly entries: string[] }
+/** One entry in a directory listing. */
+export interface FsEntry {
+	readonly name: string;
+	/**
+	 * `unknown` when the line matched neither the directory nor the file shape — kept
+	 * rather than dropped, so a firmware that formats differently is visible.
+	 */
+	readonly kind: 'file' | 'directory' | 'unknown';
+	/** Byte size, which the brick includes for files only. */
+	readonly bytes?: number;
+	/** MD5 the brick computed, lowercase hex. Files only. */
+	readonly md5?: string;
+}
+
+export interface FsListContinueResponse {
+	readonly kind: 'fs:listContinue';
+	readonly entries: FsEntry[];
+	readonly complete: boolean;
+	readonly handle?: number;
+}
+
+export interface FsListResponse {
+	readonly kind: 'fs:list';
+	readonly entries: FsEntry[];
+	/** False when the brick has more of this listing to hand over. */
+	readonly complete: boolean;
+	/** Handle to continue the listing with, when it is not complete. */
+	readonly handle?: number;
+}
 export interface FsReadResponse { readonly kind: 'fs:read'; readonly content: string }
 export interface FsWriteResponse { readonly kind: 'fs:write' }
 export interface FsExistsResponse { readonly kind: 'fs:exists'; readonly exists: boolean }
@@ -131,8 +172,46 @@ export interface FsContinueReadResponse extends FsTransferStep {
 }
 export interface FsCloseHandleResponse { readonly kind: 'fs:closeHandle' }
 
+export interface FsSizeResponse {
+	readonly kind: 'fs:size';
+	/**
+	 * Kilobytes, rounded up, as the firmware computes them. For a directory, the sum
+	 * over its tree.
+	 *
+	 * Not bytes: a 3-byte file reports 1. For an exact file size use a directory
+	 * listing, whose entries carry a byte count.
+	 */
+	readonly kilobytes: number;
+	/**
+	 * Files the total covers.
+	 *
+	 * **Zero for a plain file.** The firmware counts entries only while walking a
+	 * directory; handed a file it adds the size and never enters the loop.
+	 */
+	readonly files: number;
+}
+export interface FsFreeSpaceResponse {
+	readonly kind: 'fs:freeSpace';
+	/** Kilobytes, as the firmware reports them. */
+	readonly totalKb: number;
+	readonly freeKb: number;
+}
+export interface FsMakeDirectoryResponse {
+	readonly kind: 'fs:makeDirectory';
+	/** True when the directory exists afterwards, whether or not it existed before. */
+	readonly exists: boolean;
+}
+export interface FsCopyResponse { readonly kind: 'fs:copy' }
+export interface FsRemoveTreeResponse { readonly kind: 'fs:removeTree' }
+
 /** Union of all possible brick responses. Narrow on `kind` to access typed fields. */
 export type BrickResponse =
+	| FsListContinueResponse
+	| FsSizeResponse
+	| FsFreeSpaceResponse
+	| FsMakeDirectoryResponse
+	| FsCopyResponse
+	| FsRemoveTreeResponse
 	| FsBeginWriteResponse
 	| FsContinueWriteResponse
 	| FsBeginReadResponse
