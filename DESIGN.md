@@ -119,7 +119,6 @@ graph TD
     SM --> API
     TM --> API
     FS --> API
-    FS -->|ev3:// provider| VSC[VS Code workspace.fs + editors]
     SM --> UI
     TM --> UI
     API -->|events + snapshots| EXT[External Extensions]
@@ -303,29 +302,26 @@ The Public API layer exports:
 - subscription telemetry,
 - filesystem services.
 
-### 4.6a The `ev3://` FileSystemProvider
+### 4.6a The `ev3://` Scheme Is Not Cockpit's
 
-The cockpit registers a `vscode.FileSystemProvider` for the `ev3://` scheme, over the
-filesystem service (§11).
+The cockpit does **not** register a `vscode.FileSystemProvider` for `ev3://`. Consumers
+reach the filesystem through the public API (§10).
 
-This is a platform capability, not an explorer feature, because **two independent
-consumers need it**:
+A `FileSystemProvider` exists to make a remote filesystem appear inside VS Code — in
+editors, `vscode.workspace.fs`, drag and drop. That is a UI-integration concern, and the
+consumer that wants it is `ev3-explorer`, whose own design calls itself *"čistě UX
+vrstva pro filesystém"*. It registers the scheme over this API.
 
-- `ev3-explorer` opens files in editors and works through `vscode.workspace.fs`;
-- `ev3-native` writes a compiled binary to the brick, and its design records that the
-  cockpit exports no programmatic API today, leaving `ev3://` and VS Code commands as its
-  only channels.
+`ev3-native` does not need it either, which is the case worth recording because it looks
+like it might. It compiles a binary and needs it on the brick, but its design asks for a
+programmatic API for exactly that (`uploadFile`, `runProgram`) and its usage example calls
+that API directly. Its own recommended channel is VS Code commands, not `ev3://`.
 
-If the scheme lived in the explorer, `ev3-native` would need the explorer installed to
-upload a program — a dependency between two unrelated plugins. Registering it here also
-keeps the safe/full mode policy where `ev3-explorer`'s own design already puts it: *"safe
-and full mode is a property of the cockpit"*, and consumers must not build a side channel
-around its guardrails. A consumer cannot honour that if the enforcement point ships in
-one of the consumers.
-
-The cockpit still contains no file explorer of its own (§12). Registering a URI scheme is
-not a UI: it is the surface through which VS Code and other extensions reach the
-filesystem service.
+**One obligation follows from putting the scheme in a consumer.** `ev3-explorer`'s design
+states that safe and full mode are properties of the cockpit and that no consumer may
+build a side channel around the guardrails. A consumer can only honour that if the policy
+is reachable from the API, so §10 must export it rather than leaving each consumer to
+reimplement it.
 
 ### 4.7 Cockpit UI Layer
 
@@ -798,7 +794,12 @@ The first version of the public API exports:
 - `onActiveBrickChanged`,
 - `subscribeTelemetry`,
 - `unsubscribeTelemetry`,
-- filesystem operations.
+- filesystem operations,
+- program control — run, stop, emergency stop, and a running-program query.
+
+Program control is listed because `ev3-native` cannot function without it: it compiles a
+binary, puts it on the brick, and runs it. An earlier revision of this list omitted it,
+which would have left that consumer with no supported path at all.
 
 ### 10.3 What the API Does Not Export
 
