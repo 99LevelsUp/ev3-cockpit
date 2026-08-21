@@ -120,6 +120,47 @@ Not everything in range belongs in a filesystem API:
 Excluding these is a decision, not an oversight; recorded here so the next round of review
 does not read the gap as incomplete coverage.
 
+## 7. Corrections from hardware
+
+Four entries above were wrong, and each was only caught by running the operation against a
+brick and checking the result rather than the call.
+
+| Claim | What the brick does |
+|---|---|
+| `MOVE` (31) is rename | It is `cp -r`. The source survives and the destination is deleted first, so renaming is copy-then-delete and cannot be atomic. The copy runs brick-side, so it costs one command whatever the size. |
+| `GET_POOL` (11) gives free space | It allocates an image pool and says nothing about storage. Free space is `opMEMORY_USAGE` (0xC5), which takes no subcode. |
+| `TOTALSIZE` (17) gives bytes | Kilobytes, rounded up: a 3-byte file measures 1. `cMemoryFindSize` ends with `Size = (Size + (KB - 1)) / KB`. Exact bytes come from a listing entry. |
+| Its file count is 1 for a file | Zero. The firmware only counts while walking a directory. |
+
+Two further facts worth keeping:
+
+- **`DEL_SUBFOLDER` (24) takes an index, not a name.** The by-name recursive delete is
+  `REMOVE` (30), via `cMemoryDeleteSubFolders`.
+- **Absolute paths are safe with `opFILE` subcodes.** `ConstructFilename` substitutes the
+  running program's directory only when the caller supplies no path at all. It also
+  validates the character set, and `"`, `$` and a backtick are all rejected — which is why
+  `MOVE`'s use of `system("cp -r ...")` is not an injection route.
+
+### The listing format
+
+`cComGetFileInfo` writes one line per entry:
+
+```
+directory   name/
+file        <32 hex md5> <8 hex byte size> name
+```
+
+So a trailing slash is the only directory marker, and a file line already carries an exact
+byte size and a checksum the caller would otherwise have to fetch separately.
+
+### What USB cannot do
+
+A HID write delivers 64 bytes, so a direct command whose parameters exceed roughly 50 bytes
+cannot be sent at all. `opFILE/MOVE` carries two paths and a stock EV3 project path is
+already 25 characters, so **copy and move do not work over USB** while every other
+operation does. TCP and Bluetooth carry them inside their 1024-byte packets. The libusb
+path is therefore a correctness requirement for USB, not only a throughput one.
+
 ## 6. Open questions for the design
 
 1. **Two paths to most operations** — chunked system commands versus `opFILE` handles.
