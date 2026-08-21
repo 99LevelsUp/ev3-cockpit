@@ -432,6 +432,17 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.6.11 Path length guard — the firmware truncates a path silently at 60 bytes, so an
     over-length path must be rejected before a packet is sent or the brick acts on a different
     path than the caller named (R13)
+  - [x] 4.6.14 Wired into `extension.ts` via `createBrickFilesystem`, which binds both
+    services to one brick over the session manager's queued send and derives the
+    per-transport packet cap from the brick key. Two palette commands (DESIGN §14:
+    diagnostics, not primary UX) give the layer a caller before the API and panel
+    exist, and a host test asserts they are both declared and registered
+  - [ ] 4.6.15 libusb backend for USB — **a correctness requirement, not only a
+    throughput one.** A HID write delivers 64 bytes, which caps any single command:
+    `copy` and `move` carry two paths and a stock project path is 25 characters, so
+    they cannot be sent over USB at all. It also holds verified USB transfer
+    throughput to 6.8 KB/s against TCP's 57. The `usb` dependency is already present
+    for name probing, so this is a change of backend rather than of dependency
   - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
     listed full paths, a shape no brick produces. It now returns bare names with kinds
     and sizes, tracks directories explicitly so an empty one is representable, and
