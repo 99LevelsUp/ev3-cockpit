@@ -432,20 +432,24 @@ Export a stable API for other extensions without giving them direct access to th
   - [ ] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
     survey found, including `BEGIN_GETFILE` / `CONTINUE_GETFILE`. Log tailing itself is deferred
     until a consumer wants it, but the opcodes are recorded so the capability is not lost again
-- [ ] **4.9 `ev3://` FileSystemProvider** — a `vscode.FileSystemProvider` over the
-  filesystem service (DESIGN §4.6a). Belongs here rather than in `ev3-explorer` because two
-  independent consumers need it: the explorer for editors and `workspace.fs`, and
-  `ev3-native` to write a compiled binary, whose design records that the cockpit exports no
-  programmatic API yet. In the explorer it would make `ev3-native` depend on the explorer
-  being installed
-  - [ ] 4.9.1 Register the scheme and implement `stat`, `readDirectory`, `readFile`,
-    `writeFile`, `delete`, `rename`, `createDirectory` over the filesystem service
-  - [ ] 4.9.2 URI authority maps to a brick — decide whether `ev3://active/...` (the shape
-    `ev3-native` assumes) is supported alongside an explicit brick key
-  - [ ] 4.9.3 Expose the safe/full mode policy through the public API, so a consumer can
-    honour `ev3-explorer`'s “no side channel around the guardrails” rule instead of
-    reimplementing the policy
-  - [ ] 4.9.4 `onDidChangeFile` events, so an editor over `ev3://` notices external change
+- [ ] **4.9 Consumer requirements from the sibling projects** — `ev3-native` and
+  `ev3-explorer` both consume this API, and neither can work with what §10.2 listed. The
+  `ev3://` scheme is deliberately **not** here: it is a VS Code UI-integration surface and
+  `ev3-explorer` registers it over this API (DESIGN §4.6a)
+  - [ ] 4.9.1 Program control — `runProgram`, `stopProgram`, `emergencyStop`,
+    `isProgramRunning`. `ev3-native` compiles a binary, uploads it, and runs it, so without
+    this it has no supported path at all. Needs `opFILE`/`opPROGRAM` work in the command
+    layer that no phase currently owns
+  - [ ] 4.9.2 Expose the safe/full mode policy, so a consumer can honour `ev3-explorer`'s
+    “no side channel around the guardrails” rule instead of reimplementing the policy.
+    Required because the enforcement point (`ev3://`) ships in a consumer
+  - [ ] 4.9.3 Decide the brick-identity shape in the API. `ev3-native`'s design assumes an
+    `'active'` sentinel (`api.uploadFile('active', …)`) alongside explicit ids; the cockpit
+    models the active brick as state, so a sentinel and a key are not interchangeable
+  - [ ] 4.9.4 Reconcile `ev3-native/design.md` §3 against this cockpit. It describes
+    capabilities that do not exist — “Registruje 45+ VS Code příkazů”, program start/stop —
+    and an internal contradiction of its own: §3.2 channel 3 calls `api.uploadFile()` while
+    the §3.3 workflow diagram routes upload through `ev3://`
 - [ ] **4.7 API export**
   - [ ] 4.7.1 Export typed API object from `extension.ts` `activate()` return value
   - [ ] 4.7.2 Ensure API is fully initialized before any consumer can use it
