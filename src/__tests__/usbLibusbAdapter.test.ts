@@ -284,6 +284,31 @@ describe('UsbLibusbAdapter — device selection', () => {
 		await adapter.close();
 	});
 
+	it('never opens a device another session is holding', async () => {
+		// Resolving a serial means opening the device, and libusb hands out one handle per
+		// device: opening and closing a brick another session has claimed drops that handle
+		// and every later transfer on it fails with "Device is not open". Verified the hard
+		// way — connecting a second brick killed the first.
+		const { module, log } = fakeUsb([
+			{ serial: '001653AABBCC', deviceAddress: 10 },
+			{ serial: '001653DDEEFF', deviceAddress: 11 },
+		]);
+		const adapter = new UsbLibusbAdapter({
+			serial: '001653ddeeff',
+			inUse: (location) => location.deviceAddress === 10,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			moduleLoader: () => module as any,
+		});
+		await adapter.open();
+
+		assert.ok(
+			!log.openedDevices.includes('001653AABBCC'),
+			'the in-use brick must not be opened even to read its serial'
+		);
+		assert.deepEqual(adapter.deviceLocation, { busNumber: 2, deviceAddress: 11 });
+		await adapter.close();
+	});
+
 	it('names the serial it could not find', async () => {
 		const { adapter } = adapterFor([{ serial: '001653AABBCC' }], '001653ddeeff');
 		await assert.rejects(() => adapter.open(), /001653DDEEFF/);

@@ -24,21 +24,73 @@ import { ProtocolError } from '../errors/CockpitError';
 
 // ── Sensor/motor type names ─────────────────────────────────────────
 
+/**
+ * Device type codes as the brick reports them.
+ *
+ * Two of these were wrong, and the mistake was invisible: 16 was named `color` and 29
+ * `color-v2`, so a touch sensor was reported as a colour sensor and the real colour sensor
+ * as a second-generation one. A brick with a touch sensor plugged in read as having none.
+ *
+ * Sources, since guessing is what produced the error:
+ * - 1 and 16 from the firmware's own `typedata.rcf` (`1 0 NXT-TOUCH`, `16 0 TOUCH`)
+ * - 29, 30, 32, 33 are UART sensors, which supply their own type data, so they are absent
+ *   from that file; the codes come from `lego-linux-drivers/sensors/ev3_uart_sensor.h`
+ *   (`LEGO_EV3_COLOR_TYPE_ID 29`, `..._ULTRASONIC 30`, `..._GYRO 32`, `..._INFRARED 33`)
+ */
 const SENSOR_TYPE_NAMES: Record<number, string> = {
-	1: 'touch',
-	16: 'color',
-	29: 'color-v2',
+	1: 'nxt-touch',
+	16: 'touch',
+	29: 'color',
 	30: 'ultrasonic',
 	32: 'gyro',
 	33: 'infrared',
+	125: 'unknown',
 	126: 'none',
+	127: 'error',
 };
 
+/**
+ * From `typedata.rcf`: `7 0 L-MOTOR-DEG`, `8 0 M-MOTOR-DEG`.
+ *
+ * The port-status codes belong here too: a motor plugged in while running passes through
+ * `TYPE_UNKNOWN` exactly as a sensor does, and without these it would surface as
+ * `motor-125` — the sensor table got the fix first and this one nearly missed it.
+ */
 const MOTOR_TYPE_NAMES: Record<number, string> = {
 	7: 'large-motor',
 	8: 'medium-motor',
+	125: 'unknown',
 	126: 'none',
+	127: 'error',
 };
+
+/**
+ * The three type codes that are a port status rather than a device.
+ *
+ * From `bytecodes.h`: 125 `TYPE_UNKNOWN` ("port not empty but type has not been
+ * determined"), 126 `TYPE_NONE` ("port empty or not available"), 127 `TYPE_ERROR`.
+ *
+ * 125 is not a corner case: every sensor plugged in while running reports it for a second
+ * or two before announcing itself, observed on all three bricks. None of the three carries
+ * a usable reading, so the value is dropped rather than passed on — the buffer slot behind
+ * it holds whatever the last command left there.
+ */
+const TYPE_UNKNOWN = 125;
+const NO_DEVICE_TYPE = 126;
+const TYPE_ERROR = 127;
+
+function hasReading(typeCode: number): boolean {
+	return typeCode !== TYPE_UNKNOWN && typeCode !== NO_DEVICE_TYPE && typeCode !== TYPE_ERROR;
+}
+
+/**
+ * `DATA32_NAN` from `bytecodes.h` (0x80000000) — a tacho slot with nothing to report.
+ *
+ * Distinct from an empty port: the device is there and has no reading yet. Sensor readings
+ * signal the same thing with `DATAF_NAN`, which the firmware defines as 0/0 and therefore
+ * arrives as a real NaN.
+ */
+const DATA32_NAN = -2147483648;
 
 const SENSOR_PORT_LABELS = ['1', '2', '3', '4'];
 const MOTOR_PORT_LABELS = ['A', 'B', 'C', 'D'];
@@ -140,31 +192,45 @@ function parsePorts(payload: Uint8Array): PortsResponse {
 	const sensorPorts: PortState[] = [];
 	const motorPorts: PortState[] = [];
 
+	// The firmware does not clear the global buffer, so a slot it did not write holds
+	// whatever the previous command left there — verified on hardware, where the unwritten
+	// bytes were legible ASCII. Presence therefore comes from the type code only, and a
+	// value is trusted only for a port that reports a device.
+
 	// Sensor type/mode: bytes 0..7 (2 per port)
 	for (let i = 0; i < 4; i++) {
-		const typeCode = payload.length > i * 2 ? payload[i * 2] : 126;
-		const sensorValue = payload.length >= 16 + (i + 1) * 4
+		const typeCode = payload.length > i * 2 ? payload[i * 2] : NO_DEVICE_TYPE;
+		const present = typeCode !== NO_DEVICE_TYPE;
+		const raw = hasReading(typeCode) && payload.length >= 16 + (i + 1) * 4
 			? readFloat32le(payload, 16 + i * 4)
 			: undefined;
 		sensorPorts.push({
 			port: SENSOR_PORT_LABELS[i],
-			peripheralType: SENSOR_TYPE_NAMES[typeCode] ?? (typeCode === 126 ? undefined : `sensor-${typeCode}`),
-			value: typeCode !== 126 ? sensorValue : undefined,
+			peripheralType: present
+				? SENSOR_TYPE_NAMES[typeCode] ?? `sensor-${typeCode}`
+				: undefined,
+			// DATAF_NAN is a real NaN, so a device with no reading yet is reported as
+			// having none rather than as holding a nonsense number.
+			value: raw !== undefined && Number.isFinite(raw) ? raw : undefined,
 			timestamp: Date.now(),
 		});
 	}
 
 	// Motor type/mode: bytes 8..15 (2 per port)
 	for (let i = 0; i < 4; i++) {
-		const typeCode = payload.length > 8 + i * 2 ? payload[8 + i * 2] : 126;
-		const tachoValue = payload.length >= 32 + (i + 1) * 4
+		const typeCode = payload.length > 8 + i * 2 ? payload[8 + i * 2] : NO_DEVICE_TYPE;
+		const present = typeCode !== NO_DEVICE_TYPE;
+		const raw = hasReading(typeCode) && payload.length >= 32 + (i + 1) * 4
 			? readInt32le(payload, 32 + i * 4)
 			: undefined;
+		const tachoValue = raw === DATA32_NAN ? undefined : raw;
 		motorPorts.push({
 			port: MOTOR_PORT_LABELS[i],
-			peripheralType: MOTOR_TYPE_NAMES[typeCode] ?? (typeCode === 126 ? undefined : `motor-${typeCode}`),
-			value: typeCode !== 126 ? tachoValue : undefined,
-			unit: typeCode !== 126 ? 'deg' : undefined,
+			peripheralType: present
+				? MOTOR_TYPE_NAMES[typeCode] ?? `motor-${typeCode}`
+				: undefined,
+			value: tachoValue,
+			unit: tachoValue !== undefined ? 'deg' : undefined,
 			timestamp: Date.now(),
 		});
 	}

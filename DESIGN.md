@@ -362,6 +362,40 @@ The throttling applies to telemetry delivery scheduling only — it has no effec
 
 The current telemetry speed is visible in the Cockpit panel (diagnostic display).
 
+#### What the measurements say about those two inputs
+
+The phase gate on this section asked for the concrete degradation throttling prevents,
+reproduced rather than assumed. It reproduces — but **not through either input named
+above**, and that is the finding.
+
+A full `ports` frame costs 6.0 ms against an idle brick over USB, the same as a
+three-operation `battery` read: the cost is the round trip, not the work in it. Two things
+change that, and both are properties of the brick rather than of the channel or the queue:
+
+| Cause | Effect | Shape |
+|---|---|---|
+| Wi-Fi stack running | median 6.0 → 26 ms | steady, ~4× |
+| Port View open on the brick's screen | ~34 ms stall, ~7×/s | periodic, median unchanged |
+
+Both were isolated by experiment. Switching Wi-Fi off in software with the adapter still
+fitted restored the full rate, so the tax is the running radio stack rather than the
+hardware. Moving the on-screen port monitor between bricks moved the stalls with it — a
+crossover, which also rules out firmware version.
+
+Three consequences for the design:
+
+- **Latency must be measured as a distribution, not an average.** A brick drawing its own
+  port screen keeps a 6.0 ms median and a 37 ms p95. A throttler watching mean latency sees
+  a healthy brick; only p95 or a stall count separates it from one.
+- **Queue depth has no dynamic range here.** Commands are strictly serial per brick, so
+  depth is 0 or 1 unless the scheduler out-runs the brick. Neither cause above moves it.
+- **The signal is the brick's own workload**, which the host cannot query and cannot
+  control. It is observable only through the host's own latency tail — an argument for
+  keeping that tail as the input, not for dropping adaptivity.
+
+Throttling must also be **per brick**: in a three-brick session, one brick with its port
+screen open must not slow telemetry for the other two.
+
 ### 4.6 Public API Layer
 
 The Public API layer exports:
