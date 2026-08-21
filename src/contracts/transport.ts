@@ -21,6 +21,14 @@ export interface TransportCapabilities {
 	readonly supportsForget: boolean;
 }
 
+/**
+ * What a command channel does, stated here so the transport contract can name it
+ * without importing the command layer — which sits above it.
+ */
+export interface CommandChannelLike {
+	execute(command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse>;
+}
+
 /** Per-command overrides a caller may pass through a provider to the adapter. */
 export interface SendCommandOptions {
 	/**
@@ -168,16 +176,30 @@ export interface TransportProvider extends vscode.Disposable {
 	disconnect(brickKey: BrickKey): Promise<void>;
 
 	/**
-	 * Sends a typed command to a connected brick and receives a typed response.
+	 * Sends one packet to a connected brick and returns the reply packet.
 	 *
-	 * `options` reaches the adapter, so a caller can set a round-trip budget or pass
-	 * an abort signal. Omitting it uses the transport's default.
+	 * Byte level on purpose: a transport carries frames and knows nothing about what a
+	 * command means. Typing lives in the command layer above, which owns the codec and
+	 * the message counter.
+	 *
+	 * `options` reaches the adapter, so a caller can set a round-trip budget or pass an
+	 * abort signal. Omitting it uses the transport's default.
 	 */
-	send(
+	sendPacket(
 		brickKey: BrickKey,
-		command: BrickCommand,
-		options?: SendCommandOptions,
-	): Promise<BrickResponse>;
+		packet: Uint8Array,
+		options?: SendCommandOptions & { expectedMessageCounter?: number },
+	): Promise<Uint8Array>;
+
+	/**
+	 * Supplies a command channel instead of letting one be built over `sendPacket`.
+	 *
+	 * Only the mock implements this. A mock brick simulates command semantics, not USB
+	 * framing, so asking it to decode real packets back into commands would be work in
+	 * service of nothing. Real transports leave this undefined and the caller wraps
+	 * `sendPacket` in a `PacketCommandChannel`.
+	 */
+	createCommandChannel?(brickKey: BrickKey): CommandChannelLike;
 
 	/**
 	 * Attempt to re-establish a lost connection.
