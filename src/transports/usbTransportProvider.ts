@@ -186,7 +186,10 @@ export class UsbTransportProvider implements TransportProvider {
 		brickKey: BrickKey,
 		serial: string | undefined,
 	): Promise<string | undefined> {
-		const libusb = this.makeLibusbAdapter(serial ? { serial } : {});
+		const libusb = this.makeLibusbAdapter({
+			...(serial ? { serial } : {}),
+			inUse: (location) => this.isInUse(location),
+		});
 		try {
 			await libusb.open();
 		} catch (error) {

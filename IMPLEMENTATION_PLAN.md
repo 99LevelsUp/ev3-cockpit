@@ -317,6 +317,84 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 
 - [ ] **3.1 Telemetry category definitions**
   - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
+  - [x] 3.1.4a Device-type codes corrected against the firmware, and the `ports` command
+    made to read a value at all. Four defects, none of which any test could see:
+    - **Two type codes were misnamed.** 16 was `color` and 29 was `color-v2`; 16 is the EV3
+      **touch** sensor (firmware `typedata.rcf`: `16 0 TOUCH`) and 29 is the colour sensor
+      (`LEGO_EV3_COLOR_TYPE_ID 29` in the ev3dev driver). A brick with a touch sensor
+      plugged in therefore reported a colour sensor, and no touch sensor anywhere. Code 1 is
+      `NXT-TOUCH` and is now named as such
+    - **Sensor values were read with the wrong opcode.** `INPUT_READ_SI` held 0x9A, which is
+      `opINPUT_READ` — output parameter `PAR8`, one percent byte. `opINPUT_READSI` is 0x9D
+      with `PARF`. The parser read four bytes as a float from a slot the firmware filled one
+      byte of, so every sensor value was three bytes of the previous command's leftovers
+    - **The firmware does not clear the global buffer.** The unwritten bytes were legible
+      ASCII on the wire. Presence must come from the type code and never from the value: a
+      brick with no motors at all returns four tacho zeros
+    - **125 and 127 were unhandled.** `TYPE_UNKNOWN` ("port not empty but type has not been
+      determined") and `TYPE_ERROR`. 125 is not exotic — every sensor plugged in while
+      running reports it for a second or two, seen on all three bricks
+
+    Verified on hardware by moving each device and watching the value change: touch 0↔1,
+    ultrasonic 3–255 cm, infrared 0–100, colour 0–89 %, gyro −56–+57°, and four motors
+    across −243–+212°. Three bricks at once, two firmware versions (V1.10E and V1.09H),
+    zero read errors over six minutes
+  - [x] 3.1.4c **Telemetry verified identical over USB and TCP**, on the same brick read
+    both ways within one run: port map, device types, presence, firmware and button state
+    all matched, at 39 frames/s over USB and 43 over TCP. TCP was found by beacon discovery
+    rather than by being handed an address. Note for anyone writing a one-shot scan: beacon
+    discovery is cache-based and each `discover()` re-primes the path, so a single call
+    followed by a long wait comes back empty even with a brick present — poll it.
+  - [ ] 3.1.4d **BT cannot be exercised at all**, and no hardware setup changes that.
+    `BtTransportProvider` is constructed with no backends and no discovery function, so
+    `discover()` returns empty and `connectWithFallback` would throw "No BT backends
+    configured". `BtSppAdapter` exists and is not wired to it. A transport-layer gap that
+    telemetry inherits rather than a telemetry gap — and the last of the three providers
+    still unverified for the `ports` path
+  - [ ] 3.1.4e **Round-trip cost is per brick, not per transport — and that un-gates 3.4.**
+    Same command, same USB transport, three bricks, 40 reads each. This table is the
+    measurement **before** the two anomalies were isolated; the findings below supersede
+    its explanations, not its numbers:
+
+    | Brick | median | p95 | note |
+    |---|---|---|---|
+    | BBB | 6.0 ms | 6.3 ms | tight |
+    | CCC | 5.0 ms | **41.0 ms** | fat tail, firmware V1.09H |
+    | AAA | **26.0 ms** | 30.1 ms | the brick on Wi-Fi |
+
+    **`ports` costs the same as `battery`** — 16 sub-operations against 3 — so the cost is
+    the round trip and batching a telemetry frame into one command is nearly free, which is
+    3.1.5's premise confirmed.
+
+    Both anomalies were then isolated, and they are two different phenomena:
+
+    - **An active Wi-Fi stack costs the brick 4× its command throughput.** Switching Wi-Fi
+      off in software, with the adapter still physically fitted, took that brick from a
+      26 ms median to 6.0 ms — indistinguishable from the others. The tax is the running
+      radio and network stack, not the presence of the dongle.
+    - **The brick's own on-screen port monitor blocks the command channel.** With Wi-Fi off
+      everywhere, the one brick with Port View open showed 17 slow reads in 300 (5.7%),
+      spaced a median of **138 ms** apart (range 127–148, a timer rather than jitter) and
+      costing ~34 ms each, while the other two showed none. Moving the monitor moved the
+      stalls exactly: with it switched off there and on on the other two, that brick went
+      to **0 of 300** and the other two to 19 and 17, at 141 and 139 ms. A crossover, so the
+      cause is identified rather than correlated — and firmware version is ruled out, since
+      the V1.09H brick is the clean one in the second run.
+
+      The mechanism matters more than the number: **the brick polls its own sensors to draw
+      that screen, and the host's telemetry competes with it for the same processing.** Its
+      median stays 6.0 ms either way — it is not slow, it is intermittently blocked, ~7
+      times a second.
+
+    For 3.4 this settles the shape of the problem: **a median-based throttler would see
+    nothing wrong** on the stalling brick, since its median matches a healthy one. Only a
+    tail-aware measure (p95, or a stall counter) distinguishes them, and the input is the
+    brick's own state rather than queue depth or transport latency as DESIGN §4.5 assumed.
+    At a 10 Hz telemetry loop that brick would hit a stall roughly every twentieth frame
+  - [ ] 3.1.4b **A UART sensor cannot be read in two modes in one command.** Asking for a
+    mode other than the current one returns `DATAF_NAN` and the sensor stays NaN while it
+    settles — including in the mode that worked a moment earlier. Mode switching therefore
+    needs a settling policy, and 3.1.5's batching cannot span modes of one device
   - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
   - [ ] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the `MAX_COMMANDS_PER_SEC = 10` guard in DESIGN §4.1: at four commands per frame that is 2.5 Hz on every transport, heartbeat included. Batching four reads into one command is what buys that back fourfold. Open question for the owner: does the guard budget count only telemetry, or explicit commands and the heartbeat too?
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
