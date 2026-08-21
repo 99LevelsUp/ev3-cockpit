@@ -86,7 +86,19 @@ export const EV3_OPCODE = {
 	COM_GET: 0xd3,
 	COM_SET: 0xd4,
 	INPUT_DEVICE: 0x99,
-	INPUT_READ_SI: 0x9a,
+	/**
+	 * `opINPUT_READSI` — one sensor reading in SI units.
+	 *
+	 * Signature from the firmware's own opcode table: `PAR8,PAR8,PAR8,PAR8,PARF` — layer,
+	 * port, type hint, mode hint, and a **four-byte float** out.
+	 *
+	 * This constant held 0x9a until it was checked against that table. 0x9A is
+	 * `opINPUT_READ`, whose last parameter is `PAR8`: it writes a single percent byte. The
+	 * parser read four bytes as a float from a slot the firmware had filled one byte of, so
+	 * every sensor value was three bytes of whatever the previous command had left in the
+	 * global buffer.
+	 */
+	INPUT_READ_SI: 0x9d,
 	INPUT_DEVICE_LIST: 0x98,
 	OUTPUT_SPEED: 0xa5,
 	OUTPUT_START: 0xa6,

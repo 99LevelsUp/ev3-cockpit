@@ -76,6 +76,15 @@ export interface UsbLibusbAdapterOptions {
 	productId?: number;
 	/** Interface to claim (default: 0, the HID-class interface carrying the channel). */
 	interfaceNumber?: number;
+	/**
+	 * Devices another session already holds, which must not be opened while searching.
+	 *
+	 * Resolving a serial means opening the device to read its string descriptor, and libusb
+	 * hands out one handle per device: opening and closing an already-claimed brick drops
+	 * that handle and every later transfer on it fails with "Device is not open". Verified
+	 * on hardware — connecting a second brick killed the first.
+	 */
+	inUse?: (location: UsbDeviceLocation) => boolean;
 	/** Injection seam for tests, which have no brick to enumerate. */
 	moduleLoader?: () => UsbModuleLike;
 }
@@ -129,6 +138,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private readonly productId: number;
 	private readonly interfaceNumber: number;
 	private readonly moduleLoader: () => UsbModuleLike;
+	private readonly inUse: (location: UsbDeviceLocation) => boolean;
 
 	private device?: UsbDeviceLike;
 	private claimed?: UsbInterfaceLike;
@@ -145,6 +155,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.productId = options.productId ?? USB.PRODUCT_ID;
 		this.interfaceNumber = options.interfaceNumber ?? 0;
 		this.moduleLoader = options.moduleLoader ?? loadUsbModule;
+		this.inUse = options.inUse ?? (() => false);
 	}
 
 	get isOpen(): boolean {
@@ -308,6 +319,14 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		// Reading a serial means opening the device, so close every one that is not the
 		// brick we were asked for — leaving handles open would block a later connect.
 		for (const candidate of candidates) {
+			// Never touch a brick another session is holding: opening and closing it drops
+			// the handle that session is using.
+			if (this.inUse({
+				busNumber: candidate.busNumber,
+				deviceAddress: candidate.deviceAddress,
+			})) {
+				continue;
+			}
 			let opened = false;
 			try {
 				candidate.open();
