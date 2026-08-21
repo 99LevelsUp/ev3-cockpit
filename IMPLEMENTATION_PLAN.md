@@ -416,18 +416,26 @@ Export a stable API for other extensions without giving them direct access to th
     1.8.5b: with progress visible, “no progress for N seconds” is the signal that matters (R3)
   - [ ] 4.6.4 Per-transport chunk size — USB takes the report payload; TCP and BT take the largest
     the firmware accepts, which is unmeasured (R4)
-  - [ ] 4.6.5 `list` with `CONTINUE_LIST_FILES` paging, and file-versus-directory distinction (R5)
-  - [ ] 4.6.6 `read` for a file of any size (R6)
-  - [ ] 4.6.7 `exists` from `opFILENAME/EXIST` instead of listing the parent and searching (R7)
-  - [ ] 4.6.8 `size` from `opFILENAME/TOTALSIZE`; `freeSpace` from `opFILE/GET_POOL` (R8, R9)
-  - [ ] 4.6.9 `move` via `opFILE/MOVE` — the protocol has no rename system command, so this is
-    the only primitive for it (R10)
-  - [ ] 4.6.10 `makeDirectory`, `removeDirectory`, and `remove` — a populated directory is
-    refused with a named error; recursive removal exists and is never the default (R11, R12)
-  - [ ] 4.6.11 Path length guard — the firmware truncates a path silently at 60 bytes, so an
+  - [x] 4.6.5 `list` with `CONTINUE_LIST_FILES` paging, typed entries carrying the byte
+    size and checksum the brick already includes per file (R5)
+  - [x] 4.6.6 `read` for a file of any size (R6)
+  - [x] 4.6.7 `exists` from `opFILENAME/EXIST` instead of listing the parent and searching (R7)
+  - [x] 4.6.8 `size` from `opFILENAME/TOTALSIZE`, which reports **kilobytes** rounded up
+    and a zero file count for a plain file; storage from `opMEMORY_USAGE`, since
+    `opFILE/GET_POOL` allocates an image pool and reports nothing about storage (R8, R9)
+  - [x] 4.6.9 `move` — `opFILE/MOVE` turned out to be `cp -r`, so this is copy-then-delete
+    and cannot be atomic; the failure path says both copies exist. Blocked over USB: the
+    command carries two paths and a HID write delivers 64 bytes (R10)
+  - [x] 4.6.10 `makeDirectory`, `remove` and `removeTree` — a populated directory is refused
+    with an error naming the reason, because the firmware reports ENOTEMPTY as
+    NO_PERMISSION; recursive removal is `opFILE/REMOVE` and never the default (R11, R12)
+  - [x] 4.6.11 Path length guard — the firmware truncates a path silently at 60 bytes, so an
     over-length path must be rejected before a packet is sent or the brick acts on a different
     path than the caller named (R13)
-  - [ ] 4.6.12 Mock parity — partial-transfer failure, cancellation, populated-directory refusal,
+  - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
+    listed full paths, a shape no brick produces. It now returns bare names with kinds
+    and sizes, tracks directories explicitly so an empty one is representable, and
+    refuses to delete a populated directory. — partial-transfer failure, cancellation, populated-directory refusal,
     and over-length path rejection all reproducible against the mock (R15)
   - [ ] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
     survey found, including `BEGIN_GETFILE` / `CONTINUE_GETFILE`. Log tailing itself is deferred
