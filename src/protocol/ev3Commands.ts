@@ -7,6 +7,7 @@
  */
 
 import { BrickCommand } from '../contracts';
+import { ProtocolError } from '../errors/CockpitError';
 import { concatBytes, uint16le, uint32le, lc0, cString, gv0, gv1 } from './ev3Bytecode';
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
@@ -18,6 +19,39 @@ import {
 const LAYER_SELF = 0;
 /** Max bytes per system command chunk. */
 const SYSTEM_LIST_CHUNK_SIZE = 1012;
+
+/**
+ * The firmware's own receive and transmit buffers, in bytes.
+ *
+ * `c_com.c` sets `RxBuf[n].BufSize = 1024` and `TxBuf[n].BufSize = 1024`
+ * unconditionally, for every communication channel. So this is a firmware property,
+ * not a transport one: USB, TCP and Bluetooth all hit the same ceiling, and USB's
+ * 1025-byte HID report (one report id plus 1024) matches it exactly.
+ */
+export const FIRMWARE_BUFFER_BYTES = 1024;
+
+/** Envelope before a system command's own payload: length, counter, type, command. */
+export const SYSTEM_ENVELOPE_BYTES = 2 + 2 + 1 + 1;
+
+/**
+ * Largest chunk `CONTINUE_DOWNLOAD` can carry: the buffer less the envelope and the
+ * one-byte handle.
+ */
+export const MAX_WRITE_CHUNK_BYTES = FIRMWARE_BUFFER_BYTES - SYSTEM_ENVELOPE_BYTES - 1;
+
+/**
+ * Largest first chunk `BEGIN_DOWNLOAD` can carry for a given path.
+ *
+ * BEGIN_DOWNLOAD carries payload directly after the zero-terminated path, so its
+ * room shrinks as the path grows — unlike CONTINUE_DOWNLOAD, whose header is fixed.
+ */
+export function maxFirstChunkBytes(
+	path: string,
+	packetBytes: number = FIRMWARE_BUFFER_BYTES,
+): number {
+	const pathBytes = Buffer.byteLength(path, 'utf8') + 1;
+	return packetBytes - SYSTEM_ENVELOPE_BYTES - 4 - pathBytes;
+}
 
 // ── Capability probe (info command) ─────────────────────────────────
 
@@ -83,6 +117,16 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 		return buildFsExistsCommand(command.path);
 	case 'fs:delete':
 		return buildFsDeleteCommand(command.path);
+	case 'fs:beginWrite':
+		return buildFsBeginWriteCommand(command.path, command.totalBytes, command.chunk);
+	case 'fs:continueWrite':
+		return buildFsContinueWriteCommand(command.handle, command.chunk);
+	case 'fs:beginRead':
+		return buildFsBeginReadCommand(command.path, command.wantBytes);
+	case 'fs:continueRead':
+		return buildFsContinueReadCommand(command.handle, command.wantBytes);
+	case 'fs:closeHandle':
+		return buildFsCloseHandleCommand(command.handle);
 	}
 }
 
@@ -243,6 +287,82 @@ function buildFsWriteCommand(path: string, content: string): EncodedCommand {
 function buildFsExistsCommand(path: string): EncodedCommand {
 	// Use LIST_FILES on the path — if it succeeds, the path exists
 	return buildFsListCommand(path);
+}
+
+function buildFsBeginWriteCommand(
+	path: string,
+	totalBytes: number,
+	chunk: Uint8Array,
+): EncodedCommand {
+	// Sized against the firmware buffer; a tighter host transport is the service's
+	// business, and its own guard catches that before this one.
+	const room = maxFirstChunkBytes(path);
+	if (chunk.length > room) {
+		throw new ProtocolError(
+			`BEGIN_DOWNLOAD first chunk of ${chunk.length} bytes exceeds the ${room} bytes `
+			+ `left after a ${path.length}-character path.`
+		);
+	}
+	// The brick refuses a chunk larger than the size it was told to expect (SIZE_ERROR),
+	// so catch the caller's arithmetic here rather than reading it back off the wire.
+	if (chunk.length > totalBytes) {
+		throw new ProtocolError(
+			`First chunk of ${chunk.length} bytes exceeds the declared total of ${totalBytes}.`
+		);
+	}
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: concatBytes(
+			new Uint8Array([EV3_SYSTEM.BEGIN_DOWNLOAD]),
+			uint32le(totalBytes),
+			cString(path),
+			chunk,
+		),
+	};
+}
+
+function buildFsContinueWriteCommand(handle: number, chunk: Uint8Array): EncodedCommand {
+	if (chunk.length > MAX_WRITE_CHUNK_BYTES) {
+		throw new ProtocolError(
+			`CONTINUE_DOWNLOAD chunk of ${chunk.length} bytes exceeds the firmware's `
+			+ `${MAX_WRITE_CHUNK_BYTES}-byte limit.`
+		);
+	}
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: concatBytes(
+			new Uint8Array([EV3_SYSTEM.CONTINUE_DOWNLOAD, handle & 0xff]),
+			chunk,
+		),
+	};
+}
+
+function buildFsBeginReadCommand(path: string, wantBytes: number): EncodedCommand {
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: concatBytes(
+			new Uint8Array([EV3_SYSTEM.BEGIN_UPLOAD]),
+			uint16le(wantBytes),
+			cString(path),
+		),
+	};
+}
+
+function buildFsContinueReadCommand(handle: number, wantBytes: number): EncodedCommand {
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: concatBytes(
+			new Uint8Array([EV3_SYSTEM.CONTINUE_UPLOAD, handle & 0xff]),
+			uint16le(wantBytes),
+		),
+	};
+}
+
+function buildFsCloseHandleCommand(handle: number): EncodedCommand {
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: new Uint8Array([EV3_SYSTEM.CLOSE_FILEHANDLE, handle & 0xff]),
+	};
 }
 
 function buildFsDeleteCommand(path: string): EncodedCommand {
