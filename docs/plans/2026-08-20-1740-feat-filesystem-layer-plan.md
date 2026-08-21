@@ -16,7 +16,7 @@ type: feat
 - **Objective:** A consuming extension can read, write, move, and remove files and directories on a connected brick, and can transfer a file of any size with visible progress and the ability to cancel — over USB, TCP, or Bluetooth, with the same semantics on each.
 - **Means:** A `FileTransferService` above the command layer owns chunking; the command layer stays one-command-one-reply.
 - **Product authority:** `REQUIREMENTS.md` (scope), `DESIGN.md` §11 (filesystem design), `docs/ideation/2026-08-20-filesystem-protocol-survey.md` (what the protocol actually offers, verified against firmware sources).
-- **Open blockers:** Q1 and Q2, both needing hardware that is powered down until 2026-08-21. Q1 — the sustained command rates in `DESIGN.md` §9.2 were measured on an idle brick, so combined load is unmeasured. Q2 — the largest chunk the firmware accepts on the stream-framed transports is unknown, and on Bluetooth that is the only lever that materially changes transfer time.
+- **Open blockers:** Q1 only. Q2 is answered — see Outstanding Questions.
 
 ---
 
@@ -39,7 +39,7 @@ The `10 commands/second` figure that governed transfer feasibility turned out to
 - KD1. **Chunking lives in a service above the command layer, not in the adapters.** (session-settled: user-approved — chosen over adapter-level chunking: a transport should move one packet, not own a multi-command protocol.) Governs R1, R2, R3.
 - KD2. **The layer covers every operation the protocol offers.** (session-settled: user-directed — chosen over the five operations in `IMPLEMENTATION_PLAN.md` §4.6: that list came from what seemed obvious, not from the protocol.) Governs R4–R12.
 - KD3. **System commands are authoritative for transfer and the core operations; `opFILE` and `opFILENAME` fill only the gaps.** Rename, existence, and size have no system command at all, so this is a division dictated by what exists rather than an architectural choice. Governs R4, R7, R9, R10.
-- KD4. **Transfers are unbounded, observable, and cancellable.** (session-settled: user-directed — chosen over a soft warning, transport preference, and a hard Bluetooth size limit: Bluetooth slowness is the link's physics at ~11 KB/s, and whether 93 seconds is too long is the consumer's judgement.) Governs R2, R3.
+- KD4. **Transfers are unbounded, observable, and cancellable.** (session-settled: user-directed — chosen over a soft warning, transport preference, and a hard Bluetooth size limit: how long is too long is the consumer's judgement, not this layer's. The decision was taken against an estimate of ~11 KB/s over Bluetooth; measurement later put it at 20.3 KB/s, which only strengthens it.) Governs R2, R3.
 - KD5. **Destructive operations refuse to recurse unless asked.** (session-settled: user-directed — chosen over always-recursive, never-recursive, and recursive-with-dry-run: the brick has no trash can.) Governs R11, R12.
 - KD6. **The transfer deadline is a stall detector, not a total-time budget.** With progress reporting in place, "no progress for N seconds" is the signal that matters; a cap on total duration would reject legitimate slow transfers. Supersedes the framing of task 1.8.5b. Governs R3.
 - KD7. **The rate guard is a backstop against a pathological caller, not a meter on normal traffic.** Commands are strictly serial, so each transport self-limits at its own round trip. Governs R14.
@@ -51,7 +51,7 @@ The `10 commands/second` figure that governed transfer feasibility turned out to
 - R1. A `FileTransferService` above the command layer performs chunked upload and download by issuing `BEGIN_DOWNLOAD`/`CONTINUE_DOWNLOAD` and `BEGIN_UPLOAD`/`CONTINUE_UPLOAD` until the transfer completes, and closes the handle on every exit path including failure and cancellation.
 - R2. A transfer reports progress as bytes transferred against total bytes, at least once per chunk.
 - R3. A transfer accepts an `AbortSignal` and stops within one chunk of cancellation. A transfer that makes no progress for a per-transport stall interval fails with a timeout naming the stall.
-- R4. Chunk size is a per-transport constant. USB is report-framed and takes the report payload size; TCP and Bluetooth are stream-framed and take the largest chunk the firmware accepts.
+- R4. Chunk size is a per-transport constant, taking the lower of two ceilings: the firmware's 1024-byte buffer, and whatever the host transport actually delivers. On USB the second binds hard — a HID write delivers 64 bytes however large a report it is given, and the same frame bounds replies — so USB carries 57 payload bytes per write and 52 per read against 1017 and 1012 on TCP and Bluetooth.
 
 The sequence R1–R4 describe, including the two exits that currently do not exist:
 
@@ -137,7 +137,7 @@ Today the loop runs once: `CONTINUE_DOWNLOAD` and `CONTINUE_UPLOAD` are never se
 
 ### Success Criteria
 
-- A 1 MB upload completes over USB and TCP within the time the measured per-transport rates predict, and over Bluetooth within the time its bandwidth predicts.
+- A transfer completes at the verified throughput for its transport: TCP 57 KB/s, Bluetooth 20 KB/s, USB 6.8 KB/s (measured on a 20 KB round trip with every byte compared). A 1 MB upload is therefore about 18 seconds over TCP, 50 over Bluetooth, and two and a half minutes over USB.
 - No filesystem operation reports success for work it did not complete.
 - A consumer can implement deploy-and-run against the mock alone and have it work against hardware unchanged.
 
@@ -164,14 +164,18 @@ Today the loop runs once: `CONTINUE_DOWNLOAD` and `CONTINUE_UPLOAD` are never se
 - Depends on the command layer's typed error split (`ProtocolError` versus transport failure) so a mid-transfer parse failure does not read as a dead link.
 - Depends on the per-transport rates recorded in `DESIGN.md` §9.2 for the stall intervals in R3 and the throughput expectations in Success Criteria.
 - Assumes the firmware's 60-byte path buffer applies to every system command that names a path, not only `DELETE_FILE` where it was read.
+- Bluetooth is **not** bandwidth-bound at the 11 KB/s its 115200 baud configuration implies: measured throughput is 20.3 KB/s, so the SPP link runs faster than the adapter's nominal baud rate. An earlier revision of this plan reasoned from the nominal figure.
 - Assumes `DELETE_FILE` removes an empty directory, from the firmware's use of POSIX `remove()`. Verified in source, not yet on hardware.
 
 ### Outstanding Questions
 
 **Resolve before planning**
 
-- Q1. Do the measured per-transport command rates hold on a loaded brick — a running program, live telemetry, and a transfer at once? The rates behind R3 and Success Criteria come from an idle brick. Needs hardware; bricks are powered down until 2026-08-21.
-- Q2. What is the largest chunk the firmware accepts on the stream-framed transports (R4)? Bluetooth is bandwidth-bound, so this is the only lever that materially changes its transfer time. Needs hardware.
+- Q1. Do the verified throughputs hold on a loaded brick — a running program, live telemetry, and a transfer at once? Everything measured so far used an idle brick.
+
+**Answered**
+
+- Q2. **The firmware's buffers are 1024 bytes on every channel** (`c_com.c` sets both RX and TX unconditionally), so a `CONTINUE_DOWNLOAD` payload tops out at 1017 — there is no larger chunk to be had on any transport. But the host side can be tighter, and on USB it is: a HID write delivers 64 bytes whatever report length it is handed, and the same frame bounds replies. That inverts this plan's original premise, which assumed USB was the roomiest transport and the stream-framed ones were firmware-capped. Verified throughput puts USB last by a factor of three. Reaching the full 1024 bytes over USB needs the libusb path rather than node-hid; the `usb` dependency is already present for name probing. Recorded as a follow-up, not a blocker — transfers are correct on USB, only slow.
 
 **Deferred to planning**
 
