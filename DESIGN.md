@@ -103,7 +103,9 @@ graph TD
 
     PA[Presence Aggregator]
     SM[Session Manager]
+    CMD[Command Layer]
     TM[Telemetry Runtime]
+    FS[Filesystem Service]
     API[Public API Layer]
     UI[Cockpit UI Layer]
 
@@ -111,9 +113,13 @@ graph TD
     PERS --> PA
     PERS --> SM
     PA --> SM
-    SM --> TM
+    SM --> CMD
+    CMD --> TM
+    CMD --> FS
     SM --> API
     TM --> API
+    FS --> API
+    FS -->|ev3:// provider| VSC[VS Code workspace.fs + editors]
     SM --> UI
     TM --> UI
     API -->|events + snapshots| EXT[External Extensions]
@@ -232,6 +238,29 @@ Responsibilities:
 
 The Public API is strictly read-only for session management; it cannot trigger `connect` or `disconnect`.
 
+### 4.3a Command Layer
+
+Owns the typed command vocabulary and everything needed to execute one command against
+one connected brick: the EV3 codec (`src/protocol/`), message counters, reply matching,
+and command-to-response typing.
+
+It sits above the session manager, which owns connections, and below telemetry and the
+filesystem, which both orchestrate commands rather than issue them one at a time.
+
+**The transports beneath it carry bytes.** `TransportProvider.sendPacket` takes a packet
+and returns a packet; it does not know what a command means. Until this was separated, a
+provider accepted a typed `BrickCommand`, which inverted the dependency — the lowest
+layer owned the vocabulary every layer above it was defined in terms of, and the codec
+lived inside `src/transports/`.
+
+A channel is **session-scoped**, because the message counter is. Two channels over one
+connection would hand out colliding counters and match each other's replies. The session
+manager builds one per session.
+
+The mock is the single provider that stays at the command level, through an optional
+`createCommandChannel`. A mock brick simulates what a command *means*; making it decode
+real EV3 framing back into commands would be work in service of nothing.
+
 ### 4.4 Telemetry Runtime
 
 The Telemetry Runtime runs over a connected session and schedules individual telemetry loops.
@@ -273,6 +302,30 @@ The Public API layer exports:
 - active brick,
 - subscription telemetry,
 - filesystem services.
+
+### 4.6a The `ev3://` FileSystemProvider
+
+The cockpit registers a `vscode.FileSystemProvider` for the `ev3://` scheme, over the
+filesystem service (§11).
+
+This is a platform capability, not an explorer feature, because **two independent
+consumers need it**:
+
+- `ev3-explorer` opens files in editors and works through `vscode.workspace.fs`;
+- `ev3-native` writes a compiled binary to the brick, and its design records that the
+  cockpit exports no programmatic API today, leaving `ev3://` and VS Code commands as its
+  only channels.
+
+If the scheme lived in the explorer, `ev3-native` would need the explorer installed to
+upload a program — a dependency between two unrelated plugins. Registering it here also
+keeps the safe/full mode policy where `ev3-explorer`'s own design already puts it: *"safe
+and full mode is a property of the cockpit"*, and consumers must not build a side channel
+around its guardrails. A consumer cannot honour that if the enforcement point ships in
+one of the consumers.
+
+The cockpit still contains no file explorer of its own (§12). Registering a URI scheme is
+not a UI: it is the surface through which VS Code and other extensions reach the
+filesystem service.
 
 ### 4.7 Cockpit UI Layer
 
