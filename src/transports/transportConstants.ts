@@ -17,6 +17,23 @@ export const USB = {
 	RECOVERY_PRODUCT_ID: 0x0006,
 	/** HID report size in bytes (1 byte report ID + 1024 payload). */
 	REPORT_SIZE: 1025,
+	/**
+	 * Largest EV3 packet a HID write actually delivers, in bytes.
+	 *
+	 * Measured, not declared: `node-hid`'s `write()` returns 65 whatever report length
+	 * it is handed, so one report id plus 64 payload bytes reach the brick and anything
+	 * beyond is dropped by the OS.
+	 *
+	 * The same 64 bytes bound replies. A verified round trip diverges at file byte 52
+	 * whatever chunk size is used, and 52 is exactly this frame less BEGIN_UPLOAD's
+	 * 12-byte reply header — so the limit is symmetric, not write-only.
+	 *
+	 * This makes USB by far the *most* constrained transport for bulk transfer, not the
+	 * least: about 52 payload bytes per 6 ms round trip is roughly 8 KB/s, an order
+	 * below Bluetooth. Reaching the firmware's full 1024 bytes needs the libusb path
+	 * (the `usb` dependency already present for name probing), not node-hid.
+	 */
+	MAX_WRITE_PACKET_BYTES: 64,
 	/** HID report ID used for EV3 communication. */
 	REPORT_ID: 0,
 	/** Discovery scan interval (ms). */
