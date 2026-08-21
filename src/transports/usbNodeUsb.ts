@@ -10,13 +10,27 @@ export interface LegoUsbDeviceInfo {
 	product: string | null;
 }
 
+/** Options for {@link listLegoUsbDevices}. */
+export interface ListLegoUsbDevicesOptions {
+	/**
+	 * Devices to enumerate without opening.
+	 *
+	 * Reading a string descriptor means opening the device, and discovery runs on a timer
+	 * while a session may hold the same brick's interface claimed. Skipping by bus address
+	 * needs no handle, so an in-use brick is never reopened underneath its own session.
+	 */
+	skip?: (location: { busNumber: number; deviceAddress: number }) => boolean;
+}
+
 /**
  * Enumerates LEGO USB devices via libusb, reading string descriptors directly
  * from the USB hardware — bypasses Windows USB descriptor cache.
  *
  * Returns an empty array if the `usb` package is unavailable or inaccessible.
  */
-export async function listLegoUsbDevices(): Promise<LegoUsbDeviceInfo[]> {
+export async function listLegoUsbDevices(
+	options?: ListLegoUsbDevicesOptions,
+): Promise<LegoUsbDeviceInfo[]> {
 	let getDeviceList: () => Device[];
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -35,6 +49,18 @@ export async function listLegoUsbDevices(): Promise<LegoUsbDeviceInfo[]> {
 		let serialNumber: string | null = null;
 		let manufacturer: string | null = null;
 		let product: string | null = null;
+		if (options?.skip?.({ busNumber: device.busNumber, deviceAddress: device.deviceAddress })) {
+			// In use by a session. Reported so it still appears in the scan, but without
+			// reopening the device its own transport is holding.
+			results.push({
+				vendorId: device.deviceDescriptor.idVendor,
+				productId: device.deviceDescriptor.idProduct,
+				serialNumber: null,
+				manufacturer: null,
+				product: null,
+			});
+			continue;
+		}
 		try {
 			device.open();
 			try {

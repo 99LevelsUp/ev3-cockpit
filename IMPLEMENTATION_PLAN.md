@@ -437,12 +437,28 @@ Export a stable API for other extensions without giving them direct access to th
     per-transport packet cap from the brick key. Two palette commands (DESIGN §14:
     diagnostics, not primary UX) give the layer a caller before the API and panel
     exist, and a host test asserts they are both declared and registered
-  - [ ] 4.6.15 libusb backend for USB — **a correctness requirement, not only a
-    throughput one.** A HID write delivers 64 bytes, which caps any single command:
-    `copy` and `move` carry two paths and a stock project path is 25 characters, so
-    they cannot be sent over USB at all. It also holds verified USB transfer
-    throughput to 6.8 KB/s against TCP's 57. The `usb` dependency is already present
-    for name probing, so this is a change of backend rather than of dependency
+  - [x] 4.6.15 libusb backend for USB — was **a correctness requirement, not only a
+    throughput one**: a HID write delivers 64 bytes, which caps any single command, so
+    `copy` and `move` (two paths, and a stock project path is 25 characters) could not be
+    sent over USB at all. `UsbLibusbAdapter` goes straight at the interrupt endpoints and
+    reaches the firmware's full 1024-byte frame. Verified against hardware through the
+    shipped stack — provider, session manager, `createBrickFilesystem` — rather than
+    through a probe: `copy` and `move` both execute byte-identical, a 600-byte file goes in
+    one packet, and 64 KB moves at **201 KB/s written and 325 KB/s read**, against 6.8 KB/s
+    over HID. Four findings worth keeping:
+    - The 64-byte ceiling is a **defect in the brick's HID report descriptor**, which
+      declares `Report Count 0` for both reports while its endpoints advertise 1024. It was
+      never a `node-hid` limitation and nothing above HID could have lifted it
+    - A libusb interrupt transfer must be **exactly** `wMaxPacketSize`; a 16-byte write
+      fails with `LIBUSB_ERROR_IO` and the same packet padded to 1024 succeeds. Reads come
+      back full-length too, so a reply is found by its length prefix
+    - `maxPacketBytes` had to become a property of the **live link**, travelling adapter →
+      provider → session → filesystem. Reaching a full frame alone would have fixed
+      `copy`/`move` while leaving every transfer chunked to 64 bytes, silently
+    - USB is now the **fastest** transport for bulk work by a factor of five, inverting the
+      ranking a second time and in the opposite direction (DESIGN §4.1)
+  - [ ] 4.6.16 Unverified on the libusb path: the Linux backend (padding should be
+    harmless, but has not been run) and recovery from unplugging mid-transfer
   - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
     listed full paths, a shape no brick produces. It now returns bare names with kinds
     and sizes, tracks directories explicitly so an empty one is representable, and

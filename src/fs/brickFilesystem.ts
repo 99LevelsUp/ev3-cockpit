@@ -20,6 +20,14 @@ export interface BrickSender {
 		command: BrickCommand,
 		options?: SendCommandOptions,
 	): Promise<BrickResponse>;
+
+	/**
+	 * Largest packet the live link carries, when the sender knows.
+	 *
+	 * Optional so a test double need not implement it; absent, the transport's own
+	 * conservative figure applies.
+	 */
+	maxPacketBytes?(brickKey: BrickKey): number | undefined;
 }
 
 export interface BrickFilesystem {
@@ -30,13 +38,14 @@ export interface BrickFilesystem {
 }
 
 /**
- * Largest EV3 packet a transport delivers, or `undefined` to use the firmware's own
- * 1024-byte buffer.
+ * Fallback packet size for a transport whose live link has not said, or `undefined` to
+ * use the firmware's own 1024-byte buffer.
  *
- * Only USB is tighter, and by a lot: a HID write puts 64 bytes on the wire whatever
- * report length it is handed. That caps transfer chunks and, less obviously, the size of
- * any single command — which is why `copy` and `move`, carrying two paths each, cannot be
- * sent over USB at all.
+ * This is the floor, not the truth. A USB brick reached over libusb carries the full
+ * 1024 bytes; the same brick over HID carries 64, because a HID write puts 64 bytes on
+ * the wire whatever report length it is handed. When nothing can say which backend is in
+ * force, assume the tighter one: chunking small is slow, and chunking large is silent
+ * truncation.
  */
 export function maxPacketBytesFor(transport: Transport | undefined): number | undefined {
 	return transport === Transport.USB ? USB.MAX_WRITE_PACKET_BYTES : undefined;
@@ -55,7 +64,11 @@ export function createBrickFilesystem(
 	const send = (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> =>
 		sender.send(brickKey, command, options);
 
-	const maxPacketBytes = maxPacketBytesFor(brickKeyTransport(brickKey));
+	// The live link first: a USB session over libusb carries sixteen times what the
+	// transport's own floor assumes, and asking the transport instead would leave every
+	// transfer chunked to 64 bytes with nothing visibly wrong.
+	const maxPacketBytes = sender.maxPacketBytes?.(brickKey)
+		?? maxPacketBytesFor(brickKeyTransport(brickKey));
 
 	return {
 		files: new FilesystemService(send),

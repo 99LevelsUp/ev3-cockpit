@@ -102,6 +102,14 @@ export class UsbHidAdapter implements TransportAdapter {
 		return this._isOpen;
 	}
 
+	/**
+	 * What a HID write actually delivers, which is far below the frame the brick's own
+	 * endpoints advertise. See {@link USB.MAX_WRITE_PACKET_BYTES} for why.
+	 */
+	get maxPacketBytes(): number {
+		return USB.MAX_WRITE_PACKET_BYTES;
+	}
+
 	async open(): Promise<void> {
 		if (this._isOpen) {
 			return;

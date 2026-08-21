@@ -4,6 +4,8 @@ export { ProviderRegistry } from './providerRegistry';
 export type { TransportAdapter, SendOptions } from './transportAdapter';
 export { UsbHidAdapter } from './usbHidAdapter';
 export type { UsbHidAdapterOptions } from './usbHidAdapter';
+export { UsbLibusbAdapter } from './usbLibusbAdapter';
+export type { UsbLibusbAdapterOptions, UsbDeviceLocation } from './usbLibusbAdapter';
 export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
 export { BtSppAdapter } from './btSppAdapter';
@@ -11,6 +13,9 @@ export type { BtSppAdapterOptions } from './btSppAdapter';
 
 // Transport providers
 export { UsbTransportProvider } from './usbTransportProvider';
+export type {
+	UsbTransportProviderOptions, UsbBackend, UsbProviderLog
+} from './usbTransportProvider';
 export { TcpTransportProvider } from './tcpTransportProvider';
 export type { TcpTransportProviderOptions } from './tcpTransportProvider';
 export { BtTransportProvider } from './btTransportProvider';
