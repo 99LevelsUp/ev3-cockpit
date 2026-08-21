@@ -10,7 +10,7 @@ import * as vscode from 'vscode';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
-import { BrickCommand, BrickResponse, TransportProvider } from '../contracts/transport';
+import { BrickCommand, BrickResponse, SendCommandOptions, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
 import { CommandQueue } from './commandQueue';
 import { PacketCommandChannel } from '../commands/commandChannel';
@@ -247,12 +247,16 @@ export class SessionManager implements vscode.Disposable {
 	// ── Command dispatch ────────────────────────────────────────────
 
 	/** Send a command to a connected brick (via its command queue). */
-	send(brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> {
+	send(
+		brickKey: BrickKey,
+		command: BrickCommand,
+		options?: SendCommandOptions,
+	): Promise<BrickResponse> {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
 			return Promise.reject(new NotConnectedError(`Brick ${brickKey} is not connected.`));
 		}
-		return resources.commandQueue.send(command);
+		return resources.commandQueue.send(command, options);
 	}
 
 	// ── Query ───────────────────────────────────────────────────────
