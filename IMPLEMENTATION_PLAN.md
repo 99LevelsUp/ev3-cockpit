@@ -436,10 +436,7 @@ Export a stable API for other extensions without giving them direct access to th
   `ev3-explorer` both consume this API, and neither can work with what §10.2 listed. The
   `ev3://` scheme is deliberately **not** here: it is a VS Code UI-integration surface and
   `ev3-explorer` registers it over this API (DESIGN §4.6a)
-  - [ ] 4.9.1 Program control — `runProgram`, `stopProgram`, `emergencyStop`,
-    `isProgramRunning`. `ev3-native` compiles a binary, uploads it, and runs it, so without
-    this it has no supported path at all. Needs `opFILE`/`opPROGRAM` work in the command
-    layer that no phase currently owns
+  - [ ] 4.9.1 Expose program control on the API surface, over the service built in 4.7a
   - [ ] 4.9.2 Expose the safe/full mode policy, so a consumer can honour `ev3-explorer`'s
     “no side channel around the guardrails” rule instead of reimplementing the policy.
     Required because the enforcement point (`ev3://`) ships in a consumer
@@ -450,6 +447,23 @@ Export a stable API for other extensions without giving them direct access to th
     capabilities that do not exist — “Registruje 45+ VS Code příkazů”, program start/stop —
     and an internal contradiction of its own: §3.2 channel 3 calls `api.uploadFile()` while
     the §3.3 workflow diagram routes upload through `ev3://`
+- [ ] **4.7a Program control service** — a peer of the filesystem and telemetry services on
+  the service tier (DESIGN §4.3b), not part of the API. It earns a service because running a
+  program is not one command: the image is loaded first and its address flows into the start
+  call, and run state has to be polled because the brick does not push it
+  - [ ] 4.7a.1 `runProgram` — `opFILE/LOAD_IMAGE` (subcode 8) for the slot and image
+    address, then `opPROGRAM_START(slot, imageAddress, imageSize, debugFlag)`. Verify the
+    argument order against `bytecodes.c`: `PAR16,PAR32,PAR32,PAR8`
+  - [ ] 4.7a.2 `stopProgram` — `opPROGRAM_STOP(slot)`
+  - [ ] 4.7a.3 `isProgramRunning` — `opPROGRAM_INFO` with `GET_STATUS` (subcode 22) per slot
+  - [ ] 4.7a.4 Run-state change events — needs polling, so decide the interval against the
+    same per-transport command budget telemetry uses, and whether polling stops when nobody
+    subscribes
+  - [ ] 4.7a.5 `emergencyStop` — decide whether it is `opPROGRAM_STOP` on every slot or the
+    firmware has a dedicated path. Unverified; do not assume
+  - [ ] 4.7a.6 Slot model — the brick has several program slots and every call above takes
+    one. Nothing in the cockpit models slots yet, and `ev3-native`'s API sketch does not
+    mention them
 - [ ] **4.7 API export**
   - [ ] 4.7.1 Export typed API object from `extension.ts` `activate()` return value
   - [ ] 4.7.2 Ensure API is fully initialized before any consumer can use it

@@ -104,8 +104,11 @@ graph TD
     PA[Presence Aggregator]
     SM[Session Manager]
     CMD[Command Layer]
-    TM[Telemetry Runtime]
-    FS[Filesystem Service]
+    subgraph Services["Service Tier"]
+        TM[Telemetry]
+        FS[Filesystem]
+        PC[Program Control]
+    end
     API[Public API Layer]
     UI[Cockpit UI Layer]
 
@@ -114,13 +117,11 @@ graph TD
     PERS --> SM
     PA --> SM
     SM --> CMD
-    CMD --> TM
-    CMD --> FS
+    CMD --> Services
     SM --> API
-    TM --> API
-    FS --> API
+    Services --> API
     SM --> UI
-    TM --> UI
+    Services --> UI
     API -->|events + snapshots| EXT[External Extensions]
     UI -->|read model| PANEL[Webview Panel]
     PANEL -->|actions| UI
@@ -259,6 +260,36 @@ manager builds one per session.
 The mock is the single provider that stays at the command level, through an optional
 `createCommandChannel`. A mock brick simulates what a command *means*; making it decode
 real EV3 framing back into commands would be work in service of nothing.
+
+### 4.3b Service Tier
+
+Between the command layer and the public API sits one tier of peer services: **telemetry**,
+**filesystem**, and **program control**. They are siblings, not a chain.
+
+**What earns a service.** Not a command group — a group is not a reason for a layer.
+A service exists where a capability needs more than one command, or holds state the
+command layer does not:
+
+| Capability | Commands | Why it is or is not a service |
+|---|---|---|
+| `battery`, `ports`, `buttons` | one each | periodic scheduling, throttling, subscriptions — **telemetry** |
+| `info`, brick rename | one each | nothing to orchestrate — straight through, no service |
+| filesystem | many, plus a brick handle | chunking, progress, cancellation, handle cleanup — **filesystem** |
+| program control | `opFILE/LOAD_IMAGE` then `opPROGRAM_START`; `opPROGRAM_INFO/GET_STATUS` polled | the loaded image's address flows between commands, and run state has no push — **program control** |
+
+So most command groups get no service. A service over `battery` would be a pass-through
+with nothing in it; the command layer already delivers that capability whole.
+
+**Why the tier is not folded into the API.** A service must be usable without being a
+registered consumer. Tests, the mock, and hardware probes are its first callers and its
+most useful ones: the chunked-transfer work was driven straight against
+`FileTransferService`, with no API and no consumer registration. Move the orchestration up
+into the API and none of that is reachable without the whole entry ceremony, and the API
+becomes the only place complex behaviour can live.
+
+**What the API owns instead** (§10): the consumer contract — registration and lifecycle,
+the snapshot-and-event model, the active brick, and the safe/full mode policy. It composes
+the services rather than containing them.
 
 ### 4.4 Telemetry Runtime
 
