@@ -5,18 +5,22 @@
  * Tracks queue depth for telemetry throttling in Phase 3.
  */
 
-import { BrickCommand, BrickResponse } from '../contracts/transport';
+import { BrickCommand, BrickResponse, SendCommandOptions } from '../contracts/transport';
 import { QueueUnavailableError } from '../errors/CockpitError';
 
 /** A queued command with its resolve/reject callbacks. */
 interface QueuedCommand {
 	command: BrickCommand;
+	options?: SendCommandOptions;
 	resolve: (response: BrickResponse) => void;
 	reject: (error: unknown) => void;
 }
 
 /** Function that executes a command against a connected brick. */
-export type CommandExecutor = (command: BrickCommand) => Promise<BrickResponse>;
+export type CommandExecutor = (
+	command: BrickCommand,
+	options?: SendCommandOptions,
+) => Promise<BrickResponse>;
 
 /**
  * FIFO command queue for a single brick.
@@ -43,7 +47,7 @@ export class CommandQueue {
 	}
 
 	/** Enqueue a command. Returns a promise that resolves with the response. */
-	send(command: BrickCommand): Promise<BrickResponse> {
+	send(command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> {
 		if (this._disposed) {
 			return Promise.reject(new QueueUnavailableError('Command queue has been disposed.'));
 		}
@@ -52,7 +56,7 @@ export class CommandQueue {
 		}
 
 		return new Promise<BrickResponse>((resolve, reject) => {
-			this.queue.push({ command, resolve, reject });
+			this.queue.push({ command, options, resolve, reject });
 			void this.drain();
 		});
 	}
@@ -84,7 +88,7 @@ export class CommandQueue {
 			while (this.queue.length > 0 && !this._disposed) {
 				const entry = this.queue.shift()!;
 				try {
-					const response = await this.executor!(entry.command);
+					const response = await this.executor!(entry.command, entry.options);
 					entry.resolve(response);
 				} catch (error) {
 					entry.reject(error);

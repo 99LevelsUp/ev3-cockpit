@@ -8,13 +8,12 @@
 import { Transport, BrickKey, makeBrickKey, brickKeyId } from '../contracts';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle,
-	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse, SendCommandOptions,
+	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
 	PresenceState
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
 import { UsbHidAdapter, UsbHidAdapterOptions } from './usbHidAdapter';
 import { USB } from './transportConstants';
-import { sendCommandViaAdapter } from './protocolBridge';
 import { listLegoUsbDevices } from './usbNodeUsb';
 
 // ── node-hid discovery (duck-typed) ─────────────────────────────────
@@ -152,19 +151,17 @@ export class UsbTransportProvider implements TransportProvider {
 		await session.adapter.close();
 	}
 
-	async send(
+	async sendPacket(
 		brickKey: BrickKey,
-		command: BrickCommand,
-		options?: SendCommandOptions,
-	): Promise<BrickResponse> {
+		packet: Uint8Array,
+		options?: SendCommandOptions & { expectedMessageCounter?: number },
+	): Promise<Uint8Array> {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
 			throw new TransportError(`USB brick ${brickKey} is not connected.`);
 		}
-
-		session.messageCounter = (session.messageCounter + 1) & 0xffff;
-		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'USB', options);
+		return session.adapter.send(packet, options);
 	}
 
 	dispose(): void {

@@ -134,7 +134,7 @@ describe('MockTransportProvider — send', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'battery' }) as BatteryResponse;
+		const result = await provider.executeCommand(key, { kind: 'battery' }) as BatteryResponse;
 		assert.equal(result.level, 82);
 		assert.equal(result.voltage, 7.2);
 	});
@@ -148,7 +148,7 @@ describe('MockTransportProvider — send', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'ports' }) as PortsResponse;
+		const result = await provider.executeCommand(key, { kind: 'ports' }) as PortsResponse;
 		assert.equal(result.motorPorts[0].value,  42);
 		assert.equal(result.sensorPorts[0].value, 3);
 	});
@@ -161,7 +161,7 @@ describe('MockTransportProvider — send', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'ports' }) as PortsResponse;
+		const result = await provider.executeCommand(key, { kind: 'ports' }) as PortsResponse;
 		assert.equal(result.sensorPorts[0].value, undefined);
 	});
 
@@ -170,7 +170,7 @@ describe('MockTransportProvider — send', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'buttons' }) as ButtonsResponse;
+		const result = await provider.executeCommand(key, { kind: 'buttons' }) as ButtonsResponse;
 		assert.deepEqual(result.state, {
 			left: false, right: false, up: false, down: false, enter: false, back: false,
 		});
@@ -180,7 +180,7 @@ describe('MockTransportProvider — send', () => {
 		const provider = new MockTransportProvider(makeConfig([{ id: 'a' }]));
 		const key = makeBrickKey(Transport.Mock, 'a');
 
-		await assert.rejects(() => provider.send(key, { kind: 'battery' }), /not connected/);
+		await assert.rejects(() => provider.executeCommand(key, { kind: 'battery' }), /not connected/);
 	});
 
 	it('respects sendFailRate', async () => {
@@ -191,7 +191,7 @@ describe('MockTransportProvider — send', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		await assert.rejects(() => provider.send(key, { kind: 'battery' }), /Mock send failure/);
+		await assert.rejects(() => provider.executeCommand(key, { kind: 'battery' }), /Mock send failure/);
 	});
 });
 
@@ -207,7 +207,7 @@ describe('MockTransportProvider — recover', () => {
 		const handle = await provider.recover(key);
 
 		assert.equal(handle.brickKey, key);
-		const result = await provider.send(key, { kind: 'battery' });
+		const result = await provider.executeCommand(key, { kind: 'battery' });
 		assert.ok(result);
 	});
 });
@@ -227,7 +227,7 @@ describe('MockTransportProvider — filesystem', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'fs:list', path: '/home/root/lms2012/prjs/Proj' }) as FsListResponse;
+		const result = await provider.executeCommand(key, { kind: 'fs:list', path: '/home/root/lms2012/prjs/Proj' }) as FsListResponse;
 		assert.deepEqual(result.entries, [
 			'/home/root/lms2012/prjs/Proj/a.rbf',
 			'/home/root/lms2012/prjs/Proj/b.rbf',
@@ -242,7 +242,7 @@ describe('MockTransportProvider — filesystem', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const result = await provider.send(key, { kind: 'fs:read', path: '/home/root/lms2012/prjs/Test/test.rbf' }) as FsReadResponse;
+		const result = await provider.executeCommand(key, { kind: 'fs:read', path: '/home/root/lms2012/prjs/Test/test.rbf' }) as FsReadResponse;
 		assert.equal(result.content, 'LEGO');
 	});
 
@@ -251,7 +251,7 @@ describe('MockTransportProvider — filesystem', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		await assert.rejects(() => provider.send(key, { kind: 'fs:read', path: '/nope' }), /File not found/);
+		await assert.rejects(() => provider.executeCommand(key, { kind: 'fs:read', path: '/nope' }), /File not found/);
 	});
 
 	it('checks file existence via send()', async () => {
@@ -262,10 +262,10 @@ describe('MockTransportProvider — filesystem', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		await provider.connect(key);
 
-		const exists = await provider.send(key, { kind: 'fs:exists', path: '/x' }) as FsExistsResponse;
+		const exists = await provider.executeCommand(key, { kind: 'fs:exists', path: '/x' }) as FsExistsResponse;
 		assert.equal(exists.exists, true);
 
-		const missing = await provider.send(key, { kind: 'fs:exists', path: '/nope' }) as FsExistsResponse;
+		const missing = await provider.executeCommand(key, { kind: 'fs:exists', path: '/nope' }) as FsExistsResponse;
 		assert.equal(missing.exists, false);
 	});
 
@@ -357,7 +357,7 @@ describe('MockTransportProvider -- loss simulation', () => {
 		const scan = await provider.discover();
 		assert.equal(scan.items.length, 0, 'a hidden brick must not appear in discovery');
 
-		await assert.rejects(() => provider.send(key, { kind: 'battery' }), /unreachable/);
+		await assert.rejects(() => provider.executeCommand(key, { kind: 'battery' }), /unreachable/);
 
 		provider.dispose();
 	});

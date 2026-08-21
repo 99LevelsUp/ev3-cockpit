@@ -2,7 +2,7 @@ import {
 	Transport, PresenceState, BrickKey, makeBrickKey,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, PortState,
-	BrickCommand, BrickResponse, SendCommandOptions,
+	BrickCommand, BrickResponse, SendCommandOptions, CommandChannelLike,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors';
 import { MockConfig, MockBrickConfig, MockPortConfig } from './mockConfig';
@@ -95,7 +95,28 @@ export class MockTransportProvider implements TransportProvider {
 	// ── Send ────────────────────────────────────────────────────────
 
 	// eslint-disable-next-line @typescript-eslint/require-await
-	async send(
+	/**
+	 * The mock answers commands, not packets.
+	 *
+	 * Real transports are byte movers and the command layer frames for them. A mock
+	 * brick exists to simulate what a command *means*, so making it decode real EV3
+	 * framing back into commands would be work in service of nothing. It therefore
+	 * supplies its own channel and leaves `sendPacket` unusable.
+	 */
+	createCommandChannel(brickKey: BrickKey): CommandChannelLike {
+		return {
+			execute: (command, options) => this.executeCommand(brickKey, command, options),
+		};
+	}
+
+	sendPacket(): Promise<Uint8Array> {
+		return Promise.reject(new TransportError(
+			'The mock provider has no wire format. Use createCommandChannel().'
+		));
+	}
+
+	// eslint-disable-next-line @typescript-eslint/require-await
+	async executeCommand(
 		brickKey: BrickKey,
 		command: BrickCommand,
 		options?: SendCommandOptions,

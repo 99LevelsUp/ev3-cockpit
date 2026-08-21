@@ -630,7 +630,10 @@ function createStallableProvider(): {
 			if (open > 0) { open -= 1; }
 			return Promise.resolve();
 		},
-		send: () => Promise.reject(new Error('brick gone')),
+		sendPacket: () => Promise.reject(new Error('brick gone')),
+		createCommandChannel: () => ({
+			execute: () => Promise.reject(new Error('brick gone')),
+		}),
 		dispose: () => { /* nothing to release */ },
 	};
 
@@ -711,7 +714,10 @@ describe('SessionManager -- abandoned connect must not touch a newer session', (
 				return Promise.resolve({ brickKey, transport: Transport.Mock });
 			},
 			disconnect: () => { open = false; return Promise.resolve(); },
-			send: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
+			createCommandChannel: () => ({
+				execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			}),
 			dispose: () => { /* nothing to release */ },
 		};
 

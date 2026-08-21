@@ -30,7 +30,7 @@ function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): Transpo
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
-		async send(_key: BrickKey, _cmd: BrickCommand): Promise<BrickResponse> { return { kind: 'battery', level: 0 }; },
+		async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
 		dispose(): void { /* noop */ },
 	};
 }
@@ -234,7 +234,7 @@ describe('DiscoveryScheduler — error resilience', () => {
 			async discover(): Promise<DiscoveryScanResult> { throw new Error('scan failed'); },
 			async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport: Transport.Mock }; },
 			async disconnect(): Promise<void> { /* noop */ },
-			async send(_key: BrickKey, _cmd: BrickCommand): Promise<BrickResponse> { return { kind: 'battery', level: 0 }; },
+			async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
 			dispose(): void { /* noop */ },
 		};
 		registry.register(failingProvider);
@@ -310,7 +310,7 @@ describe('DiscoveryScheduler -- skipped transports must not accrue misses', () =
 			},
 			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.Mock }),
 			disconnect: () => Promise.resolve(),
-			send: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
 			dispose: () => { /* nothing to release */ },
 		};
 
@@ -362,7 +362,7 @@ describe('DiscoveryScheduler — a failed scan is not a scan', () => {
 				return { brickKey, transport: Transport.TCP };
 			},
 			async disconnect(): Promise<void> { /* noop */ },
-			async send(): Promise<BrickResponse> { return { kind: 'battery', level: 0 }; },
+			async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
 			dispose(): void { /* noop */ },
 		};
 
