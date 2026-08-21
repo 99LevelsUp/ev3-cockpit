@@ -8,10 +8,10 @@
 
 import { BrickCommand } from '../contracts';
 import { ProtocolError } from '../errors/CockpitError';
-import { concatBytes, uint16le, uint32le, lc0, cString, gv0, gv1 } from './ev3Bytecode';
+import { concatBytes, uint16le, uint32le, lc0, lcs, cString, gv0, gv1 } from './ev3Bytecode';
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
-	INPUT_DEVICE_SUB,
+	INPUT_DEVICE_SUB, FILE_SUB, FILENAME_SUB,
 } from './ev3Packet';
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -127,6 +127,18 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 		return buildFsContinueReadCommand(command.handle, command.wantBytes);
 	case 'fs:closeHandle':
 		return buildFsCloseHandleCommand(command.handle);
+	case 'fs:size':
+		return buildFsSizeCommand(command.path);
+	case 'fs:freeSpace':
+		return buildFsFreeSpaceCommand();
+	case 'fs:makeDirectory':
+		return buildFsMakeDirectoryCommand(command.path);
+	case 'fs:copy':
+		return buildFsCopyCommand(command.from, command.to);
+	case 'fs:removeTree':
+		return buildFsRemoveTreeCommand(command.path);
+	case 'fs:listContinue':
+		return buildFsListContinueCommand(command.handle, command.wantBytes);
 	}
 }
 
@@ -284,9 +296,104 @@ function buildFsWriteCommand(path: string, content: string): EncodedCommand {
 	return { type: EV3_COMMAND.SYSTEM_COMMAND_REPLY, payload };
 }
 
+// ── Direct-command filesystem operations ───────────────────
+
+/**
+ * `opFILENAME/EXIST` — one output byte, non-zero when the path resolves.
+ *
+ * Replaces inferring existence from a directory listing, which needed the parent read and
+ * paged wrongly for a listing that spanned packets.
+ */
 function buildFsExistsCommand(path: string): EncodedCommand {
-	// Use LIST_FILES on the path — if it succeeds, the path exists
-	return buildFsListCommand(path);
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(1),
+			new Uint8Array([EV3_OPCODE.FILENAME, FILENAME_SUB.EXIST]),
+			lcs(path),
+			gv0(0),
+		),
+	};
+}
+
+/** `opFILENAME/TOTALSIZE` — outputs a file count and a byte total, in that order. */
+/** `CONTINUE_LIST_FILES` - handle then a byte budget, like CONTINUE_UPLOAD. */
+function buildFsListContinueCommand(handle: number, wantBytes: number): EncodedCommand {
+	return {
+		type: EV3_COMMAND.SYSTEM_COMMAND_REPLY,
+		payload: concatBytes(
+			new Uint8Array([EV3_SYSTEM.CONTINUE_LIST_FILES, handle & 0xff]),
+			uint16le(wantBytes),
+		),
+	};
+}
+
+function buildFsSizeCommand(path: string): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(8),
+			new Uint8Array([EV3_OPCODE.FILENAME, FILENAME_SUB.TOTALSIZE]),
+			lcs(path),
+			gv0(0),
+			gv0(4),
+		),
+	};
+}
+
+/**
+ * `opMEMORY_USAGE` — total then free, in kilobytes. No subcode.
+ *
+ * Not `opFILE/GET_POOL`, which allocates an image pool and reports nothing about storage.
+ */
+function buildFsFreeSpaceCommand(): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(8),
+			new Uint8Array([EV3_OPCODE.MEMORY_USAGE]),
+			gv0(0),
+			gv0(4),
+		),
+	};
+}
+
+/** `opFILE/MAKE_FOLDER` — one output byte, set when the directory exists afterwards. */
+function buildFsMakeDirectoryCommand(path: string): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(1),
+			new Uint8Array([EV3_OPCODE.FILE, FILE_SUB.MAKE_FOLDER]),
+			lcs(path),
+			gv0(0),
+		),
+	};
+}
+
+/** `opFILE/MOVE` — a recursive copy that leaves the source. No output. */
+function buildFsCopyCommand(from: string, to: string): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(0),
+			new Uint8Array([EV3_OPCODE.FILE, FILE_SUB.MOVE]),
+			lcs(from),
+			lcs(to),
+		),
+	};
+}
+
+/** `opFILE/REMOVE` — recursive delete by name. No output. */
+function buildFsRemoveTreeCommand(path: string): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(0),
+			new Uint8Array([EV3_OPCODE.FILE, FILE_SUB.REMOVE]),
+			lcs(path),
+		),
+	};
 }
 
 function buildFsBeginWriteCommand(

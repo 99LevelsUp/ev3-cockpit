@@ -53,6 +53,31 @@ export const EV3_SYSTEM = {
 	DELETE_FILE: 0x9c,
 } as const;
 
+/** `opFILE` subcodes. Only the ones this layer uses; there are 32. */
+export const FILE_SUB = {
+	MAKE_FOLDER: 10,
+	/**
+	 * Recursive delete by name.
+	 *
+	 * Distinct from `DEL_SUBFOLDER`, which takes an index, and from the `DELETE_FILE`
+	 * system command, which removes a file or an *empty* directory only.
+	 */
+	REMOVE: 30,
+	/**
+	 * Copy, despite the name: the firmware runs `cp -r` and leaves the source in place.
+	 *
+	 * A rename is therefore this followed by a delete. The copy runs on the brick, so
+	 * its cost does not scale with the link.
+	 */
+	MOVE: 31,
+} as const;
+
+/** `opFILENAME` subcodes. */
+export const FILENAME_SUB = {
+	EXIST: 16,
+	TOTALSIZE: 17,
+} as const;
+
 // ── Direct command opcodes ──────────────────────────────────────────
 
 export const EV3_OPCODE = {
@@ -69,6 +94,8 @@ export const EV3_OPCODE = {
 	OUTPUT_RESET: 0xa2,
 	OUTPUT_GET_COUNT: 0xb3,
 	MEMORY_USAGE: 0xc5,
+	FILE: 0xc0,
+	FILENAME: 0xc6,
 	PROGRAM_STOP: 0x02,
 } as const;
 

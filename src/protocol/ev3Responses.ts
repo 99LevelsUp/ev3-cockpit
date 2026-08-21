@@ -9,6 +9,8 @@ import {
 	BrickCommand, BrickResponse,
 	BatteryResponse, PortsResponse, ButtonsResponse, InfoResponse,
 	FsListResponse, FsReadResponse, FsWriteResponse, FsExistsResponse, FsDeleteResponse,
+	FsSizeResponse, FsFreeSpaceResponse, FsMakeDirectoryResponse, FsEntry,
+	FsListContinueResponse,
 	FsBeginWriteResponse, FsContinueWriteResponse, FsBeginReadResponse,
 	FsContinueReadResponse, FsCloseHandleResponse,
 	PortState,
@@ -89,6 +91,18 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 		return parseFsContinueRead(reply.payload);
 	case 'fs:closeHandle':
 		return parseFsCloseHandle(reply.payload);
+	case 'fs:listContinue':
+		return parseFsListContinue(reply.payload);
+	case 'fs:size':
+		return parseFsSize(reply.payload);
+	case 'fs:freeSpace':
+		return parseFsFreeSpace(reply.payload);
+	case 'fs:makeDirectory':
+		return parseFsMakeDirectory(reply.payload);
+	case 'fs:copy':
+		return { kind: 'fs:copy' };
+	case 'fs:removeTree':
+		return { kind: 'fs:removeTree' };
 	case 'fs:delete':
 		return parseFsDelete(reply.payload);
 	}
@@ -200,8 +214,64 @@ function parseFsList(payload: Uint8Array): FsListResponse {
 	// Skipping 4 left three stray bytes glued to the first entry, which is exactly
 	// what a directory listing beginning "\0\0\0tetris 22/" looked like.
 	const listing = Buffer.from(payload.subarray(SYSTEM_REPLY_HEADER_BYTES)).toString('utf8');
-	const entries = listing.split('\n').filter(e => e.length > 0);
-	return { kind: 'fs:list', entries };
+	const entries = listing
+		.split('\n')
+		.filter((line) => line.length > 0)
+		.map(parseListingLine);
+	return {
+		kind: 'fs:list',
+		entries,
+		/** Whether the brick still has more of this listing to hand over. */
+		complete: payload[1] === EV3_SYSTEM_STATUS.END_OF_FILE,
+		handle: payload.length > 6 ? payload[6] : undefined,
+	};
+}
+
+/**
+ * A continuation reply, whose header is `[echo][status][handle]` - three bytes, where
+ * the opening `LIST_FILES` reply carries a four-byte list size as well.
+ */
+function parseFsListContinue(payload: Uint8Array): FsListContinueResponse {
+	if (payload.length < 3) {
+		throw new ProtocolError(
+			`Malformed fs:listContinue reply: expected at least 3 bytes, got ${payload.length}.`
+		);
+	}
+	const listing = Buffer.from(payload.subarray(3)).toString('utf8');
+	return {
+		kind: 'fs:listContinue',
+		entries: listing.split('\n').filter((l) => l.length > 0).map(parseListingLine),
+		complete: payload[1] === EV3_SYSTEM_STATUS.END_OF_FILE,
+		handle: payload[2],
+	};
+}
+
+/**
+ * Splits one listing line into its parts.
+ *
+ * `cComGetFileInfo` writes a directory as `name/` and a file as
+ * `<32 hex md5> <8 hex size> name`. The `.` and `..` entries arrive like any other
+ * directory and are dropped by the caller, not here — a parser should not decide policy.
+ */
+function parseListingLine(line: string): FsEntry {
+	if (line.endsWith('/')) {
+		return { name: line.slice(0, -1), kind: 'directory' };
+	}
+
+	// 32 hex, space, 8 hex, space, then the name.
+	const match = /^([0-9A-Fa-f]{32}) ([0-9A-Fa-f]{8}) (.+)$/.exec(line);
+	if (match) {
+		return {
+			name: match[3],
+			kind: 'file',
+			bytes: parseInt(match[2], 16),
+			md5: match[1].toLowerCase(),
+		};
+	}
+
+	// A line in neither shape: report it rather than guess, so an unexpected firmware
+	// format shows up as an odd name instead of a silently dropped entry.
+	return { name: line, kind: 'unknown' };
 }
 
 function parseFsRead(payload: Uint8Array): FsReadResponse {
@@ -222,13 +292,17 @@ function parseFsWrite(_payload: Uint8Array): FsWriteResponse {
 	return { kind: 'fs:write' };
 }
 
-function parseFsExists(_payload: Uint8Array): FsExistsResponse {
-	// Existence is inferred from LIST_FILES not erroring, which cannot tell an empty
-	// directory from a missing path — both come back without an error and with no
-	// entries. The mock answers correctly because it queries its own tree, so the
-	// gap is invisible in tests and only appears against real hardware. Phase 4
-	// filesystem work needs a real existence probe, not this.
-	return { kind: 'fs:exists', exists: true };
+function parseFsExists(payload: Uint8Array): FsExistsResponse {
+	// One output byte from `opFILENAME/EXIST`: non-zero when the path resolves.
+	//
+	// This used to infer existence from a LIST_FILES reply not erroring, and returned
+	// true whatever came back — including for a file in a directory that had just been
+	// created empty. The builder moved to the real primitive without the parser
+	// following, so the right question was asked and the answer thrown away.
+	if (payload.length < 1) {
+		throw new ProtocolError('Malformed fs:exists reply: no result byte.');
+	}
+	return { kind: 'fs:exists', exists: payload[0] !== 0 };
 }
 
 /**
@@ -305,6 +379,40 @@ function parseFsContinueRead(payload: Uint8Array): FsContinueReadResponse {
 function parseFsCloseHandle(payload: Uint8Array): FsCloseHandleResponse {
 	transferStatus(payload, 'fs:closeHandle');
 	return { kind: 'fs:closeHandle' };
+}
+
+function parseFsSize(payload: Uint8Array): FsSizeResponse {
+	if (payload.length < 8) {
+		throw new ProtocolError(
+			`Malformed fs:size reply: expected 8 bytes, got ${payload.length}.`
+		);
+	}
+	// Firmware order: files first, then the kilobyte total.
+	return {
+		kind: 'fs:size',
+		files: readUint32le(payload, 0),
+		kilobytes: readUint32le(payload, 4),
+	};
+}
+
+function parseFsFreeSpace(payload: Uint8Array): FsFreeSpaceResponse {
+	if (payload.length < 8) {
+		throw new ProtocolError(
+			`Malformed fs:freeSpace reply: expected 8 bytes, got ${payload.length}.`
+		);
+	}
+	return {
+		kind: 'fs:freeSpace',
+		totalKb: readUint32le(payload, 0),
+		freeKb: readUint32le(payload, 4),
+	};
+}
+
+function parseFsMakeDirectory(payload: Uint8Array): FsMakeDirectoryResponse {
+	if (payload.length < 1) {
+		throw new ProtocolError('Malformed fs:makeDirectory reply: no result byte.');
+	}
+	return { kind: 'fs:makeDirectory', exists: payload[0] !== 0 };
 }
 
 function parseFsDelete(_payload: Uint8Array): FsDeleteResponse {

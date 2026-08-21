@@ -323,6 +323,7 @@ describe('ev3Responses — parseResponse', () => {
 		// Real reply began 99 08 42 00 00 00 00 then the listing. Skipping 4 left
 		// three stray bytes glued to the first entry.
 		const header = new Uint8Array([0x99, 0x08, 0x42, 0x00, 0x00, 0x00, 0x00]);
+		// A file line carries the brick's own MD5 and an 8-hex byte size before the name.
 		const listing = Buffer.from('tetris/\nSUMO/\n', 'utf8');
 		const payload = new Uint8Array(header.length + listing.length);
 		payload.set(header, 0);
@@ -331,9 +332,12 @@ describe('ev3Responses — parseResponse', () => {
 		const result = parseResponse(
 			{ kind: 'fs:list', path: '/x/' },
 			makeReply(EV3_REPLY.SYSTEM_REPLY, payload),
-		) as { entries: string[] };
+		) as { entries: { name: string; kind: string; bytes?: number }[] };
 
-		assert.deepEqual(result.entries, ['tetris/', 'SUMO/']);
+		assert.deepEqual(result.entries, [
+			{ name: 'tetris', kind: 'directory' },
+			{ name: 'SUMO', kind: 'directory' },
+		]);
 	});
 
 
