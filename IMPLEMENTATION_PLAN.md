@@ -171,6 +171,16 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.7.7 System reply header is 7 bytes — command echo, status, uint32 size, handle — measured on a real brick (`99 08 42 00 00 00 00` before the listing). `parseFsList` skipped 4 and glued three stray bytes to the first entry; `parseFsRead` skipped 6 and glued the handle to the content. Both now use one named constant
   - [x] 1.7.9 Buttons: `opUI_BUTTON` (0x83) subcode `PRESSED` (0x09). The shipped command asked `opUI_READ` for 0x0d, which is `GET_ADDRESS` — a real brick answered the whole command with an error, so button telemetry never worked outside the mock
   - [x] 1.7.10 The info command reads the brick's own name via `opCOM_GET` (0xD3) / `GET_BRICKNAME` (0x0D), and `InfoResponse` gained `osVersion` so the kernel string keeps a home of its own. Verified on three bricks, each reporting its own name. The earlier failed probe used 0xD5, which is `opCOM_TEST`
+- [x] **1.13 Command layer** — `src/commands/` owns the codec, message counters, reply
+  matching and command typing, above the session manager and below telemetry and the
+  filesystem (DESIGN §4.3a). Transports carry bytes: `TransportProvider.sendPacket`
+  replaced the typed `send`, which had the lowest layer owning the protocol every layer
+  above it was defined in terms of
+  - [x] 1.13.1 `PacketCommandChannel` — session-scoped, because the message counter is
+  - [x] 1.13.2 `protocolBridge` moved out of `src/transports/` and deleted
+  - [x] 1.13.3 Mock keeps command semantics via optional `createCommandChannel`
+  - [x] 1.13.4 `SendCommandOptions` carried through `CommandQueue` — the timeout and abort
+    signal plumbed through the providers earlier had no path from a caller until this
 - [ ] **1.8 Transport adapter interface and constants** — only 1.8.4 (guard wiring) remains open; 1.8.4a and 1.8.5b are resolved
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
@@ -422,6 +432,20 @@ Export a stable API for other extensions without giving them direct access to th
   - [ ] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
     survey found, including `BEGIN_GETFILE` / `CONTINUE_GETFILE`. Log tailing itself is deferred
     until a consumer wants it, but the opcodes are recorded so the capability is not lost again
+- [ ] **4.9 `ev3://` FileSystemProvider** — a `vscode.FileSystemProvider` over the
+  filesystem service (DESIGN §4.6a). Belongs here rather than in `ev3-explorer` because two
+  independent consumers need it: the explorer for editors and `workspace.fs`, and
+  `ev3-native` to write a compiled binary, whose design records that the cockpit exports no
+  programmatic API yet. In the explorer it would make `ev3-native` depend on the explorer
+  being installed
+  - [ ] 4.9.1 Register the scheme and implement `stat`, `readDirectory`, `readFile`,
+    `writeFile`, `delete`, `rename`, `createDirectory` over the filesystem service
+  - [ ] 4.9.2 URI authority maps to a brick — decide whether `ev3://active/...` (the shape
+    `ev3-native` assumes) is supported alongside an explicit brick key
+  - [ ] 4.9.3 Expose the safe/full mode policy through the public API, so a consumer can
+    honour `ev3-explorer`'s “no side channel around the guardrails” rule instead of
+    reimplementing the policy
+  - [ ] 4.9.4 `onDidChangeFile` events, so an editor over `ev3://` notices external change
 - [ ] **4.7 API export**
   - [ ] 4.7.1 Export typed API object from `extension.ts` `activate()` return value
   - [ ] 4.7.2 Ensure API is fully initialized before any consumer can use it
