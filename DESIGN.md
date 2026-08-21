@@ -179,6 +179,23 @@ Concrete adapters:
 - `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
 - `BtRfcommAdapter` — Bluetooth RFCOMM. Multi-backend on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus.
 
+**Bulk transfer is not the same ranking as latency.** Round-trip time puts USB far ahead,
+but a HID write on Windows delivers only 64 bytes however large a report it is handed, and
+the same frame bounds replies. Since the firmware's own buffers are 1024 bytes on every
+channel, that makes USB the *most* constrained transport for moving a file and the least
+constrained for issuing a command. Verified throughput on a 20 KB round trip with every
+byte compared: **TCP 57.3 KB/s, Bluetooth 20.3 KB/s, USB 6.8 KB/s**.
+
+Two consequences. Any transport-preference logic for file transfer must rank TCP first and
+USB last, which is the reverse of the telemetry ranking. And reaching the firmware's full
+1024 bytes over USB needs the libusb path rather than `node-hid` — the `usb` dependency is
+already present for name probing, so this is a change of backend, not of dependency.
+
+This also cost a real defect. The USB adapter discarded what `write()` returned, and the
+brick advances its file pointer by the length the host *declares* rather than by what
+arrived, so a truncated upload reported success and landed zero padding. Nothing detected
+it because every command sent before the filesystem work fit inside 64 bytes.
+
 **Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
 brick), firmware freeze protection (one active transport at a time, 2-second switch
 cooldown), degradation tracking. It is deliberately **not** a meter on normal traffic:
