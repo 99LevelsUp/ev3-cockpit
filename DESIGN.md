@@ -181,26 +181,66 @@ graph LR
 
 Concrete adapters:
 
-- `UsbHidAdapter` — USB HID via `node-hid`. 1025-byte reports (1 byte report ID + 1024 payload).
+- `UsbLibusbAdapter` — USB interrupt endpoints via `usb` (libusb). Reaches the firmware's
+  full 1024-byte frame. The preferred USB backend.
+- `UsbHidAdapter` — USB HID via `node-hid`. Fallback for when libusb cannot claim the
+  interface; delivers 64 bytes per packet.
 - `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
 - `BtRfcommAdapter` — Bluetooth RFCOMM. Multi-backend on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus.
 
-**Bulk transfer is not the same ranking as latency.** Round-trip time puts USB far ahead,
-but a HID write on Windows delivers only 64 bytes however large a report it is handed, and
-the same frame bounds replies. Since the firmware's own buffers are 1024 bytes on every
-channel, that makes USB the *most* constrained transport for moving a file and the least
-constrained for issuing a command. Verified throughput on a 20 KB round trip with every
-byte compared: **TCP 57.3 KB/s, Bluetooth 20.3 KB/s, USB 6.8 KB/s**.
+#### USB has two backends, and they are not equivalent
 
-Two consequences. Any transport-preference logic for file transfer must rank TCP first and
-USB last, which is the reverse of the telemetry ranking. And reaching the firmware's full
-1024 bytes over USB needs the libusb path rather than `node-hid` — the `usb` dependency is
-already present for name probing, so this is a change of backend, not of dependency.
+**The 64-byte HID ceiling is a defect in the brick's own descriptor.** Its HID report
+descriptor declares `Report Count 0` for both the input and the output report, so Windows
+derives no usable report length and a write delivers 64 bytes however large a report it is
+handed — while the interrupt endpoints underneath advertise `wMaxPacketSize` **1024**.
+Nothing above HID can lift that: the ceiling is the descriptor, not `node-hid`.
 
-This also cost a real defect. The USB adapter discarded what `write()` returned, and the
-brick advances its file pointer by the length the host *declares* rather than by what
-arrived, so a truncated upload reported success and landed zero padding. Nothing detected
-it because every command sent before the filesystem work fit inside 64 bytes.
+Going straight at the endpoints through libusb reaches the firmware's real frame. Two
+measured quirks shape that path, both invisible in review and fatal in practice:
+
+- **A transfer must be exactly `wMaxPacketSize`.** A 16-byte interrupt write fails with
+  `LIBUSB_ERROR_IO`; the same packet padded to 1024 succeeds. Sends are padded.
+- **Reads come back full-length too**, so a reply is located by its own length prefix
+  rather than by the size of the transfer that carried it.
+
+**Verified throughput, every byte compared:**
+
+| Transport | Write | Read |
+|---|---|---|
+| USB (libusb) | 200–278 KB/s | 325–330 KB/s |
+| TCP | 57.3 KB/s | — |
+| Bluetooth | 20.3 KB/s | — |
+| USB (HID fallback) | 6.8 KB/s | — |
+
+**This ranking has now inverted twice, in opposite directions.** The plan first assumed USB
+was fastest for bulk work; measurement over HID made it the slowest by an order of
+magnitude, and that finding is recorded above; measurement over libusb makes it the fastest
+by a factor of five. What survives is not a ranking but a method: the number came from the
+wire each time, and the two revisions differed only in which wire was being used.
+
+So `maxPacketBytes` is a property of the **live link**, not of the transport — it is read
+from the endpoint descriptor at open and travels adapter → provider → session →
+`createBrickFilesystem`. Both halves matter: reaching a full frame is what lets `copy` and
+`move` be expressed at all, and the figure arriving at `FileTransferService` is what stops
+every transfer from chunking to 64 bytes with nothing visibly wrong.
+
+`UsbTransportProvider` prefers libusb and falls back to HID **loudly**, naming the refusal
+and what the fallback costs. A silent fallback would look like a working connection and
+behave like a broken one: on HID, `copy` and `move` carry two paths and do not fit a packet
+at all.
+
+Discovery stays on HID enumeration, which needs no handle. libusb name probing skips a
+device whose interface a session holds claimed — identified by bus address, since reading a
+serial would mean opening the device discovery is trying to avoid touching.
+
+Unverified: the Linux path (padding should be harmless there, but it has not been run), and
+recovery from unplugging mid-transfer.
+
+The HID ceiling also cost a real defect. The USB adapter discarded what `write()` returned,
+and the brick advances its file pointer by the length the host *declares* rather than by
+what arrived, so a truncated upload reported success and landed zero padding. Nothing
+detected it because every command sent before the filesystem work fit inside 64 bytes.
 
 **Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
 brick), firmware freeze protection (one active transport at a time, 2-second switch

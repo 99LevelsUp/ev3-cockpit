@@ -15,7 +15,11 @@ import { createBrickFilesystem, maxPacketBytesFor } from '../fs/brickFilesystem'
 import { USB } from '../transports/transportConstants';
 
 describe('maxPacketBytesFor', () => {
-	it('caps USB at what a HID write actually delivers', () => {
+	it('falls back to what a HID write delivers when nothing knows better', () => {
+		// The floor, not the truth: a USB session over libusb carries the full 1024 bytes.
+		// This figure applies only when no live link has said which backend is in force, and
+		// it errs tight on purpose — chunking small is slow, chunking large is silent
+		// truncation.
 		assert.equal(maxPacketBytesFor(Transport.USB), USB.MAX_WRITE_PACKET_BYTES);
 	});
 
@@ -47,7 +51,7 @@ describe('createBrickFilesystem', () => {
 		assert.deepEqual(seen, [key]);
 	});
 
-	it('derives the packet cap from the key, not from a caller-supplied guess', async () => {
+	it('derives the packet cap from the key when the sender cannot say', async () => {
 		// A USB transfer must chunk to 64 bytes without anyone passing that in.
 		const chunks: number[] = [];
 		const sender = {
@@ -75,5 +79,31 @@ describe('createBrickFilesystem', () => {
 			chunks.every((n) => n + 7 <= USB.MAX_WRITE_PACKET_BYTES),
 			`every chunk must fit a 64-byte packet, got ${chunks.join(',')}`
 		);
+	});
+
+	it('lets the live link overrule the transport floor', async () => {
+		// The half that is easy to leave undone. Reaching a full frame closes `copy` and
+		// `move` on its own, but transfers keep chunking to 64 bytes until the figure the
+		// session actually negotiated arrives here — slow, and nothing looks wrong.
+		const chunks: number[] = [];
+		const sender = {
+			send: (_brickKey: BrickKey, command: BrickCommand): Promise<BrickResponse> => {
+				if (command.kind === 'fs:beginWrite') {
+					chunks.push(command.chunk.length);
+					return Promise.resolve({
+						kind: 'fs:beginWrite', handle: 1,
+						endOfFile: command.chunk.length >= command.totalBytes,
+					});
+				}
+				return Promise.resolve({ kind: 'fs:closeHandle' });
+			},
+			maxPacketBytes: (): number | undefined => 1024,
+		};
+
+		const usb = createBrickFilesystem(sender, makeBrickKey(Transport.USB, 'aabbcc'));
+		await usb.transfer.writeFile('/p/x', new Uint8Array(600));
+
+		assert.equal(chunks.length, 1, 'a 600-byte file fits one 1024-byte frame');
+		assert.equal(chunks[0], 600);
 	});
 });

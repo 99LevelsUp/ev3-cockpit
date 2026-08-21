@@ -281,6 +281,16 @@ export interface TransportProvider extends vscode.Disposable {
 	createCommandChannel?(brickKey: BrickKey): CommandChannelLike;
 
 	/**
+	 * Largest packet the live link to this brick carries, in bytes.
+	 *
+	 * Present only where the answer is not simply the firmware's own 1024-byte buffer.
+	 * USB implements it because the same brick carries 1024 bytes over libusb and 64 over
+	 * HID, and both transfer chunking and whether a two-path command fits at all follow
+	 * from which backend the connection landed on. `undefined` means the firmware default.
+	 */
+	maxPacketBytes?(brickKey: BrickKey): number | undefined;
+
+	/**
 	 * Attempt to re-establish a lost connection.
 	 * Present only on providers that support connection recovery.
 	 */

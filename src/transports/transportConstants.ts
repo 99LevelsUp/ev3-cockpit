@@ -28,10 +28,16 @@ export const USB = {
 	 * whatever chunk size is used, and 52 is exactly this frame less BEGIN_UPLOAD's
 	 * 12-byte reply header — so the limit is symmetric, not write-only.
 	 *
-	 * This makes USB by far the *most* constrained transport for bulk transfer, not the
-	 * least: about 52 payload bytes per 6 ms round trip is roughly 8 KB/s, an order
-	 * below Bluetooth. Reaching the firmware's full 1024 bytes needs the libusb path
-	 * (the `usb` dependency already present for name probing), not node-hid.
+	 * **The cause is the brick's own descriptor, not node-hid.** Its HID report descriptor
+	 * declares `Report Count 0` for both reports, so Windows derives no usable report
+	 * length — while the interrupt endpoints underneath advertise `wMaxPacketSize` 1024.
+	 * Nothing above HID can lift this, which is why {@link UsbLibusbAdapter} exists and is
+	 * the preferred backend: over libusb the same brick carries the full 1024 bytes and
+	 * moves bulk data about forty times faster.
+	 *
+	 * This figure therefore applies to the HID fallback only. Ask the live session for
+	 * `maxPacketBytes` rather than reading it here — a USB link's frame depends on which
+	 * backend the connection landed on.
 	 */
 	MAX_WRITE_PACKET_BYTES: 64,
 	/** HID report ID used for EV3 communication. */

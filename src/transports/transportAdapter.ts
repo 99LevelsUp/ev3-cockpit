@@ -39,4 +39,13 @@ export interface TransportAdapter {
 
 	/** Whether the adapter is currently open. */
 	readonly isOpen: boolean;
+
+	/**
+	 * Largest packet this link carries, or `undefined` to use the firmware's own buffer.
+	 *
+	 * A property of the open link rather than of the transport: the same USB brick carries
+	 * 1024 bytes over libusb and 64 over HID, and everything above — transfer chunking,
+	 * and whether a two-path command fits at all — follows from which one is in use.
+	 */
+	readonly maxPacketBytes?: number;
 }

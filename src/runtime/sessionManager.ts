@@ -259,6 +259,23 @@ export class SessionManager implements vscode.Disposable {
 		return resources.commandQueue.send(command, options);
 	}
 
+	/**
+	 * Largest packet the live link to this brick carries, or `undefined` for the
+	 * firmware's own buffer.
+	 *
+	 * Asked of the provider rather than derived from the transport: a USB brick reached
+	 * over libusb carries sixteen times what the same brick carries over HID, and the
+	 * filesystem services need the figure that is actually in force.
+	 */
+	maxPacketBytes(brickKey: BrickKey): number | undefined {
+		const resources = this.sessions.get(brickKey);
+		if (!resources) {
+			return undefined;
+		}
+		const provider = this.providerRegistry.get(resources.entry.transport);
+		return provider?.maxPacketBytes?.(brickKey);
+	}
+
 	// ── Query ───────────────────────────────────────────────────────
 
 	/** Get the current snapshot of a session. */
