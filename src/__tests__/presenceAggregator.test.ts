@@ -30,7 +30,7 @@ function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): Transpo
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
-		async send(_key: BrickKey, _cmd: BrickCommand): Promise<BrickResponse> { return { kind: 'battery', level: 0 }; },
+		async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
 		dispose(): void { /* noop */ },
 	};
 }

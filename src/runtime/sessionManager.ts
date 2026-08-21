@@ -13,6 +13,7 @@ import { ConnectedSession } from '../contracts/models';
 import { BrickCommand, BrickResponse, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
 import { CommandQueue } from './commandQueue';
+import { PacketCommandChannel } from '../commands/commandChannel';
 import { HeartbeatMonitor } from './heartbeatMonitor';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
@@ -427,9 +428,22 @@ export class SessionManager implements vscode.Disposable {
 		try { await provider.disconnect(brickKey); } catch { /* best effort */ }
 	}
 
+	/**
+	 * Binds the queue to a command channel over this session.
+	 *
+	 * The channel is session-scoped because the message counter is: two channels over
+	 * one connection would hand out colliding counters and match each other's replies.
+	 */
 	private wireExecutor(resources: SessionResources, provider: TransportProvider): void {
+		const brickKey = resources.entry.brickKey;
+		const channel = provider.createCommandChannel
+			? provider.createCommandChannel(brickKey)
+			: new PacketCommandChannel(
+				(packet, options) => provider.sendPacket(brickKey, packet, options),
+				provider.transport,
+			);
 		resources.commandQueue.setExecutor(
-			(cmd) => provider.send(resources.entry.brickKey, cmd)
+			(cmd, options) => channel.execute(cmd, options)
 		);
 	}
 

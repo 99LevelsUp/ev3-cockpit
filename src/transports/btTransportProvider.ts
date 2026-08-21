@@ -13,14 +13,13 @@
 import {
 	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
-	DiscoveryScanResult, DiscoveryItem, BrickCommand, BrickResponse, SendCommandOptions,
+	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
 	PresenceState,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
 import { BtConnectionQueue } from './btConnectionQueue';
 import { BT } from './transportConstants';
-import { sendCommandViaAdapter } from './protocolBridge';
 
 // ── BT backend types ────────────────────────────────────────────────
 
@@ -173,19 +172,17 @@ export class BtTransportProvider implements TransportProvider {
 		}
 	}
 
-	async send(
+	async sendPacket(
 		brickKey: BrickKey,
-		command: BrickCommand,
-		options?: SendCommandOptions,
-	): Promise<BrickResponse> {
+		packet: Uint8Array,
+		options?: SendCommandOptions & { expectedMessageCounter?: number },
+	): Promise<Uint8Array> {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
 			throw new TransportError(`BT brick ${brickKey} is not connected.`);
 		}
-
-		session.messageCounter = (session.messageCounter + 1) & 0xffff;
-		return sendCommandViaAdapter(session.adapter, command, session.messageCounter, 'BT', options);
+		return session.adapter.send(packet, options);
 	}
 
 	async recover(brickKey: BrickKey): Promise<SessionHandle> {
