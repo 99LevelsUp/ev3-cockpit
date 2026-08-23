@@ -391,6 +391,95 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     tail-aware measure (p95, or a stall counter) distinguishes them, and the input is the
     brick's own state rather than queue depth or transport latency as DESIGN §4.5 assumed.
     At a 10 Hz telemetry loop that brick would hit a stall roughly every twentieth frame
+  - [ ] 3.1.4f **Daisy chain: sensors cross it, motors do not.** Three bricks chained over
+    USB, verified 23.08.2026. From the host a chained brick is addressed by the `LAYER`
+    argument of an ordinary direct command — the master's firmware does the routing, and no
+    daisy-specific command type is needed.
+
+    | | layer 0 (master) | layer 1 | layer 2 |
+    |---|---|---|---|
+    | sensor type | correct | correct | correct |
+    | sensor value | live | live | live |
+    | motor occupancy | correct | correct | correct |
+    | motor type | correct | **correct** | wrong in the one test so far |
+    | motor tacho | live | **always 111616** | **always 111616** |
+
+    The one thing that never crosses is the **tacho**. Everything else does, at least one
+    hop: with a large motor on A and a medium on B of the layer-1 brick, layer 1 reported
+    exactly that — two different types on two different ports — while layer 2, by then
+    empty, correctly reported nothing. Both motors nonetheless read 111616, which two
+    physically different motors cannot share.
+
+    An earlier version of this entry claimed the remote motor type was always 8. That was
+    wrong, and the mistake is worth keeping: at the time the only remote motors sat on layer
+    2, where one of two types did come back wrong (a large motor read as medium). Reading a
+    constant out of a single wrong sample is the same error as reading a value out of a
+    stale buffer. **Layer 2's motor type is still unconfirmed** — it needs a motor put back
+    on the last brick, ideally one whose type differs from anything on layer 1.
+
+    Not an artefact of reading order or of a stale buffer, which was the first hypothesis:
+    reading layer 0 immediately before layer 2 still yields 111616 rather than layer 0's
+    values, and two consecutive layer-2 reads agree. `opOUTPUT_READ`, a different opcode
+    verified working on layer 0 in the same run, returns zeros for every port on both remote
+    layers. Every motor was turned by hand; layer 0 tracked it (C 231→381, D 265→382) and
+    the remote layers did not move by a unit.
+
+    This contradicts the Hardware Developer Kit, which says all 16 motor and 16 sensor
+    values refresh on the master about every 100 ms — and the firmware source agrees with
+    the documentation, which is what makes the tacho interesting. The relay is fully
+    implemented: `DAISY_MAX_SENSORS_PER_LAYER` is four inputs **plus four outputs**, the
+    slave's push loop cycles all eight, ports 16–19 normalise to indexes 4–7 on both sides,
+    and the master's read copies status, type, mode **and** the data payload. Locally a
+    slave answers an output query with `OutputInstance.pMotor[…].TachoSensor`, the real
+    counter.
+
+    Hypothesis for why the counter alone is dead, unconfirmed and not resolvable from
+    source: a slave runs no program — the hardware kit says the slaves "will not be
+    executing any individual program but instead be executing individual designated
+    commands" — so its output module may never refresh `pMotor`, leaving whatever value it
+    powered up with. Type and mode are static properties and survive; the counter is not.
+    Consistent with that, the frozen figure is not a fixed constant: it changed from 111616
+    to 43192 when the motors were rewired and the chain resynchronised, then froze again.
+
+  - [x] 3.1.4i **Writing to a remote motor works; only reading is broken.** Driving layer 1's
+    ports A and B with `opOUTPUT_TIME_SPEED` turned both motors — confirmed by eye, eight
+    alternating bursts, starting and stopping together. The counter still reported the same
+    frozen number throughout.
+
+    So the daisy chain is **asymmetric**: commands go down and are executed, sensor readings
+    come back up, and motor state does not. For the cockpit that means a chained brick's
+    motors can be controlled but never observed — a UI must not offer a position readout for
+    them, and any close-the-loop operation (move to an angle, wait until stopped) is
+    impossible on a remote layer with this firmware.
+
+    The port argument of the output ops is a **bitfield** (0x01=A … 0x08=D), unlike the
+    single-port index that `opOUTPUT_GET_COUNT` takes. Verified before trusting the remote
+    result by driving the master's own port C with 0x04 and watching its live counter move
+    231 → 527 while port D stayed put — without that control, a motionless remote motor
+    would not have distinguished a broken chain from a malformed command.
+
+    **Firmware mismatch is ruled out.** Layer 1 runs V1.10E, the same build as the master,
+    and behaves exactly like the V1.09H brick on layer 2: `opOUTPUT_READ` returns zeros for
+    all four ports on both. Moving a motor between bricks changed nothing either — and the
+    two remote layers then reported **byte-identical** motor data (both a `medium-motor` on
+    port B with the same 111616), which two different bricks cannot legitimately produce.
+    Whatever the master answers for a remote layer's outputs, it is not a reading of that
+    brick.
+
+  - [ ] 3.1.4g **Daisy chain changes what discovery sees, and `brickKey` cannot express it.**
+    With three bricks chained, USB discovery reports **one** — only the master keeps its
+    client port free. The other two are reachable only as layers 1 and 2 of that connection.
+    Today `brickKey` is `transport:id` and every command hardcodes layer 0, so the cockpit
+    can neither list nor address a chained brick. Needs a design decision: does a layer
+    become part of the key, a property of the session, or a separate concept?
+
+  - [ ] 3.1.4h **A 32-bit global must start on a 4-byte boundary.** Not in any documentation
+    read so far, and it cost three probes today. A command whose `PAR32` output lands on an
+    unaligned offset is not executed at all — and the brick answers with the **previous
+    command's global buffer**, which reads as plausible data rather than as an error. The
+    shipped commands happen to comply (SI floats at 16/20/24/28, tachos at 32/36/40/44), so
+    nothing was broken; anything new that allocates globals must keep to it.
+
   - [ ] 3.1.4b **A UART sensor cannot be read in two modes in one command.** Asking for a
     mode other than the current one returns `DATAF_NAN` and the sensor stays NaN while it
     settles — including in the mode that worked a moment earlier. Mode switching therefore
