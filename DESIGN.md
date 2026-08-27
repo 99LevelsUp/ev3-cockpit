@@ -865,8 +865,16 @@ which bought nothing and gave up three things:
   only 10.7 commands/second, this is a routine case, not a corner one.
 - **The tick is the only clock.** Phase comes from the tick, so no row drifts and none can be
   pulled forward. "Nearly due" needed a bound nobody could state; a divider needs none.
-- **A skipped tick is not a missed sample**, only a later one. The next tick includes every
-  row whose divider comes up, so a stall costs latency, never a gap in the series.
+- **A skipped tick costs latency, and for a slow row it can cost a sample.** A divider-1 row
+  simply comes up again on the next tick. A divider-5 row whose turn fell on a skipped tick
+  waits for the next multiple of five, because phase is anchored to the tick counter and the
+  counter keeps running while the scheduler stands down — so that row's series has a gap.
+
+  That is the price of a clock nothing can drift against, and it is a divergence from LEGO's
+  Device Manager, which decrements its slow-tier counter only inside a tick that actually ran:
+  its slow tier is delayed by a stall but never skips. Ours is the right trade while stalls
+  are rare and the slow tier is battery and occupancy; it would be the wrong one if a slow row
+  ever carried something whose every sample matters.
 
 One rule genuinely follows from round trips being scarce, and it survives:
 
@@ -970,6 +978,14 @@ discovering later: a freshly known port shows no value for one extra tick, and a
 just gone empty had a slot allocated for it in the frame already in flight. Neither is a
 defect; the panel shows *identifying* in the first case and a NAN it can recognise in the
 second.
+
+**One stall window stays open, deliberately.** A port nothing has reported on yet is treated
+as readable, so a device plugged in seconds before connect — still reporting 125 — has its
+value read on the very first frame of the session and can hold it for 1.2 s. Closing the
+window means gating on unknown as well, which costs every port one tick of silence at every
+connect. Since the occupancy rows come up on tick 0 anyway, the window is one frame wide and
+only opens on a connect that races a hot-plug, while the silence would be paid every time.
+Worth revisiting if the first frame after connect ever matters more than that.
 
 **Mode ownership spans ticks.** At most one active mode row per port at any time. Two rows
 asking for two modes of one UART sensor cannot be fixed by putting them in different frames:
