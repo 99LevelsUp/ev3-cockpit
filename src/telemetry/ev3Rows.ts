@@ -89,6 +89,7 @@ export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.eve
 		lifetime: repeating(divider),
 		result: { bytes: 2, alignment: 1 },
 		port,
+		reportsOccupancy: true,
 		emit: (slot: RowSlot) => concatBytes(
 			new Uint8Array([EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
 			lc0(LAYER_SELF), lc0(SENSOR_PORTS[index]),
@@ -108,6 +109,7 @@ export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.even
 		lifetime: repeating(divider),
 		result: { bytes: 2, alignment: 1 },
 		port,
+		reportsOccupancy: true,
 		emit: (slot: RowSlot) => concatBytes(
 			new Uint8Array([EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
 			lc0(LAYER_SELF), lc0(MOTOR_INPUT_PORTS[index]),
