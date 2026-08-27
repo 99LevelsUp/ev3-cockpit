@@ -316,6 +316,122 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 ### Tasks
 
 - [ ] **3.1 Telemetry category definitions**
+
+  **DESIGN §9.1–9.1c rewrote what telemetry is and what it costs, and the tasks numbered
+  below predate it.** Three categories on their own cadence became rows on their own
+  interval, and a four-command frame became one composed command. What forced it: a round
+  trip costs the same whatever it carries, so a frame's price is the number of commands, not
+  their content — and a full frame uses about a quarter of the 1024-byte budget, so there is
+  usually nothing to leave out. **Re-read 3.1.1–3.1.5, 3.2, 3.3 and 3.8 against §9.1 before
+  starting them** — the multi-engine review of 27.08.2026 found several of those written
+  against the superseded shape, and 3.1.14 records what it settled.
+
+  - [ ] 3.1.6 Row registry — every telemetry value as a row with a **tick divider**, a switch,
+    a result size and a stable id in a namespace. Three lifetimes, not just an interval: off
+    (divider 0), repeating (divider *n*), one-shot (first tick after connect, then retired) —
+    the static tier needs *once*, which divider 0 cannot express. Registration **validates and
+    refuses**: a row whose result would breach 4-byte alignment for the opcode it uses, the
+    1019-byte reply ceiling, or 57 bytes of declared globals on HID fails here rather than
+    corrupting a frame at runtime. Rows carry a raw type code alongside the resolved name
+  - [ ] 3.1.7 **Base-tick scheduler with integer dividers** — one command per tick from the
+    rows whose divider comes up, handed to the per-brick `commandQueue` rather than sent
+    directly. Three invariants, each of which the superseded due-list lacked:
+    (a) **at most one telemetry frame in flight per brick** — a tick arriving while the
+    previous frame is outstanding is *skipped*, not queued, as Device Manager guards with
+    `Interlocked`; (b) **the tick is the only clock** — no per-row next-due state, no drift,
+    and no pulling rows forward from future ticks; (c) the **slow tier gets its own command**
+    on its own ticks instead of being merged into the fast one. A skipped tick is a later
+    sample, never a gap. Tests must cover a brick that stalls for longer than the tick period
+    and assert the queue never grows and the heartbeat still makes its window
+  - [ ] 3.1.8 Frame assembler — owns global-buffer offsets. Lays out 32-bit results 4-byte
+    aligned, because `opINPUT_READSI` (the opcode we use) rejects an unaligned one and answers
+    `DIRECT_REPLY_ERROR` carrying the previous buffer. The constraint is per opcode, not
+    global: `opINPUT_DEVICE`/`READY_SI` accepts the same unaligned offset, which is how
+    LEGOev3's layout works. Both measured 3/3 — see the table in §9.1b.
+    Bounds the **declaration** as well as the bytecode: usable globals are 1019 B, not the
+    1021 B of `MAX_COMMAND_GLOBALS`, because the reply is globals + 5 B and the firmware never
+    checks it. Mode ownership is **per device across frames**, not a per-frame check: at most
+    one active mode row per port at any time, with an explicit switch-and-settle policy
+    (change mode, discard readings until non-NAN). A per-frame-only refusal just relocates the
+    conflict into alternating frames, where each frame forces a mode change and both rows read
+    NAN indefinitely. Two reads of the *same* mode are not a conflict — LEGOev3 takes SI, RAW
+    and PCT off one port in one frame
+  - [ ] 3.1.9 Truncation rule for the HID fallback — 64 bytes fits about nine instructions,
+    and it must bound both sides: request bytecode ≤ packet size − 7 (the direct-command
+    header) **and** declared globals ≤ packet size − 5. Alignment padding can breach the second
+    before the first. Pending 3.1.13, treat an over-long reply as unsupported rather than
+    assuming it fragments. Truncation is **rotating, not static**: a row that loses a tick goes
+    to the front of the next one. Static priority on a tight budget starves the losers for
+    good — with the old mandatory eight-port type sweep costing ~48 of 57 bytes it would have
+    shipped a panel that showed ports appearing and disappearing but never a sensor value.
+    Occupancy is now a row (3.1.11), which frees the budget, but a user with eight populated
+    ports on HID can still overrun a tick, so the rule holds regardless. A test must fill a
+    tick past the HID budget and assert every row is eventually served
+  - [ ] 3.1.10 Effective interval = the fastest any subscriber asks for, **clamped to the
+    transport floor** and reported back: `subscribeTelemetry` returns the interval each row was
+    actually granted, because a request is not a guarantee — 10 Hz on Bluetooth would eat the
+    brick's whole measured 10.7 commands/second. Subscribers hold an opaque handle, so
+    unsubscribing releases one claim and the effective interval is recomputed from the rest.
+    That is what makes the promise real: the panel's switches are the cockpit's own
+    subscription, so switching a row off must not take it from a dependent extension
+  - [ ] 3.1.11 Port state in the read model and the panel: empty (126), identifying (125),
+    known, error (127), terminal (124); anything else ≥124 shows as not-readable. The value is
+    read only in the *known* state. **Occupancy is a row with its own divider, not a mandatory
+    header on every frame** — it is what gates the value rows, so their inclusion decision uses
+    the state from the previous tick. State the two consequences in the model's docs: a freshly
+    known port shows no value for one extra tick, and a just-emptied port had a slot allocated
+    in the frame already in flight. Accept deliberately that a hot-plug is noticed when the
+    occupancy row next comes up, not instantly — invisible next to the 1–2 s the device spends
+    reporting 125 anyway. `GET_TYPEMODE` never blocks, so the occupancy row is safe at any
+    divider; the value read is the one that can stall for 1.2 s (§9.1c)
+  - [ ] 3.1.12 **Measure a composed frame.** Every latency figure in §9.2 comes from a single
+    narrow command; §9.1's ~250 B/~120 B full frame is a projection nothing has built. Compose
+    the widest frame the design permits, measure request and reply bytes and round-trip time on
+    all three transports, and replace the estimates in §9.1 and §9.2 with measurements. Until
+    this runs, no plan task may cite the projected sizes as fact
+  - [ ] 3.1.13 **Measure what HID does with an over-long reply.** The reply on the wire is
+    always declared globals + 5 B and the firmware never checks it against `MAX_MSG_SIZE`, so a
+    frame that satisfies the instruction budget can still declare more globals than a 64-byte
+    HID read can carry. Determine whether the firmware fragments such a reply across reports or
+    truncates it, then fix the truncation rule in 3.1.9 to bound the declaration as well as the
+    bytecode. Our `ports` reply is 48 B and has never crossed the boundary, so this is untested
+    rather than known-good
+  - [x] 3.1.14 **Three linked decisions the multi-engine review of 27.08.2026 raised, settled
+    by the owner the same day.** Recorded here because they changed 3.1.6–3.1.11 and several
+    Phase 3 tasks, and because a later reader will want to know these were chosen rather than
+    drifted into.
+
+    1. *Is the type sweep mandatory every frame?* **No — occupancy is an event-ish row with
+       its own divider.** §9.1a said event-ish, §9.1c said every frame, and on the 64-byte HID
+       path the sweep cost ~48 of 57 bytes, leaving room for one value and starving every other
+       row permanently. Two vendors reported that independently as the review's only blocker.
+       Accepted cost: a hot-plug is noticed when the occupancy row next comes up. Landed in
+       §9.1a, §9.1c, 3.1.9, 3.1.11.
+    2. *Due-list, or a base tick with dividers?* **Base tick with integer dividers**, at most
+       one frame in flight, next tick skipped rather than queued while one is outstanding. Both
+       mature references do this — Device Manager 200 ms with `_checkDeviceInfoCounter = 5` and
+       an `Interlocked` re-entrancy guard, LEGOev3 awaiting each reply before its delay, which
+       makes its "100 ms" a gap and not a period. The due-list fired on wall-clock against a
+       serial queue with nothing to stop frames piling up until the heartbeat missed its window
+       and tripped reconnect on a healthy brick. Greedy pull-forward from future ticks is
+       dropped with it; wide composition *within* a tick stays, and the slow tier keeps its own
+       command. Landed in §4.4, §9.1b, §9.5, 3.1.7.
+    3. *Rows or categories as the public surface?* **Rows.** Categories survive only as a
+       convenience bundle expanded at subscribe time, never as a unit of cadence. Rows gained
+       what they needed to be a contract: stable ids in a namespace, `apiVersion`,
+       per-row `sampledAt`, a granted interval returned from subscribe (a request is not a
+       guarantee — 10 Hz on Bluetooth would consume the brick's entire 10.7 cmd/s), subscriber
+       handles with an unsubscribe path, and registration that *refuses* a row breaching
+       alignment or buffer limits rather than publishing those limits as API. Landed in §9.1a,
+       §9.3, §9.6, §5.4, §10.2, 3.1.6, 3.1.10.
+
+    **Superseded by (3):** 3.2.1, 3.2.2 and 3.3.5 are written against per-category
+    subscriptions and snapshots. Rewrite them against rows before implementing.
+
+    Full findings matrix — 25 clusters with verdicts, five vendors, and what was rejected and
+    why — in the review notes at `.notes/zápisky/2026-08-27 Multi-oponentní review
+    telemetrického návrhu.md`.
+
   - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
   - [x] 3.1.4a Device-type codes corrected against the firmware, and the `ports` command
     made to read a value at all. Four defects, none of which any test could see:
@@ -473,25 +589,92 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     can neither list nor address a chained brick. Needs a design decision: does a layer
     become part of the key, a property of the session, or a separate concept?
 
-  - [ ] 3.1.4h **A 32-bit global must start on a 4-byte boundary.** Not in any documentation
-    read so far, and it cost three probes today. A command whose `PAR32` output lands on an
+  - [ ] 3.1.4h **A 32-bit global must start on a 4-byte boundary.** It *is* documented, in
+    the Communication Developer Kit's opening section on direct commands — "Offset in the
+    response buffer (global variables) must be aligned (float/32bits first and 8 bits last)"
+    — which was found only after three probes had been debugged the hard way. The opcode
+    table and the Firmware Kit were read; the Communication Kit's prose was not. A command whose `PAR32` output lands on an
     unaligned offset is not executed at all — and the brick answers with the **previous
     command's global buffer**, which reads as plausible data rather than as an error. The
     shipped commands happen to comply (SI floats at 16/20/24/28, tachos at 32/36/40/44), so
     nothing was broken; anything new that allocates globals must keep to it.
+
+  - [ ] 3.1.4j **A Bluetooth brick-to-brick link is not a daisy chain, and carries no ports
+    at all.** With the master on USB and a second brick joined over Bluetooth, layers 1–3
+    read empty — no sensors, no motors, nothing — while the same bricks over a USB chain had
+    filled layer 1 and 2. That is by design rather than a fault: the Hardware Kit scopes
+    daisy chaining to USB, `c_daisy.c` is written directly against libusb, and the
+    brick-to-brick Bluetooth facility is `opMailbox_Write`, which addresses **a brick by
+    name** and carries application messages between running programs. Ports are not part of
+    it. A Bluetooth-linked brick is therefore invisible to the host through the master and
+    must be connected to directly.
+
+  - [ ] 3.1.4k **The brick keeps its own pairing list, and forgetting on Windows does not
+    touch it.** After every trace of the bricks was removed from Windows — PnP nodes, the
+    `BTHPORT` pairing keys, the COM reservations — the master still listed the PC in its own
+    paired devices. Whatever 6.6.x implements as "forget" has to clear **both sides**, or a
+    brick keeps offering a stale peer that the host no longer knows.
+
+    `opCOM_GET` answers this directly and is worth wiring for the `system` telemetry
+    category (3.1.3), which already lists BT visibility: `GET_ON_OFF` (1), `GET_VISIBLE` (2),
+    `CONNEC_ITEMS` (17), `FAVOUR_ITEMS` (10) and `FAVOUR_ITEM` (11), with HARDWARE = 2 for
+    Bluetooth. `FAVOUR_ITEM` returns a name plus paired/connected/type bytes and reads
+    cleanly. `CONNEC_ITEM` (18) returned filler on the first attempt, so its parameter shape
+    differs from `FAVOUR_ITEM`'s and is still unknown — the connected count from
+    `CONNEC_ITEMS` was correct, and the per-item detail is available from the paired list's
+    `connected` flag anyway.
+
+  - [ ] 3.1.4l **A one-sided pairing record blocks re-pairing, and renaming a brick strands
+    it.** A brick that could not join the others turned out to hold a pairing entry for the
+    intended master under the master's **previous** name, while the master held no record of
+    it at all. Every transaction between the two then failed: the remote name request came
+    back as the firmware's `"????"` marker (`c_bt.c` writes that literal when the request
+    returns a non-zero status, so it means *lookup failed*, not *unnamed*), `SET_CONNECTION`
+    did nothing, and pairing from the brick's own UI left its checkbox unticked. Ruled out:
+    the master being busy — dropping its existing link changed nothing.
+
+    Two lessons for 6.6.x, both about "forget". A pairing has to be cleared on **both**
+    sides or the stale half poisons the next attempt, and a **rename leaves peers holding
+    the old name** — which matters because `SET_CONNECTION` addresses a peer by name, so a
+    renamed brick becomes unreachable to a peer that still remembers the old one.
+
+    Clearing the stale record fixed the name lookup: the same device that had read `"????"`
+    from that brick resolved to its real name on the next search. So the poisoned pairing
+    was blocking discovery itself, not only the connection.
+
+    Two claims made along the way turned out to be wrong, both from probes rather than from
+    the bricks. "A brick that already holds a link cannot be discovered" was never actually
+    tested — the search that produced the negative result was the broken one below. And
+    "`SET_SEARCH` from a direct command does not populate the list" was a **too-short wait**:
+    the list was read after 15 s and found empty, and the entries appeared later. Bluetooth
+    inquiry plus name resolution wants tens of seconds, so any host-driven search in the
+    cockpit needs a patient timeout rather than a single poll.
+
+    `SEARCH_ITEM` takes **five** output parameters — name, paired, connected, type and
+    visible — where `FAVOUR_ITEM` takes four. Passing the four-output form to both returns
+    plausible-looking rubbish (a truncated name and wrong flags) rather than an error.
 
   - [ ] 3.1.4b **A UART sensor cannot be read in two modes in one command.** Asking for a
     mode other than the current one returns `DATAF_NAN` and the sensor stays NaN while it
     settles — including in the mode that worked a moment earlier. Mode switching therefore
     needs a settling policy, and 3.1.5's batching cannot span modes of one device
   - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
-  - [ ] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the `MAX_COMMANDS_PER_SEC = 10` guard in DESIGN §4.1: at four commands per frame that is 2.5 Hz on every transport, heartbeat included. Batching four reads into one command is what buys that back fourfold. Open question for the owner: does the guard budget count only telemetry, or explicit commands and the heartbeat too?
+  - [ ] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the brick's own sustained rate, measured in §9.2: 176 commands/second on USB, 62 on TCP, **10.7 on Bluetooth**. At four commands per frame Bluetooth gives under 3 Hz with nothing left for the heartbeat, and batching is what buys that back. The earlier version of this task cited a `MAX_COMMANDS_PER_SEC = 10` guard in §4.1 as the binding constraint; §4.1 now specifies a ≤200/s backstop that is deliberately not a meter on normal traffic, and §9.2 retracted the 10 as a figure that came from nowhere and is 17x low on USB. The open question that followed from that guard — whether its budget counted the heartbeat — is moot under a backstop and is withdrawn.
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
   - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
 - [ ] **3.2 Telemetry data models**
-  - [ ] 3.2.1 `TelemetrySnapshot` — full state at a point in time for a category
-  - [ ] 3.2.2 `TelemetryEvent` — incremental change within a category
-  - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp)
+  - [ ] 3.2.1 `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
+    a set of row values, each carrying its own `sampledAt`, because rows in one snapshot come
+    from different ticks. Typed row values, not a `data: unknown` payload
+  - [ ] 3.2.2 `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
+    the rows that changed. Add `TelemetryRow` (id, value type, unit, raw type code) and
+    `TelemetrySubscription` (handle plus the interval each row was granted)
+  - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp). Port identity must
+    carry the **daisy-chain layer** (0–3), not just the port number: 3.1.4j–3.1.4l measured that
+    sensor types and values relay across a chain while motor tacho does not, so a port is only
+    identified by layer *and* number. Keep the raw type code alongside the resolved name — a
+    closed vocabulary throws away the one thing a consumer could use to recognise a device we
+    have never heard of
   - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory. The opcode is known: `opCOM_SET` (0xD4) with `SET_BRICKNAME` (0x08), both already declared in `ev3Packet.ts`; the read side (1.7.10) confirms the matching getter works
   - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
 - [ ] **3.3 Telemetry scheduler**
@@ -499,7 +682,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.3.2 Subscribed loop — per-category, reduced frequency
   - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
   - [ ] 3.3.4 Mode switching on foreground/background transitions
-  - [ ] 3.3.5 Subscription registry — track which categories are subscribed per brick
+  - [ ] 3.3.5 Subscription registry — **rewrite against rows before implementing**
+    (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
+    so releasing one claim recomputes the effective interval from those that remain. A registry
+    keyed on categories cannot honour 3.1.10
 - [ ] **3.4 Adaptive Throttling** — **gated**: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
   - [ ] 3.4.1 Response latency measurement per command
   - [ ] 3.4.2 Queue depth monitoring from the command queue
@@ -525,7 +711,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.7.5 Read model aggregation tests
   - [ ] 3.7.6 Multi-brick concurrent telemetry tests
 - [ ] **3.8 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, a **per-transport foreground target and floor** (DESIGN §9.2), latency and queue-depth thresholds, placed alongside the empirical values in
-  `transportConstants.ts`. Derive them from the `MAX_COMMANDS_PER_SEC = 10` per-brick guard, which binds first on every transport, using the measured round trips recorded in DESIGN §9.2 (USB 9 ms, TCP 58 ms, BT 121 ms worst case) only as the lower-bound check. This is also the first code to read `COMMAND_RTT_MS`, which until now no code did.
+  `transportConstants.ts`. Derive them from the **measured sustained rates** in DESIGN §9.2 — USB 176 cmd/s, TCP 62 cmd/s, BT 10.7 cmd/s — with the worst-case round trips (USB 9 ms, TCP 58 ms, BT 121 ms) as the lower-bound check. Bluetooth is the case that constrains the design: a floor must leave headroom for the heartbeat and for user commands, so the foreground target there cannot approach 10 Hz. Do **not** seed these from `MAX_COMMANDS_PER_SEC` or `COMMAND_RTT_MS`: the first was retracted in §9.2, and the second was pessimistic by ~50x on USB and is being replaced by the measurements, not read.
 
 ### Definition of Done
 
