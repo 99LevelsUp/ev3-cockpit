@@ -47,6 +47,24 @@ const DEFAULT_POST_OPEN_DELAY_MS = 120;
 /** Grace period for port close (ms). */
 const PORT_CLOSE_GRACE_MS = 500;
 
+/**
+ * How many times to try opening the port before reporting the brick unreachable.
+ *
+ * Three, because two was not enough against real hardware: opening an outgoing RFCOMM port to
+ * a paired, powered, in-range brick failed on the first attempt about half the time and
+ * succeeded on a later one with nothing changed.
+ */
+const OPEN_ATTEMPTS = 3;
+
+/**
+ * Pause between open attempts (ms).
+ *
+ * Long enough for Windows to release the previous failed handle. A shorter gap turns a
+ * retryable error 121 into an access-denied on the next attempt, which is the same failure
+ * wearing a different code.
+ */
+const OPEN_RETRY_DELAY_MS = 1_200;
+
 /** Configuration for {@link BtSppAdapter}. */
 export interface BtSppAdapterOptions {
 	/** Serial/COM port path (e.g. "COM5" on Windows, "/dev/rfcomm0" on Linux). */
@@ -122,11 +140,39 @@ export class BtSppAdapter implements TransportAdapter {
 		return this._isOpen;
 	}
 
+	/**
+	 * Opens the port, retrying the failures that are about timing rather than about the brick.
+	 *
+	 * Measured against three paired bricks: opening an outgoing RFCOMM port fails often, and
+	 * the same port opens on the next attempt with nothing changed. Windows reports it as
+	 * error 121 (`ERROR_SEM_TIMEOUT`) when the RFCOMM handshake does not complete in time,
+	 * 1256 (`ERROR_HOST_DOWN`) when the brick did not answer this instant, and access-denied
+	 * when a previous handle has not been released yet. None of those means "this brick is not
+	 * there" — a single attempt reports a working brick as unreachable roughly half the time.
+	 *
+	 * What is *not* retried is a timeout from our own deadline: that one already waited
+	 * `connectTimeoutMs`, and retrying would multiply a delay the caller chose.
+	 */
 	async open(): Promise<void> {
-		if (this._isOpen) {
-			return;
-		}
+		if (this._isOpen) { return; }
 
+		let lastError: unknown;
+		for (let attempt = 1; attempt <= OPEN_ATTEMPTS; attempt += 1) {
+			try {
+				await this.openOnce();
+				return;
+			} catch (error) {
+				lastError = error;
+				if (error instanceof TimeoutError || attempt === OPEN_ATTEMPTS) { throw error; }
+				// Windows needs the failed handle gone before the next attempt can succeed;
+				// retrying immediately just collects an access-denied instead.
+				await new Promise<void>((resolve) => setTimeout(resolve, OPEN_RETRY_DELAY_MS));
+			}
+		}
+		throw lastError;
+	}
+
+	private async openOnce(): Promise<void> {
 		const portOptions = {
 			path: this.portPath,
 			baudRate: this.baudRate,

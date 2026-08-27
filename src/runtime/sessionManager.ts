@@ -406,6 +406,19 @@ export class SessionManager implements vscode.Disposable {
 		}
 
 		try {
+			// Release whatever the provider still thinks it holds, before asking for a new
+			// link. A provider drops its own session record only in `disconnect()`, so after
+			// a link dies on its own the record survives and `connect()` answers "already
+			// connected" — every attempt, instantly, forever. Measured on a brick: a USB
+			// session could never recover from a power cycle, an unplugged cable, or a brick
+			// going out of range, which are the only kinds of loss that matter. An explicit
+			// disconnect is not a failure and never reached this path.
+			//
+			// Providers that implement `recover` own this themselves, so leave those alone.
+			if (!provider.recover) {
+				await provider.disconnect(brickKey).catch(() => { /* may already be gone */ });
+			}
+
 			const handle = provider.recover
 				? await provider.recover(brickKey)
 				: await provider.connect(brickKey);
@@ -425,7 +438,12 @@ export class SessionManager implements vscode.Disposable {
 
 			this.wireExecutor(resources, provider);
 			resources.heartbeat.start();
-		} catch {
+		} catch (error) {
+			// Record why. A bare catch here hid the defect above for as long as it existed:
+			// every attempt failed with the same message and left no trace anywhere, so a
+			// session stuck in Reconnecting looked like a brick that had not come back rather
+			// than like a bug.
+			resources.entry.setError(error instanceof Error ? error.message : String(error));
 			this.scheduleReconnect(brickKey);
 		}
 	}
