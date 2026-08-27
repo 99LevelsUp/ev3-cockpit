@@ -296,6 +296,37 @@ Build the source of truth for connected bricks.
   - [x] 2.8.5 Heartbeat timeout and reconnect tests
   - [x] 2.8.6 Explicit disconnect vs reconnect precedence tests
   - [x] 2.8.7 Command queue ordering and drain tests
+  - [x] 2.8.8 **Hardware scenarios, 27.08.2026.** Everything above passed for months while
+    three defects sat in the recovery path, because all of them needed a person to switch a
+    brick off. Two harnesses now exist for the kinds of check that cannot be simulated:
+    `scripts/hardware-matrix.js` (every layer against every reachable transport, no human
+    needed) and `scripts/hardware-scenario.js` (one brick watched through `SessionManager`
+    while someone unplugs or power-cycles it).
+
+    What a power cycle found, all three now fixed and re-verified on the brick:
+
+    - **A session could never recover from a link that died on its own.** A provider deletes
+      its session record only in `disconnect()`, so an unexpected loss left it behind and
+      `connect()` answered "already connected" to every reconnect attempt, forever. Explicit
+      disconnect — the only case the tests covered — never reached that path.
+    - **The bare `catch` in `attemptReconnect` hid it.** Every attempt failed identically and
+      left no trace, so a stuck session looked like a brick that had not come back.
+    - **Backoff overshot the brick's boot time by ~80 s.** Recovery took 121 s against a brick
+      that boots in about 40; discovery now wakes a reconnecting session, and recovery lands in
+      the same millisecond as the sighting.
+
+    Why the unit suite could not have caught the first: `MockTransportProvider` implements
+    `recover()` and none of the real transports do, so every session test exercised a branch
+    USB never takes. **The mock diverges from the product exactly where the product broke** —
+    worth remembering the next time a mock-only pass is treated as coverage.
+
+    Measured detection latency, unchanged by the fixes: link loss is reported in 3.1 s as
+    `LIBUSB_TRANSFER_NO_DEVICE` — a named cause rather than a timeout, which is what lets the
+    heartbeat tell a departed brick from a busy one. Session reaches `Reconnecting` at 5.4 s.
+  - [ ] 2.8.9 **Remaining hardware scenarios.** Power cycle is done. Still to run: USB cable
+    pulled and replaced while the brick stays powered (a different case — the brick lives, only
+    the link goes); Bluetooth out of range; a brick reachable over two transports losing one;
+    Wi-Fi switched off mid-session on TCP
 
 ### Definition of Done
 
