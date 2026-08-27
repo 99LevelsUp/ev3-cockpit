@@ -13,7 +13,7 @@
  * had booted again — because reconnect lives in the session layer, and nothing was driving
  * it. Watching a layer below the one that owns recovery cannot show recovery.
  *
- *   node scripts/hardware-scenario.js watch <brickName> [--seconds 900]
+ *   node scripts/hardware-scenario.js watch <brickName> [--seconds 900] [--on usb|tcp|bt]
  *
  * Run it, then do the physical thing. It prints state changes as they happen.
  */
@@ -45,6 +45,12 @@ const quiet = { log: { info: () => {}, warn: () => {} } };
 const args = process.argv.slice(2);
 const target = (args[1] ?? '').toLowerCase();
 const seconds = Number(args[args.indexOf('--seconds') + 1]) || 900;
+// Which transport to sign in over. A brick is usually reachable on more than one, and the
+// interesting scenarios are per transport: the same brick behaves differently when its cable
+// is pulled than when it goes out of Bluetooth range.
+const onlyTransport = args.includes('--on')
+	? (args[args.indexOf('--on') + 1] ?? '').toLowerCase()
+	: undefined;
 
 const started = Date.now();
 const stamp = () => `${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s`;
@@ -68,10 +74,17 @@ async function probe(sessions, key) {
 
 async function findBrick(providers, name) {
 	for (const { label, provider, transport } of providers) {
+		if (onlyTransport && label.trim().toLowerCase() !== onlyTransport) { continue; }
 		let scan = { items: [] };
 		try { scan = await provider.discover(); } catch { /* transport down */ }
-		const item = scan.items.find((i) => i.displayName.toLowerCase().includes(name)
-			|| i.brickKey.toLowerCase().includes(name));
+		// Match on the identifier with separators stripped. A USB serial is 00165342D9F2 and
+		// the same brick's Bluetooth address is 00:16:53:42:D9:F2 — the same bytes, spelled
+		// differently, so a search that does not normalise finds the brick on one transport
+		// and not the other.
+		const flat = (text) => text.toLowerCase().replace(/[^a-z0-9]/g, '');
+		const wanted = flat(name);
+		const item = scan.items.find((i) => flat(i.displayName).includes(wanted)
+			|| flat(i.brickKey).includes(wanted));
 		if (item) { return { label, provider, item, transport }; }
 	}
 	return undefined;

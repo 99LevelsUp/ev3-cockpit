@@ -361,9 +361,44 @@ Build the source of truth for connected bricks.
   - [ ] 2.8.10a **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
     one place: telemetry should run exactly while a brick is signed in *and* available, and
     stop the moment either drops. Belongs with the telemetry runtime wiring in 3.3
-  - [ ] 2.8.11 **Remaining hardware scenarios.** Bluetooth out of range or switched off on the
-    brick; a brick reachable over two transports losing one; Wi-Fi switched off mid-session on
-    TCP. Use **CCC** for USB scenarios — its cable is the accessible one
+  - [ ] 2.8.11 **Bluetooth cannot yet hold a session, and that blocks its scenarios.** Measured
+    27.08.2026 across all three bricks, in a fresh process each time:
+
+    ```
+    attempt 1   opens          AAA 10.8 s · BBB 7.5 s · CCC 3.9 s
+    attempt 2   times out
+    attempt 3+  Access denied, or 1256 ERROR_HOST_DOWN
+    ```
+
+    An open succeeds once per process and then the port refuses further connections, sometimes
+    taking a full minute to say so. A clean `close()` returns in **73 ms**, so the port is
+    released promptly and the refusal is not ours to fix by closing harder.
+
+    Two explanations were tried and both were wrong, which is worth recording because each
+    looked convincing: first that a timed-out open poisons the port (it does not — error 121
+    does not poison, and the pattern survives a fresh process), then that `close()` leaks the
+    handle (it does not — 73 ms, and `PORT_CLOSE_GRACE_MS` of 500 is ample).
+
+    What this does establish: **the adapter's open retry is wrong in kind, not in degree.**
+    Three attempts 1.2 s apart cannot help against a peer that refuses for a minute. It also
+    explains the matrix result where Bluetooth worked on one brick and failed on the other
+    two — what mattered was which one was tried first.
+
+    Open question, being measured: whether the refusal is a cool-down that expires, and how
+    long it lasts. Until a BT session can be established twice in a row there is nothing to
+    test a link *loss* against.
+  - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
+    radio can be switched off **on the brick** or **on the computer**, and they are different
+    failures: one is a peer that stops answering, the other is a local stack that disappears
+    underneath an open handle. Then: a brick reachable over two transports losing one; Wi-Fi
+    switched off mid-session on TCP. Use **CCC** for USB scenarios — its cable is the
+    accessible one
+  - [ ] 2.8.13 **A brick has no name over Bluetooth.** Discovery reports `EV3
+    [00:16:53:42:D9:F2]` on BT and `CCC` on USB — the same brick, and nothing tells the user
+    so. The identifiers are the same bytes spelled differently: the USB serial is
+    `00165342D9F2` and the BT address is `00:16:53:42:D9:F2`, so a name learned on one
+    transport can name the brick on the other. Needs a place for cross-transport identity to
+    live; `availableTransports` on `DiscoveryItem` already implies one brick can appear twice
 
 ### Definition of Done
 
