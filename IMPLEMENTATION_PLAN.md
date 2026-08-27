@@ -500,12 +500,24 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     rather than by being handed an address. Note for anyone writing a one-shot scan: beacon
     discovery is cache-based and each `discover()` re-primes the path, so a single call
     followed by a long wait comes back empty even with a brick present — poll it.
-  - [ ] 3.1.4d **BT cannot be exercised at all**, and no hardware setup changes that.
-    `BtTransportProvider` is constructed with no backends and no discovery function, so
-    `discover()` returns empty and `connectWithFallback` would throw "No BT backends
-    configured". `BtSppAdapter` exists and is not wired to it. A transport-layer gap that
-    telemetry inherits rather than a telemetry gap — and the last of the three providers
-    still unverified for the `ports` path
+  - [x] 3.1.4d **BT provider wired** — `src/transports/btSppDiscovery.ts`. `BtSppBackend`
+    supplies both halves the provider was missing: a discovery function and an `spp` adapter
+    factory. Windows exposes a paired peer as an outgoing COM port whose PnP id carries the
+    peer's address, so one enumeration answers "which bricks are paired" and "which port
+    reaches each" together — which is why the two live in one object sharing a map, the
+    factory being handed only a MAC.
+
+    Deliberate limits, each with a test: the address pattern includes the LEGO OUI so a paired
+    headset is not opened as a brick; `connected` is always reported false because a port list
+    cannot know whether a link is up, and claiming otherwise would make presence assert a live
+    brick from a pairing record; a MAC no scan has seen is refused rather than guessed at.
+    Nothing here pairs anything — that is the user's action on their own machine.
+
+    **Not yet exercised against hardware.** No brick is currently paired to this computer:
+    the Bluetooth records for all three were deleted on 27.08 and only brick-to-brick pairings
+    were made afterward. `SerialPort.list()` returns nothing, and the only Bluetooth peer the
+    host knows is a headset. Needs one brick paired with the PC before the BT column of 3.1.4c
+    and 3.1.12 can be filled in
   - [ ] 3.1.4e **Round-trip cost is per brick, not per transport — and that un-gates 3.4.**
     Same command, same USB transport, three bricks, 40 reads each. This table is the
     measurement **before** the two anomalies were isolated; the findings below supersede
