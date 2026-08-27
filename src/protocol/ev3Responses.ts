@@ -117,6 +117,9 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 	validateReply(reply, command.kind);
 
 	switch (command.kind) {
+	case 'telemetry:frame':
+		// Handed back as bytes on purpose: only the frame that was sent knows the layout.
+		return { kind: 'telemetry:frame', payload: reply.payload };
 	case 'battery':
 		return parseBattery(reply.payload);
 	case 'ports':

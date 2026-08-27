@@ -99,6 +99,10 @@ export interface EncodedCommand {
  */
 export function buildCommand(command: BrickCommand): EncodedCommand {
 	switch (command.kind) {
+	case 'telemetry:frame':
+		// Already bytecode: the assembler composed it from whichever rows came up. Nothing
+		// here can add to that, and re-deriving it would need the row set the caller has.
+		return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: command.payload };
 	case 'battery':
 		return buildBatteryCommand();
 	case 'ports':

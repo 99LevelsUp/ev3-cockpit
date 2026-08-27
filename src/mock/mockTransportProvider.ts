@@ -147,6 +147,17 @@ export class MockTransportProvider implements TransportProvider {
 		}
 
 		switch (command.kind) {
+		case 'telemetry:frame':
+			// The mock answers typed commands, not bytecode, and a composed frame is bytecode.
+			// Returning a plausible-looking buffer would be worse than refusing: the rows would
+			// parse it and report numbers that came from nowhere. Scheduler tests drive a fake
+			// frame sender instead, and a mock that serves telemetry needs a bytecode-aware
+			// fake — recorded as a gap rather than papered over here.
+			throw new TransportError(
+				'The mock provider cannot execute a telemetry frame: it has no bytecode '
+				+ 'interpreter. Drive the scheduler with a fake frame sender instead.'
+			);
+
 		case 'battery':
 			return { kind: 'battery', level: state.config.battery.level, voltage: state.config.battery.voltage };
 

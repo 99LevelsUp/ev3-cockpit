@@ -333,16 +333,37 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     refuses**: a row whose result would breach 4-byte alignment for the opcode it uses, the
     1019-byte reply ceiling, or 57 bytes of declared globals on HID fails here rather than
     corrupting a frame at runtime. Rows carry a raw type code alongside the resolved name
-  - [ ] 3.1.7 **Base-tick scheduler with integer dividers** — one command per tick from the
-    rows whose divider comes up, handed to the per-brick `commandQueue` rather than sent
-    directly. Three invariants, each of which the superseded due-list lacked:
-    (a) **at most one telemetry frame in flight per brick** — a tick arriving while the
-    previous frame is outstanding is *skipped*, not queued, as Device Manager guards with
-    `Interlocked`; (b) **the tick is the only clock** — no per-row next-due state, no drift,
-    and no pulling rows forward from future ticks; (c) the **slow tier gets its own command**
-    on its own ticks instead of being merged into the fast one. A skipped tick is a later
-    sample, never a gap. Tests must cover a brick that stalls for longer than the tick period
-    and assert the queue never grows and the heartbeat still makes its window
+  - [x] 3.1.7 **Base-tick scheduler with integer dividers** — `src/telemetry/telemetryScheduler.ts`.
+    One command per tick from the rows whose divider comes up. Three invariants, each of which
+    the superseded due-list lacked: (a) **at most one telemetry frame in flight per brick** — a
+    tick arriving while the previous frame is outstanding is *skipped*, not queued, as Device
+    Manager guards with `Interlocked`; (b) **the tick is the only clock** — no per-row next-due
+    state, no drift, no pulling rows forward; (c) truncation carries this tick's losers to the
+    front of the next. A skipped tick is a later sample, never a gap.
+
+    Verified against a brick, whole stack (rows → assembler → scheduler → libusb):
+
+    - 3 s at a 100 ms tick: 27 ticks, 27 frames, 0 skipped, 0 failed, **0 replies rejected by
+      the brick** — so every composed frame was legal bytecode, not just plausible;
+    - dividers hold in wall-clock time: sampled rows 27 reads, occupancy rows 6, a ratio of
+      4.5 against the nominal 5;
+    - the occupancy gate opens and closes on real ports: only 2 (infrared, type 33) and 3
+      (ultrasonic, type 30) were populated, and the value rows for the six empty ports stopped
+      after their first read while the occupancy rows kept running;
+    - **back-pressure holds under load**: at a 5 ms tick the link cannot serve, peak frames in
+      flight stayed at **1** and the scheduler declined 32% of ticks rather than queueing them.
+
+    Verified in unit tests that discriminate: removing the in-flight guard does not make the
+    suite fail, it makes it hang, which is a stronger signal than a red assertion.
+
+    Still open: the scheduler currently takes a `FrameSender` directly. Routing it through the
+    per-brick `commandQueue` (the `telemetry:frame` command variant exists for exactly this) is
+    what makes telemetry interleave with the heartbeat rather than run beside it — 3.3
+  - [ ] 3.1.7a **Mock telemetry has no answer.** `MockTransportProvider` refuses a
+    `telemetry:frame` because it dispatches typed commands and a composed frame is bytecode.
+    Refusing is right — a plausible-looking buffer would be parsed into numbers that came from
+    nowhere — but it leaves the mock unable to serve the panel. Either give the mock a small
+    bytecode interpreter, or let the scheduler take a row-level fake for mock sessions
   - [ ] 3.1.8 Frame assembler — owns global-buffer offsets. Lays out 32-bit results 4-byte
     aligned, because `opINPUT_READSI` (the opcode we use) rejects an unaligned one and answers
     `DIRECT_REPLY_ERROR` carrying the previous buffer. The constraint is per opcode, not
