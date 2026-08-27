@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { DisposableStore } from './events';
 import {
 	ProviderRegistry,
-	UsbTransportProvider, TcpTransportProvider, BtTransportProvider,
+	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
 } from './transports';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
@@ -60,10 +60,17 @@ export function activate(context: vscode.ExtensionContext): void {
 	registry.register(tcpProvider);
 	logger.info('TCP transport registered');
 
-	// BT transport (discovery requires platform backend — silent until wired)
-	const btProvider = services.add(new BtTransportProvider());
+	// BT transport. Discovery enumerates the outgoing serial ports Windows creates for
+	// already-paired peers, which answers both "which bricks are paired" and "which port
+	// reaches each" in one call. Nothing here pairs anything: that is the user's action on
+	// their own machine, and a brick they have not paired simply does not appear.
+	const btBackend = new BtSppBackend();
+	const btProvider = services.add(new BtTransportProvider({
+		discoverDevices: btBackend.discover,
+		backends: new Map([['spp', btBackend.adapterFor]]),
+	}));
 	registry.register(btProvider);
-	logger.info('BT transport registered (discovery not yet wired)');
+	logger.info('BT transport registered (SPP over paired serial ports)');
 
 	// ── Session Manager ─────────────────────────────────────────
 	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));

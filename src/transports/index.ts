@@ -10,6 +10,8 @@ export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
 export { BtSppAdapter } from './btSppAdapter';
 export type { BtSppAdapterOptions } from './btSppAdapter';
+export { BtSppBackend, macFromPnpId, formatMac } from './btSppDiscovery';
+export type { SppPeer } from './btSppDiscovery';
 
 // Transport providers
 export { UsbTransportProvider } from './usbTransportProvider';
