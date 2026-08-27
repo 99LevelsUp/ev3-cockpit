@@ -85,13 +85,36 @@ describe('BtSppBackend — discovery', () => {
 		assert.equal(device.connected, false);
 	});
 
-	it('falls back to naming the brick by its address', async () => {
-		const backend = new BtSppBackend(() => Promise.resolve([brickPort]));
+	it('names the brick by its address, never by the port description', async () => {
+		// Windows describes every outgoing SPP port as "Standard Serial over Bluetooth link",
+		// and localises it: on a Czech machine this port really is called "Standardni seriova
+		// linka pomoci protokolu Bluetooth". An earlier version filtered the English phrase
+		// only and reported a brick by that name. The description names the mechanism in every
+		// language, so none of it is worth keeping.
+		const localised = {
+			...brickPort,
+			friendlyName: 'Standardni seriova linka pomoci protokolu Bluetooth (COM5)',
+		};
+		const backend = new BtSppBackend(() => Promise.resolve([localised]));
 		const [device] = await backend.discover();
 
-		// "Standard Serial over Bluetooth link" names the mechanism, not the brick, so it is
-		// worse than useless as a display name.
 		assert.equal(device.name, 'EV3 [00:16:53:AA:BB:CC]');
+	});
+
+	it('ignores the local incoming port, whose address is all zeros', async () => {
+		// Windows creates one of these alongside the outgoing ports. It has no peer, so a
+		// connect attempt would open a port that answers nothing.
+		const incoming = {
+			path: 'COM3',
+			friendlyName: 'Standard Serial over Bluetooth link (COM3)',
+			pnpId: 'BTHENUM\\{00001101-0000-1000-8000-00805f9b34fb}_LOCALMFG&0000\\8&2e3ee818&0&000000000000_0000006E',
+		};
+		const backend = new BtSppBackend(() => Promise.resolve([incoming, brickPort]));
+
+		const devices = await backend.discover();
+
+		assert.equal(devices.length, 1);
+		assert.equal(devices[0].mac, '00:16:53:AA:BB:CC');
 	});
 
 	it('drops a peer that has gone away since the last scan', async () => {

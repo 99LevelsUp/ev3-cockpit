@@ -396,6 +396,67 @@ describe('SessionManager', () => {
 		});
 	});
 
+	it('reconnects after a link dies without an explicit disconnect', async () => {
+		// The defect this pins was found on hardware, not here, and the reason is in the first
+		// three lines of the test: `MockTransportProvider` implements `recover`, and none of
+		// the real transports do. So every session test took a path USB never takes, and the
+		// path USB does take — release, then connect — went unexercised until a brick was
+		// power-cycled. A provider drops its own session record only in `disconnect()`, so a
+		// link that dies on its own leaves it behind and `connect()` then answers "already
+		// connected" to every reconnect attempt, instantly and forever.
+		// Shadow it on the instance: `recover` lives on the prototype, so `delete` on the
+		// instance removes nothing and the test would keep taking the path it means to avoid.
+		(mockProvider as { recover?: unknown }).recover = undefined;
+
+		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+		await manager.connect(keyA, Transport.Mock);
+
+		let refusedWhileHeld = 0;
+		let connectCalls = 0;
+		let held = true;   // the provider still thinks it owns the brick
+		mockProvider.disconnect = () => { held = false; return Promise.resolve(); };
+		mockProvider.connect = (brickKey: BrickKey) => {
+			connectCalls += 1;
+			if (held) {
+				refusedWhileHeld += 1;
+				return Promise.reject(new Error(`Mock brick ${brickKey} is already connected.`));
+			}
+			return Promise.resolve({ brickKey, transport: Transport.Mock });
+		};
+
+		manager['handleHeartbeatFailure'](keyA, new Error('link went away'));
+		assert.equal(manager.getSession(keyA)?.connectionState, ConnectionState.Reconnecting);
+
+		await new Promise((resolve) => setTimeout(resolve, 400));
+
+		assert.ok(connectCalls > 0, 'reconnect never asked the provider for a link');
+		assert.equal(refusedWhileHeld, 0,
+			'reconnect asked for a link while the provider still held the brick, which is the '
+			+ 'failure that made recovery impossible');
+		assert.equal(manager.getSession(keyA)?.connectionState, ConnectionState.Connected,
+			'the session never came back');
+	});
+
+	it('records why a reconnect attempt failed', async () => {
+		// A reconnect that fails forever with no trace looks like a brick that has not come
+		// back. It took a hardware run to tell the two apart.
+		// Shadow it on the instance: `recover` lives on the prototype, so `delete` on the
+		// instance removes nothing and the test would keep taking the path it means to avoid.
+		(mockProvider as { recover?: unknown }).recover = undefined;
+
+		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+		await manager.connect(keyA, Transport.Mock);
+
+		mockProvider.disconnect = () => Promise.resolve();
+		mockProvider.connect = () => Promise.reject(new Error('brick is still booting'));
+
+		manager['handleHeartbeatFailure'](keyA, new Error('link went away'));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+
+		assert.match(manager.getSession(keyA)?.lastError ?? '', /still booting/,
+			'the reason a reconnect failed has to survive somewhere a human can read it');
+	});
+
 	it('connects a brick', async () => {
 		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
 		await manager.connect(keyA, Transport.Mock, 'Brick Alpha');
