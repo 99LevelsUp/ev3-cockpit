@@ -15,6 +15,16 @@ node_modules/
 .claudian/
 CLAUDE.md
 
+# Cross-CLI review scratch — engine sandboxes refuse to write outside the working
+# directory, so review output lands here rather than in a temp folder.
+/.review-out/
+
+# Junction to the EV3 reference collection (firmware source, LEGO's own decompiled tools,
+# the official developer kits). It lives outside the repo; the junction exists because
+# review engines sandbox themselves to the working directory and refuse a `..` path.
+# Never commit it — it is a large third-party corpus, not ours to redistribute.
+/ev3-resources
+
 # Playwright
 /test-results/
 /playwright-report/
