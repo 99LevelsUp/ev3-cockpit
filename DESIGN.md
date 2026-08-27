@@ -594,7 +594,13 @@ telemetry runs  ⟺  signed in  ∧  available
 ```
 
 The vocabulary matters because the old one collapsed both into "disconnect", which meant a
-pulled cable and a user's decision at once. **Unplug** is a cable; **sign out** is a choice.
+pulled cable and a user's decision at once. **Losing the link** is something that happens to
+the cockpit; **signing out** is something the user does.
+
+The pair is **the same on every transport**, and the only thing that differs is what losing
+the link looks like: a cable pulled or a brick powered off on USB, a brick carried out of
+range or its radio switched off on Bluetooth, Wi-Fi turned off on the brick for TCP. All of
+them are the world's doing, none of them is a decision, and none of them signs anything out.
 
 Connected session states, which describe the link and not the intent:
 
