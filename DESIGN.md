@@ -333,15 +333,22 @@ the services rather than containing them.
 
 ### 4.4 Telemetry Runtime
 
-The Telemetry Runtime runs over a connected session and schedules individual telemetry loops.
+The Telemetry Runtime runs over a connected session and drives **one base tick per brick**,
+composing one command per tick from the rows whose divider comes up. Not one loop per mode —
+§9.1b explains why, and an earlier version of this section described three loops with three
+frequencies, which contradicted it.
 
-Modes:
+Modes are **interval presets applied to rows**, not separate schedulers:
 
-- `foreground`,
-- `subscribed`,
-- `minimal`.
+| Mode | What it means |
+|---|---|
+| `foreground` | the fastest tick the transport allows; sampled rows on divider 1 |
+| `subscribed` | a slower tick; only rows some consumer has claimed come up at all |
+| `minimal` | no telemetry rows — heartbeat and reconnect only |
 
-Each mode has its own frequency and priority.
+Priority belongs to truncation order within a tick (§9.1b), not to modes. A mode selects how
+often the tick fires and which rows are eligible; it never competes with another mode for the
+brick, because a brick has exactly one tick.
 
 ### 4.5 Adaptive Throttling
 
@@ -353,10 +360,14 @@ Goal:
 - the VS Code editor must not be blocked,
 - subscription telemetry should be as fast as possible within the remaining capacity.
 
-The throttling mechanism scales the frequency of requests based on:
+The mechanism scales **the base tick period** (§9.5) — the single knob — based on:
 
-- **Response latency**: how long the last command to the brick took to complete.
-- **Queue depth**: how many commands are waiting in the per-brick queue.
+- **Response latency**, as a distribution rather than an average. The measurements in the
+  subsection below are why: a brick with an active Wi-Fi stack is 4x slower across the board,
+  and one showing Port View stalls the channel periodically, which moves the tail while
+  leaving the median alone.
+- ~~**Queue depth**~~: retired as an input. With one telemetry frame in flight per brick
+  (§9.1b) depth is 0 or 1 by construction, so it measures the invariant, not the brick.
 
 The throttling applies to telemetry delivery scheduling only — it has no effect on user-facing UI logic or explicit commands.
 
@@ -527,9 +538,14 @@ It requires its own explicit models:
 - `ConnectedBrickSnapshot`,
 - `BrickStateChangeEvent`,
 - `ActiveBrickSnapshot`,
-- `TelemetrySnapshot`,
-- `TelemetryEvent`,
+- `TelemetryRow` — a row's identity and schema: stable id, value type, unit, raw type code,
+- `TelemetrySnapshot` — a set of row values, each with its own `sampledAt`,
+- `TelemetryEvent` — the rows that changed,
+- `TelemetrySubscription` — the handle plus the interval each row was actually granted,
 - `FilesystemEvent`.
+
+`TelemetrySnapshot` carries typed row values, not a `data: unknown` payload. A typed surface
+that gives up its type at the one point a consumer reads it is not a typed surface.
 
 ## 6. State Model
 
@@ -726,36 +742,265 @@ Rules:
 
 ## 9. Telemetry Design
 
-### 9.1 Categories
+### 9.1 What telemetry is, and what it costs
 
-Telemetry is divided into categories:
+A direct command is not a query — it is a short bytecode program the brick runs, where each
+instruction names the offset in a reply buffer to write its result to. The brick executes it
+top to bottom and returns that buffer. **One round trip carries many values.** Measured: a
+`ports` frame with sixteen sub-operations costs the same as a `battery` read with three.
 
-- `ports` — sensors, motors, port mapping, and measured values,
-- `filesystem` — filesystem state and events relevant to the API consumer,
-- `system` — system information: firmware, battery, available transports.
+That is a 3-to-16 measurement, so read it as "sub-operations are cheap relative to the round
+trip over this range", not as "cost is flat to any width". Two things do scale with width and
+are measured nowhere yet: the brick's own execution time, and the reply bytes. A row that
+addresses a settling device can hold the whole frame for up to 1.2 s (§9.1c), so the cost of a
+frame is not a constant even at fixed width.
 
-Categories are an explicit part of the public API and internal scheduling. A dependent extension subscribes only to the categories it needs.
+Still, over the range that matters the scarce resource is **round trips, not bytes**.
+
+The buffers are large enough that this rarely binds:
+
+| | Limit | Source |
+|---|---|---|
+| Reply buffer (= global variables) | 1021 B | `MAX_COMMAND_GLOBALS` |
+| — of which usable by the assembler | **1019 B** | the reply is globals + 5 B, unchecked |
+| Whole message, either direction | 1024 B | `MAX_MSG_SIZE` |
+| Locals | 64 B | `MAX_COMMAND_LOCALS` |
+
+The reply is always *declared* globals + 5 bytes on the wire, whatever the program wrote, and
+the firmware validates globals on the way in but never re-checks the reply against
+`MAX_MSG_SIZE`. So 1019 is the assembler's hard cap, not 1021.
+
+Today's `ports` command uses 99 bytes of request and 48 of reply — those are measured. A frame
+carrying *every* value below is **estimated** at around 250 and 120; nothing has composed one
+yet, so treat it as a projection to be replaced by a measurement (plan 3.1.12).
+
+**The exception is the HID fallback at 64 bytes per packet**, which fits roughly nine
+instructions and is where leaving something out becomes a real question. Whether a longer
+reply fragments across HID reports or is truncated is also unmeasured — our `ports` reply has
+never crossed 64 bytes.
+
+### 9.1a Categories and cadence
+
+Telemetry values differ by **how they change**, and that decides how they are read:
+
+| Tier | Rows | Read |
+|---|---|---|
+| **Sampled** | sensor values · motor tacho · buttons | at a rate |
+| **Event-ish** | port occupancy · brick name + battery · connectivity (BT, Wi-Fi) · filesystem usage | at a slower rate |
+| **Static** | firmware and Linux version · serial number | once, at connect |
+
+Each row carries its own interval and its own switch. **Interval 0 means never read** — no
+special case in the scheduler, the row simply never falls due. Battery sits in the event
+tier deliberately: it is dynamic, but nothing needs its instantaneous value.
+
+The tiers cut *across* commands as well as categories, which is why cadence cannot be a
+per-category or per-command property. `info` alone returns a firmware version (static) and a
+brick name (mutable, since renaming is a feature).
+
+Rows are the **subscription surface** — the one third parties build against, which §9.3 and
+§10.2 spell out. The panel's switches are the cockpit's own subscription, and a dependent
+extension has its own. The effective interval for a row is the **fastest any subscriber asks
+for**, so turning a row off in the panel means "I do not want it", never "nobody gets it".
+
+**Port occupancy is a row like any other**, with its own interval — it is not a mandatory
+header on every frame. An earlier version of §9.1c required reading every port's type in
+every frame; that contradicted this table, and on the 64-byte HID path it cost ~48 of the 57
+available bytes, leaving room for a single value and starving every other row permanently.
+
+The consequence to accept deliberately: a hot-plug is noticed when the occupancy row next
+falls due, not instantly. At a sub-second occupancy interval that is invisible next to the
+1–2 seconds the device itself spends reporting `TYPE_UNKNOWN` while it identifies.
+
+A row whose value depends on a port being occupied is **registered against that port** and
+only falls due while the port is in the *known* state (§9.1c). Occupancy is therefore what
+gates the value rows, at its own cadence, rather than being re-read for their benefit.
+
+### 9.1b Composing a frame
+
+The scheduler is a **base tick with integer dividers**. Each row's interval is expressed as a
+whole number of ticks; a row with divider *n* is included every *n*-th tick, and **divider 0
+means never**.
+
+A row's divider does not have to be the whole story. The static tier needs *once*, which
+divider 0 cannot express, so a row carries one of three lifetimes: **off** (divider 0),
+**repeating** (divider *n*), or **one-shot** — included on the first tick after connect and
+then retired. One-shot is a state, not an interval, which is why it needs saying: the earlier
+version of this section had only intervals and would have either skipped the firmware version
+or polled it forever. Worth noting the references chose differently and read even nominally
+static values repeatedly — Device Manager re-reads the firmware version every fifth tick, on a
+product that can flash firmware in-session. If in-session flashing ever becomes ours to
+support, the affected rows move from one-shot to repeating; the mechanism already allows it.
+
+On each tick the scheduler composes **one command** from the rows that come up,
+and hands it to the per-brick `commandQueue` so telemetry interleaves with the heartbeat and
+with explicit commands rather than racing them.
+
+This is what both mature implementations do, and an earlier version of this section did not.
+LEGO's own Device Manager runs a 200 ms tick with `_checkDeviceInfoCounter = 5` for its slow
+tier; LEGOev3 awaits each reply *before* its 100 ms delay, so its "100 ms" is a gap rather
+than a period. The version this replaces held per-row next-due times and fired on wall-clock,
+which bought nothing and gave up three things:
+
+- **At most one telemetry frame is in flight per brick.** A tick that arrives while the
+  previous frame is outstanding is **skipped**, not queued — Device Manager guards exactly
+  this with an `Interlocked` counter. Without it a stalled brick lets frames pile up behind a
+  serial queue until the heartbeat misses its window and trips reconnect on a healthy brick.
+  Since a single unsettled device can hold a frame for 1.2 s (§9.1c) while Bluetooth sustains
+  only 10.7 commands/second, this is a routine case, not a corner one.
+- **The tick is the only clock.** Phase comes from the tick, so no row drifts and none can be
+  pulled forward. "Nearly due" needed a bound nobody could state; a divider needs none.
+- **A skipped tick is not a missed sample**, only a later one. The next tick includes every
+  row whose divider comes up, so a stall costs latency, never a gap in the series.
+
+One rule genuinely follows from round trips being scarce, and it survives:
+
+- **Compose widely within a tick.** Every row coming up on this tick rides in one command.
+  What does *not* follow is pulling rows forward from future ticks: neither reference does it,
+  and it is what made the HID budget unmanageable while letting intervals ratchet shorter.
+  The slow tier keeps its **own command** on its own ticks rather than being merged into the
+  fast one — again as Device Manager does, calling `GetDeviceInfo()` outside `CheckSensors()`.
+- **Priority is a truncation rule, not the scheduling principle.** It decides what survives
+  when a tick's rows genuinely cannot fit one command — in practice the HID fallback.
+  Truncation must be **rotating, not static**: a row that loses this tick is carried to the
+  front of the next one. Static priority on a tight budget starves the losers for good, which
+  is how the first version of this design produced a panel that could show ports appearing and
+  disappearing but never a single sensor value.
+  With occupancy now a row rather than a mandatory header, and the slow tier in its own
+  command, the HID budget is no longer routinely exhausted — but the rule has to hold anyway,
+  because a user with eight populated ports on HID can still overrun a tick.
+- **The assembler owns the offsets.** A row declares how many bytes its result needs; it does
+  not pick where. It lays 32-bit results out 4-byte aligned — the Communication Developer Kit
+  states it as "float/32bits first and 8 bits last".
+
+  **How strictly the brick enforces that depends on the opcode**, which took two measurements
+  to establish and one wrong conclusion in between:
+
+  | Instruction | 32-bit result at offset 2 | Reply |
+  |---|---|---|
+  | `opINPUT_READSI` (0x9d) | **rejected** | `DIRECT_REPLY_ERROR` (0x04) |
+  | `opINPUT_DEVICE` / `READY_SI` (0x99, sub 29) | **accepted**, correct value | `DIRECT_REPLY` (0x02) |
+
+  Both measured 3 of 3 on a brick with a gyro on port 2. The second row is LEGOev3's shipped
+  layout — type at 0, mode at 1, SI float at 2, RAW int32 at 6, PCT at 10 — which is
+  unaligned in six of its eight ports and works. So alignment is not a property of the
+  global buffer; it is a property of the instruction writing into it.
+
+  We use `opINPUT_READSI`, so the rule binds on us and the assembler must keep it. But state
+  it as what it is: a constraint of the opcodes we chose, not a law of the firmware. Switching
+  a row to the `READY_*` subcodes would lift the padding at the cost of one byte per
+  instruction — worth weighing when the HID budget is tight, not before.
+
+  When it does bind, the rejection is not silent. The brick answers `DIRECT_REPLY_ERROR`, and
+  `c_com.c` copies the full declared global buffer into that error reply exactly as into a
+  successful one — so the payload is whatever the *previous* command left there. It reads as
+  data only to a parser that ignores the reply-type byte. Ours checks it (`validateReply` in
+  `ev3Responses.ts`), which is why shipped code was never exposed; the earlier claim that the
+  brick "skips the command silently" came from a probe of mine that did not check it.
+
+- **The assembler must bound the reply, not just the request.** The reply on the wire is
+  always *declared globals + 5 bytes*, however few bytes the program actually wrote, and the
+  firmware never checks it against `MAX_MSG_SIZE`. So the usable ceiling is 1019 B, not the
+  1021 B of `MAX_COMMAND_GLOBALS` — and on the 64-byte HID fallback the declaration must stay
+  under 59 B, which alignment padding can breach before the instruction count does.
+
+The assembler also has to **refuse conflicts rather than merge them**: two *modes* of the same
+UART sensor cannot share a command. Asking for both returns `DATAF_NAN` and leaves the sensor
+unsettled, including in the mode that worked a moment earlier.
+
+Two reads of the same mode are not a conflict — LEGOev3 takes SI, RAW and PCT off one port in
+one frame. The constraint is the mode switch, not the number of reads.
+
+### 9.1c Port state is five-valued
+
+Port type is read by the **occupancy row**, on that row's own divider (§9.1a) — not in every
+frame. It is what gates the value rows: a value is read only when the port's last known state
+was *known*, so the state is one tick stale by construction and that is a property to state,
+not a defect to hide.
+
+| State | Code | Value | What the panel shows |
+|---|---|---|---|
+| empty | 126 | — | nothing attached |
+| identifying | **125** | — | attached, being identified |
+| known | a device type | read | the device and its reading |
+| error | 127 | — | attached, faulty |
+| terminal | 124 | — | a console, not a peripheral |
+
+Anything else at or above 124 that is not a recognised device code is displayed as
+not-readable rather than guessed at.
+
+`TYPE_UNKNOWN` is information, not noise: every device plugged in while running reports it
+for a second or two, and showing it is how the panel says "working on it" instead of showing
+a blank.
+
+The reason not to read its value is **not** stale data. `c_input.c` pops the remaining
+parameters and writes the type-appropriate NAN into each — `DATA8_NAN`, `DATA32_NAN` or
+`DATAF_NAN` — so an absent or faulty port reports its own absence, and that NAN is the
+authoritative answer rather than something to be second-guessed host-side.
+
+The real reason is that an *identifying* port is not absent. Its connection is a live value,
+so the read takes the device-present path, and if the device is still settling the firmware
+does `SetObjectIp(TmpIp - 1); SetDispatchStatus(BUSYBREAK)` — it re-executes the instruction,
+blocking the VM thread for up to `MAX_DEVICE_BUSY_TIME`, **1200 ms**. Since everything rides
+in one command, one unsettled port holds up every other value in the frame, the heartbeat,
+and every explicit command queued behind it.
+
+`GET_TYPEMODE` never blocks; it reads `DeviceType` and `DeviceMode` straight out of memory.
+So the occupancy row is safe at any divider. It is only the value read that can stall — which
+is the second reason the two are separate rows rather than one mandatory sweep plus optional
+values.
+
+Two consequences of gating on the previous tick's state, both worth stating rather than
+discovering later: a freshly known port shows no value for one extra tick, and a port that has
+just gone empty had a slot allocated for it in the frame already in flight. Neither is a
+defect; the panel shows *identifying* in the first case and a NAN it can recognise in the
+second.
+
+**Mode ownership spans ticks.** At most one active mode row per port at any time. Two rows
+asking for two modes of one UART sensor cannot be fixed by putting them in different frames:
+each frame would force a mode change, and `cInputSetDeviceType` sets Busy with a timeout of
+`MAX_DEVICE_BUSY_TIME`, so both rows would read NAN indefinitely — worse than the in-frame
+conflict the rule was written to prevent. Changing a row's mode is therefore an explicit
+switch-and-settle: change it, then discard readings until one comes back non-NAN.
+
+Two reads of the *same* mode are not a conflict. LEGOev3 takes SI, RAW and PCT off one port in
+one frame, and our own measurement reproduced it.
 
 ### 9.2 Foreground Telemetry
 
 **Refresh budget.** The foreground rate is bounded from below by the transport, not only from
-above by throttling: the per-brick queue is strictly serial and a full frame is four round
-trips (`ports`, `battery`, `buttons`, `info`).
+above by throttling: the per-brick queue is strictly serial, so the frame rate is the round
+trip time times the number of commands per frame.
+
+The per-command figures below are measured. The **frame** figures are arithmetic on top of
+them, against a frame of four commands (`ports`, `battery`, `buttons`, `info`) — what the
+cockpit happened to send at the time, not a considered baseline. Both reference
+implementations already compose one command, so four was never the state of the art; it was
+our own starting point.
+
+§9.1b replaces it with a single composed command. That does **not** license dividing every
+figure by four: the composed frame has not been measured, and it is wider than any of the four
+it replaces. What the division gives is an upper bound on the improvement, not a prediction.
+
+Both an average and a worst case are given below, because mixing them was how this section
+previously reported a Bluetooth frame at 240 ms while quoting a 121 ms worst-case command.
 
 Measured on USB, firmware V1.10E: **9 ms** worst case over 40 exchanges, including the
-`ports` command's 16 sub-operations. A four-command frame is therefore about 40 ms, or
-roughly 25 Hz — far above anything the panel needs. An earlier version of this section put
-USB at 0.5 Hz; that came from `USB.COMMAND_RTT_MS: 500`, a constant no code ever read and
-which was about 50x pessimistic.
+`ports` command's 16 sub-operations. Four such commands is about 40 ms — roughly 25 Hz, far
+above anything the panel needs. An earlier version of this section put USB at 0.5 Hz; that
+came from `USB.COMMAND_RTT_MS: 500`, a constant no code ever read and which was about 50x
+pessimistic. Sustained rate: **176 commands/second**.
 
-Bluetooth SPP measures at **121 ms** worst case over 30 exchanges, averaging 55-70 ms, so a
-four-command frame is about 240 ms or roughly 4 Hz. Slower than USB by an order of magnitude,
-and still usable for the panel. The RFCOMM connect itself took 4851 ms, which is the cost
-worth designing around on that transport — not the per-command latency.
+Bluetooth SPP measures at **121 ms** worst case over 30 exchanges, averaging 55-70 ms. Four
+commands is therefore ~240 ms (≈4 Hz) on average and ~484 ms (≈2 Hz) worst case. Slower than
+USB by an order of magnitude, and still usable for the panel. The RFCOMM connect itself took
+4851 ms, which is the cost worth designing around on that transport — not the per-command
+latency. Sustained rate: **10.7 commands/second**, which is worth stating plainly: a target of
+"10 Hz on Bluetooth" would consume the brick's entire measured capacity, leaving nothing for
+the heartbeat or for anything the user does.
 
 TCP measures at **58 ms** worst case over 40 exchanges against a brick on Wi-Fi, averaging
-33 ms, so a four-command frame is about 130 ms or roughly 7 Hz. Connect plus the VMTP unlock
-handshake takes 273 ms.
+33 ms, so four commands is about 130 ms (≈7 Hz) on average and ~232 ms (≈4 Hz) worst case.
+Connect plus the VMTP unlock handshake takes 273 ms. Sustained rate: **62 commands/second**.
 
 All three transports are now measured, and in every case the constant that had been sitting
 in `transportConstants.ts` was pessimistic by more than an order of magnitude: USB by ~50x,
@@ -823,10 +1068,41 @@ Subscribed telemetry runs over an inactive connected brick only when an active A
 
 Rules:
 
-- subscriptions are per category,
+- **subscriptions are per row.** A category is a convenience bundle that expands to a set of
+  rows at subscribe time and is never a unit of cadence — §9.1a explains why cadence cannot be
+  a per-category property, and an earlier version of this section contradicted it,
 - a snapshot is always delivered before events,
 - after a subscription ends, the runtime may hold the last snapshot briefly as `stale`,
 - subscribed telemetry is slower than foreground.
+
+**What a row must carry to be a contract.** Rows are the surface third parties build on, so
+each needs more than a value:
+
+| | Why a consumer needs it |
+|---|---|
+| stable **row id** in a namespace | to name a row across versions; `ports.1.value`, not an index into an array |
+| **`apiVersion`** on the subscription call | to detect that the row vocabulary changed |
+| **`sampledAt`** per row value | rows in one snapshot come from different ticks; without this a consumer cannot tell fresh from carried-over |
+| the **granted interval** | what the consumer asked for is a request, not a guarantee — see below |
+| raw type code beside the resolved name | a closed vocabulary cannot name a device we have not heard of; the code lets a consumer recognise one anyway |
+
+**Subscribing is a negotiation, not an assignment.** "Fastest subscriber wins" is the
+reconciliation rule, but not without limits: a request faster than the transport's floor
+(§9.2) is **clamped**, not honoured, and the subscribe call returns the interval the row
+actually got. Without that, one extension asking for 10 Hz on Bluetooth would consume the
+brick's entire measured capacity of 10.7 commands/second and every other consumer — and the
+heartbeat — would pay for it silently.
+
+Subscribers are identified by an opaque handle returned from subscribe, so unsubscribing
+releases exactly one claim on a row and the effective interval is recomputed from those that
+remain. This is what makes §9.1a's promise real: switching a row off in the panel drops the
+cockpit's claim, never anyone else's.
+
+**Registering a row rejects, rather than documents, what will not fit.** A third party adding
+a row does not need to know about 4-byte alignment for `opINPUT_READSI`, the 1019-byte reply
+ceiling, or 57 bytes of declared globals on HID (§9.1b). Registration validates against them
+and fails there — the alternative is a constraint published as API and breached at runtime as
+a corrupt frame.
 
 ### 9.4 Minimal Telemetry
 
@@ -840,7 +1116,19 @@ Contains only:
 
 ### 9.5 Adaptive Throttling
 
-The speed of subscription telemetry is governed by the Adaptive Throttling mechanism described in §4.5.
+Throttling adjusts **one knob: the base tick period** (§9.1b). Row dividers stay fixed, so
+every row slows in proportion and their phase relationships are preserved — which is the
+practical reason to throttle the tick rather than the intervals. There is no other quantity to
+scale: under §9.1a telemetry has no single speed, and the earlier wording here pointed at §4.5
+as though it did.
+
+The tick period is floored per transport (§9.2) and clamped so it can never grow past the
+heartbeat's window.
+
+Of §4.5's two named inputs, only one survives its own measurements: **latency**, and as a
+distribution rather than an average. Queue depth has no dynamic range here — with one frame in
+flight per brick (§9.1b) it is 0 or 1 by construction, so it reports the invariant holding
+rather than the brick struggling.
 
 The throttling applies to telemetry delivery scheduling only — it has no effect on user-facing UI logic or explicit commands.
 
@@ -858,16 +1146,19 @@ sequenceDiagram
     Ext->>API: registerConsumer()
     API-->>Ext: ConnectedBricksSnapshot
 
-    Ext->>API: subscribeTelemetry(brickKey, 'ports')
-    API->>TM: addSubscription(brickKey, 'ports')
-    TM-->>Ext: TelemetrySnapshot (initial)
+    Ext->>API: subscribeTelemetry(brickKey, rows, intervalMs, apiVersion)
+    API->>TM: claimRows(brickKey, rows, intervalMs)
+    TM-->>Ext: Subscription { id, grantedIntervalMs per row }
+    TM-->>Ext: TelemetrySnapshot (initial, each row with sampledAt)
 
-    loop On change detected
-        SM->>TM: value changed
-        TM-->>Ext: TelemetryEvent
+    loop Every tick a claimed row comes up
+        SM->>TM: reply parsed
+        TM-->>Ext: TelemetryEvent (changed rows only)
     end
 
     Ext->>API: unsubscribeTelemetry(subscriptionId)
+    API->>TM: releaseRows(subscriptionId)
+    note over TM: effective interval recomputed<br/>from the claims that remain
 
     note over SM,TM: On disconnect
     SM->>API: brick disconnected
@@ -897,7 +1188,9 @@ The first version of the public API exports:
 - `onBrickStateChanged`,
 - `getActiveBrick`,
 - `onActiveBrickChanged`,
-- `subscribeTelemetry`,
+- `listTelemetryRows` — the row vocabulary and its `apiVersion`, so a consumer can discover
+  what exists rather than hard-coding ids,
+- `subscribeTelemetry` — takes rows and a requested interval, returns the granted one,
 - `unsubscribeTelemetry`,
 - filesystem operations,
 - program control — run, stop, emergency stop, and a running-program query.
