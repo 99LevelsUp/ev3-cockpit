@@ -57,6 +57,23 @@ export type BrickCommand =
 	| { readonly kind: 'ports' }
 	| { readonly kind: 'buttons' }
 	| { readonly kind: 'info' }
+	/**
+	 * A telemetry frame the assembler already built.
+	 *
+	 * The odd one out: every other command here names *what* to read and lets
+	 * `buildCommand` decide the bytecode, but a telemetry frame is composed at run time from
+	 * whichever rows come up on a tick, so its bytecode cannot be a function of its kind.
+	 *
+	 * It goes through this union rather than straight down to the transport so telemetry sits
+	 * in the same per-brick queue as the heartbeat and the user's own commands. Sending it
+	 * around the queue would let a tick race the heartbeat, which is the failure the
+	 * one-frame-in-flight rule exists to prevent.
+	 */
+	| {
+		readonly kind: 'telemetry:frame';
+		/** Declared globals word followed by bytecode, from `buildTelemetryFrame`. */
+		readonly payload: Uint8Array;
+	}
 	| { readonly kind: 'fs:list'; readonly path: string }
 	| { readonly kind: 'fs:read'; readonly path: string }
 	| { readonly kind: 'fs:write'; readonly path: string; readonly content: string }
@@ -225,7 +242,20 @@ export type BrickResponse =
 	| FsReadResponse
 	| FsWriteResponse
 	| FsExistsResponse
-	| FsDeleteResponse;
+	| FsDeleteResponse
+	| TelemetryFrameResponse;
+
+/**
+ * A telemetry frame's reply, handed back as bytes.
+ *
+ * Deliberately unparsed. Only the assembler knows where each row's result landed, and it
+ * returns that layout with the frame — a parser that re-derives offsets is the bug plan
+ * 3.1.4a caught, where four bytes were read from a slot the firmware filled one byte of.
+ */
+export interface TelemetryFrameResponse {
+	readonly kind: 'telemetry:frame';
+	readonly payload: Uint8Array;
+}
 
 // ── Provider interface ───────────────────────────────────────────────
 

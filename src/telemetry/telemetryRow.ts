@@ -86,6 +86,20 @@ export interface TelemetryRow {
 	/** The UART mode this row selects, where it selects one. */
 	readonly mode?: number;
 
+	/**
+	 * Marks the row that reports what is plugged into `port`.
+	 *
+	 * The scheduler needs to tell this row apart from a value row on the same port, because
+	 * the two are treated oppositely: an occupancy row is never gated (gating it on the type
+	 * it reads would be circular, and a port that once went empty could never be seen to
+	 * refill), while a value row is gated on whatever the last occupancy row reported.
+	 *
+	 * A flag rather than something inferred from the shape. The first version recognised an
+	 * occupancy row by "two bytes and no mode", which would have quietly reclassified any
+	 * future two-byte reading.
+	 */
+	readonly reportsOccupancy?: true;
+
 	/** Bytecode reading this value into `slot`. */
 	emit(slot: RowSlot): Uint8Array;
 
