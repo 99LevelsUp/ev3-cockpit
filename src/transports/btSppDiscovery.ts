@@ -70,7 +70,12 @@ export function macFromPnpId(pnpId: string | undefined): string | undefined {
 	if (!pnpId) { return undefined; }
 	const flattened = pnpId.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
 	const match = new RegExp(`(${LEGO_OUI}[0-9A-F]{6})`).exec(flattened);
-	return match ? match[1] : undefined;
+	if (!match) { return undefined; }
+	// Windows also creates a local *incoming* SPP port, whose PnP id carries an all-zero
+	// address because there is no peer. It would never resolve to a brick, and offering it
+	// as one means a connect attempt opens a port that answers nothing.
+	if (/^0+$/.test(match[1])) { return undefined; }
+	return match[1];
 }
 
 /** Formats a bare twelve-digit address the way the rest of the transports spell one. */
@@ -104,7 +109,7 @@ export class BtSppBackend {
 			const bare = macFromPnpId(port.pnpId);
 			if (!bare) { continue; }
 			const mac = formatMac(bare);
-			const name = friendlyNameOf(port) ?? `EV3 [${mac}]`;
+			const name = `EV3 [${mac}]`;
 			this.portByMac.set(mac, { mac, name, portPath: port.path });
 			devices.push({
 				mac,
@@ -138,12 +143,17 @@ export class BtSppBackend {
 	};
 }
 
-function friendlyNameOf(port: SerialPortInfo): string | undefined {
-	// friendlyName reads like "Standard Serial over Bluetooth link (COM5)" for a generic
-	// pairing, which names the mechanism rather than the brick. Prefer it anyway when it
-	// carries something else — some stacks put the peer's own name there.
-	const raw = port.friendlyName ?? port.manufacturer;
-	if (!raw) { return undefined; }
-	if (/serial over bluetooth/i.test(raw)) { return undefined; }
-	return raw.replace(/\s*\([^)]*\)\s*$/, '').trim() || undefined;
-}
+/**
+ * Why the port's own description is never used as a name.
+ *
+ * Windows calls every outgoing SPP port "Standard Serial over Bluetooth link", and on a
+ * Czech machine "Standardní sériová linka pomocí protokolu Bluetooth". A first version
+ * filtered that phrase in English and let the localised one through, so on this machine
+ * discovery reported a brick literally named "Standardní sériová linka pomocí protokolu
+ * Bluetooth". Filtering more languages would only postpone the problem: the description
+ * names the mechanism in every language, so there is no phrasing worth keeping.
+ *
+ * The address is the identity here. A brick's own name is a telemetry row
+ * (`system.brickName`), read from the brick once a session is up, which is the only place
+ * it can come from honestly.
+ */
