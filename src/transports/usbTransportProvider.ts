@@ -74,6 +74,16 @@ export interface UsbTransportProviderOptions {
 	createLibusbAdapter?: (options: UsbLibusbAdapterOptions) => UsbLibusbAdapter;
 	/** Injection seam for tests. */
 	createHidAdapter?: (options: UsbHidAdapterOptions) => UsbHidAdapter;
+	/**
+	 * Injection seams for the two device enumerations discovery reads names from.
+	 *
+	 * Both exist because the names they return disagree, and which one wins is a decision
+	 * worth testing: libusb reads the product string off the hardware, node-hid returns the
+	 * Windows descriptor cache, and on this machine that cache calls two of three bricks
+	 * "Xfer data to and from EV3 brick".
+	 */
+	listUsbDevices?: typeof listLegoUsbDevices;
+	listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 }
 
 /**
@@ -88,9 +98,24 @@ export class UsbTransportProvider implements TransportProvider {
 	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
 
 	private readonly sessions = new Map<BrickKey, UsbSession>();
+
+	/**
+	 * Brick names read from the hardware, keyed by lower-cased serial.
+	 *
+	 * Kept across scans because discovery deliberately skips a brick whose interface this
+	 * provider has claimed, and the only name left for such a brick is the Windows descriptor
+	 * cache — which is stale. Two of the three bricks here are cached as "Xfer data to and
+	 * from EV3 brick", so without this a brick renames itself to that on connect.
+	 *
+	 * Never cleared: a serial is a brick for good, and a name that was true once is a better
+	 * answer than a name that was never true.
+	 */
+	private readonly nameBySerial = new Map<string, string>();
 	private readonly log?: UsbProviderLog;
 	private readonly makeLibusbAdapter: (options: UsbLibusbAdapterOptions) => UsbLibusbAdapter;
 	private readonly makeHidAdapter: (options: UsbHidAdapterOptions) => UsbHidAdapter;
+	private readonly listUsbDevices: typeof listLegoUsbDevices;
+	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	private disposed = false;
 	/** Guard against concurrent discover() calls overlapping on the same device. */
 	private discovering = false;
@@ -100,6 +125,8 @@ export class UsbTransportProvider implements TransportProvider {
 		this.makeLibusbAdapter = options.createLibusbAdapter
 			?? ((o) => new UsbLibusbAdapter(o));
 		this.makeHidAdapter = options.createHidAdapter ?? ((o) => new UsbHidAdapter(o));
+		this.listUsbDevices = options?.listUsbDevices ?? listLegoUsbDevices;
+		this.listHidDevices = options?.listHidDevices;
 	}
 
 	async discover(): Promise<DiscoveryScanResult> {
@@ -127,16 +154,24 @@ export class UsbTransportProvider implements TransportProvider {
 		// A brick with a live libusb session is skipped rather than reopened: discovery runs
 		// on a 1.2 s timer and would otherwise be prying at a device its own transport holds
 		// claimed. Such a brick keeps the HID product string, which is what it had before.
-		const nodeUsbDevices = await listLegoUsbDevices({
+		const nodeUsbDevices = await this.listUsbDevices({
 			skip: (location) => this.isInUse(location),
 		}).catch(() => []);
-		const nameBySerial = new Map(
-			nodeUsbDevices
-				.filter(d => d.serialNumber)
-				.map(d => [d.serialNumber!.toLowerCase(), d.product])
-		);
 
-		const devices = hid.devices(USB.VENDOR_ID, USB.PRODUCT_ID)
+		// Remember every name libusb manages to read, because a connected brick is skipped
+		// above and would otherwise fall back to the Windows cache — which is wrong on this
+		// machine for two bricks out of three, calling both of them "Xfer data to and from EV3
+		// brick". Without the memory a brick renames itself to that the moment anyone connects
+		// to it, and back again on disconnect. Measured across a power cycle: the same brick
+		// appeared as "Xfer data to and from EV3 brick" while connected and as "AAA" after.
+		for (const device of nodeUsbDevices) {
+			const serial = device.serialNumber?.trim().toLowerCase();
+			if (serial && device.product?.trim()) {
+				this.nameBySerial.set(serial, device.product.trim());
+			}
+		}
+
+		const devices = (this.listHidDevices?.() ?? hid.devices(USB.VENDOR_ID, USB.PRODUCT_ID))
 			// Trim in the filter, not just at the key: makeBrickKey throws on a blank
 			// identifier now, and one device with a whitespace-only serial would take the
 			// entire scan down with it instead of dropping itself.
@@ -147,7 +182,11 @@ export class UsbTransportProvider implements TransportProvider {
 		for (const dev of devices) {
 			const serial = dev.serialNumber!.trim().toUpperCase();
 			const brickKey = makeBrickKey(Transport.USB, serial);
-			const displayName = nameBySerial.get(serial.toLowerCase()) ?? dev.product?.trim() ?? serial;
+			// node-hid's product string is the last resort, not the second choice: it comes
+			// from the Windows descriptor cache, which is what libusb exists here to bypass.
+			const displayName = this.nameBySerial.get(serial.toLowerCase())
+				?? dev.product?.trim()
+				?? serial;
 			items.push({
 				brickKey,
 				displayName,
