@@ -475,6 +475,46 @@ describe('SessionManager', () => {
 		assert.doesNotThrow(() => manager.notifyBrickAvailable(keyA));
 	});
 
+	it('keeps trying for as long as the sign-in stands', async () => {
+		// The distinction the whole lifecycle turns on: unplugging a cable is the world's
+		// doing, signing out is the user's. Only the second ends a session.
+		//
+		// Measured before this: ten attempts spanned about three minutes, so a brick away for
+		// longer reached Disconnected and was never picked up again — it came back 35 seconds
+		// after the session had given up, while discovery was seeing it the whole time, and
+		// nothing happened. A ceiling counted in attempts is a time limit nobody chose.
+		(mockProvider as { recover?: unknown }).recover = undefined;
+
+		const unlimited = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 3000,
+			heartbeatMissThreshold: 2,
+			reconnectBaseMs: 10,
+			reconnectMaxMs: 20,
+		});
+		try {
+			const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+			await unlimited.connect(keyA, Transport.Mock);
+
+			let attempts = 0;
+			mockProvider.disconnect = () => Promise.resolve();
+			mockProvider.connect = () => {
+				attempts += 1;
+				return Promise.reject(new Error('still unplugged'));
+			};
+
+			unlimited['handleHeartbeatFailure'](keyA, new Error('cable pulled'));
+			await new Promise((resolve) => setTimeout(resolve, 400));
+
+			assert.ok(attempts > 10,
+				`only ${attempts} attempts — the session gave up while it was still signed in`);
+			assert.equal(unlimited.getSession(keyA)?.connectionState, ConnectionState.Reconnecting,
+				'a signed-in session must stay reconnecting, however long the brick is away');
+		} finally {
+			unlimited.dispose();
+		}
+	});
+
 	it('records why a reconnect attempt failed', async () => {
 		// A reconnect that fails forever with no trace looks like a brick that has not come
 		// back. It took a hardware run to tell the two apart.

@@ -13,7 +13,15 @@ export interface ReconnectStrategyOptions {
 	maxMs?: number;
 	/** Backoff multiplier (default: 2). */
 	multiplier?: number;
-	/** Maximum number of attempts before giving up (default: 10). */
+	/**
+	 * Maximum number of attempts before giving up, or `Infinity` to never give up.
+	 *
+	 * A session that a user signed in to keeps trying for as long as the sign-in stands: a
+	 * brick unplugged for five minutes and plugged back in has to come back, and a ceiling
+	 * measured in attempts turns into a time limit nobody chose. Measured before this: ten
+	 * attempts spanned about three minutes, so a brick away for longer was never picked up
+	 * again even though it was sitting there being discovered.
+	 */
 	maxAttempts?: number;
 }
 
