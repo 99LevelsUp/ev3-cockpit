@@ -368,6 +368,41 @@ export class SessionManager implements vscode.Disposable {
 
 	// ── Internal: Reconnect ─────────────────────────────────────────
 
+	/**
+	 * Tells a reconnecting session that its brick has been seen again.
+	 *
+	 * Backoff is a guess about when to look; discovery is evidence that there is something to
+	 * look at. Without this the two never talk, and the cost is measurable: a brick that boots
+	 * in about 40 seconds took **121 seconds** to be picked up, because the backoff had already
+	 * stretched to 30-second steps by the time it came back and simply waited them out. Roughly
+	 * eighty seconds of a session sitting broken next to a brick that was ready.
+	 *
+	 * Backoff stays as the fallback for everything discovery cannot see — a brick that answers
+	 * a scan but refuses a session, or a transport with no discovery at all. This only ever
+	 * makes an attempt happen sooner, never less often, so the guard against hammering an
+	 * unreachable brick is untouched.
+	 *
+	 * Does nothing unless the session is actually waiting to reconnect.
+	 */
+	notifyBrickAvailable(brickKey: BrickKey): void {
+		const resources = this.sessions.get(brickKey);
+		if (!resources || resources.entry.connectionState !== ConnectionState.Reconnecting) {
+			return;
+		}
+		if (resources.entry.explicitlyDisconnected) {
+			return;
+		}
+
+		if (resources.reconnectTimer) {
+			clearTimeout(resources.reconnectTimer);
+			resources.reconnectTimer = undefined;
+		}
+		// The wait was the only thing standing between the last failure and this attempt, and
+		// discovery has just retired the reason for it.
+		resources.reconnect.reset();
+		void this.attemptReconnect(brickKey);
+	}
+
 	private scheduleReconnect(brickKey: BrickKey): void {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {

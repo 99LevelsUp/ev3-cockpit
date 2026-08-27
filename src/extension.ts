@@ -9,7 +9,7 @@ import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
-import { ConnectionState } from './contracts';
+import { ConnectionState, PresenceState } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -92,6 +92,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	});
 	aggregator.onPresenceChanged(e => {
 		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState ?? 'new'} → ${e.currentState}`);
+
+		// A brick that has just become visible again is the evidence a reconnecting session
+		// is waiting for. Measured before this existed: a brick that boots in about 40 s took
+		// 121 s to be picked up, because the backoff had reached 30-second steps and waited
+		// them out beside a brick that was ready. Backoff remains the fallback wherever
+		// discovery cannot see — this only ever makes an attempt happen sooner.
+		if (e.currentState === PresenceState.Available) {
+			sessionManager.notifyBrickAvailable(e.brickKey);
+		}
 	});
 
 	// The discovery list owns `connected` locally, and nothing was telling it. Without

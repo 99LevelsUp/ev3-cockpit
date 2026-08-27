@@ -437,6 +437,44 @@ describe('SessionManager', () => {
 			'the session never came back');
 	});
 
+	it('reconnects as soon as discovery says the brick is back', async () => {
+		// Backoff is a guess about when to look; discovery is evidence there is something to
+		// look at. Measured before the two were connected: a brick that boots in about 40 s
+		// took 121 s to be picked up, because the backoff had reached 30-second steps and
+		// waited them out beside a brick that was ready.
+		(mockProvider as { recover?: unknown }).recover = undefined;
+
+		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+		await manager.connect(keyA, Transport.Mock);
+
+		let reachable = false;
+		mockProvider.disconnect = () => Promise.resolve();
+		mockProvider.connect = (brickKey: BrickKey) => reachable
+			? Promise.resolve({ brickKey, transport: Transport.Mock })
+			: Promise.reject(new Error('brick is still booting'));
+
+		manager['handleHeartbeatFailure'](keyA, new Error('link went away'));
+
+		// Let the early, short backoff steps burn down so the next wait is a long one — the
+		// situation where waiting it out is the whole cost.
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		assert.equal(manager.getSession(keyA)?.connectionState, ConnectionState.Reconnecting);
+
+		reachable = true;
+		manager.notifyBrickAvailable(keyA);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		assert.equal(manager.getSession(keyA)?.connectionState, ConnectionState.Connected,
+			'discovery said the brick was back and the session kept waiting anyway');
+	});
+
+	it('ignores a discovery sighting for a session that is not reconnecting', () => {
+		// Only ever makes an attempt happen sooner. A connected session must not be disturbed
+		// by a scan, and an explicitly disconnected one must stay disconnected.
+		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+		assert.doesNotThrow(() => manager.notifyBrickAvailable(keyA));
+	});
+
 	it('records why a reconnect attempt failed', async () => {
 		// A reconnect that fails forever with no trace looks like a brick that has not come
 		// back. It took a hardware run to tell the two apart.

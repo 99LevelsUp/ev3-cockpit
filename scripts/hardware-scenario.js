@@ -36,7 +36,8 @@ const {
 	BtSppBackend,
 } = require(out('transports'));
 const { SessionManager } = require(out('runtime/sessionManager'));
-const { Transport } = require(out('contracts/enums'));
+const { DiscoveryScheduler } = require(out('runtime/discoveryScheduler'));
+const { Transport, PresenceState } = require(out('contracts/enums'));
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const quiet = { log: { info: () => {}, warn: () => {} } };
@@ -100,6 +101,18 @@ async function main() {
 		say(`session: ${event.previousState} -> ${event.newState}`);
 	});
 
+	// Discovery has to be running, exactly as it is in the extension. Without it a scenario
+	// measures a session with no idea whether its brick is back — which is what the first
+	// power-cycle run did, and it made an 80-second wait look like the design rather than
+	// like a missing wire.
+	const scheduler = new DiscoveryScheduler(registry);
+	scheduler.onPresenceChanged((event) => {
+		say(`presence: ${event.item.displayName} ${event.previousState ?? 'new'} -> ${event.currentState}`);
+		if (event.currentState === PresenceState.Available) {
+			sessions.notifyBrickAvailable(event.brickKey);
+		}
+	});
+
 	try {
 		const found = await findBrick([
 			{ label: 'USB', provider: usb, transport: Transport.USB },
@@ -115,7 +128,8 @@ async function main() {
 		const { label, item, transport } = found;
 		say(`found ${item.displayName} on ${label}`);
 		await sessions.connect(item.brickKey, transport, item.displayName);
-		say('connected. watching — do the physical thing now.');
+		scheduler.start();
+		say('connected, discovery running. watching — do the physical thing now.');
 
 		let lastAlive = null;
 		let lastChangeAt = Date.now();
@@ -147,6 +161,7 @@ async function main() {
 		}
 		return 0;
 	} finally {
+		scheduler.dispose();
 		sessions.dispose();
 		usb.dispose(); tcp.dispose(); bt.dispose(); registry.dispose();
 	}
