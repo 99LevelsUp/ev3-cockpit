@@ -204,6 +204,22 @@ export const FIRMWARE_SAFETY = {
 	RECONNECT_MAX_MS: 30000,
 	/** Reconnect backoff multiplier. */
 	RECONNECT_MULTIPLIER: 2,
-	/** Maximum reconnect attempts before giving up. */
-	MAX_RECONNECT_ATTEMPTS: 10,
+	/**
+	 * Maximum reconnect attempts before giving up.
+	 *
+	 * `Infinity`: a session the user signed in to keeps trying for as long as the sign-in
+	 * stands. Signing out is the only thing that ends it, which is the whole distinction —
+	 * unplugging a cable is the world's doing, signing out is the user's.
+	 *
+	 * It used to be 10, which with the backoff below spanned about three minutes. A brick
+	 * unplugged for longer than that was never picked up again, even while discovery kept
+	 * seeing it: the session had reached Disconnected and nothing wakes a session in that
+	 * state. Measured on a brick — it came back 35 seconds after the session had given up,
+	 * and nothing happened.
+	 *
+	 * Retrying forever costs nothing here: the delay caps at RECONNECT_MAX_MS, and discovery
+	 * makes the attempt immediate whenever it can see the brick, so the slow tail only runs
+	 * for transports that cannot be discovered.
+	 */
+	MAX_RECONNECT_ATTEMPTS: Number.POSITIVE_INFINITY,
 } as const;

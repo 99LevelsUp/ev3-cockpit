@@ -581,7 +581,22 @@ After an explicit disconnect, auto-connect for that brick is suppressed for the 
 
 ### 6.2 Connection
 
-Connected session states:
+**Two independent states, and confusing them is what made recovery unpredictable.**
+
+- **Signed in** is the user's intent. Only the user changes it, by signing a brick in or out
+  in the cockpit.
+- **Available** is the world's doing. Only discovery changes it, by seeing the brick or not.
+
+Everything else follows from the pair:
+
+```
+telemetry runs  ⟺  signed in  ∧  available
+```
+
+The vocabulary matters because the old one collapsed both into "disconnect", which meant a
+pulled cable and a user's decision at once. **Unplug** is a cable; **sign out** is a choice.
+
+Connected session states, which describe the link and not the intent:
 
 - `connecting`,
 - `connected`,
@@ -592,10 +607,24 @@ Rules:
 
 - only Cockpit creates sessions via `connect`,
 - a transport failure leads to `reconnecting`,
-- explicit `disconnect` terminates the session regardless of active subscriptions,
-- on explicit disconnect, subscription registries for that brick are cleared.
+- **a signed-in session keeps trying for as long as the sign-in stands.** There is no attempt
+  ceiling, because a ceiling counted in attempts is a time limit nobody chose: ten attempts
+  spanned about three minutes, and a brick unplugged for longer was never picked up again —
+  measured on a brick, it came back 35 seconds after the session had given up, while discovery
+  had been seeing it the whole time. The backoff caps at `RECONNECT_MAX_MS` and repeats; the
+  sighting itself makes the next attempt immediate (§4.3),
+- signing out terminates the session regardless of active subscriptions,
+- on sign-out, subscription registries for that brick are cleared.
 
-After explicit disconnect:
+The cockpit never signs a brick in by itself. At startup every brick is *available* and none
+is signed in, so a brick in range that the user has not asked for is never connected to — and
+a brick the user signed out of stays signed out when its cable goes back in.
+
+Sign-in has **no persistence**: it lives in the extension host's memory and nowhere else.
+Closing the cockpit signs every brick out, which is what makes the startup rule above true
+rather than merely usual.
+
+After sign-out:
 
 - if the brick is still visible in discovery → it transitions to `available`,
 - if not visible → it transitions to `removed`.
