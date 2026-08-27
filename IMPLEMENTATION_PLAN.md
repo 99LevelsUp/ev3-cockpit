@@ -339,20 +339,28 @@ Build the source of truth for connected bricks.
       within seven seconds of each other. Worth knowing before reading any single brick's
       instability as a brick problem.
     - **After the reconnect budget runs out, nothing ever brings the brick back** — see 2.8.10.
-  - [ ] 2.8.10 **Owner decision: a session that outlives its reconnect budget.** Ten attempts
-    with backoff spans about three minutes. A brick away longer than that leaves the session in
-    `Disconnected`, and `notifyBrickAvailable` only wakes a session that is `Reconnecting` — so
-    when the brick came back at 427 s, after the session had given up at 392 s, nothing
-    happened. From the user's side: *unplugged for five minutes, plugged back in, never
-    reconnected.*
+  - [x] 2.8.10 **Sign-in and availability are two states, not one** — settled by the owner
+    27.08.2026 and written into DESIGN §6.2. The question was posed as three options for what
+    to do when the reconnect budget runs out; the answer was that the budget should not exist,
+    because none of the three named the quantity that decides:
 
-    Three ways to go. **(A)** leave it — the session is gone, the user reconnects by hand.
-    **(B)** keep a session that exhausted its budget in a dormant state and let discovery wake
-    it, making backoff a pace rather than a ceiling; manual disconnect stays the only real end.
-    **(C)** auto-connect anything discovery sees that the user did not explicitly disconnect.
+    ```
+    telemetry runs  ⟺  signed in  ∧  available
+    ```
 
-    B is the smallest change that removes the surprise, and does not touch manual disconnect.
-    C is a broader UX decision than this task should make on its own.
+    Signed in is the user's intent and only the user changes it. Available is the world's and
+    only discovery changes it. The old vocabulary collapsed both into "disconnect", which is
+    why the behaviour was confusing to describe: **unplug** is a cable, **sign out** is a
+    choice, and only the second ends a session.
+
+    `MAX_RECONNECT_ATTEMPTS` is now unbounded. The delay still caps at `RECONNECT_MAX_MS` and
+    discovery still makes an attempt immediate, so the slow tail only runs where nothing can be
+    discovered. Sign-in has no persistence: it lives in the extension host's memory, so closing
+    the cockpit signs everything out — which is what makes "nothing is signed in at startup" a
+    rule rather than a habit.
+  - [ ] 2.8.10a **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
+    one place: telemetry should run exactly while a brick is signed in *and* available, and
+    stop the moment either drops. Belongs with the telemetry runtime wiring in 3.3
   - [ ] 2.8.11 **Remaining hardware scenarios.** Bluetooth out of range or switched off on the
     brick; a brick reachable over two transports losing one; Wi-Fi switched off mid-session on
     TCP. Use **CCC** for USB scenarios — its cable is the accessible one
