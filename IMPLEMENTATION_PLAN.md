@@ -384,11 +384,29 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     occupancy row next comes up, not instantly — invisible next to the 1–2 s the device spends
     reporting 125 anyway. `GET_TYPEMODE` never blocks, so the occupancy row is safe at any
     divider; the value read is the one that can stall for 1.2 s (§9.1c)
-  - [ ] 3.1.12 **Measure a composed frame.** Every latency figure in §9.2 comes from a single
-    narrow command; §9.1's ~250 B/~120 B full frame is a projection nothing has built. Compose
-    the widest frame the design permits, measure request and reply bytes and round-trip time on
-    all three transports, and replace the estimates in §9.1 and §9.2 with measurements. Until
-    this runs, no plan task may cite the projected sizes as fact
+  - [x] 3.1.12 **Composed frame measured** over libusb, through the real assembler and the
+    real row catalogue, with a one-row control in the same run:
+
+    | Rows | Request | Reply | Median |
+    |---|---|---|---|
+    | 1 | 10 B | 6 B | 10.1 ms |
+    | 3 | 25 B | 17 B | 10.9 ms |
+    | 14 (sampled tier) | 77 B | 43 B | 10.9 ms |
+    | 26 (everything) | 159 B | 96 B | 11.9 ms |
+
+    Twenty-six times the values for 18% more time, so §9.1's central claim holds and is now
+    measured rather than extrapolated from a 3-to-16 comparison. The projection it replaces
+    (~250 B/~120 B) was high by more than half on the request.
+
+    The control earned its place: the same brick measured 6.0 ms on 26.08, so without a
+    one-row baseline in the same run the full frame would have read as twice the cost of a
+    narrow command instead of marginally more. Brick state taxes the round trip (§4.5), and
+    that tax is larger than the width effect being measured.
+
+    On the 64-byte HID budget the same catalogue places **11 rows of 26** (62 B request,
+    40 B reply). Reply payload matched declared globals exactly in every frame, confirming
+    reply = declared globals + 5. Still to do on TCP and BT, and once the BT provider is
+    wired (3.1.4d)
   - [ ] 3.1.13 **Measure what HID does with an over-long reply.** The reply on the wire is
     always declared globals + 5 B and the firmware never checks it against `MAX_MSG_SIZE`, so a
     frame that satisfies the instruction budget can still declare more globals than a 64-byte

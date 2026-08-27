@@ -746,16 +746,27 @@ Rules:
 
 A direct command is not a query — it is a short bytecode program the brick runs, where each
 instruction names the offset in a reply buffer to write its result to. The brick executes it
-top to bottom and returns that buffer. **One round trip carries many values.** Measured: a
-`ports` frame with sixteen sub-operations costs the same as a `battery` read with three.
+top to bottom and returns that buffer. **One round trip carries many values.**
 
-That is a 3-to-16 measurement, so read it as "sub-operations are cheap relative to the round
-trip over this range", not as "cost is flat to any width". Two things do scale with width and
-are measured nowhere yet: the brick's own execution time, and the reply bytes. A row that
-addresses a settling device can hold the whole frame for up to 1.2 s (§9.1c), so the cost of a
-frame is not a constant even at fixed width.
+Measured against a brick, one row up to the full catalogue of twenty-six, all in one run so
+the brick's own state cannot drift between the readings:
 
-Still, over the range that matters the scarce resource is **round trips, not bytes**.
+| Rows | Request | Reply | Median round trip |
+|---|---|---|---|
+| 1 | 10 B | 6 B | 10.1 ms |
+| 3 | 25 B | 17 B | 10.9 ms |
+| 14 (the sampled tier) | 77 B | 43 B | 10.9 ms |
+| 26 (everything) | 159 B | 96 B | 11.9 ms |
+
+**Twenty-six times the values for eighteen percent more time.** The control row is what makes
+that readable: the same brick measured 6.0 ms on a different day (§4.5), so without a
+one-row baseline in the same run the full frame would have looked twice as expensive as a
+narrow command rather than marginally so.
+
+The scarce resource is therefore **round trips, not bytes** — with one exception that is not
+about width at all. A row addressing a device that is still settling makes the firmware
+re-execute the instruction for up to 1.2 s (§9.1c), which is why the value rows are gated on
+port state rather than composed freely.
 
 The buffers are large enough that this rarely binds:
 
@@ -770,14 +781,19 @@ The reply is always *declared* globals + 5 bytes on the wire, whatever the progr
 the firmware validates globals on the way in but never re-checks the reply against
 `MAX_MSG_SIZE`. So 1019 is the assembler's hard cap, not 1021.
 
-Today's `ports` command uses 99 bytes of request and 48 of reply — those are measured. A frame
-carrying *every* value below is **estimated** at around 250 and 120; nothing has composed one
-yet, so treat it as a projection to be replaced by a measurement (plan 3.1.12).
+Today's `ports` command uses 99 bytes of request and 48 of reply. A frame carrying *every* row
+measures **159 and 96** — an earlier revision projected 250 and 120, which was high by more
+than half on the request. Either way it is a tenth of the budget, so on a link that carries
+1024 bytes there is nothing to leave out.
 
-**The exception is the HID fallback at 64 bytes per packet**, which fits roughly nine
-instructions and is where leaving something out becomes a real question. Whether a longer
-reply fragments across HID reports or is truncated is also unmeasured — our `ports` reply has
-never crossed 64 bytes.
+**The exception is the HID fallback at 64 bytes per packet.** Measured with the same
+catalogue: **eleven rows of twenty-six fit**, at 62 bytes of request and 40 of reply. That is
+where leaving something out becomes a real question, and why truncation has to rotate (§9.1b)
+rather than pick the same winners every tick.
+
+Whether a reply longer than 64 bytes fragments across HID reports or is truncated is still
+unmeasured — nothing we send has crossed it, and the assembler refuses to declare more than
+the link can carry rather than find out by accident (plan 3.1.13).
 
 ### 9.1a Categories and cadence
 
