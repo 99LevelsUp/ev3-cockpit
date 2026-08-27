@@ -323,10 +323,39 @@ Build the source of truth for connected bricks.
     Measured detection latency, unchanged by the fixes: link loss is reported in 3.1 s as
     `LIBUSB_TRANSFER_NO_DEVICE` — a named cause rather than a timeout, which is what lets the
     heartbeat tell a departed brick from a busy one. Session reaches `Reconnecting` at 5.4 s.
-  - [ ] 2.8.9 **Remaining hardware scenarios.** Power cycle is done. Still to run: USB cable
-    pulled and replaced while the brick stays powered (a different case — the brick lives, only
-    the link goes); Bluetooth out of range; a brick reachable over two transports losing one;
-    Wi-Fi switched off mid-session on TCP
+  - [x] 2.8.9 **USB cable pulled and replaced**, 27.08.2026. A different case from a power
+    cycle: the brick keeps running and only the link goes, and the two report differently —
+    a departed device gives `LIBUSB_TRANSFER_NO_DEVICE` on a read, a pulled cable gives
+    `LIBUSB_ERROR_IO` on a write. Both name a cause rather than timing out, which is what lets
+    the heartbeat tell a lost link from a busy brick.
+
+    Recovery worked, and worked repeatedly: three separate losses in one run, each recovered in
+    the same millisecond as the discovery sighting. That repetition is the part worth having —
+    a first reconnect that leaves a handle behind would have broken the second.
+
+    Two findings from the same run:
+
+    - The bricks were on a shared segment: handling one cable took **all three** offline
+      within seven seconds of each other. Worth knowing before reading any single brick's
+      instability as a brick problem.
+    - **After the reconnect budget runs out, nothing ever brings the brick back** — see 2.8.10.
+  - [ ] 2.8.10 **Owner decision: a session that outlives its reconnect budget.** Ten attempts
+    with backoff spans about three minutes. A brick away longer than that leaves the session in
+    `Disconnected`, and `notifyBrickAvailable` only wakes a session that is `Reconnecting` — so
+    when the brick came back at 427 s, after the session had given up at 392 s, nothing
+    happened. From the user's side: *unplugged for five minutes, plugged back in, never
+    reconnected.*
+
+    Three ways to go. **(A)** leave it — the session is gone, the user reconnects by hand.
+    **(B)** keep a session that exhausted its budget in a dormant state and let discovery wake
+    it, making backoff a pace rather than a ceiling; manual disconnect stays the only real end.
+    **(C)** auto-connect anything discovery sees that the user did not explicitly disconnect.
+
+    B is the smallest change that removes the surprise, and does not touch manual disconnect.
+    C is a broader UX decision than this task should make on its own.
+  - [ ] 2.8.11 **Remaining hardware scenarios.** Bluetooth out of range or switched off on the
+    brick; a brick reachable over two transports losing one; Wi-Fi switched off mid-session on
+    TCP. Use **CCC** for USB scenarios — its cable is the accessible one
 
 ### Definition of Done
 
