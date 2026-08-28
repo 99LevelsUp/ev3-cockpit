@@ -209,12 +209,21 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
         provider's own beacon cache; it used to hand the adapter a bare serial with
         `useDiscovery: true`, and the adapter could never bind the beacon port because the
         provider already held it — so connecting to a brick found by discovery always failed
-- [ ] **1.11 BT Transport** — SPP backend only; discovery not wired
-  - [ ] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator (no such file or symbol exists)
+- [ ] **1.11 BT Transport** — Winsock and SPP backends built; discovery not wired
+  - [~] 1.11.1 ~~`BtRfcommAdapter` — multi-backend orchestrator~~ **Not needed.**
+    `BtTransportProvider` already holds the backend map and chooses between them; a second
+    orchestrator between it and the adapters would have nothing to do.
   - [~] 1.11.2 ~~`BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket~~ **Dropped
     28.08.2026 by the owner.** It needs a .NET helper process, and the testlab excludes
     `child_process` paths for extension compatibility. See DESIGN §4.1.1.
-  - [ ] 1.11.3 `BtWinsockBackend` — koffi FFI to ws2_32.dll AF_BTH (Windows, pure JS)
+  - [x] 1.11.3 **`BtWinsockAdapter` — koffi FFI to ws2_32.dll AF_BTH**, 28.08.2026. Ported
+    from the testlab, which measured it against live bricks and chose it as the BT runtime.
+    Four deliberate departures from the original, each recorded in the source: the connect
+    has a deadline and aborts by closing the socket; the adapter does not queue, because
+    the provider does; a short `send()` is finished rather than ignored; idle polling drops
+    from 5 ms to 250 ms, which a request-reply link can afford and an all-day extension
+    host needs. Preferred over SPP in `extension.ts`; falling back to SPP now happens only
+    when a backend cannot run at all, never after a connect that touched the radio
   - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
   - [~] 1.11.5 ~~.NET runtime detection~~ **Dropped with 1.11.2** — nothing to detect once
     WinRT is out of the chain.
@@ -390,6 +399,22 @@ Build the source of truth for connected bricks.
     Open question, being measured: whether the refusal is a cool-down that expires, and how
     long it lasts. Until a BT session can be established twice in a row there is nothing to
     test a link *loss* against.
+  - [ ] 2.8.14 **Compare the two BT backends on hardware** — P7 of the re-survey brief,
+    run here because the code under test is the code that ships. `scripts/bt-backend-comparison.js`
+    puts Winsock and SPP through the real provider and one shared `BtConnectionQueue`, so
+    every cooldown the product enforces is enforced in the measurement. Round-robin across
+    all three bricks, backends alternating per round.
+
+    Note what the existing SPP number is worth: the ~50% open rate measured 27.08.2026 came
+    from a 2-second round-robin against a channel with documented 10 s and 30 s recoveries,
+    so it measures the pacing violation rather than the backend. Nothing about SPP behind the
+    queue is known yet, and the decision between backends is already made — this validates it
+    rather than deciding it
+  - [ ] 2.8.15 **BT discovery should not depend on SPP pairing artifacts.** Discovery still
+    scans COM ports, which is what the testlab used as its *secondary* mechanism; its primary
+    was `bthprops.cpl` through koffi. The two differ in a way that matters now that the
+    runtime no longer goes through a COM port: a paired brick with no outgoing serial port is
+    invisible to discovery while the Winsock backend could reach it perfectly well
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears
