@@ -410,7 +410,7 @@ Build the source of truth for connected bricks.
     Open question, being measured: whether the refusal is a cool-down that expires, and how
     long it lasts. Until a BT session can be established twice in a row there is nothing to
     test a link *loss* against.
-  - [ ] 2.8.14 **Compare the two BT backends on hardware** — P7 of the re-survey brief,
+  - [x] 2.8.14 **Compare the two BT backends on hardware** — P7 of the re-survey brief,
     run here because the code under test is the code that ships. `scripts/bt-backend-comparison.js`
     puts Winsock and SPP through the real provider and one shared `BtConnectionQueue`, so
     every cooldown the product enforces is enforced in the measurement. Round-robin across
@@ -430,6 +430,32 @@ Build the source of truth for connected bricks.
     broad failure across healthy bricks reopens the backend decision, which the owner and the
     testlab have already made. Fixing the interpretation in advance is the point: four BT
     diagnoses have been written after the fact and withdrawn
+
+    **Result, 28.08.2026 — 15 attempts per backend, 13.6 minutes.** The criterion was not
+    met, and the reason is not the one it was written to catch.
+
+    | | winsock | SPP |
+    |---|---|---|
+    | opened | 6/15 (40%) | 7/15 (47%) |
+    | round trip | 46–117 ms, median **104** | 355–948 ms, median **610** |
+    | failure | `WSAETIMEDOUT` (10060) | error 121 |
+
+    **On the round trip the two are not close: Winsock is about six times faster**, and its
+    spread is tight where SPP's is not. That is the backend decision confirmed, and it is the
+    half of the question that was actually about the backend.
+
+    **On opening there is no difference worth the name.** 40% against 47% at fifteen attempts
+    is noise, and both are far from usable. Per brick, Winsock failed 5/5 on CCC, 2/5 on AAA
+    and 2/5 on BBB — so the pre-registered "near-100% on BBB and CCC" fails, and it fails on
+    the brick the April note did *not* flag. AAA, the one that note called degraded, was
+    Winsock's second-best.
+
+    **And it retires a claim made earlier in this file.** The ~50% SPP open rate measured
+    27.08.2026 at a 2-second spacing was written off as measuring the pacing violation rather
+    than the backend. At 15 and 30 second spacing, through the queue, the rate is 47%. The
+    pacing was not what that number measured. Whatever makes an RFCOMM connect fail here is
+    untouched by waiting longer, and it is untouched by which API opens the socket — which is
+    a real result, and a narrower question than the one that has been asked four times
   - [x] 2.8.15 **BT discovery no longer depends on SPP pairing artifacts**, 28.08.2026 — see
     1.11.7a. It also settles most of 2.8.13: the device cache carries the brick's own name, so
     a brick reports itself as `CCC` over Bluetooth instead of `EV3 [00:16:53:42:D9:F2]`. What
