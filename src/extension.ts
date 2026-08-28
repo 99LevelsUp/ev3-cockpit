@@ -3,7 +3,7 @@ import { DisposableStore } from './events';
 import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
-	BtConnectionQueue, BtWinsockAdapter,
+	BtConnectionQueue, BtWinsockAdapter, BtClassicDiscovery,
 } from './transports';
 import type { BtBackend, BtAdapterFactory } from './transports';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
@@ -62,10 +62,17 @@ export function activate(context: vscode.ExtensionContext): void {
 	registry.register(tcpProvider);
 	logger.info('TCP transport registered');
 
-	// BT transport. Discovery enumerates the outgoing serial ports Windows creates for
-	// already-paired peers, which answers both "which bricks are paired" and "which port
-	// reaches each" in one call. Nothing here pairs anything: that is the user's action on
-	// their own machine, and a brick they have not paired simply does not appear.
+	// BT transport. Discovery reads the Windows Bluetooth device cache, which is what the
+	// testlab used and answers the question discovery actually asks: which bricks does this
+	// machine know about, and what does each call itself. The COM-port scan runs behind it,
+	// both as a fallback and because the SPP backend builds its adapters from what it saw.
+	//
+	// Those two used to be the same list, back when the runtime went through a serial port.
+	// They are not any more: a paired brick whose outgoing port Windows never created is
+	// invisible to a port scan and perfectly reachable over a socket.
+	//
+	// Nothing here pairs anything -- that is still the user's action on their own machine,
+	// and a brick they have not paired does not appear. See plan 1.11.13.
 	//
 	// The connection queue is not optional. Windows carries exactly **one** RFCOMM/SPP
 	// channel: a second connection fails with error 121 until the first is fully released,
@@ -84,8 +91,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	// ends the attempt, because the channel it just disturbed needs the cooldown more than
 	// it needs another immediate try.
 	const btBackend = new BtSppBackend();
+	const btDiscovery = new BtClassicDiscovery({
+		portScan: btBackend.discover,
+		onCacheUnavailable: (reason) => logger.warn(
+			`BT device cache unavailable, falling back to the COM port scan: ${reason}`
+		),
+	});
 	const btProvider = services.add(new BtTransportProvider({
-		discoverDevices: btBackend.discover,
+		discoverDevices: btDiscovery.discover,
 		backends: new Map<BtBackend, BtAdapterFactory>([
 			['winsock', (mac) => new BtWinsockAdapter({ mac })],
 			['spp', btBackend.adapterFor],
@@ -93,7 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		connectionQueue: services.add(new BtConnectionQueue()),
 	}));
 	registry.register(btProvider);
-	logger.info('BT transport registered (Winsock RFCOMM, SPP fallback)');
+	logger.info('BT transport registered (Winsock RFCOMM, SPP fallback; bthprops discovery)');
 
 	// ── Session Manager ─────────────────────────────────────────
 	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));
