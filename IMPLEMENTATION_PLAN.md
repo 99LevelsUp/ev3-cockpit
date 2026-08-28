@@ -479,6 +479,27 @@ Build the source of truth for connected bricks.
     came back with an empty name. The claim was written from reading the structure and not
     from running it, which is the same mistake as arguing about a wire instead of measuring
     it. 2.8.13 stands as it was: the name has to come from the brick or from the USB identity
+  - [ ] 2.8.16 **Isolate what makes an RFCOMM connect fail.** 2.8.14 established what it is
+    not: not the backend (40% against 47%), and not the wait before trying (47% at 15/30 s
+    against ~50% at 2 s). Next measurement varies one thing — one brick, Winsock only,
+    cooldown stepped up from 15 s to 60 s and beyond, enough attempts per step to tell 40%
+    from 90%.
+
+    First fix the instrument: `openedMs` in `scripts/bt-backend-comparison.js` is measured
+    from before `provider.connect()`, so it includes the queue wait. Comparing cooldowns with
+    a number that contains the cooldown would confound the experiment with the thing it
+    varies. Report queue wait and connect time separately
+
+  - [ ] 2.8.17 **Verify pair and unpair against Windows.** 1.11.13 compiles and is tested
+    against fakes; neither call has touched the real DLL. That is the state the naming claim
+    was in an hour before it turned out to be wrong, and `unpair` is now wired into `forget()`
+    with `supportsForget: true`, so it is a shipped path resting on a reading of the header.
+
+    Needs the owner: unpairing changes their machine's pairing state and pairing raises a
+    Windows dialog. Scenario is one brick — `forget()` it, confirm Windows no longer lists it,
+    `pair()` it back, confirm the dialog appears and PIN 1234 is accepted, confirm discovery
+    and a connect both work afterwards
+
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears

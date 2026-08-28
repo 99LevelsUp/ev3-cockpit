@@ -140,16 +140,20 @@ export function loadWinsock2(): Winsock2Api {
 	try {
 		const lib = koffi.load('ws2_32.dll');
 
+		// Type names are registered process-wide in koffi, and an extension host can hold
+		// more than one extension using it. Prefixing keeps a second registration of a
+		// well-known Win32 name from throwing on whichever of us loads second.
+
 		// `pack` rather than `struct`: SOCKADDR_BTH is documented as unaligned, and the
 		// natural alignment of the 64-bit address would otherwise pad it to 32 bytes and
 		// push the channel past where the kernel reads it.
-		koffi.pack('SOCKADDR_BTH', {
+		koffi.pack('COCKPIT_SOCKADDR_BTH', {
 			addressFamily: 'uint16',
 			btAddr: 'uint64',
 			serviceClassId: koffi.array('uint8', 16),
 			port: 'uint32',
 		});
-		koffi.struct('WSADATA_BTH', {
+		koffi.struct('COCKPIT_WSADATA_BTH', {
 			wVersion: 'uint16',
 			wHighVersion: 'uint16',
 			iMaxSockets: 'uint16',
@@ -158,22 +162,22 @@ export function loadWinsock2(): Winsock2Api {
 			szDescription: koffi.array('uint8', 257),
 			szSystemStatus: koffi.array('uint8', 129),
 		});
-		koffi.struct('TIMEVAL_BTH', { tv_sec: 'int32', tv_usec: 'int32' });
-		koffi.struct('FD_SET_BTH', { fd_count: 'uint32', fd_array: koffi.array('uintptr', 64) });
+		koffi.struct('COCKPIT_TIMEVAL_BTH', { tv_sec: 'int32', tv_usec: 'int32' });
+		koffi.struct('COCKPIT_FD_SET_BTH', { fd_count: 'uint32', fd_array: koffi.array('uintptr', 64) });
 
-		const wsaStartup = lib.func('int __stdcall WSAStartup(uint16, WSADATA_BTH*)') as KoffiFunc;
+		const wsaStartup = lib.func('int __stdcall WSAStartup(uint16, COCKPIT_WSADATA_BTH*)') as KoffiFunc;
 		const started = wsaStartup(0x0202, {});
 		if (started !== 0) {
 			return fail(`WSAStartup failed with ${started}.`);
 		}
 
-		const rawConnect = lib.func('int __stdcall connect(uintptr, SOCKADDR_BTH*, int)') as KoffiFunc;
+		const rawConnect = lib.func('int __stdcall connect(uintptr, COCKPIT_SOCKADDR_BTH*, int)') as KoffiFunc;
 		const rawSocket = lib.func('uintptr __stdcall socket(int, int, int)') as KoffiFunc;
 		const rawSend = lib.func('int __stdcall send(uintptr, const uint8*, int, int)') as KoffiFunc;
 		const rawRecv = lib.func('int __stdcall recv(uintptr, uint8*, int, int)') as KoffiFunc;
 		const rawClose = lib.func('int __stdcall closesocket(uintptr)') as KoffiFunc;
 		const rawSelect = lib.func(
-			'int __stdcall select(int, FD_SET_BTH*, FD_SET_BTH*, FD_SET_BTH*, TIMEVAL_BTH*)'
+			'int __stdcall select(int, COCKPIT_FD_SET_BTH*, COCKPIT_FD_SET_BTH*, COCKPIT_FD_SET_BTH*, COCKPIT_TIMEVAL_BTH*)'
 		) as KoffiFunc;
 		const rawLastError = lib.func('int __stdcall WSAGetLastError()') as KoffiFunc;
 
