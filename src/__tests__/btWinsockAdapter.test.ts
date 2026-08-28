@@ -47,8 +47,12 @@ class FakeWinsock implements Winsock2Api {
 		return this.socketHandle;
 	}
 
+	/** When set, `connect` rejects with this instead of returning a code. */
+	connectThrows?: Error;
+
 	connect(_socket: SocketHandle, address: BluetoothAddress): Promise<number> {
 		this.lastAddress = address;
+		if (this.connectThrows) { return Promise.reject(this.connectThrows); }
 		if (!this.holdConnect) { return Promise.resolve(this.connectResult); }
 		return new Promise<number>((resolve) => { this.connectSettle = resolve; });
 	}
@@ -183,6 +187,18 @@ describe('BtWinsockAdapter — opening', () => {
 		// brick stays silent, which on RFCOMM is indefinitely.
 		assert.deepEqual(api.closed, [42]);
 		assert.equal(adapter.isOpen, false);
+	});
+
+	it('releases the socket when the FFI call itself throws', async () => {
+		const api = new FakeWinsock();
+		api.connectThrows = new Error('koffi: cannot marshal SOCKADDR_BTH');
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api });
+
+		await assert.rejects(adapter.open(), /failed/);
+
+		// Neither the timeout nor the SOCKET_ERROR path runs here, and a handle left open
+		// stays charged against the host's one RFCOMM channel with nothing referencing it.
+		assert.deepEqual(api.closed, [42]);
 	});
 
 	it('does not adopt a connection that lands after it was abandoned', async () => {

@@ -162,9 +162,15 @@ export class BtWinsockAdapter implements TransportAdapter {
 				expiry,
 			]);
 		} catch (error) {
-			throw error instanceof TimeoutError
-				? error
-				: new TransportError(`BT connect to ${this.mac} failed.`, error);
+			if (error instanceof TimeoutError) {
+				// The timer already closed it; that is how it aborted the call.
+				throw error;
+			}
+			// The FFI itself threw, which the two paths below do not cover. Leaving the
+			// handle open here is what costs on Windows: the socket stays charged against
+			// the one RFCOMM channel with nothing left holding a reference to it.
+			api.closesocket(socket);
+			throw new TransportError(`BT connect to ${this.mac} failed.`, error);
 		} finally {
 			if (this.connectTimer) { clearTimeout(this.connectTimer); this.connectTimer = undefined; }
 		}

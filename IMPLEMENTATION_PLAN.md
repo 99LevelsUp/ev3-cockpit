@@ -410,6 +410,15 @@ Build the source of truth for connected bricks.
     so it measures the pacing violation rather than the backend. Nothing about SPP behind the
     queue is known yet, and the decision between backends is already made — this validates it
     rather than deciding it
+
+    **Pass criteria, written before the run.** Winsock is validated when it opens at or near
+    100% on **BBB and CCC** at product pacing. Judge per brick and per backend, never pooled:
+    the testlab recorded in April, before any of this code existed, that **AAA has a degraded
+    BT runtime on this host** — discovery works, the runtime times out opening. So an
+    AAA-only failure confirms that April finding and says nothing about the backend. Only a
+    broad failure across healthy bricks reopens the backend decision, which the owner and the
+    testlab have already made. Fixing the interpretation in advance is the point: four BT
+    diagnoses have been written after the fact and withdrawn
   - [ ] 2.8.15 **BT discovery should not depend on SPP pairing artifacts.** Discovery still
     scans COM ports, which is what the testlab used as its *secondary* mechanism; its primary
     was `bthprops.cpl` through koffi. The two differ in a way that matters now that the
