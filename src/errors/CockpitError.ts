@@ -41,6 +41,23 @@ export class TransportError extends CockpitError {
 	}
 }
 
+/**
+ * This backend cannot run on this host, and nothing was attempted.
+ *
+ * The distinction matters to whoever is choosing between backends. A backend that is
+ * unavailable — wrong platform, an FFI that will not load, a socket the OS refused to
+ * hand out — never touched the radio, so trying the next one immediately costs nothing.
+ * An ordinary {@link TransportError} from a connect attempt did touch it, and on Windows
+ * that leaves the single RFCOMM channel settling for tens of seconds; following it with
+ * another attempt spends the recovery rather than shortening it.
+ */
+export class BackendUnavailableError extends TransportError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause);
+		this.name = 'BackendUnavailableError';
+	}
+}
+
 export class ConnectionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.ConnectionFailed, message, cause);
