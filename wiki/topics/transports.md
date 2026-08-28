@@ -22,7 +22,7 @@ The module follows a two-layer architecture per transport:
 **Transport Providers** (`TransportProvider` interface): compose adapter + protocol for full `discover/connect/disconnect/send/recover/forget`.
 - `UsbTransportProvider` — USB device enumeration via `node-hid`. BrickKey: `usb:<serial>`. Lazy-loads node-hid with try-catch fallback.
 - `TcpTransportProvider` — UDP beacon discovery on port 3015 (`dgram`), TCP connection on port 5555. VMTP1.0 unlock handshake. BrickKey: `tcp:<serial>` or `tcp:<ip>`. Hybrid beacon + direct-IP recovery.
-- `BtTransportProvider` — multi-backend architecture on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus. BrickKey: `bt:<mac>`. Supports signal strength reporting.
+- `BtTransportProvider` — two backends on Windows: WinSock2 `AF_BTH` via `koffi` FFI (preferred), then SPP via `serialport`. BrickKey: `bt:<mac>`.
 
 **Infrastructure:**
 - `ProviderRegistry` — register/unregister/enumerate/lookup transport providers by type
@@ -66,7 +66,7 @@ Transport timing constants (from `transportConstants.ts`):
 ## Key Decisions [coverage: high — 5 sources]
 
 - **Adapter/provider separation** — adapters handle only raw I/O; providers compose adapter + protocol + discovery. This keeps adapters thin and testable.
-- **Multi-backend BT** — Windows BT has three backends (WinRT, WinSock2, SPP) tried in priority order, because no single approach works reliably on all Windows configurations.
+- **Two BT backends** — WinSock2 is the testlab's measured choice; SPP remains because it needs no FFI. A WinRT backend was dropped: it would need a .NET helper process.
 - **Lazy native loading** — `node-hid` and other native modules are loaded with `require()` inside try-catch, allowing the extension to function without native dependencies installed.
 - **Serialized BT connections** — Windows RFCOMM allows only one active connection at a time; the `BtConnectionQueue` enforces this with a 15-second inter-connection cooldown.
 - **Rate limiting at transport guard level** — ≤10 commands/second protects EV3 firmware from freezes; applied per-brick regardless of how many consumers send commands.

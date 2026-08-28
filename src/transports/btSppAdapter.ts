@@ -1,9 +1,10 @@
 /**
  * Bluetooth SPP transport adapter using the `serialport` package.
  *
- * This is the lowest-priority BT backend (fallback after WinRT and Winsock).
- * It communicates with the EV3 brick over a COM/serial port using the
- * standard Serial Port Profile (SPP).
+ * The fallback BT backend, behind {@link BtWinsockAdapter}. It reaches the brick over the
+ * outgoing COM port Windows creates for a paired device, using the Serial Port Profile.
+ *
+ * Kept because it needs no FFI and so still works where `koffi` cannot load.
  */
 
 import { TransportAdapter, SendOptions } from './transportAdapter';

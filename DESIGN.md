@@ -186,7 +186,10 @@ Concrete adapters:
 - `UsbHidAdapter` — USB HID via `node-hid`. Fallback for when libusb cannot claim the
   interface; delivers 64 bytes per packet.
 - `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
-- `BtRfcommAdapter` — Bluetooth RFCOMM. Multi-backend on Windows: WinRT StreamSocket (if .NET available) → WinSock2 via `koffi` FFI → SPP via `serialport`. On Linux: BlueZ D-Bus.
+- `BtWinsockAdapter` — Bluetooth RFCOMM over WinSock2 `AF_BTH` via `koffi` FFI. The preferred
+  BT backend on Windows.
+- `BtSppAdapter` — Bluetooth RFCOMM over the paired brick's outgoing serial port via
+  `serialport`. Fallback, and the only path on hosts where the FFI cannot load.
 
 #### USB has two backends, and they are not equivalent
 
@@ -242,6 +245,32 @@ and the brick advances its file pointer by the length the host *declares* rather
 what arrived, so a truncated upload reported success and landed zero padding. Nothing
 detected it because every command sent before the filesystem work fit inside 64 bytes.
 
+#### Bluetooth has one runtime backend, and WinRT is not it
+
+The design used to name three backends in a fallback chain: WinRT `StreamSocket`, then
+WinSock2 through `koffi`, then SPP over a serial port. Only the last was ever built, and
+building the first was never the right plan.
+
+**WinRT is excluded deliberately.** LEGO's own desktop products do use it — EV3 Classroom
+opens `RfcommDeviceService` and a `StreamSocket` — but they are .NET applications and we
+are a VS Code extension. Reaching WinRT from Node means a .NET helper process, and the
+testlab ruled that class of solution out at the start: native Windows API through `koffi`
+FFI, never a `child_process` shelling out to .NET, PowerShell or Python. A backend that
+cannot be built within the extension's own process is not a backend, it is a dependency on
+a runtime the user may not have. The chain is now **WinSock2 → SPP**, and nothing above
+the provider knows the difference.
+
+**WinSock2 is the testlab's answer, not a guess.** The lab compared the candidates against
+live bricks and selected `AF_BTH`/`BTHPROTO_RFCOMM` sockets as the BT runtime; the serial
+port was its *discovery* mechanism, promoted to a transport here by an oversight rather
+than by a measurement. Porting the lab's choice is what this section records.
+
+**The single-channel limit survives the change.** Windows carries one RFCOMM connection at
+a time whichever API opens it — the lab hit error 121 on sockets exactly as this code hit
+it on serial ports. So `BtConnectionQueue` is not a workaround for the fallback backend,
+it is a property of the host, and it paces both. What the backend choice can improve is
+what happens *inside* a connection; it cannot make the host carry two.
+
 **Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
 brick), firmware freeze protection (one active transport at a time, 2-second switch
 cooldown), degradation tracking. It is deliberately **not** a meter on normal traffic:
@@ -250,7 +279,9 @@ trip — measured at 176, 62 and 11 commands per second for USB, TCP and BT, wit
 and no latency drift at any of them. The guard exists for a retry storm or a runaway
 loop, not for the rates a working caller can reach.
 
-**BT connection queue**: Windows RFCOMM allows only one active connection at a time. A serialized queue with 15-second inter-connection cooldown and exponential backoff on errors enforces this constraint.
+**BT connection queue**: Windows RFCOMM allows only one active connection at a time, on any
+backend. A serialized queue enforces it — a 15-second gap after a connection is released
+cleanly, 30 seconds after one that failed, and exponential backoff on repeated errors.
 
 ### 4.2 Presence Aggregator
 

@@ -211,10 +211,13 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
         provider already held it — so connecting to a brick found by discovery always failed
 - [ ] **1.11 BT Transport** — SPP backend only; discovery not wired
   - [ ] 1.11.1 `BtRfcommAdapter` — multi-backend orchestrator (no such file or symbol exists)
-  - [ ] 1.11.2 `BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket (Windows, requires dotnet)
+  - [~] 1.11.2 ~~`BtWinrtBackend` — .NET helper IPC for WinRT StreamSocket~~ **Dropped
+    28.08.2026 by the owner.** It needs a .NET helper process, and the testlab excludes
+    `child_process` paths for extension compatibility. See DESIGN §4.1.1.
   - [ ] 1.11.3 `BtWinsockBackend` — koffi FFI to ws2_32.dll AF_BTH (Windows, pure JS)
   - [x] 1.11.4 `BtSppBackend` — serialport COM port fallback (cross-platform)
-  - [ ] 1.11.5 .NET runtime detection — WinRT primary if available, otherwise Winsock
+  - [~] 1.11.5 ~~.NET runtime detection~~ **Dropped with 1.11.2** — nothing to detect once
+    WinRT is out of the chain.
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
   - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3, which requires a connect beyond a transport's ceiling to "fail with a stated reason rather than queue indefinitely". The one-slot BT ceiling is correct and stays; only the unbounded wait is the defect
   - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
