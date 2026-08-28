@@ -188,4 +188,13 @@ async function main() {
 	for (const [, provider] of backends) { provider.dispose?.(); }
 }
 
-main().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); });
+// BtConnectionQueue unrefs its drain timer, which is right inside an extension host and
+// fatal in a script: while the queue is serving a 30-second cooldown there is nothing
+// referenced left to run, so Node decides the program is finished and exits 0 mid-run.
+// The first attempt at this file died exactly there, after one line of output.
+const keepAlive = setInterval(() => { /* hold the loop open */ }, 1000);
+
+main().then(
+	() => { clearInterval(keepAlive); process.exit(0); },
+	(error) => { clearInterval(keepAlive); console.error(error); process.exit(1); }
+);
