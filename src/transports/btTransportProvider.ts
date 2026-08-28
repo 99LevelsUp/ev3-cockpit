@@ -19,7 +19,7 @@ import {
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
 	PresenceState,
 } from '../contracts';
-import { TransportError, ConnectionError } from '../errors/CockpitError';
+import { TransportError, ConnectionError, BackendUnavailableError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
 import { BtConnectionQueue } from './btConnectionQueue';
 import { BT } from './transportConstants';
@@ -215,29 +215,42 @@ export class BtTransportProvider implements TransportProvider {
 
 	// ── Internal ────────────────────────────────────────────────────
 
+	/**
+	 * Opens the first backend that can serve this host.
+	 *
+	 * Falling through is **only** for a backend that could not run at all — no radio, an
+	 * FFI that will not load, the wrong platform. Those never touch the air, so the next
+	 * one may go immediately.
+	 *
+	 * A backend that did touch the air and failed ends the attempt. Windows carries one
+	 * RFCOMM channel and a failed connection leaves it settling for tens of seconds, so a
+	 * second backend arriving straight afterwards is the impatient retry that was deleted
+	 * from `BtSppAdapter`, wearing a different name. The caller waits out the queue's error
+	 * cooldown and tries again, which is where that recovery belongs.
+	 */
 	private async connectWithFallback(mac: string): Promise<{ adapter: TransportAdapter; backend: BtBackend }> {
 		if (this.backends.size === 0) {
 			throw new ConnectionError('No BT backends configured.');
 		}
 
-		// Try preferred backend first if known
-		const preferred = this.preferredBackend.get(mac);
-		const orderedBackends = this.getOrderedBackends(preferred);
+		const ordered = this.getOrderedBackends(this.preferredBackend.get(mac));
+		const unavailable: string[] = [];
 
-		const errors: string[] = [];
-		for (const [backend, factory] of orderedBackends) {
+		for (const [backend, factory] of ordered) {
 			try {
 				const adapter = factory(mac);
 				await adapter.open();
 				return { adapter, backend };
 			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				errors.push(`${backend}: ${msg}`);
+				if (!(error instanceof BackendUnavailableError)) {
+					throw error;
+				}
+				unavailable.push(`${backend}: ${error.message}`);
 			}
 		}
 
 		throw new ConnectionError(
-			`All BT backends failed for ${mac}:\n${errors.join('\n')}`
+			`No BT backend can run on this host for ${mac}: ${unavailable.join('; ')}`
 		);
 	}
 
