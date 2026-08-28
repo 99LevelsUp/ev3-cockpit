@@ -1,11 +1,14 @@
 /**
  * What Bluetooth discovery reports once it reads the Windows device cache.
  *
- * Two things are being pinned. First, that a brick Windows knows about is listed whether or
- * not it has an outgoing COM port — that gap is the reason this exists, and it opened the
- * moment the runtime stopped going through a serial port. Second, that a brick keeps its own
- * name: over the port scan the same brick reported itself as `EV3 [00:16:53:42:D9:F2]` on
- * Bluetooth and `CCC` on USB, with nothing to tell the user they were one machine.
+ * What is being pinned: a brick Windows knows about is listed whether or not it has an
+ * outgoing COM port. That gap is the reason this exists, and it opened the moment the runtime
+ * stopped going through a serial port.
+ *
+ * Naming is deliberately not pinned to the cache. `szName` is filled only for a device
+ * Windows is connected to, so a remembered brick arrives unnamed and the port scan's
+ * `EV3 [address]` is what survives — which the test below states, so the next reader does not
+ * re-derive the disappointment.
  */
 
 import { describe, it } from 'node:test';
@@ -84,7 +87,7 @@ describe('BtClassicDiscovery', () => {
 		assert.equal(found[0].mac, '00:16:53:42:D9:F2');
 	});
 
-	it('gives the brick its own name instead of its address', async () => {
+	it('uses the cached name when Windows has one', async () => {
 		const discovery = new BtClassicDiscovery({
 			listDevices: () => [cached({ name: 'CCC' })],
 			portScan: () => Promise.resolve([scanned()]),
@@ -93,6 +96,19 @@ describe('BtClassicDiscovery', () => {
 		const [brick] = await discovery.discover();
 
 		assert.equal(brick.name, 'CCC');
+	});
+
+	it('falls back to the address when the cache has no name, which is the usual case', async () => {
+		const discovery = new BtClassicDiscovery({
+			listDevices: () => [cached({ name: '' })],
+			portScan: () => Promise.resolve([scanned()]),
+		});
+
+		const [brick] = await discovery.discover();
+
+		// Measured on all three bricks: Windows fills szName only while connected, so a
+		// remembered brick arrives unnamed. This file briefly claimed otherwise.
+		assert.equal(brick.name, 'EV3 [00:16:53:42:D9:F2]');
 	});
 
 	it('falls back to the port scan when the cache cannot be read', async () => {

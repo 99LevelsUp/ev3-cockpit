@@ -470,10 +470,15 @@ Build the source of truth for connected bricks.
     untouched by waiting longer, and it is untouched by which API opens the socket — which is
     a real result, and a narrower question than the one that has been asked four times
   - [x] 2.8.15 **BT discovery no longer depends on SPP pairing artifacts**, 28.08.2026 — see
-    1.11.7a. It also settles most of 2.8.13: the device cache carries the brick's own name, so
-    a brick reports itself as `CCC` over Bluetooth instead of `EV3 [00:16:53:42:D9:F2]`. What
-    2.8.13 still wants is the cross-transport identity itself — knowing that the BT `CCC` and
-    the USB `CCC` are one machine rather than two entries that happen to agree
+    1.11.7a. Verified against the real DLL: three bricks read out of the cache with correct
+    addresses and a Class of Device of 0x000804 each, and the one non-LEGO device on this host
+    correctly excluded.
+
+    **It does not help 2.8.13, and this entry said it did for about an hour.** `szName` is
+    populated only for a device Windows is currently connected to; every remembered brick
+    came back with an empty name. The claim was written from reading the structure and not
+    from running it, which is the same mistake as arguing about a wire instead of measuring
+    it. 2.8.13 stands as it was: the name has to come from the brick or from the USB identity
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears
