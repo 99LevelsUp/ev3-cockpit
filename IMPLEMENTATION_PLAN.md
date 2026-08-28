@@ -236,12 +236,25 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     questions and only looked alike while the runtime went through a serial port: a paired
     brick whose outgoing port Windows never created is invisible to a scan and perfectly
     reachable over a socket. No inquiry is issued, so it costs no air time
-  - [ ] 1.11.13 **Pair and unpair from inside the cockpit.** The owner asked for this on
-    27.08.2026: *„zarizeni se maji pripojovat primo k cockpitu bez nutnosti ovladat to z
-    windows“*. `bthprops.cpl` carries both calls next to the enumeration already bound in
-    `windowsBluetooth.ts` — `BluetoothAuthenticateDeviceEx` (the EV3's PIN is 1234) and
-    `BluetoothRemoveDevice`, which is also what would let `capabilities.supportsForget`
-    become true (see 6.6.6). The testlab has working versions of both
+  - [x] 1.11.13 **Pair and unpair, in the discovery layer**, 28.08.2026. The owner asked for
+    this on 27.08.2026 — *„zarizeni se maji pripojovat primo k cockpitu bez nutnosti
+    ovladat to z windows“* — and placed it on 28.08.2026: pairing belongs to discovery, not
+    to a command or a view. It does, and the code agrees: `BluetoothAuthenticateDeviceEx` and
+    `BluetoothRemoveDevice` sit in the same DLL as the enumeration, so any other home would
+    mean the same FFI in two places.
+
+    `BluetoothAuthenticateDeviceEx` runs off the main thread. With a null window handle
+    Windows raises its own dialog and does not return until the user answers it; called
+    synchronously that would freeze the extension host for as long as the dialog stood.
+
+    `forget()` now removes the pairing and reports a refusal instead of swallowing it, and
+    `capabilities.supportsForget` follows whether an unpair hook was supplied. That closes
+    6.6.6: forget used to drop this provider's own bookkeeping and leave the pairing alone,
+    so a forgotten brick came back on the next scan.
+
+    Still open: pairing without the Windows dialog, which needs
+    `BluetoothRegisterForAuthenticationEx` and a native callback to answer with 1234, and a
+    command to invoke any of this from the UI
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
   - [ ] 1.11.9 Signal strength reporting where available (`signalInfo` is read for ordering, never populated)
   - [ ] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper

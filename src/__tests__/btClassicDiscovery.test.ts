@@ -149,3 +149,41 @@ describe('BtClassicDiscovery', () => {
 		assert.equal(found.length, 1);
 	});
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Pairing
+// ════════════════════════════════════════════════════════════════════
+
+describe('BtClassicDiscovery — pairing', () => {
+	it('reports a cancelled pairing rather than throwing', async () => {
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => Promise.resolve({ ok: false, reason: 'Windows refused the pairing (error 1223).' }),
+		});
+
+		const result = await discovery.pair('00:16:53:42:D9:F2');
+
+		// A user closing the dialog is an answer, not a fault.
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /1223/);
+	});
+
+	it('turns a thrown binding failure into a reason', async () => {
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => Promise.reject(new Error('koffi is not installed')),
+		});
+
+		const result = await discovery.pair('00:16:53:42:D9:F2');
+
+		assert.deepEqual(result, { ok: false, reason: 'koffi is not installed' });
+	});
+
+	it('unpairs through the binding', () => {
+		const asked: string[] = [];
+		const discovery = new BtClassicDiscovery({
+			unpairDevice: (mac) => { asked.push(mac); return { ok: true }; },
+		});
+
+		assert.deepEqual(discovery.unpair('00:16:53:42:D9:F2'), { ok: true });
+		assert.deepEqual(asked, ['00:16:53:42:D9:F2']);
+	});
+});

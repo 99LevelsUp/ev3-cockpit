@@ -16,7 +16,10 @@
  */
 
 import { BtDiscoveryDevice } from './btTransportProvider';
-import { BluetoothDeviceInfo, listBluetoothDevices, isLikelyEv3 } from './windowsBluetooth';
+import {
+	BluetoothDeviceInfo, listBluetoothDevices, isLikelyEv3,
+	pairBluetoothDevice, removeBluetoothDevice,
+} from './windowsBluetooth';
 import { BT } from './transportConstants';
 import { formatMac } from './btSppDiscovery';
 
@@ -35,6 +38,17 @@ export interface BtClassicDiscoveryOptions {
 	portScan?: () => Promise<BtDiscoveryDevice[]>;
 	/** Called when the cache cannot be read, once per scan. */
 	onCacheUnavailable?: (reason: string) => void;
+	/** Pairs with a device. Injectable for the same reason as {@link listDevices}. */
+	pairDevice?: (mac: string) => Promise<{ ok: boolean; reason?: string }>;
+	/** Removes a pairing. */
+	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+}
+
+/** Outcome of a pairing operation. */
+export interface PairingResult {
+	ok: boolean;
+	/** Why it did not happen. Absent on success. */
+	reason?: string;
 }
 
 /**
@@ -44,12 +58,50 @@ export class BtClassicDiscovery {
 	private readonly listDevices: () => BluetoothDeviceInfo[];
 	private readonly portScan?: () => Promise<BtDiscoveryDevice[]>;
 	private readonly onCacheUnavailable?: (reason: string) => void;
+	private readonly pairDevice: (mac: string) => Promise<PairingResult>;
+	private readonly unpairDevice: (mac: string) => PairingResult;
 
 	constructor(options: BtClassicDiscoveryOptions = {}) {
 		this.listDevices = options.listDevices ?? (() => listBluetoothDevices());
 		this.portScan = options.portScan;
 		this.onCacheUnavailable = options.onCacheUnavailable;
+		this.pairDevice = options.pairDevice ?? pairBluetoothDevice;
+		this.unpairDevice = options.unpairDevice ?? removeBluetoothDevice;
 	}
+
+	/**
+	 * Pairs this machine with a brick.
+	 *
+	 * Pairing belongs here rather than to a command or a view: it is the same question
+	 * discovery asks — which bricks does this machine know — and the call sits in the same
+	 * DLL, next to the enumeration. Putting it a layer up would mean the same FFI in two
+	 * places and a UI that knows about `bthprops.cpl`.
+	 *
+	 * Windows shows its own dialog and the user types the brick's PIN. Every EV3 uses the
+	 * same one, and the brick displays it when asked.
+	 */
+	pair = async (mac: string): Promise<PairingResult> => {
+		try {
+			return await this.pairDevice(mac);
+		} catch (error) {
+			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	};
+
+	/**
+	 * Removes the pairing, so the machine forgets the brick.
+	 *
+	 * This is what makes `forget()` mean what its name says. Until now it dropped the
+	 * cockpit's own bookkeeping and left the Windows pairing in place, so a forgotten brick
+	 * reappeared on the next scan.
+	 */
+	unpair = (mac: string): PairingResult => {
+		try {
+			return this.unpairDevice(mac);
+		} catch (error) {
+			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	};
 
 	/**
 	 * Bound so it can be handed straight to `BtTransportProvider` as its discovery function.

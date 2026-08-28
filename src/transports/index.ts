@@ -14,8 +14,11 @@ export { BtSppAdapter } from './btSppAdapter';
 export type { BtSppAdapterOptions } from './btSppAdapter';
 export { BtSppBackend, macFromPnpId, formatMac } from './btSppDiscovery';
 export { BtClassicDiscovery } from './btClassicDiscovery';
-export type { BtClassicDiscoveryOptions } from './btClassicDiscovery';
-export { listBluetoothDevices, isLikelyEv3 } from './windowsBluetooth';
+export type { BtClassicDiscoveryOptions, PairingResult } from './btClassicDiscovery';
+export {
+	listBluetoothDevices, isLikelyEv3, pairBluetoothDevice, removeBluetoothDevice,
+	EV3_PAIRING_PIN,
+} from './windowsBluetooth';
 export type { BluetoothDeviceInfo, ListBluetoothDevicesOptions } from './windowsBluetooth';
 export type { SppPeer } from './btSppDiscovery';
 
