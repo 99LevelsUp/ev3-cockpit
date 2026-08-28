@@ -113,3 +113,39 @@ describe('BtTransportProvider — backend selection', () => {
 		assert.deepEqual(attempts, ['spp'], 'the known-good backend goes first on the retry');
 	});
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Forgetting
+// ════════════════════════════════════════════════════════════════════
+
+describe('BtTransportProvider — forgetting', () => {
+	it('removes the OS pairing, not just its own bookkeeping', async () => {
+		const unpaired: string[] = [];
+		const provider = new BtTransportProvider({
+			unpairDevice: (mac) => { unpaired.push(mac); return { ok: true }; },
+		});
+
+		await provider.forget(KEY);
+
+		// Dropping only the cached backend preference left the pairing in place, so the
+		// brick came back on the next scan as though nothing had happened.
+		assert.deepEqual(unpaired, [MAC]);
+	});
+
+	it('advertises forget only when it can actually forget', () => {
+		assert.equal(new BtTransportProvider({}).capabilities.supportsForget, false);
+		assert.equal(
+			new BtTransportProvider({ unpairDevice: () => ({ ok: true }) })
+				.capabilities.supportsForget,
+			true
+		);
+	});
+
+	it('reports a refused unpair instead of claiming success', async () => {
+		const provider = new BtTransportProvider({
+			unpairDevice: () => ({ ok: false, reason: 'device is in use' }),
+		});
+
+		await assert.rejects(provider.forget(KEY), /device is in use/);
+	});
+});
