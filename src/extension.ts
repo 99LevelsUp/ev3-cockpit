@@ -3,8 +3,9 @@ import { DisposableStore } from './events';
 import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
-	BtConnectionQueue,
+	BtConnectionQueue, BtWinsockAdapter,
 } from './transports';
+import type { BtBackend, BtAdapterFactory } from './transports';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
 /** Where the brick keeps user projects. The one path worth a default. */
@@ -75,14 +76,24 @@ export function activate(context: vscode.ExtensionContext): void {
 	//
 	// What that looked like from outside: the first connect in a session worked and the next
 	// one failed, seemingly at random, differently on each brick.
+	//
+	// Two backends. Winsock2 opens an AF_BTH RFCOMM socket through koffi and is what the
+	// testlab measured and chose; SPP goes through the COM port and stays behind it because
+	// it needs no FFI, so it still works where koffi cannot load. Falling from one to the
+	// other happens only when a backend cannot run on this host at all — a failed connect
+	// ends the attempt, because the channel it just disturbed needs the cooldown more than
+	// it needs another immediate try.
 	const btBackend = new BtSppBackend();
 	const btProvider = services.add(new BtTransportProvider({
 		discoverDevices: btBackend.discover,
-		backends: new Map([['spp', btBackend.adapterFor]]),
+		backends: new Map<BtBackend, BtAdapterFactory>([
+			['winsock', (mac) => new BtWinsockAdapter({ mac })],
+			['spp', btBackend.adapterFor],
+		]),
 		connectionQueue: services.add(new BtConnectionQueue()),
 	}));
 	registry.register(btProvider);
-	logger.info('BT transport registered (SPP over paired serial ports)');
+	logger.info('BT transport registered (Winsock RFCOMM, SPP fallback)');
 
 	// ── Session Manager ─────────────────────────────────────────
 	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));
