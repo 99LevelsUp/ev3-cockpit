@@ -8,6 +8,8 @@ export { UsbLibusbAdapter } from './usbLibusbAdapter';
 export type { UsbLibusbAdapterOptions, UsbDeviceLocation } from './usbLibusbAdapter';
 export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
+export { BtWinsockAdapter } from './btWinsockAdapter';
+export type { BtWinsockAdapterOptions } from './btWinsockAdapter';
 export { BtSppAdapter } from './btSppAdapter';
 export type { BtSppAdapterOptions } from './btSppAdapter';
 export { BtSppBackend, macFromPnpId, formatMac } from './btSppDiscovery';
