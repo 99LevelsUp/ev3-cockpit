@@ -230,7 +230,18 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
   - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3, which requires a connect beyond a transport's ceiling to "fail with a stated reason rather than queue indefinitely". The one-slot BT ceiling is correct and stays; only the unbounded wait is the defect
   - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
-  - [ ] 1.11.7a BT discovery implementation (koffi bthprops.cpl + registry on Windows) — `extension.ts` registers the provider with no discovery function, so BT discovery returns an empty list
+  - [x] 1.11.7a **BT discovery via `bthprops.cpl`**, 28.08.2026. Reads the Windows Bluetooth
+    device cache — the testlab's primary mechanism — with the COM-port scan behind it as a
+    fallback and to keep the SPP backend's port map fresh. The two answer different
+    questions and only looked alike while the runtime went through a serial port: a paired
+    brick whose outgoing port Windows never created is invisible to a scan and perfectly
+    reachable over a socket. No inquiry is issued, so it costs no air time
+  - [ ] 1.11.13 **Pair and unpair from inside the cockpit.** The owner asked for this on
+    27.08.2026: *„zarizeni se maji pripojovat primo k cockpitu bez nutnosti ovladat to z
+    windows“*. `bthprops.cpl` carries both calls next to the enumeration already bound in
+    `windowsBluetooth.ts` — `BluetoothAuthenticateDeviceEx` (the EV3's PIN is 1234) and
+    `BluetoothRemoveDevice`, which is also what would let `capabilities.supportsForget`
+    become true (see 6.6.6). The testlab has working versions of both
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
   - [ ] 1.11.9 Signal strength reporting where available (`signalInfo` is read for ordering, never populated)
   - [ ] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
@@ -419,11 +430,11 @@ Build the source of truth for connected bricks.
     broad failure across healthy bricks reopens the backend decision, which the owner and the
     testlab have already made. Fixing the interpretation in advance is the point: four BT
     diagnoses have been written after the fact and withdrawn
-  - [ ] 2.8.15 **BT discovery should not depend on SPP pairing artifacts.** Discovery still
-    scans COM ports, which is what the testlab used as its *secondary* mechanism; its primary
-    was `bthprops.cpl` through koffi. The two differ in a way that matters now that the
-    runtime no longer goes through a COM port: a paired brick with no outgoing serial port is
-    invisible to discovery while the Winsock backend could reach it perfectly well
+  - [x] 2.8.15 **BT discovery no longer depends on SPP pairing artifacts**, 28.08.2026 — see
+    1.11.7a. It also settles most of 2.8.13: the device cache carries the brick's own name, so
+    a brick reports itself as `CCC` over Bluetooth instead of `EV3 [00:16:53:42:D9:F2]`. What
+    2.8.13 still wants is the cross-transport identity itself — knowing that the BT `CCC` and
+    the USB `CCC` are one machine rather than two entries that happen to agree
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears
