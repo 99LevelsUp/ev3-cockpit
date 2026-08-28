@@ -167,8 +167,6 @@ export const BT = {
 	INTER_CONNECTION_COOLDOWN_MS: 15000,
 	/** Recovery cooldown after RFCOMM error (ms, base value). */
 	ERROR_RECOVERY_COOLDOWN_MS: 30000,
-	/** WinRT .NET helper startup timeout (ms). */
-	WINRT_STARTUP_TIMEOUT_MS: 8000,
 	/** Default EV3 pairing PIN. */
 	PAIRING_PIN: '1234',
 } as const;
