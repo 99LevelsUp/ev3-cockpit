@@ -57,12 +57,12 @@ Implementují `TransportProvider` interface z [[moduly/Contracts]]:
 Pořadí priorit:
 
 ```
-1. WinRT StreamSocket   (pokud je dostupné .NET runtime)
-2. WinSock2 via koffi   (FFI na ws2_32.dll AF_BTH)
-3. SPP via serialport   (fallback COM port)
+1. WinSock2 via koffi   (FFI na ws2_32.dll AF_BTH)  — volba testlabu
+2. SPP via serialport   (fallback COM port)
 ```
 
-Bez detekce .NET: automaticky WinSock2 → SPP.
+WinRT StreamSocket byl 28.08.2026 vyřazen: potřebuje .NET helper proces a testlab
+`child_process` cesty vylučuje kvůli kompatibilitě s extensioní.
 
 ## Infrastruktura
 

@@ -29,7 +29,7 @@ Architecture layers (bottom to top): Transport Providers → Presence Aggregator
 ## Talks To [coverage: medium — 3 sources]
 
 - **VS Code Extension API** — OutputChannel logging, EventEmitter pattern, Disposable lifecycle, globalState persistence (planned)
-- **Physical EV3 bricks** — via USB HID (`node-hid`), TCP sockets (Node.js `net` + UDP `dgram`), Bluetooth RFCOMM (multi-backend: WinRT, WinSock2 via koffi FFI, serialport SPP)
+- **Physical EV3 bricks** — via USB HID (`node-hid`), TCP sockets (Node.js `net` + UDP `dgram`), Bluetooth RFCOMM (WinSock2 via koffi FFI, with serialport SPP as fallback)
 - **Dependent extensions** — consume the public API via `vscode.extensions.getExtension('ev3-cockpit')?.exports` after declaring `extensionDependencies`
 
 ## API Surface [coverage: high — 5 sources]

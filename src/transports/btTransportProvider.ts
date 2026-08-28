@@ -1,10 +1,13 @@
 /**
  * Bluetooth transport provider — composes BT adapters + EV3 protocol layer.
  *
- * Supports multiple BT backends with automatic fallback:
- * - WinRT StreamSocket (primary on Windows with .NET)
- * - Winsock AF_BTH RFCOMM via koffi (fallback on Windows)
- * - SPP via serialport (last resort, cross-platform)
+ * Two BT backends, in this order:
+ * - Winsock2 AF_BTH RFCOMM via koffi — the testlab's chosen runtime, preferred here.
+ * - SPP over the paired brick's serial port — fallback, and the only path where the
+ *   FFI cannot load.
+ *
+ * A WinRT StreamSocket backend was once planned and is excluded: it needs a .NET helper
+ * process, which the testlab ruled out for extension compatibility. See DESIGN §4.1.1.
  *
  * BT connections are serialized through {@link BtConnectionQueue} to respect
  * the Windows RFCOMM single-channel bottleneck.
@@ -23,7 +26,7 @@ import { BT } from './transportConstants';
 
 // ── BT backend types ────────────────────────────────────────────────
 
-export type BtBackend = 'winrt' | 'winsock' | 'spp';
+export type BtBackend = 'winsock' | 'spp';
 
 /** Factory that creates a transport adapter for a specific BT backend. */
 export type BtAdapterFactory = (mac: string) => TransportAdapter;

@@ -110,7 +110,7 @@ Known wires today, for the re-cut:
 | USB | HID reports | node-hid, hidapi.dll, setupapi.dll |
 | USB | interrupt endpoints (1024 B) | libusb — now the cockpit's preferred backend |
 | TCP | stream socket | Node `net` |
-| BT | RFCOMM | WinRT StreamSocket, WinSock2 (koffi), serialport SPP |
+| BT | RFCOMM | WinSock2 (koffi), serialport SPP — WinRT dropped 28.08.2026 |
 
 ### P3 — Fidelity check between lab and cockpit
 
@@ -165,7 +165,7 @@ Two carryovers from the cockpit belong here, both currently unverified:
 
 ### P7 — Bluetooth backend comparison under load
 
-Three RFCOMM backends exist and there is no evidence they were ever compared for stability
+Two RFCOMM backends remain and there is no evidence they were ever compared for stability
 rather than for connecting at all. BT is also the transport whose implied and measured RTT
 disagree most.
 
