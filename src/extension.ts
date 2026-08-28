@@ -99,6 +99,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	});
 	const btProvider = services.add(new BtTransportProvider({
 		discoverDevices: btDiscovery.discover,
+		unpairDevice: btDiscovery.unpair,
 		backends: new Map<BtBackend, BtAdapterFactory>([
 			['winsock', (mac) => new BtWinsockAdapter({ mac })],
 			['spp', btBackend.adapterFor],

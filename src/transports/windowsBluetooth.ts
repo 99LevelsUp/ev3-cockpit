@@ -31,6 +31,11 @@ export interface BluetoothDeviceInfo {
 /** Major device class of the EV3, from its Class of Device word. */
 export const BT_MAJOR_CLASS_TOY = 8;
 
+/** A `koffi` function that also offers an off-thread call. */
+type KoffiFunc = ((...args: unknown[]) => number) & {
+	async(...args: unknown[]): void;
+};
+
 interface KoffiLike {
 	load(name: string): { func(signature: string): unknown };
 	struct(name: string, fields: Record<string, unknown>): unknown;
@@ -41,6 +46,16 @@ interface BthpropsApi {
 	findFirst(params: unknown, info: unknown): unknown;
 	findNext(handle: unknown, info: unknown): number;
 	findClose(handle: unknown): number;
+	/** Removes a pairing. Takes a pointer to the 64-bit address. */
+	removeDevice(address: unknown): number;
+	/**
+	 * Pairs with a device, resolving `0` on success and a Win32 error otherwise.
+	 *
+	 * Off the main thread on purpose: with a null window handle Windows puts up its own
+	 * pairing dialog and does not return until the user answers it. Called synchronously
+	 * that would freeze the extension host for as long as the dialog stands.
+	 */
+	authenticateDevice(info: unknown): Promise<number>;
 }
 
 let cached: BthpropsApi | undefined;
@@ -119,7 +134,21 @@ function loadBthprops(): BthpropsApi {
 			hRadio: 'void*',
 		});
 
+		const removeDevice = lib.func('uint32 __stdcall BluetoothRemoveDevice(uint64*)') as KoffiFunc;
+		const authenticate = lib.func(
+			'uint32 __stdcall BluetoothAuthenticateDeviceEx(void*, void*, _Inout_ COCKPIT_BT_DEVICE_INFO*, void*, uint32)'
+		) as KoffiFunc;
+
 		cached = {
+			removeDevice: (address) => removeDevice(address),
+			authenticateDevice: (info) => new Promise<number>((resolve, reject) => {
+				// hwnd null: Windows owns the dialog. radio null: the first available one.
+				// The trailing 0 is MITMProtectionNotRequired, which is what a device with a
+				// fixed four-digit PIN can offer.
+				authenticate.async(null, null, info, null, 0, (error: Error | null, result: number) => {
+					if (error) { reject(error); } else { resolve(result); }
+				});
+			}),
 			findFirst: lib.func(
 				'void* __stdcall BluetoothFindFirstDevice(COCKPIT_BT_SEARCH_PARAMS*, _Inout_ COCKPIT_BT_DEVICE_INFO*)'
 			) as BthpropsApi['findFirst'],
@@ -259,4 +288,76 @@ export function isLikelyEv3(device: BluetoothDeviceInfo, legoOui: string): boole
 	if (/\bev3\b|lego|mindstorms/i.test(device.name)) { return true; }
 	if (((device.classOfDevice >> 8) & 0x1f) === BT_MAJOR_CLASS_TOY) { return true; }
 	return device.mac.toLowerCase().startsWith(legoOui.toLowerCase());
+}
+
+// ── Pairing ──────────────────────────────────────────────────
+
+/** The EV3's fixed pairing PIN. The brick shows it on its own display when asked. */
+export const EV3_PAIRING_PIN = '1234';
+
+/** Converts a MAC to the 64-bit form `BLUETOOTH_DEVICE_INFO` expects. */
+function macToAddress(mac: string): bigint | undefined {
+	const hex = String(mac ?? '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+	if (hex.length !== 12) { return undefined; }
+
+	let address = 0n;
+	for (let i = 0; i < 12; i += 2) {
+		address = (address << 8n) | BigInt(Number.parseInt(hex.slice(i, i + 2), 16));
+	}
+	return address;
+}
+
+/**
+ * Pairs this machine with a Bluetooth device.
+ *
+ * Windows puts up its own pairing dialog and the user types the brick's PIN, which for
+ * every EV3 is {@link EV3_PAIRING_PIN}. The call does not return until they answer, so it
+ * runs off the main thread — a dialog left open would otherwise hold the extension host.
+ *
+ * Pairing only. Whether the brick can then be reached is a separate question, answered by
+ * the transport rather than here.
+ *
+ * @returns Nothing on success; a `reason` when Windows refused or the user cancelled.
+ * @throws {BackendUnavailableError} When the bindings cannot load on this host.
+ */
+export async function pairBluetoothDevice(mac: string): Promise<{ ok: boolean; reason?: string }> {
+	const api = loadBthprops();
+	const address = macToAddress(mac);
+	if (address === undefined) {
+		return { ok: false, reason: `Not a MAC address: ${mac}` };
+	}
+
+	const info = emptyDeviceInfo();
+	(info.Address as { ullLong: bigint }).ullLong = address;
+
+	try {
+		const result = await api.authenticateDevice(info);
+		// ERROR_CANCELLED is the ordinary outcome of a user closing the dialog, and it is
+		// reported rather than thrown: nothing went wrong, they changed their mind.
+		return result === 0
+			? { ok: true }
+			: { ok: false, reason: `Windows refused the pairing (error ${result}).` };
+	} catch (error) {
+		return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/**
+ * Removes a pairing, so the machine forgets the device entirely.
+ *
+ * @returns Nothing on success; a `reason` when Windows refused.
+ * @throws {BackendUnavailableError} When the bindings cannot load on this host.
+ */
+export function removeBluetoothDevice(mac: string): { ok: boolean; reason?: string } {
+	const api = loadBthprops();
+	const address = macToAddress(mac);
+	if (address === undefined) {
+		return { ok: false, reason: `Not a MAC address: ${mac}` };
+	}
+
+	// The signature takes a pointer to the address; koffi marshals a one-element array.
+	const result = api.removeDevice([address]);
+	return result === 0
+		? { ok: true }
+		: { ok: false, reason: `Windows refused to remove the pairing (error ${result}).` };
 }

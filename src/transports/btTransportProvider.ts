@@ -68,6 +68,14 @@ export interface BtTransportProviderOptions {
 	discoverDevices?: BtDiscoveryFunction;
 	/** Connection queue (shared across BT providers). */
 	connectionQueue?: BtConnectionQueue;
+	/**
+	 * Removes the OS-level pairing.
+	 *
+	 * When present, `forget()` actually forgets and `capabilities.supportsForget` is true.
+	 * Without it forget only drops this provider's own bookkeeping, and the brick returns
+	 * on the next scan as though nothing happened.
+	 */
+	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 }
 
 /**
@@ -78,14 +86,15 @@ export interface BtTransportProviderOptions {
  */
 export class BtTransportProvider implements TransportProvider {
 	readonly transport = Transport.BT;
-	// supportsForget stays false until forget() actually unpairs at the OS level.
-	// Today it disconnects and drops the preferred-backend cache entry, which leaves
-	// the pairing in place -- see plan task 6.6.6.
-	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
+	// supportsForget follows whether an unpair hook was supplied: without one, forget()
+	// drops this provider's bookkeeping and leaves the OS pairing in place, and a brick
+	// that comes straight back is worse than a button that was never offered.
+	readonly capabilities: TransportCapabilities;
 
 	private readonly backends: Map<BtBackend, BtAdapterFactory>;
 	private readonly discoverDevices?: BtDiscoveryFunction;
 	private readonly connectionQueue?: BtConnectionQueue;
+	private readonly unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 	private readonly sessions = new Map<BrickKey, BtSession>();
 	private readonly preferredBackend = new Map<string, BtBackend>();
 	private disposed = false;
@@ -94,6 +103,11 @@ export class BtTransportProvider implements TransportProvider {
 		this.backends = options?.backends ?? new Map<BtBackend, BtAdapterFactory>();
 		this.discoverDevices = options?.discoverDevices;
 		this.connectionQueue = options?.connectionQueue;
+		this.unpairDevice = options?.unpairDevice;
+		this.capabilities = {
+			supportsSignalInfo: false,
+			supportsForget: Boolean(this.unpairDevice),
+		};
 	}
 
 	async discover(): Promise<DiscoveryScanResult> {
@@ -195,11 +209,26 @@ export class BtTransportProvider implements TransportProvider {
 		return this.connect(brickKey);
 	}
 
+	/**
+	 * Disconnects and removes the pairing, when this provider was given a way to.
+	 *
+	 * @throws {TransportError} When the OS refused to remove the pairing. Reported rather
+	 *   than swallowed: a forget that silently left the pairing in place is what made this
+	 *   capability false in the first place.
+	 */
 	async forget(brickKey: BrickKey): Promise<void> {
 		await this.disconnect(brickKey);
 		const mac = this.extractMac(brickKey);
-		if (mac) {
-			this.preferredBackend.delete(mac);
+		if (!mac) { return; }
+
+		this.preferredBackend.delete(mac);
+		if (!this.unpairDevice) { return; }
+
+		const result = this.unpairDevice(mac);
+		if (!result.ok) {
+			throw new TransportError(
+				`Could not forget ${mac}: ${result.reason ?? 'the operating system refused.'}`
+			);
 		}
 	}
 
