@@ -3,6 +3,7 @@ import { DisposableStore } from './events';
 import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
+	BtConnectionQueue,
 } from './transports';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
@@ -64,10 +65,21 @@ export function activate(context: vscode.ExtensionContext): void {
 	// already-paired peers, which answers both "which bricks are paired" and "which port
 	// reaches each" in one call. Nothing here pairs anything: that is the user's action on
 	// their own machine, and a brick they have not paired simply does not appear.
+	//
+	// The connection queue is not optional. Windows carries exactly **one** RFCOMM/SPP
+	// channel: a second connection fails with error 121 until the first is fully released,
+	// and recovery is about 10 s after a clean close and 30 s or more after a failure. That
+	// was measured in the testlab long before this code existed, and `BtConnectionQueue` was
+	// written from those numbers — but nothing ever passed it in, so every Bluetooth
+	// connection went straight at the adapter with no pacing at all.
+	//
+	// What that looked like from outside: the first connect in a session worked and the next
+	// one failed, seemingly at random, differently on each brick.
 	const btBackend = new BtSppBackend();
 	const btProvider = services.add(new BtTransportProvider({
 		discoverDevices: btBackend.discover,
 		backends: new Map([['spp', btBackend.adapterFor]]),
+		connectionQueue: services.add(new BtConnectionQueue()),
 	}));
 	registry.register(btProvider);
 	logger.info('BT transport registered (SPP over paired serial ports)');

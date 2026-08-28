@@ -11,7 +11,7 @@ import { BT, FIRMWARE_SAFETY } from './transportConstants';
 /** Entry in the pending queue. */
 interface QueueEntry {
 	readonly brickId: string;
-	resolve: (release: () => void) => void;
+	resolve: (release: (error?: unknown) => void) => void;
 	reject: (error: unknown) => void;
 }
 
@@ -50,7 +50,7 @@ export class BtConnectionQueue {
 	 * Acquire a connection slot. Returns a release callback that MUST be called
 	 * when the connection is no longer needed.
 	 */
-	async acquire(brickId: string): Promise<() => void> {
+	async acquire(brickId: string): Promise<(error?: unknown) => void> {
 		return new Promise<() => void>((resolve, reject) => {
 			this.queue.push({ brickId, resolve, reject });
 			this.scheduleDrain();
@@ -129,9 +129,15 @@ export class BtConnectionQueue {
 			const entry = this.queue.shift()!;
 			this.activeCount += 1;
 
-			const release = () => {
+			const release = (error?: unknown) => {
 				this.activeCount = Math.max(0, this.activeCount - 1);
 				this.lastReleaseTs = Date.now();
+				// A slot released after a failure has to start the longer recovery, not the
+				// ordinary gap. Windows carries one RFCOMM channel; a failed attempt leaves it
+				// unsettled for far longer than a clean close does, and the lab measured the
+				// difference as 10 s against 30 s. Without this the queue paced a failing
+				// brick as if nothing had gone wrong.
+				if (error === undefined) { this.recordSuccess(); } else { this.recordError(); }
 				this.scheduleDrain();
 			};
 

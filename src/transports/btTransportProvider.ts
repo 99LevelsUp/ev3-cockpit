@@ -46,7 +46,7 @@ interface BtSession {
 	adapter: TransportAdapter;
 	backend: BtBackend;
 	messageCounter: number;
-	queueRelease?: () => void;
+	queueRelease?: (error?: unknown) => void;
 }
 
 // ── LEGO OUI filter ─────────────────────────────────────────────────
@@ -145,7 +145,7 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		// Acquire connection queue slot (serialized RFCOMM)
-		let queueRelease: (() => void) | undefined;
+		let queueRelease: ((error?: unknown) => void) | undefined;
 		if (this.connectionQueue) {
 			queueRelease = await this.connectionQueue.acquire(mac);
 		}
@@ -156,7 +156,9 @@ export class BtTransportProvider implements TransportProvider {
 			this.preferredBackend.set(mac, backend);
 			return { brickKey, transport: Transport.BT };
 		} catch (error) {
-			queueRelease?.();
+			// Tell the queue it failed, so the next attempt waits out the longer recovery
+			// rather than the ordinary gap between connections.
+			queueRelease?.(error);
 			throw error;
 		}
 	}

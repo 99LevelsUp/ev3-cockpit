@@ -148,6 +148,46 @@ describe('TransportGuard', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('BtConnectionQueue', () => {
+	it('waits longer after a failed connection than after a clean one', async () => {
+		// Windows carries one RFCOMM channel, and how long it stays unusable depends on how
+		// the last one ended: about 10 s after a clean close, 30 s or more after a failure.
+		// The queue was built from those numbers but its release could not tell the two apart,
+		// so a brick that kept failing was paced as if nothing had gone wrong.
+		const queue = new BtConnectionQueue({
+			maxConcurrent: 1,
+			interConnectionCooldownMs: 40,
+			errorRecoveryCooldownMs: 400,
+		});
+		try {
+			const cleanRelease = await queue.acquire('brick-a');
+			cleanRelease();
+			const afterClean = Date.now();
+			(await queue.acquire('brick-a'))();
+			const cleanWait = Date.now() - afterClean;
+
+			const failingRelease = await queue.acquire('brick-a');
+			failingRelease(new Error('Opening COM8: Unknown error code 121'));
+			const afterFailure = Date.now();
+			const waited = new Promise<number>((resolve) => {
+				const started = Date.now();
+				void queue.acquire('brick-a').then((release) => {
+					release();
+					resolve(Date.now() - started);
+				});
+			});
+			const failureWait = await waited;
+
+			assert.ok(cleanWait < 200,
+				`a clean release waited ${cleanWait} ms, which is the failure cooldown`);
+			assert.ok(failureWait > 300,
+				`a failed release waited only ${failureWait} ms — the queue treated a failure `
+				+ 'like a clean close, which is what let a failing brick be hammered');
+			assert.ok(afterFailure >= afterClean);
+		} finally {
+			queue.dispose();
+		}
+	});
+
 	it('acquires and releases a slot', async () => {
 		const queue = new BtConnectionQueue({
 			maxConcurrent: 1,
