@@ -167,6 +167,16 @@ export const BT = {
 	INTER_CONNECTION_COOLDOWN_MS: 15000,
 	/** Recovery cooldown after RFCOMM error (ms, base value). */
 	ERROR_RECOVERY_COOLDOWN_MS: 30000,
+	/**
+	 * How long a queued connect waits for a slot before it fails with a stated reason
+	 * (DESIGN §3.3) instead of queuing indefinitely.
+	 *
+	 * Comfortably above the 30 s cooldown ceiling (`ERROR_RECOVERY_COOLDOWN_MS`, which
+	 * `BtConnectionQueue`'s backoff never exceeds), so this only fires when the wait is
+	 * for the transport's one slot to be released by another connected brick — the
+	 * ceiling-reached case — never for an ordinary cooldown.
+	 */
+	QUEUE_ACQUIRE_TIMEOUT_MS: 45000,
 	/** Default EV3 pairing PIN. */
 	PAIRING_PIN: '1234',
 } as const;
