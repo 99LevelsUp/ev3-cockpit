@@ -32,7 +32,7 @@ Module._resolveFilename = function (request, ...rest) {
 const out = (dir) => path.join(REPO, 'out', dir);
 const {
 	ProviderRegistry, UsbTransportProvider, TcpTransportProvider, BtTransportProvider,
-	BtSppBackend,
+	BtSppBackend, BtWinsockAdapter, BtConnectionQueue,
 } = require(out('transports'));
 const {
 	encodeEv3Packet, decodeEv3Packet, EV3_COMMAND, EV3_REPLY,
@@ -267,6 +267,45 @@ async function checkSession(transport, brick, provider, key, timeoutMs) {
 	});
 }
 
+/**
+ * The `TransportProvider` contract itself (1.13.1's mock coverage, against a real brick):
+ * a held session refuses a second connect, a disconnected one refuses a send, and a second
+ * disconnect is a no-op rather than a throw. 1.12.4 — no USB, TCP or BT provider had ever
+ * had this checked against real hardware; only the mock was.
+ *
+ * Ends the brick connected, same as it found it, so the checks after this one are unaffected.
+ */
+async function checkContract(transport, brick, provider, key, timeoutMs) {
+	await check(transport, brick, 'contract', 'a second connect is refused while the session is held',
+		async () => {
+			await provider.connect(key).then(
+				() => { throw new Error('a second connect() resolved instead of being refused'); },
+				() => { /* refused, as the session model requires */ }
+			);
+			return 'refused, as the session model requires';
+		});
+
+	await check(transport, brick, 'contract', 'a disconnected brick refuses a send', async () => {
+		await provider.disconnect(key);
+		try {
+			await sendCommand(provider, key, { kind: 'battery' }, timeoutMs).then(
+				() => { throw new Error('sendPacket answered a brick with no session'); },
+				() => { /* refused, as the session model requires */ }
+			);
+			return 'refused, as the session model requires';
+		} finally {
+			await provider.connect(key);
+		}
+	});
+
+	await check(transport, brick, 'contract', 'a second disconnect does not throw', async () => {
+		await provider.disconnect(key);
+		await provider.disconnect(key);
+		await provider.connect(key);
+		return 'idempotent, as the session model requires';
+	});
+}
+
 // ── driver ───────────────────────────────────────────────────────────
 
 async function runBrick(transport, provider, item, timeoutMs) {
@@ -288,6 +327,7 @@ async function runBrick(transport, provider, item, timeoutMs) {
 		await checkFilesystem(transport, brick, provider, key, timeoutMs);
 		await checkTelemetry(transport, brick, provider, key, timeoutMs);
 		await checkSession(transport, brick, provider, key, timeoutMs);
+		await checkContract(transport, brick, provider, key, timeoutMs);
 	} finally {
 		await provider.disconnect(key).catch(() => { /* already reported */ });
 	}
@@ -359,10 +399,19 @@ async function main() {
 	const registry = new ProviderRegistry();
 	const usb = new UsbTransportProvider(quiet);
 	const tcp = new TcpTransportProvider(quiet);
+	// Mirrors extension.ts: Winsock preferred, SPP fallback, paced through the same
+	// BtConnectionQueue the product shares across every BT session. Without the queue,
+	// every check here hammers the one RFCOMM channel back-to-back with no cooldown at
+	// all -- a harness bug that reads exactly like the channel refusing every reconnect.
 	const btBackend = new BtSppBackend();
+	const btQueue = new BtConnectionQueue();
 	const bt = new BtTransportProvider({
 		discoverDevices: btBackend.discover,
-		backends: new Map([['spp', btBackend.adapterFor]]),
+		backends: new Map([
+			['winsock', (mac) => new BtWinsockAdapter({ mac })],
+			['spp', btBackend.adapterFor],
+		]),
+		connectionQueue: btQueue,
 	});
 	registry.register(usb); registry.register(tcp); registry.register(bt);
 
@@ -373,7 +422,7 @@ async function main() {
 		for (const item of tcpScan.items) { await runBrick('TCP', tcp, item, 8000); }
 		for (const item of btScan.items) { await runBrick('BT ', bt, item, 12000); }
 	} finally {
-		usb.dispose(); tcp.dispose(); bt.dispose(); registry.dispose();
+		usb.dispose(); tcp.dispose(); bt.dispose(); btQueue.dispose(); registry.dispose();
 	}
 
 	return summarise();
