@@ -21,6 +21,7 @@ import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
 import { ProtocolError } from '../errors/CockpitError';
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { TransportGuard } from '../transports/transportGuard';
 import { TransportProvider } from '../contracts/transport';
 import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
@@ -783,6 +784,141 @@ function createStallableProvider(): {
 		releaseRecover: () => release?.(),
 	};
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// SessionManager -- TransportGuard wiring (1.8.4)
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('SessionManager -- TransportGuard wiring', () => {
+	const mockConfig = {
+		transport: Transport.Mock as const,
+		bricks: [{
+			id: 'brick-a',
+			displayName: 'Brick Alpha',
+			battery: { level: 75, voltage: 7.2 },
+			motorPorts: [],
+			sensorPorts: [],
+		}],
+	};
+
+	/** Bare-bones provider for exercising a real cross-transport switch. */
+	function makeFakeUsbProvider(): TransportProvider {
+		return {
+			transport: Transport.USB,
+			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			discover: () => Promise.resolve({ transport: Transport.USB, items: [] }),
+			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.USB }),
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.reject(new Error('not used in this test')),
+			dispose: () => { /* nothing to release */ },
+		};
+	}
+
+	function makeManager(guard: TransportGuard) {
+		const registry = new ProviderRegistry();
+		const provider = new MockTransportProvider(mockConfig);
+		registry.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 3000,
+			reconnectBaseMs: 50,
+			reconnectMaxMs: 200,
+			transportGuard: guard,
+		});
+		return { manager, provider };
+	}
+
+	it('does not gate an ordinary same-transport reconnect on the switch cooldown', async () => {
+		// The cooldown guards against *switching* transports rapidly, not against
+		// reconnecting the same one -- an ordinary disconnect/reconnect must not eat a
+		// 2 s (default) wait it never asked for.
+		const guard = new TransportGuard({ switchCooldownMs: 200 });
+		const { manager } = makeManager(guard);
+		const key = makeBrickKey(Transport.Mock, 'brick-a');
+
+		await manager.connect(key, Transport.Mock);
+		await manager.disconnect(key);
+		await assert.doesNotReject(
+			manager.connect(key, Transport.Mock),
+			'reopening the same transport right after closing it should not be gated'
+		);
+	});
+
+	it('refuses switching transports within the cooldown, guarded by physical brick id', async () => {
+		// DESIGN §4.1's switch cooldown protects the firmware from a rapid *transport*
+		// switch -- guarded by the brick's physical id (brickKeyId), not the
+		// transport-qualified key, so the same physical brick reachable over two
+		// transports is covered even though each has its own brickKey.
+		const guard = new TransportGuard({ switchCooldownMs: 200 });
+		const registry = new ProviderRegistry();
+		registry.register(new MockTransportProvider(mockConfig));
+		registry.register(makeFakeUsbProvider());
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 3000,
+			reconnectBaseMs: 50,
+			reconnectMaxMs: 200,
+			transportGuard: guard,
+		});
+
+		const mockKey = makeBrickKey(Transport.Mock, 'brick-a');
+		const usbKey = makeBrickKey(Transport.USB, 'brick-a');
+
+		await manager.connect(mockKey, Transport.Mock);
+		await manager.disconnect(mockKey);
+
+		await assert.rejects(
+			manager.connect(usbKey, Transport.USB),
+			/cooldown/i,
+			'switching to a different transport inside the cooldown window should be refused'
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 220));
+		await assert.doesNotReject(
+			manager.connect(usbKey, Transport.USB),
+			'the switch should go through once the cooldown has elapsed'
+		);
+		manager.dispose();
+	});
+
+	it('blocks sends once a brick degrades, and a clean reconnect recovers it', async () => {
+		// checkRateLimit() has no path back from `degraded` except recordSuccess(), which a
+		// degraded brick can never reach on its own -- every send is refused before it
+		// reaches the transport. Only a disconnect (SessionManager.resetHealth()) clears it.
+		const guard = new TransportGuard({ degradationThreshold: 2, switchCooldownMs: 0 });
+		const { manager, provider } = makeManager(guard);
+		const key = makeBrickKey(Transport.Mock, 'brick-a');
+
+		// wireExecutor() captures whichever createCommandChannel/sendPacket the provider
+		// offers *at connect time*, so the swap to a failing transport has to happen before
+		// connecting -- the mock's own command channel (its `createCommandChannel`) ignores
+		// `sendPacket` entirely and would silently keep succeeding otherwise.
+		const workingCreateChannel = provider.createCommandChannel?.bind(provider);
+		const workingSendPacket = provider.sendPacket.bind(provider);
+		const failingSendPacket = () => Promise.reject(new Error('simulated failure'));
+
+		provider.sendPacket = failingSendPacket;
+		(provider as { createCommandChannel?: unknown }).createCommandChannel = undefined;
+		await manager.connect(key, Transport.Mock);
+
+		await assert.rejects(manager.send(key, { kind: 'battery' }));
+		await assert.rejects(manager.send(key, { kind: 'battery' }));
+		await assert.rejects(
+			manager.send(key, { kind: 'battery' }),
+			/degraded/i,
+			'a third send should have been blocked by the guard, not reach the transport'
+		);
+
+		await manager.disconnect(key);
+		provider.sendPacket = workingSendPacket;
+		(provider as { createCommandChannel?: unknown }).createCommandChannel = workingCreateChannel;
+		await manager.connect(key, Transport.Mock);
+		await assert.doesNotReject(
+			manager.send(key, { kind: 'battery' }),
+			'a fresh connect after disconnect should not inherit the old degradation'
+		);
+	});
+});
 
 describe('SessionManager -- reconnect and disconnect precedence', () => {
 	it('explicit disconnect during an in-flight recover does not leak the connection', async () => {
