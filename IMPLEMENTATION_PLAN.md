@@ -711,13 +711,23 @@ Build the source of truth for connected bricks.
     into WinRT (most likely: a small helper process, JSON over stdio, with its own TFM/runtime
     trade-off to choose) — not yet started, and not assumed to be one evening's work
 
-  - [ ] 2.8.18 **Ship the WinRT pairing path in the extension, not just the probe.** Needs: a
-    helper-process design (TFM/runtime choice — framework-dependent vs self-contained vs
-    NativeAOT, each with a different size/dependency trade-off, owner's call); the helper
-    serialized against the same `BtConnectionQueue` the rest of BT already shares, so a pairing
-    attempt and a connect attempt never contend for the one radio slot; a bounded retry around
-    the live-inquiry step (a single 15 s window missed CCC once already); a UI prompt in place
-    of the beep ("confirm on the brick's display") once this leaves manual probing
+    **TFM decided, 01.09.2026: net48**, the owner's call — it ships with Windows already (same
+    as IS KARAT), no extra runtime to install, versus net10's smaller footprint but real
+    install dependency. Verified on real hardware, not assumed: WinRT projection via the
+    `Microsoft.Windows.SDK.Contracts` NuGet package (not CsWinRT, which needs a
+    `windows10.0.x`-suffixed TFM net48 doesn't have) reproduces the exact same
+    `DeviceWatcher`/`DeviceInformationCustomPairing` pairing success as the net10 probe — one
+    source change only (`string.Contains(string, StringComparison)` isn't in net48's BCL;
+    `IndexOf(...) >= 0` instead). Known future cost, not today's problem: Microsoft's own
+    direction eventually forces a net10 migration; that migration is separate work, later
+
+  - [ ] 2.8.18 **Ship the WinRT pairing path in the extension, not just the probe.** Needs: the
+    helper serialized against the same `BtConnectionQueue` the rest of BT already shares, so a
+    pairing attempt and a connect attempt never contend for the one radio slot; a bounded retry
+    around the live-inquiry step (a single 15 s window missed CCC more than once, and a
+    watcher scoped to *unpaired* devices sees nothing at all for a brick this host still
+    remembers as paired — check/unpair before assuming the radio is at fault); a UI prompt in
+    place of the beep ("confirm on the brick's display") once this leaves manual probing
 
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
