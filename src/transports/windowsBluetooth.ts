@@ -39,7 +39,12 @@ type KoffiFunc = ((...args: unknown[]) => number) & {
 interface KoffiLike {
 	load(name: string): { func(signature: string): unknown };
 	struct(name: string, fields: Record<string, unknown>): unknown;
+	union(fields: Record<string, unknown>): unknown;
 	array(type: string, length: number): unknown;
+	proto(signature: string): unknown;
+	register(callback: (...args: unknown[]) => unknown, type: string): unknown;
+	unregister(registered: unknown): void;
+	decode(pointer: unknown, type: string): unknown;
 }
 
 interface BthpropsApi {
@@ -56,10 +61,18 @@ interface BthpropsApi {
 	 * that would freeze the extension host for as long as the dialog stands.
 	 */
 	authenticateDevice(info: unknown): Promise<number>;
+	/** Registers a callback for `deviceInfo`'s pairing events. `[out]` handle in a 1-box array. */
+	registerAuth(deviceInfo: unknown, regHandleOut: unknown[], callback: unknown, param: unknown): number;
+	/** Answers a pending pairing request with the filled `BLUETOOTH_AUTHENTICATE_RESPONSE`. */
+	sendAuthResponse(radio: unknown, response: unknown): number;
+	/** Releases a handle from {@link registerAuth}. */
+	unregisterAuth(regHandle: unknown): number;
 }
 
 let cached: BthpropsApi | undefined;
 let loadFailure: string | undefined;
+/** The `koffi` module itself, kept for {@link registerLegacyPinResponder}'s own calls. */
+let koffiRef: KoffiLike | undefined;
 
 /**
  * `sizeof(BLUETOOTH_DEVICE_INFO)` and `sizeof(BLUETOOTH_DEVICE_SEARCH_PARAMS)`.
@@ -134,11 +147,65 @@ function loadBthprops(): BthpropsApi {
 			hRadio: 'void*',
 		});
 
+		// BLUETOOTH_AUTHENTICATE_RESPONSE and BLUETOOTH_AUTHENTICATION_CALLBACK_PARAMS, for
+		// answering a legacy-PIN pairing request programmatically (see
+		// registerLegacyPinResponder below). No #pragma pack surrounds either in the real
+		// header, so natural alignment applies -- the same as every struct above.
+		koffi.struct('COCKPIT_BT_PIN_INFO', {
+			pin: koffi.array('uint8', 16),
+			pinLength: 'uint8',
+		});
+		koffi.struct('COCKPIT_BT_OOB_INFO', {
+			C: koffi.array('uint8', 16),
+			R: koffi.array('uint8', 16),
+		});
+		koffi.struct('COCKPIT_BT_NUMERIC_COMPARISON_INFO', { NumericValue: 'uint32' });
+		koffi.struct('COCKPIT_BT_PASSKEY_INFO', { passkey: 'uint32' });
+		koffi.struct('COCKPIT_BT_AUTH_RESPONSE', {
+			bthAddressRemote: 'COCKPIT_BT_ADDRESS',
+			authMethod: 'uint32',
+			// Anonymous union in the real struct; naming it here only changes how this file
+			// addresses it (`.variant.pinInfo`), not the byte layout. All four members are
+			// declared, not just the one this file fills, because the union's size is the
+			// largest of them (oobInfo, at 32 bytes) -- declaring only pinInfo would model a
+			// smaller, wrong-sized struct and desync every field that follows.
+			variant: koffi.union({
+				pinInfo: 'COCKPIT_BT_PIN_INFO',
+				oobInfo: 'COCKPIT_BT_OOB_INFO',
+				numericCompInfo: 'COCKPIT_BT_NUMERIC_COMPARISON_INFO',
+				passkeyInfo: 'COCKPIT_BT_PASSKEY_INFO',
+			}),
+			negativeResponse: 'uint8',
+		});
+		koffi.struct('COCKPIT_BT_AUTH_CALLBACK_PARAMS', {
+			deviceInfo: 'COCKPIT_BT_DEVICE_INFO',
+			authenticationMethod: 'uint32',
+			ioCapability: 'uint32',
+			authenticationRequirements: 'uint32',
+			valueUnion: koffi.union({ Numeric_Value: 'uint32', Passkey: 'uint32' }),
+		});
+		// Callback pointer args do not auto-decode to structs (unlike a function's own
+		// _Out_/_Inout_ struct pointers) -- declared `void*` here and decoded explicitly
+		// with koffi.decode() inside the callback, the same way Koffi's own qsort example
+		// handles an opaque callback pointer argument.
+		koffi.proto('int __stdcall CockpitBtAuthCallback(void *pvParam, void *pAuthCallbackParams)');
+
 		const removeDevice = lib.func('uint32 __stdcall BluetoothRemoveDevice(uint64*)') as KoffiFunc;
 		const authenticate = lib.func(
 			'uint32 __stdcall BluetoothAuthenticateDeviceEx(void*, void*, _Inout_ COCKPIT_BT_DEVICE_INFO*, void*, uint32)'
 		) as KoffiFunc;
+		const registerAuth = lib.func(
+			'uint32 __stdcall BluetoothRegisterForAuthenticationEx'
+			+ '(COCKPIT_BT_DEVICE_INFO*, _Out_ void**, CockpitBtAuthCallback*, void*)'
+		) as KoffiFunc;
+		const sendAuthResponse = lib.func(
+			'uint32 __stdcall BluetoothSendAuthenticationResponseEx(void*, COCKPIT_BT_AUTH_RESPONSE*)'
+		) as KoffiFunc;
+		const unregisterAuth = lib.func(
+			'int __stdcall BluetoothUnregisterAuthentication(void*)'
+		) as KoffiFunc;
 
+		koffiRef = koffi;
 		cached = {
 			removeDevice: (address) => removeDevice(address),
 			authenticateDevice: (info) => new Promise<number>((resolve, reject) => {
@@ -156,6 +223,11 @@ function loadBthprops(): BthpropsApi {
 				'int __stdcall BluetoothFindNextDevice(void*, _Inout_ COCKPIT_BT_DEVICE_INFO*)'
 			) as BthpropsApi['findNext'],
 			findClose: lib.func('int __stdcall BluetoothFindDeviceClose(void*)') as BthpropsApi['findClose'],
+			registerAuth: (deviceInfo, regHandleOut, callback, param) => (
+				registerAuth(deviceInfo, regHandleOut, callback, param)
+			),
+			sendAuthResponse: (radio, response) => sendAuthResponse(radio, response),
+			unregisterAuth: (regHandle) => unregisterAuth(regHandle),
 		};
 		return cached;
 	} catch (error) {
@@ -307,12 +379,109 @@ function macToAddress(mac: string): bigint | undefined {
 	return address;
 }
 
+/** Fills a `BLUETOOTH_PIN_INFO` for `pin`, zero-padded to its fixed 16-byte field. */
+function buildPinInfo(pin: string): { pin: Uint8Array; pinLength: number } {
+	const bytes = new Uint8Array(16);
+	const encoded = Buffer.from(pin, 'ascii');
+	const length = Math.min(encoded.length, bytes.length);
+	encoded.copy(bytes, 0, 0, length);
+	return { pin: bytes, pinLength: length };
+}
+
+/** `BLUETOOTH_AUTHENTICATION_METHOD_LEGACY` — the EV3 supports no other. */
+const AUTH_METHOD_LEGACY = 1;
+
+/** A registration this file can later undo. */
+interface AuthResponder {
+	ok: boolean;
+	reason?: string;
+	dispose(): void;
+}
+
+/**
+ * Registers a callback that answers a legacy-PIN pairing request for `deviceInfo` with
+ * `pin`, so {@link pairBluetoothDevice} can complete without anything on this host to
+ * answer the PIN prompt.
+ *
+ * Confirmed necessary on hardware, 30.08.2026: with no callback registered, the brick's own
+ * screen accepted the pairing and its pre-filled PIN, and `BluetoothAuthenticateDeviceEx`
+ * still failed with `ERROR_ACCESS_DENIED` — nothing on this side ever answers the legacy-PIN
+ * half of the exchange. Windows raises no dialog of its own for this either: the docstring
+ * this replaced assumed one appeared, and none did, on this host or the two others tested.
+ *
+ * Needed koffi 2.16.3+ (this repo moved to 3.1.6): koffi 2.15.1's registered callbacks
+ * crashed the process on exit, reproduced down to `koffi.register()` alone with no native
+ * call involved at all — see plan 1.11.13.
+ *
+ * Scoped to one address (`BluetoothRegisterForAuthenticationEx`'s `pbtdiIn`), so this does
+ * not answer for any other device's pairing attempt.
+ *
+ * @returns `ok: false` with a reason if registration itself failed; otherwise `dispose()`
+ *   must be called exactly once, win or lose, to release the callback slot and the OS handle.
+ */
+function registerLegacyPinResponder(
+	api: BthpropsApi, deviceInfo: Record<string, unknown>, pin: string
+): AuthResponder {
+	if (!koffiRef) {
+		return { ok: false, reason: 'koffi not loaded.', dispose: () => { /* nothing to release */ } };
+	}
+	const koffi = koffiRef;
+
+	const onAuthenticationEvent = (_pvParam: unknown, paramsPtr: unknown): number => {
+		try {
+			const params = koffi.decode(paramsPtr, 'COCKPIT_BT_AUTH_CALLBACK_PARAMS') as {
+				deviceInfo: { Address: { ullLong: bigint } };
+				authenticationMethod: number;
+			};
+			const isLegacy = params.authenticationMethod === AUTH_METHOD_LEGACY;
+			api.sendAuthResponse(null, {
+				bthAddressRemote: params.deviceInfo.Address,
+				authMethod: params.authenticationMethod,
+				variant: { pinInfo: buildPinInfo(isLegacy ? pin : '') },
+				// Only a legacy PIN request is answered; anything else (numeric comparison,
+				// passkey) is refused rather than left to time out unanswered.
+				negativeResponse: isLegacy ? 0 : 1,
+			});
+			return isLegacy ? 1 : 0;
+		} catch {
+			// A decode or response failure here leaves the request unanswered, the same
+			// outcome as never having registered at all -- nothing further to do.
+			return 0;
+		}
+	};
+
+	const registeredCallback = koffi.register(onAuthenticationEvent, 'CockpitBtAuthCallback*');
+	const regHandleOut: unknown[] = [null];
+	const result = api.registerAuth(deviceInfo, regHandleOut, registeredCallback, null);
+	if (result !== 0) {
+		koffi.unregister(registeredCallback);
+		return {
+			ok: false,
+			reason: `BluetoothRegisterForAuthenticationEx failed (error ${result}).`,
+			dispose: () => { /* registration never took */ },
+		};
+	}
+
+	const regHandle = regHandleOut[0];
+	return {
+		ok: true,
+		dispose: () => {
+			api.unregisterAuth(regHandle);
+			koffi.unregister(registeredCallback);
+		},
+	};
+}
+
 /**
  * Pairs this machine with a Bluetooth device.
  *
- * Windows puts up its own pairing dialog and the user types the brick's PIN, which for
- * every EV3 is {@link EV3_PAIRING_PIN}. The call does not return until they answer, so it
- * runs off the main thread — a dialog left open would otherwise hold the extension host.
+ * The brick shows its own accept-and-PIN screen and the user confirms it there, PIN
+ * {@link EV3_PAIRING_PIN} pre-filled. This host answers the matching legacy-PIN request
+ * automatically via {@link registerLegacyPinResponder} — without it, pairing fails with
+ * `ERROR_ACCESS_DENIED` even after the brick's own screen accepts, because nothing supplies
+ * this side of the PIN exchange. `authenticateDevice` itself runs off the main thread: it
+ * does not return until the peer answers, and the brick's own screen is what the user is
+ * waiting on, not anything Windows shows.
  *
  * Pairing only. Whether the brick can then be reached is a separate question, answered by
  * the transport rather than here.
@@ -330,6 +499,11 @@ export async function pairBluetoothDevice(mac: string): Promise<{ ok: boolean; r
 	const info = emptyDeviceInfo();
 	(info.Address as { ullLong: bigint }).ullLong = address;
 
+	const responder = registerLegacyPinResponder(api, info, EV3_PAIRING_PIN);
+	if (!responder.ok) {
+		return { ok: false, reason: responder.reason };
+	}
+
 	try {
 		const result = await api.authenticateDevice(info);
 		// ERROR_CANCELLED is the ordinary outcome of a user closing the dialog, and it is
@@ -339,6 +513,8 @@ export async function pairBluetoothDevice(mac: string): Promise<{ ok: boolean; r
 			: { ok: false, reason: `Windows refused the pairing (error ${result}).` };
 	} catch (error) {
 		return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+	} finally {
+		responder.dispose();
 	}
 }
 
