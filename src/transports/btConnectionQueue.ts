@@ -7,12 +7,15 @@
  */
 
 import { BT, FIRMWARE_SAFETY } from './transportConstants';
+import { TransportError } from '../errors/CockpitError';
 
 /** Entry in the pending queue. */
 interface QueueEntry {
 	readonly brickId: string;
 	resolve: (release: (error?: unknown) => void) => void;
 	reject: (error: unknown) => void;
+	/** Fails the wait if it is not granted a slot before this fires. */
+	timeoutTimer?: NodeJS.Timeout;
 }
 
 /**
@@ -26,6 +29,7 @@ export class BtConnectionQueue {
 	private readonly interConnectionCooldownMs: number;
 	private readonly errorRecoveryCooldownMs: number;
 	private readonly backoffMax: number;
+	private readonly acquireTimeoutMs: number;
 
 	private activeCount = 0;
 	private lastReleaseTs = 0;
@@ -39,20 +43,41 @@ export class BtConnectionQueue {
 		interConnectionCooldownMs?: number;
 		errorRecoveryCooldownMs?: number;
 		backoffMax?: number;
+		acquireTimeoutMs?: number;
 	}) {
 		this.maxConcurrent = options?.maxConcurrent ?? 1;
 		this.interConnectionCooldownMs = options?.interConnectionCooldownMs ?? BT.INTER_CONNECTION_COOLDOWN_MS;
 		this.errorRecoveryCooldownMs = options?.errorRecoveryCooldownMs ?? BT.ERROR_RECOVERY_COOLDOWN_MS;
 		this.backoffMax = options?.backoffMax ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
+		this.acquireTimeoutMs = options?.acquireTimeoutMs ?? BT.QUEUE_ACQUIRE_TIMEOUT_MS;
 	}
 
 	/**
 	 * Acquire a connection slot. Returns a release callback that MUST be called
 	 * when the connection is no longer needed.
+	 *
+	 * @throws {TransportError} When no slot opens up within `acquireTimeoutMs`. A cooldown
+	 *   wait never takes that long (the backoff caps at `backoffMax`), so this only fires
+	 *   when the transport's session ceiling is genuinely reached — another brick holds
+	 *   the one slot for as long as it stays connected — per DESIGN §3.3: fail with a
+	 *   stated reason rather than queue indefinitely.
 	 */
 	async acquire(brickId: string): Promise<(error?: unknown) => void> {
 		return new Promise<() => void>((resolve, reject) => {
-			this.queue.push({ brickId, resolve, reject });
+			const entry: QueueEntry = { brickId, resolve, reject };
+			entry.timeoutTimer = setTimeout(() => {
+				const idx = this.queue.indexOf(entry);
+				if (idx < 0) { return; }
+				this.queue.splice(idx, 1);
+				reject(new TransportError(
+					`BT connection queue timed out after ${this.acquireTimeoutMs} ms waiting for `
+					+ `a slot for ${brickId} (${this.activeCount}/${this.maxConcurrent} in use). `
+					+ 'The transport\'s session ceiling is reached — disconnect the brick holding '
+					+ 'it before connecting another over Bluetooth.'
+				));
+			}, this.acquireTimeoutMs);
+			entry.timeoutTimer.unref?.();
+			this.queue.push(entry);
 			this.scheduleDrain();
 		});
 	}
@@ -92,6 +117,7 @@ export class BtConnectionQueue {
 		}
 		const entries = this.queue.splice(0);
 		for (const entry of entries) {
+			if (entry.timeoutTimer) { clearTimeout(entry.timeoutTimer); entry.timeoutTimer = undefined; }
 			entry.reject(new Error('BT connection queue disposed.'));
 		}
 	}
@@ -127,6 +153,7 @@ export class BtConnectionQueue {
 			}
 
 			const entry = this.queue.shift()!;
+			if (entry.timeoutTimer) { clearTimeout(entry.timeoutTimer); entry.timeoutTimer = undefined; }
 			this.activeCount += 1;
 
 			const release = (error?: unknown) => {
