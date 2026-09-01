@@ -285,6 +285,47 @@ describe('BtConnectionQueue', () => {
 		await p2.then((rel) => rel());
 		assert.equal(queue.pending, 0);
 	});
+
+	it('fails a queued acquire with a stated reason once the ceiling wait times out', async () => {
+		// 1.11.12: BtConnectionQueue.acquire() used to queue forever once the one slot
+		// was held by another connected brick -- a second brick's connect neither
+		// resolved nor failed. DESIGN §3.3 requires a stated failure instead.
+		const queue = new BtConnectionQueue({
+			maxConcurrent: 1,
+			interConnectionCooldownMs: 0,
+			errorRecoveryCooldownMs: 0,
+			acquireTimeoutMs: 30,
+		});
+		try {
+			const release = await queue.acquire('brick1');
+			await assert.rejects(
+				queue.acquire('brick2'),
+				/timed out.*waiting for a slot.*ceiling/s
+			);
+			release();
+		} finally {
+			queue.dispose();
+		}
+	});
+
+	it('grants a slot to a queued acquire before its ceiling timeout, without failing it', async () => {
+		const queue = new BtConnectionQueue({
+			maxConcurrent: 1,
+			interConnectionCooldownMs: 0,
+			errorRecoveryCooldownMs: 0,
+			acquireTimeoutMs: 500,
+		});
+		try {
+			const release = await queue.acquire('brick1');
+			const pending = queue.acquire('brick2');
+			setTimeout(() => release(), 20);
+			const secondRelease = await pending;
+			assert.equal(queue.active, 1);
+			secondRelease();
+		} finally {
+			queue.dispose();
+		}
+	});
 });
 
 // ═══════════════════════════════════════════════════════════════════════
