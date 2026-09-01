@@ -345,9 +345,47 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     problem underneath would still need solving first. `registerLegacyPinResponder` is kept
     (correct, crash-free, real prerequisite if the link layer is ever fixed) rather than
     reverted a second time, but pairing from the cockpit stays blocked on hardware, not code.
-    Next real step, if pursued: substitute a different Bluetooth adapter on this host to test
-    whether the link-layer failure is specific to this Realtek radio's driver/firmware —
-    a hardware question, not a code one
+
+    **That conclusion was wrong, and disproven on the same adapter, 01.09.2026 — `bthprops.cpl`
+    was the wrong API, not Bluetooth pairing itself.** `Windows.Devices.Enumeration
+    .DeviceInformationCustomPairing` (WinRT — the same stack Windows' own "Add a device" UI
+    drives) does not share the single-callback-slot ceiling: `PairingRequested` is an event on
+    the caller's own pairing object, not a process-wide registration, so the "only the first
+    registered callback ever fires" limit that defeats `BluetoothRegisterForAuthenticationEx`
+    does not apply to it. Confirmed against Microsoft's own docs (Windows requires no package
+    identity for this API family) and proved live against CCC with a throwaway C# probe
+    (`net10.0-windows10.0.19041.0`, CsWinRT — no extra plumbing): 2 pairings succeeded out of 3
+    attempts, the one "failure" being a missed brick-side confirmation window (no code fault)
+    rather than a protocol failure.
+
+    Working recipe, learned the hard way:
+    - `BluetoothDevice.FromBluetoothAddressAsync` alone hands back a stale cached
+      `DeviceInformation` that never raises `PairingRequested` and times out (~20–27 s) with no
+      dialog on either side. A live `DeviceWatcher` inquiry — `BluetoothDevice
+      .GetDeviceSelectorFromPairingState(false)`, `DeviceInformationKind.AssociationEndpoint` —
+      must find the peer fresh immediately before pairing from *that* instance.
+    - Offering `DevicePairingKinds.ConfirmOnly | DisplayPin | ProvidePin | ConfirmPinMatch`
+      together lets Windows pick `DisplayPin` — asking the human to type an arbitrary
+      Windows-generated PIN on the brick's own keypad, which EV3 does not have and cannot
+      satisfy (fixed 1234 only). Restricting the offered kinds to `ProvidePin` alone forces the
+      only ceremony this brick can actually complete.
+    - The brick still shows its own accept-and-PIN screen and needs a physical confirmation —
+      expected and unavoidable (independent of host API, per the finding two paragraphs up),
+      not a gap in "pair from the cockpit": no Windows Settings navigation is needed, only the
+      same on-brick confirmation any Bluetooth pairing requires of its peer.
+    - `PairAsync` took between ~7 s and ~46 s across the three successful/attempted runs — plan
+      any product-side timeout accordingly (see 2.8.17's note on what this means for the real
+      implementation).
+
+    Net effect: 1.11.13's blocker is lifted on Windows. `removeBluetoothDevice` (`bthprops`,
+    already working) is unaffected and stays as the unpair path. Embedding this into the
+    extension (a helper process — WinRT is not FFI-reachable through koffi the way `bthprops`
+    is) is a separate, not-yet-started task; see 2.8.17 for the open questions.
+
+    This does not touch 2.8.16's underlying finding: the *connect* step (Winsock RFCOMM,
+    after pairing) still fails at the same ~17–67% rate this session already measured, on a
+    freshly-WinRT-paired brick exactly as on a normally-paired one. The link is still flaky;
+    only pairing was ever blocked by the wrong API, not by that flakiness
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
   - [ ] 1.11.9 **Checked 28.08.2026: not available through this backend.** Windows has no
     Win32 API that returns RSSI for an already-open classic (BR/EDR) RFCOMM connection —
@@ -660,6 +698,26 @@ Build the source of truth for connected bricks.
     (2.8.16). Pairing from the cockpit stays blocked, now for a specific, evidenced reason
     rather than an open question: a link-layer problem this host's Realtek adapter has with
     the EV3, that a Windows API slot Windows itself already owns cannot route around
+
+    **Superseded 01.09.2026: `pair()` now does verify clean, through a different Win32/WinRT
+    entry point.** `bthprops.cpl`'s `BluetoothRegisterForAuthenticationEx` was correctly
+    diagnosed above as unwinnable, but that is a property of *that specific API*, not of
+    pairing this brick in general. `Windows.Devices.Enumeration.DeviceInformationCustomPairing`
+    (full recipe and evidence in 1.11.13) paired CCC live twice out of three attempts, the
+    third being a missed on-brick confirmation, not a protocol failure. Still open: this was
+    proven with a throwaway C# probe, not shipped code — the extension has no WinRT-reachable
+    binding yet (koffi is C-ABI FFI; WinRT is COM/vtable-based), so turning this into a real
+    `pairBluetoothDevice` implementation needs a design decision on how the extension calls
+    into WinRT (most likely: a small helper process, JSON over stdio, with its own TFM/runtime
+    trade-off to choose) — not yet started, and not assumed to be one evening's work
+
+  - [ ] 2.8.18 **Ship the WinRT pairing path in the extension, not just the probe.** Needs: a
+    helper-process design (TFM/runtime choice — framework-dependent vs self-contained vs
+    NativeAOT, each with a different size/dependency trade-off, owner's call); the helper
+    serialized against the same `BtConnectionQueue` the rest of BT already shares, so a pairing
+    attempt and a connect attempt never contend for the one radio slot; a bounded retry around
+    the live-inquiry step (a single 15 s window missed CCC once already); a UI prompt in place
+    of the beep ("confirm on the brick's display") once this leaves manual probing
 
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
