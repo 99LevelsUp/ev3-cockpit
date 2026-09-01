@@ -181,14 +181,36 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.13.3 Mock keeps command semantics via optional `createCommandChannel`
   - [x] 1.13.4 `SendCommandOptions` carried through `CommandQueue` — the timeout and abort
     signal plumbed through the providers earlier had no path from a caller until this
-- [ ] **1.8 Transport adapter interface and constants** — only 1.8.4 (guard wiring) remains open; 1.8.4a and 1.8.5b are resolved
+- [x] **1.8 Transport adapter interface and constants**
   - [x] 1.8.1 `TransportAdapter` interface (`open`, `close`, `send`)
   - [x] 1.8.2 Transport timing constants (empirical values from lab measurements)
   - [x] 1.8.3 Transport guard (pathological-caller backstop, firmware freeze protection, degradation tracking). The ≤ 10 cmd/s figure it was built against had no basis and is retired: measured sustained rates are USB 176, TCP 62, BT 11 per second with no degradation at any of them (DESIGN §9.2)
   - [x] 1.8.4a **Resolved: reject.** Measurement showed commands are strictly serial, so no
     transport can be pushed past its own round trip — pacing would only mask a caller bug.
     Where the backstop is enforced is still open while `TransportGuard` is unwired (1.8.4)
-  - [ ] 1.8.4 Wire `TransportGuard` into the USB/TCP/BT providers — it is currently instantiated only in tests, so DESIGN §4.1 rate limiting is not enforced anywhere
+  - [x] 1.8.4 **Wired into `SessionManager`, 28.08.2026** — one layer above the individual
+    USB/TCP/BT providers rather than into each one, since that is the single place every
+    transport's connects and sends already pass through. `connect()` calls
+    `openTransport()`/`closeTransport()`; `wireExecutor()`'s command wrapper calls
+    `checkRateLimit()` before every send and `recordSuccess()`/`recordFailure()` after.
+    Guarded by the brick's **physical** id (`brickKeyId()`, e.g. the bare MAC or serial),
+    not the transport-qualified `BrickKey` — so a brick reachable over two transports is
+    covered by the one-active-transport rule even though each transport gives it a
+    different key.
+
+    Two defects surfaced by wiring it, neither present in the class in isolation:
+    - **The switch cooldown blocked an ordinary reconnect.** `openTransport()` fired its
+      cooldown on *any* reopen after a close, not only when the new transport differed
+      from the last one — so a plain disconnect-then-reconnect on the same transport ate
+      the 2 s wait DESIGN §4.1 means for an actual transport switch. Fixed by remembering
+      `lastTransport` past the close and gating the cooldown on it changing.
+    - **A degraded brick had no way back.** `checkRateLimit()` refuses every send once
+      `degraded` is set, and the only thing that clears it is `recordSuccess()` — which a
+      degraded brick can never reach, since every send is refused before it touches the
+      transport. Added `TransportGuard.resetHealth()`, called from
+      `SessionManager.disconnect()` alongside `closeTransport()`: it drops the failure
+      count and rate window but — unlike `forget()` — keeps `lastCloseTs`, so the switch
+      cooldown still applies to whatever connects next.
   - [x] 1.8.5a Round-trip and receive timeouts in every adapter, with recovery. Shared `createPendingReply` arms the timer and abort wiring; `send()` discards the receive buffer so an abandoned exchange cannot desync the next one. Verified on hardware: a forced timeout is followed by three successful commands on the same adapter
   - [x] 1.8.5b **Reframed as stall detection** (4.6.3): with per-chunk progress reporting, a
     total-time cap would reject legitimately slow Bluetooth transfers, so the signal is “no
@@ -209,7 +231,10 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
         provider's own beacon cache; it used to hand the adapter a bare serial with
         `useDiscovery: true`, and the adapter could never bind the beacon port because the
         provider already held it — so connecting to a brick found by discovery always failed
-- [ ] **1.11 BT Transport** — Winsock and SPP backends built; discovery not wired
+- [ ] **1.11 BT Transport** — connect, discovery, pairing and the queue are built and wired;
+  remaining open items are a still-unexplained connect failure (2.8.16), signal strength
+  (1.11.9, blocked — no Win32 API for classic BT RSSI), and the Linux backend (1.11.11,
+  blocked — no Linux host)
   - [~] 1.11.1 ~~`BtRfcommAdapter` — multi-backend orchestrator~~ **Not needed.**
     `BtTransportProvider` already holds the backend map and chooses between them; a second
     orchestrator between it and the adapters would have nothing to do.
@@ -228,7 +253,13 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [~] 1.11.5 ~~.NET runtime detection~~ **Dropped with 1.11.2** — nothing to detect once
     WinRT is out of the chain.
   - [x] 1.11.6 BT connection queue — serialized RFCOMM (1 slot, 15s cooldown, exponential backoff)
-  - [ ] 1.11.12 Bounded failure when a transport's session ceiling is reached. `BtConnectionQueue` runs `maxConcurrent = 1` and `btTransportProvider.connect()` holds the slot for the whole session, while `acquire()` has no timeout — so a second BT brick's connect neither resolves nor fails, against DESIGN §3.3, which requires a connect beyond a transport's ceiling to "fail with a stated reason rather than queue indefinitely". The one-slot BT ceiling is correct and stays; only the unbounded wait is the defect
+  - [x] 1.11.12 **Bounded failure when a transport's session ceiling is reached**, 28.08.2026.
+    `BtConnectionQueue.acquire()` now takes `acquireTimeoutMs` (default `BT.QUEUE_ACQUIRE_TIMEOUT_MS`,
+    45 s — comfortably above the 30 s cooldown ceiling the queue's own backoff never exceeds,
+    so it only fires on a genuine ceiling wait, never an ordinary cooldown). A queued entry
+    that times out is spliced out and rejected with a `TransportError` naming the brick and
+    the in-use/ceiling counts, instead of sitting forever behind a brick that stays connected.
+    The one-slot BT ceiling is unchanged; only the unbounded wait was the defect
   - [x] 1.11.7 `BtTransportProvider` — composes adapter + protocol; accepts an injected discovery function
   - [x] 1.11.7a **BT discovery via `bthprops.cpl`**, 28.08.2026. Reads the Windows Bluetooth
     device cache — the testlab's primary mechanism — with the COM-port scan behind it as a
@@ -252,18 +283,117 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     6.6.6: forget used to drop this provider's own bookkeeping and leave the pairing alone,
     so a forgotten brick came back on the next scan.
 
-    Still open: pairing without the Windows dialog, which needs
-    `BluetoothRegisterForAuthenticationEx` and a native callback to answer with 1234, and a
-    command to invoke any of this from the UI
+    **Verified against Windows on all three bricks, 28–30.08.2026 (plan 2.8.17), and the
+    finding changed twice.** First: no Windows dialog appears at all — the docstring's
+    assumption that "Windows raises its own dialog" is wrong on every host tested. What
+    appears is the **brick's own** accept-and-PIN screen, and the user confirmed it there
+    (PIN 1234 pre-filled) on CCC. `BluetoothAuthenticateDeviceEx` still returned
+    `ERROR_ACCESS_DENIED` — nothing on this side ever answers the legacy-PIN half of the
+    exchange, confirming the gap this entry already named.
+
+    Second: the fix was attempted and **withdrawn**. Registering a callback via
+    `BluetoothRegisterForAuthenticationEx` (koffi `.register()`, matching its documented
+    "registered callback" pattern) and answering with `BluetoothSendAuthenticationResponseEx`
+    does get past Access Denied in principle, but **segfaults the extension host on cleanup,
+    reproducibly** — isolated down to `BluetoothRegisterForAuthenticationEx` followed by
+    `BluetoothUnregisterAuthentication` and `koffi.unregister()`, with a trivial callback that
+    is never even invoked and no radio operation of any kind in between. Not a struct-layout
+    bug in this file's types: the isolation repro uses none of them. Reverted rather than
+    shipped with a known crash.
+
+    **The crash was isolated and fixed, 30–31.08.2026 — and the real cause turned out not to
+    be Bluetooth at all.** Bisected down to `koffi.register()` alone: registering *any*
+    trivial callback and letting the process exit segfaults on koffi 2.15.1 with Node
+    v26.7.0, with zero native calls involved. koffi 2.16.3's changelog names this exact
+    defect ("fix crash when trying to run async callback during shutdown"); confirmed fixed
+    in isolation on both 2.16.3 and 3.1.6. **Upgraded to 3.1.6** (`^3.1.6`, was `2.15.1`) —
+    the newer major version despite its breaking changes (externals → BigInt pointers,
+    `koffi.callback()` removed), because this codebase uses neither `koffi.callback()`,
+    `koffi.introspect()`, `koffi.resolve()`, nor `koffi.handle()` anywhere (grepped clean),
+    and the one thing the BigInt change touches — the opaque handles `findFirst` /
+    `registerAuth` return and pass on — was already written to accept `number | bigint`
+    (`windowsWinsock.ts`'s `isInvalidSocket`), so there was nothing left to audit. Re-verified
+    against real hardware after the upgrade: discovery, Winsock connect (same WSA-10060
+    pattern, unchanged), and the full `pairBluetoothDevice` register→authenticate→dispose
+    cycle all clean, no regressions, 379/379 unit tests still pass.
+
+    With the crash gone, the callback still never fired — confirmed on real hardware with
+    both a device-scoped registration and a catch-all (`pbtdiIn: null`) one, while the
+    brick's own accept-and-PIN screen kept appearing normally each time. **Root cause,
+    confirmed against `BluetoothRegisterForAuthenticationEx`'s own docs**: *"In scenarios
+    where an application registers for authentication more than once, only the first
+    callback function registered via this function will be called."* Windows' own Bluetooth
+    service registers its callback at boot, for the system's "Add a device" UI, long before
+    this extension ever runs — so `registerAuth()` always reports success (the registration
+    is recorded) while the *system's* callback, not this one, is the one Windows actually
+    invokes. Not a bug in this file; a documented single-slot API this extension cannot win
+    a race against.
+
+    Windows Event Viewer corroborates this from another angle: `Microsoft-Windows-
+    Bluetooth-Policy/Operational` (disabled by default; enabled for one test run, restored
+    to disabled after) logged the attempt as this process's (`node.exe`, correct PID/SID),
+    and the failure ~5 s later as `ProcessID 4` (the kernel) — i.e. the negotiation really
+    reached the driver, and failed there, at the same ~5.1–5.2 s mark 2.8.16 already measured
+    for plain RFCOMM connects. That is the strongest evidence yet that **2.8.16's connect
+    failures and this pairing failure are the same underlying link-layer problem** between
+    this host's Realtek adapter and the EV3's Bluetooth chip, not two separate defects —
+    everything downstream of that link negotiation (RFCOMM connect, and now pairing) inherits
+    the same failure, regardless of which host-side API drives it.
+
+    So: no host-side callback registration can make this API pair the brick, because the
+    slot belongs to Windows' own service by design — and even if it could, the link-layer
+    problem underneath would still need solving first. `registerLegacyPinResponder` is kept
+    (correct, crash-free, real prerequisite if the link layer is ever fixed) rather than
+    reverted a second time, but pairing from the cockpit stays blocked on hardware, not code.
+    Next real step, if pursued: substitute a different Bluetooth adapter on this host to test
+    whether the link-layer failure is specific to this Realtek radio's driver/firmware —
+    a hardware question, not a code one
   - [x] 1.11.8 brickKey from MAC address (`bt:<mac>`)
-  - [ ] 1.11.9 Signal strength reporting where available (`signalInfo` is read for ordering, never populated)
-  - [ ] 1.11.10 BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET RFCOMM session helper
-  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it
-- [ ] **1.12 Transport unit tests** — no per-transport contract tests yet (1.12.4)
+  - [ ] 1.11.9 **Checked 28.08.2026: not available through this backend.** Windows has no
+    Win32 API that returns RSSI for an already-open classic (BR/EDR) RFCOMM connection —
+    only Bluetooth LE exposes signal strength, through WinRT advertisement watchers
+    (`BluetoothLEAdvertisementWatcher.SignalStrengthFilter`,
+    `BluetoothLEAdvertisementReceivedEventArgs.RawSignalStrengthInDBm`), confirmed against
+    [Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/4273960/how-to-check-the-signal-strength-rssi-of-a-bluetoo)
+    and the [`BluetoothSignalStrengthFilter`](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.bluetoothsignalstrengthfilter?view=winrt-26100)
+    docs. `bthprops.cpl` and `ws2_32.dll` — this transport's whole surface — expose neither.
+    The remaining path is raw HCI vendor commands against the radio, which is
+    adapter-specific and not something `koffi`'s `ws2_32.dll`/`bthprops.cpl` bindings reach.
+    WinRT was already dropped for the connection itself (1.11.2, DESIGN §4.1.1) for needing
+    a .NET helper process; using it for signal strength alone would reintroduce exactly
+    that helper for one field. Stays open pending a reason to accept that cost
+  - [~] 1.11.10 ~~BT native helpers — worker threads (bt-discovery, bt-winsock-connect), .NET
+    RFCOMM session helper~~ **Not needed, checked 28.08.2026.** The premise was that a
+    blocking native call needs a worker thread or a helper process to keep it off the
+    extension host's main thread. `koffi` already does that in-process: `windowsWinsock.ts`'s
+    `connect` and `windowsBluetooth.ts`'s `authenticate` (`BluetoothAuthenticateDeviceEx`,
+    the one call slow enough to matter — it can block for as long as Windows' own pairing
+    dialog stands) both go through koffi's `.async()`, which runs the call on libuv's
+    thread pool. Everything else touched (`socket`, `send`, `recv`, `closesocket`, the
+    zero-timeout `select` poll, `BluetoothFindFirstDevice`/`FindNextDevice`) either reads a
+    cache or completes fast enough to call synchronously, the same way `tcpSocketAdapter`
+    already does for TCP. A second execution context would have nothing to do that koffi
+    is not already doing — the same shape as 1.11.1 and 1.11.2, dropped for the same reason
+  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available
+- [x] **1.12 Transport unit tests**
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
   - [x] 1.12.3 BT connection queue serialization tests
-  - [ ] 1.12.4 Contract compliance tests for USB/TCP/BT (using real bricks where available) — no USB, TCP or BT provider test file exists; only the mock is covered (1.13.1)
+  - [x] 1.12.4 **Contract compliance tests for USB/TCP/BT, 28.08.2026** — added a `contract`
+    section to `scripts/hardware-matrix.js` (1.13.1's mock coverage — a held session refuses
+    a second connect, a disconnected one refuses a send, a second disconnect is a no-op — run
+    against the real provider instead of the mock). Also fixed the harness itself: its BT
+    provider had no `BtConnectionQueue` and only registered the SPP backend, so it did not
+    exercise the transport the product ships (Winsock preferred, paced through the shared
+    queue) — every early BT run's contract failures were that gap hammering the one RFCOMM
+    channel with no cooldown at all, not a product defect.
+
+    **USB (BBB, AAA, CCC): all pass.** **BT: the contract holds everywhere it could run** — a
+    second connect while held is refused — **but most of the section never got there**,
+    blocked by the still-open connect failure (2.8.16): only the first of three bricks
+    completed its first connect, and its own reconnect then hit the same WSA-10060 pattern.
+    **TCP: undiscoverable** — Wi-Fi has been off on every brick since the 26.08.2026
+    measurement, so there is nothing to connect to, not a contract gap
 - [x] **1.13 Unit tests (Mock and infrastructure)**
   - [x] 1.13.1 TransportProvider contract compliance tests (run against Mock)
   - [x] 1.13.2 Discovery scheduler tests (timing, dedup, timeout)
@@ -479,26 +609,57 @@ Build the source of truth for connected bricks.
     came back with an empty name. The claim was written from reading the structure and not
     from running it, which is the same mistake as arguing about a wire instead of measuring
     it. 2.8.13 stands as it was: the name has to come from the brick or from the USB identity
-  - [ ] 2.8.16 **Isolate what makes an RFCOMM connect fail.** 2.8.14 established what it is
+  - [x] 2.8.16 **Isolate what makes an RFCOMM connect fail.** 2.8.14 established what it is
     not: not the backend (40% against 47%), and not the wait before trying (47% at 15/30 s
-    against ~50% at 2 s). Next measurement varies one thing — one brick, Winsock only,
-    cooldown stepped up from 15 s to 60 s and beyond, enough attempts per step to tell 40%
-    from 90%.
+    against ~50% at 2 s). Instrument fixed first: `bt-backend-comparison.js` now separates
+    queue wait from adapter-open time (`trackQueueWait`), so a cooldown comparison is not
+    confounded with the wait it varies.
 
-    First fix the instrument: `openedMs` in `scripts/bt-backend-comparison.js` is measured
-    from before `provider.connect()`, so it includes the queue wait. Comparing cooldowns with
-    a number that contains the cooldown would confound the experiment with the thing it
-    varies. Report queue wait and connect time separately
+    **Measured, 28.08.2026 — one brick (CCC, `00:16:53:42:D9:F2`), Winsock only, 6 attempts
+    per step, `scripts/bt-cooldown-sweep.js`:**
 
-  - [ ] 2.8.17 **Verify pair and unpair against Windows.** 1.11.13 compiles and is tested
-    against fakes; neither call has touched the real DLL. That is the state the naming claim
-    was in an hour before it turned out to be wrong, and `unpair` is now wired into `forget()`
-    with `supportsForget: true`, so it is a shipped path resting on a reading of the header.
+    | cooldown | open rate |
+    |---|---|
+    | 15 s | 67% |
+    | 30 s | 17% |
+    | 60 s | 17%\* |
 
-    Needs the owner: unpairing changes their machine's pairing state and pairing raises a
-    Windows dialog. Scenario is one brick — `forget()` it, confirm Windows no longer lists it,
-    `pair()` it back, confirm the dialog appears and PIN 1234 is accepted, confirm discovery
-    and a connect both work afterwards
+    **A longer cooldown does not help, and the trend runs the other way.** That answers the
+    question 2.8.11 left open — whether the refusal is a cooldown that eventually expires —
+    with no: 60 s is four times the product's default and the rate is worse, not restored.
+    Waiting longer is not the fix.
+
+    **A sharper number fell out of the same run: every real failure resolved in 5.12–5.19 s**,
+    not the 15 s `CONNECT_TIMEOUT_MS` ceiling our own timer would produce. That is specific
+    and reproducible enough to be a real host or radio-side timeout distinct from ours —
+    Windows' own answer to an RFCOMM request that goes nowhere — rather than noise. Nothing
+    here identifies its source; that is the open thread 2.8.16 hands off, not a solved one.
+
+    \* Three of the six 60 s-step attempts are not clean data: 1.11.12's ceiling-reached
+    timeout defaults to 45 s, shorter than a 60 s cooldown, so it fired as a false "no slot"
+    failure rather than a real WSA error. `bt-cooldown-sweep.js` now sets its own
+    `acquireTimeoutMs` to `2 × stepMs` to prevent that; the two genuine WSA-10060 failures
+    at that step are unaffected and still fit the pattern
+
+  - [x] 2.8.17 **Verify pair and unpair against Windows**, 28–30.08.2026, with the owner —
+    unpairing changes the machine's pairing state and pairing needs a live brick to confirm.
+
+    `unpair()` (`forget()`) verified clean on CCC: `BluetoothRemoveDevice` returned success,
+    the brick dropped out of `listBluetoothDevices()` and out of `Get-PnpDevice` in the same
+    call, both checked independently.
+
+    `pair()` did **not** verify clean, across many attempts over two sessions (one interrupted
+    by a sleep/wake cycle that needed a reboot to rule out) — full account is 1.11.13's, not
+    repeated here. Short version: the assumed Windows dialog never appears; the brick's own
+    accept-and-PIN screen does, confirmed by the owner repeatedly, and `BluetoothAuthenticateDeviceEx`
+    still returns `ERROR_ACCESS_DENIED`. Chased through a real koffi crash (found, fixed by
+    upgrading to 3.1.6) to the actual cause: Windows' own Bluetooth service already holds
+    this API's one callback slot, by documented design, so nothing this extension registers
+    is ever the callback Windows invokes — and Event Viewer traced the failure itself to the
+    kernel, at the same ~5.1–5.2 s mark every plain RFCOMM connect failure has shown all day
+    (2.8.16). Pairing from the cockpit stays blocked, now for a specific, evidenced reason
+    rather than an open question: a link-layer problem this host's Realtek adapter has with
+    the EV3, that a Windows API slot Windows itself already owns cannot route around
 
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
