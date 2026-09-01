@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
-import { BrickKey } from '../contracts/brickKey';
+import { BrickKey, brickKeyId } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
 import { BrickCommand, BrickResponse, SendCommandOptions, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
@@ -21,6 +21,7 @@ import {
 	AlreadyConnectedError, NotConnectedError, NoProviderError, ProtocolError,
 } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
+import { TransportGuard } from '../transports/transportGuard';
 
 // ── Events ──────────────────────────────────────────────────────────
 
@@ -44,6 +45,8 @@ export interface SessionManagerOptions {
 	reconnectBaseMs?: number;
 	reconnectMaxMs?: number;
 	reconnectMaxAttempts?: number;
+	/** Firmware-protection layer shared across every transport. Defaults to a fresh guard. */
+	transportGuard?: TransportGuard;
 }
 
 // ── Per-session resources ───────────────────────────────────────────
@@ -77,6 +80,7 @@ export class SessionManager implements vscode.Disposable {
 	private readonly reconnectBaseMs: number;
 	private readonly reconnectMaxMs: number;
 	private readonly reconnectMaxAttempts: number;
+	private readonly transportGuard: TransportGuard;
 
 	constructor(options: SessionManagerOptions) {
 		this.providerRegistry = options.providerRegistry;
@@ -85,6 +89,7 @@ export class SessionManager implements vscode.Disposable {
 		this.reconnectBaseMs = options.reconnectBaseMs ?? FIRMWARE_SAFETY.RECONNECT_BASE_MS;
 		this.reconnectMaxMs = options.reconnectMaxMs ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
 		this.reconnectMaxAttempts = options.reconnectMaxAttempts ?? FIRMWARE_SAFETY.MAX_RECONNECT_ATTEMPTS;
+		this.transportGuard = options.transportGuard ?? new TransportGuard();
 	}
 
 	// ── Connect / Disconnect ────────────────────────────────────────
@@ -115,7 +120,17 @@ export class SessionManager implements vscode.Disposable {
 		const resources: SessionResources = { entry, commandQueue, heartbeat, reconnect };
 		this.sessions.set(brickKey, resources);
 
+		// Guarded by the brick's physical identity (MAC/serial, not the transport-qualified
+		// key), so a brick reachable over two transports cannot be bombarded by both at once
+		// -- the concern DESIGN §4.1 names. Released in the catch below only if this attempt
+		// is the one that set it.
+		const guardId = brickKeyId(brickKey) ?? brickKey;
+		let guardOpened = false;
+
 		try {
+			this.transportGuard.openTransport(guardId, transport);
+			guardOpened = true;
+
 			const handle = await provider.connect(brickKey);
 
 			// disconnect() may have run while the provider was still connecting. It
@@ -137,6 +152,7 @@ export class SessionManager implements vscode.Disposable {
 			heartbeat.start();
 			reconnect.reset();
 		} catch (error) {
+			if (guardOpened) { this.transportGuard.closeTransport(guardId); }
 			entry.setError(error instanceof Error ? error.message : String(error));
 			entry.transition(ConnectionState.Disconnected);
 			this.sessions.delete(brickKey);
@@ -159,6 +175,13 @@ export class SessionManager implements vscode.Disposable {
 
 		const previousState = resources.entry.connectionState;
 		this.cleanupSession(resources);
+		// closeTransport() keeps the switch-cooldown clock running; resetHealth() drops the
+		// rate-limit window and degradation count, which are history the next connect should
+		// not inherit -- checkRateLimit() has no path back from `degraded` except
+		// recordSuccess(), which a degraded brick can never reach on its own.
+		const guardId = brickKeyId(brickKey) ?? brickKey;
+		this.transportGuard.closeTransport(guardId);
+		this.transportGuard.resetHealth(guardId);
 
 		const provider = this.providerRegistry.get(resources.entry.transport);
 		try {
@@ -307,6 +330,7 @@ export class SessionManager implements vscode.Disposable {
 		this.sessions.clear();
 		this.suppressedBricks.clear();
 		this.activeBrickKey = undefined;
+		this.transportGuard.dispose();
 		this._onSessionStateChange.dispose();
 		this._onActiveBrickChange.dispose();
 	}
@@ -510,15 +534,25 @@ export class SessionManager implements vscode.Disposable {
 	 */
 	private wireExecutor(resources: SessionResources, provider: TransportProvider): void {
 		const brickKey = resources.entry.brickKey;
+		const guardId = brickKeyId(brickKey) ?? brickKey;
 		const channel = provider.createCommandChannel
 			? provider.createCommandChannel(brickKey)
 			: new PacketCommandChannel(
 				(packet, options) => provider.sendPacket(brickKey, packet, options),
 				provider.transport,
 			);
-		resources.commandQueue.setExecutor(
-			(cmd, options) => channel.execute(cmd, options)
-		);
+		resources.commandQueue.setExecutor(async (cmd, options) => {
+			this.transportGuard.checkRateLimit(guardId);
+			const startedAt = Date.now();
+			try {
+				const response = await channel.execute(cmd, options);
+				this.transportGuard.recordSuccess(guardId, Date.now() - startedAt);
+				return response;
+			} catch (error) {
+				this.transportGuard.recordFailure(guardId);
+				throw error;
+			}
+		});
 	}
 
 	private cleanupSession(resources: SessionResources): void {

@@ -13,6 +13,9 @@ import { FIRMWARE_SAFETY } from './transportConstants';
 /** Per-brick transport state tracked by the guard. */
 interface BrickGuardState {
 	activeTransport: string | undefined;
+	/** The transport last opened, remembered past a close so a same-transport reconnect
+	 * can be told apart from an actual switch. */
+	lastTransport: string | undefined;
 	lastCloseTs: number;
 	commandTimestamps: number[];
 	consecutiveFailures: number;
@@ -49,6 +52,12 @@ export class TransportGuard {
 
 	/**
 	 * Register a brick opening a transport. Enforces one-at-a-time and switch cooldown.
+	 *
+	 * The cooldown guards against **switching** transports rapidly (DESIGN §4.1's firmware
+	 * freeze under multi-transport bombardment) — reopening the *same* transport right
+	 * after closing it is an ordinary reconnect and is not gated here; that pacing belongs
+	 * to whatever paces reconnects for that transport (e.g. `BtConnectionQueue`,
+	 * `ReconnectStrategy`).
 	 */
 	openTransport(brickId: string, transport: string): void {
 		const state = this.getOrCreate(brickId);
@@ -60,7 +69,8 @@ export class TransportGuard {
 			);
 		}
 
-		if (!state.activeTransport && state.lastCloseTs > 0) {
+		if (!state.activeTransport && state.lastTransport && state.lastTransport !== transport
+			&& state.lastCloseTs > 0) {
 			const elapsed = Date.now() - state.lastCloseTs;
 			if (elapsed < this.switchCooldownMs) {
 				throw new Error(
@@ -70,6 +80,7 @@ export class TransportGuard {
 		}
 
 		state.activeTransport = transport;
+		state.lastTransport = transport;
 	}
 
 	/**
@@ -82,6 +93,30 @@ export class TransportGuard {
 		}
 		state.activeTransport = undefined;
 		state.lastCloseTs = Date.now();
+	}
+
+	/**
+	 * Clears degradation and rate-limit history without touching the switch-cooldown clock.
+	 *
+	 * Call when a session ends. The failures that degraded a brick belonged to the
+	 * connection that just closed, not to whatever connects next — and `checkRateLimit`
+	 * has no path back from `degraded` except `recordSuccess`, which a degraded brick can
+	 * never reach on its own, since every send is refused before it reaches the transport.
+	 * `forget` would also do this, but it drops `lastCloseTs` with it, and losing that is
+	 * what a rapid reconnect's switch cooldown depends on.
+	 */
+	resetHealth(brickId: string): void {
+		const state = this.bricks.get(brickId);
+		if (!state) {
+			return;
+		}
+		state.consecutiveFailures = 0;
+		state.commandTimestamps = [];
+		state.lastRttMs = undefined;
+		if (state.degraded) {
+			state.degraded = false;
+			this.onDegradationChange?.(brickId, false);
+		}
 	}
 
 	/**
@@ -162,6 +197,7 @@ export class TransportGuard {
 		if (!state) {
 			state = {
 				activeTransport: undefined,
+				lastTransport: undefined,
 				lastCloseTs: 0,
 				commandTimestamps: [],
 				consecutiveFailures: 0,
