@@ -56,14 +56,36 @@ const ONLY = argAfter('--only', undefined);
 
 let counter = 0;
 
+/**
+ * Wraps a shared `BtConnectionQueue.acquire` so every attempt can report how much of its
+ * `openedMs` was the queue making it wait versus the adapter actually opening a socket.
+ *
+ * 2.8.16: without this, a cooldown comparison is confounded with the thing it varies —
+ * `openedMs` measured from before `provider.connect()` already contains the wait, so
+ * "connect got slower" and "the queue made this one wait longer" were indistinguishable.
+ */
+function trackQueueWait(queue) {
+	const originalAcquire = queue.acquire.bind(queue);
+	let lastWaitMs = 0;
+	queue.acquire = async (id) => {
+		const startedAt = Date.now();
+		const release = await originalAcquire(id);
+		lastWaitMs = Date.now() - startedAt;
+		return release;
+	};
+	return () => lastWaitMs;
+}
+
 /** Opens, asks the brick who it is, closes. One full connection lifecycle. */
-async function attempt(provider, key) {
+async function attempt(provider, key, readQueueWaitMs) {
 	const startedAt = Date.now();
 	let openedMs;
 
 	try {
 		await provider.connect(key);
 		openedMs = Date.now() - startedAt;
+		const queueWaitMs = readQueueWaitMs();
+		const connectMs = openedMs - queueWaitMs;
 
 		counter = (counter + 1) & 0xffff;
 		const { type, payload } = buildCommand({ kind: 'info' });
@@ -76,14 +98,20 @@ async function attempt(provider, key) {
 		const info = parseResponse({ kind: 'info' }, decodeEv3Packet(reply));
 
 		await provider.disconnect(key);
-		return { ok: true, openedMs, rttMs, name: info.displayName };
+		return {
+			ok: true, openedMs, queueWaitMs, connectMs, rttMs, name: info.displayName,
+		};
 	} catch (error) {
 		// disconnect() is safe on a session that never opened, and skipping it would leak
 		// the queue slot for the rest of the run.
 		await provider.disconnect(key).catch(() => { /* nothing to release */ });
+		const total = openedMs ?? Date.now() - startedAt;
+		const queueWaitMs = readQueueWaitMs();
 		return {
 			ok: false,
-			openedMs: openedMs ?? Date.now() - startedAt,
+			openedMs: total,
+			queueWaitMs,
+			connectMs: total - queueWaitMs,
 			error: String((error && error.message) || error),
 		};
 	}
@@ -106,11 +134,13 @@ function summarise(label, samples) {
 	};
 
 	if (ok.length) {
-		console.log(`  connect  ${spread(ok, 'openedMs')}`);
-		console.log(`  exchange ${spread(ok, 'rttMs')}`);
+		console.log(`  queue wait ${spread(ok, 'queueWaitMs')}`);
+		console.log(`  connect    ${spread(ok, 'connectMs')}`);
+		console.log(`  exchange   ${spread(ok, 'rttMs')}`);
 	}
 	if (failed.length) {
-		console.log(`  failed   ${spread(failed, 'openedMs')}`);
+		console.log(`  failed     ${spread(failed, 'openedMs')}`
+			+ ` (queue wait ${spread(failed, 'queueWaitMs')}, connect ${spread(failed, 'connectMs')})`);
 		const reasons = new Map();
 		for (const s of failed) {
 			// Keep the whole message. Truncating one to 40 characters once turned a
@@ -133,6 +163,7 @@ async function main() {
 	}
 
 	const queue = new BtConnectionQueue();
+	const readQueueWaitMs = trackQueueWait(queue);
 	const backends = [
 		['winsock', new BtTransportProvider({
 			backends: new Map([['winsock', (mac) => new BtWinsockAdapter({ mac })]]),
@@ -158,7 +189,7 @@ async function main() {
 		for (const peer of peers) {
 			const key = makeBrickKey(Transport.BT, peer.mac);
 			for (const [name, provider] of order) {
-				const result = await attempt(provider, key);
+				const result = await attempt(provider, key, readQueueWaitMs);
 				results.get(name).push(result);
 				process.stderr.write(
 					`  r${String(round).padStart(2)} ${peer.mac} ${name.padEnd(7)} `
