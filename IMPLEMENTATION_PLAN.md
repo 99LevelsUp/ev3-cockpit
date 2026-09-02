@@ -727,7 +727,28 @@ Build the source of truth for connected bricks.
     around the live-inquiry step (a single 15 s window missed CCC more than once, and a
     watcher scoped to *unpaired* devices sees nothing at all for a brick this host still
     remembers as paired — check/unpair before assuming the radio is at fault); a UI prompt in
-    place of the beep ("confirm on the brick's display") once this leaves manual probing
+    place of the beep ("confirm on the brick's display") once this leaves manual probing.
+    Helper is a net48 console app under `native/bt-pairing-helper/`, built via `dotnet publish`,
+    spawned once per pairing attempt (no daemon), JSON-lines over stdout
+
+  - [ ] **Backlog, not scheduled: a pure-Node alternative to the net48 helper process.**
+    01.09.2026, the owner asked to try a path with no .NET at all before accepting the helper.
+    Investigated: **NodeRT** (the only existing "WinRT as a Node native addon" project) is dead
+    — official `@nodert-win10/*` packages last published ~8 years ago, the unofficial
+    `@nodert-win11/*` fork last published 27.09.2022, neither ships a prebuilt binary (install
+    runs `node-gyp rebuild` against `nan`, requiring Visual Studio Build Tools + Python on every
+    machine that installs the extension), and `DeviceInformationCustomPairing` support is
+    unconfirmed in either. Rejected as strictly worse than the helper process: a subprocess we
+    build once beats a native addon every user's machine must compile.
+
+    The one *real* no-.NET alternative, not yet attempted: a small **Rust N-API addon**
+    (`windows-rs` — Microsoft's own actively-maintained Rust WinRT projection — plus `napi-rs`
+    to expose it to Node). Unlike NodeRT this would use current, maintained tooling and could
+    ship a prebuilt binary the way `usb`/`node-hid` already do in this repo, avoiding both the
+    per-user compile step and the separate-process JSON protocol. Nobody has written it; it is
+    new code in a language not yet in this repo, of unknown effort — a candidate for a future
+    session if the net48 helper's process-per-pairing model turns out to be a real problem in
+    practice, not a default next step
 
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
