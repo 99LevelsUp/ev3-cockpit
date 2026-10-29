@@ -369,7 +369,31 @@ two nearby bricks. The value is refreshed irregularly (one number held for three
 which suits a slowly changing list. One walk, one brick: enough to say "bands, yes", not to set
 the band edges. Open: the live watcher with inquiry on for paired devices (`--watch-raw`)
 reported nothing for any brick, yet the records kept changing while it ran — whether they
-refresh without an inquiry running is the next thing to check. Proposed order, in this
+refresh without an inquiry running is the next thing to check.
+
+**Second measurement, same evening — and it overturns "bands, yes" for one room.** Three bricks
+rotated between three fixed positions, three minutes each (`signal-monitor.js --rotate-every
+180 --phases 3`), so each brick sat at each distance once. Median per position, settled
+readings:
+
+| position | AAA | BBB | CCC |
+|---|---|---|---|
+| A, at the computer (≤ 30 cm) | −35 | −47, then −19 at the very end | −15 |
+| B, 1.5 m | −47 | −48 | −37 |
+| C, farthest in the room (3–4 m) | −39 | −47 | **−11** |
+
+Within one room the records value does not separate distances — CCC read strongest from the
+far corner. And it **lags by minutes**: BBB, moved next to the computer, kept −47 for two
+minutes before reading −19; CCC held −11 for a whole phase. It is a value Windows refreshes now
+and then, closer to a last-known reading than a measurement; the first walk only showed up
+because another room is a much larger change. **Consequence:** the records value can tell
+"in this room" from "far away", nothing finer. For the competition case (a hundred bricks in
+one room), the bricks to push down are other people's — unpaired with this computer — and for
+unpaired bricks the scan's live inquiry already delivers signal readings; those are
+unmeasured. Recommendation: for the release, order by ownership (connected, on USB, paired
+with this computer, used before) and then by name; live-signal ordering of unpaired bricks,
+smoothed (moving average) with hysteresis as the owner proposed, goes to the post-release
+backlog with its measurement (one brick unpaired, measured, re-paired). Proposed order, in this
 order:
 
 1. **Bricks in use** (connected) — what the user is working with.
