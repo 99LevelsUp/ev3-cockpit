@@ -38,6 +38,22 @@ internal static class Program
         int timeoutSeconds = ParseIntOr(ArgAfter(args, "--timeout-seconds"), 90);
         bool scan = Array.IndexOf(args, "--scan") >= 0;
 
+        // Diagnostics for measuring, not used by the extension: what the selectors say, and
+        // what a watcher on an arbitrary AQS reports event by event (plan step 1, section 4a).
+        if (Array.IndexOf(args, "--print-selectors") >= 0)
+        {
+            Emit(new { type = "selector", name = "unpaired", aqs = BluetoothDevice.GetDeviceSelectorFromPairingState(false) });
+            Emit(new { type = "selector", name = "paired", aqs = BluetoothDevice.GetDeviceSelectorFromPairingState(true) });
+            Emit(new { type = "selector", name = "default", aqs = BluetoothDevice.GetDeviceSelector() });
+            return 0;
+        }
+        if (Array.IndexOf(args, "--watch-raw") >= 0)
+        {
+            using var rawCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var aqs = ArgAfter(args, "--aqs") ?? BluetoothDevice.GetDeviceSelectorFromPairingState(false);
+            return await WatchRawAsync(aqs, TimeSpan.FromSeconds(inquirySeconds), rawCts.Token);
+        }
+
         if (scan)
         {
             // Scan mode exists because nothing else on this host can answer "which bricks are
@@ -253,6 +269,62 @@ internal static class Program
         Emit(new { type = "scanComplete", count = byAddress.Count, atMs = sw.ElapsedMilliseconds });
         return 0;
     }
+
+    /// <summary>
+    /// Diagnostic: runs a watcher on <paramref name="aqs"/> for <paramref name="window"/> and
+    /// emits every Added/Updated/Removed as it arrives, with no deduplication or filtering, so
+    /// a measurement can see exactly what Windows reports and when.
+    /// </summary>
+    private static async Task<int> WatchRawAsync(string aqs, TimeSpan window, CancellationToken cancellationToken)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Emit(new { type = "rawStart", aqs });
+        object? Prop(IReadOnlyDictionary<string, object> props, string key) =>
+            props.TryGetValue(key, out var value) ? value : null;
+
+        var watcher = DeviceInformation.CreateWatcher(aqs, RawProperties, DeviceInformationKind.AssociationEndpoint);
+        watcher.Added += (_, a) => Emit(new
+        {
+            type = "rawAdded", mac = AddressFromId(a.Id), name = a.Name, paired = a.Pairing.IsPaired,
+            signal = Prop(a.Properties, "System.Devices.Aep.SignalStrength") as int?,
+            present = Prop(a.Properties, "System.Devices.Aep.IsPresent") as bool?,
+            connected = Prop(a.Properties, "System.Devices.Aep.IsConnected") as bool?,
+            atMs = sw.ElapsedMilliseconds,
+        });
+        watcher.Updated += (_, u) => Emit(new
+        {
+            type = "rawUpdated", mac = AddressFromId(u.Id),
+            signal = Prop(u.Properties, "System.Devices.Aep.SignalStrength") as int?,
+            present = Prop(u.Properties, "System.Devices.Aep.IsPresent") as bool?,
+            connected = Prop(u.Properties, "System.Devices.Aep.IsConnected") as bool?,
+            atMs = sw.ElapsedMilliseconds,
+        });
+        watcher.Removed += (_, r) => Emit(new { type = "rawRemoved", mac = AddressFromId(r.Id), atMs = sw.ElapsedMilliseconds });
+        watcher.EnumerationCompleted += (_, __) => Emit(new { type = "rawEnumerationCompleted", atMs = sw.ElapsedMilliseconds });
+
+        watcher.Start();
+        try
+        {
+            await Task.Delay(window, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // The overall deadline; what arrived before it has already been emitted.
+        }
+        finally
+        {
+            watcher.Stop();
+        }
+        Emit(new { type = "rawEnd", atMs = sw.ElapsedMilliseconds });
+        return 0;
+    }
+
+    private static readonly string[] RawProperties = {
+        "System.Devices.Aep.DeviceAddress",
+        "System.Devices.Aep.IsConnected",
+        "System.Devices.Aep.IsPresent",
+        "System.Devices.Aep.SignalStrength",
+    };
 
     private static readonly string[] ScanProperties = {
         "System.Devices.Aep.DeviceAddress",
