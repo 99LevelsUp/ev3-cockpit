@@ -109,9 +109,12 @@ async function main() {
 	console.log(`Bricks: ${bricks.map((b) => b.name).join(', ')}; gaps ${GAPS_S.join('/')} s, ${PER_GAP} each, shuffled.`);
 
 	const queue = new BtConnectionQueue({ interConnectionCooldownMs: 0, errorRecoveryCooldownMs: 0 });
+	// The provider's own reconnect gap is off too: it would stretch the short gaps this run
+	// measures to its provisional 5 s.
 	const provider = new BtTransportProvider({
 		backends: new Map([['winsock', (m) => new BtWinsockAdapter({ mac: m })]]),
 		connectionQueue: queue,
+		reconnectGapAfterCloseMs: 0,
 	});
 	const rows = [];
 	let counter = 0;
