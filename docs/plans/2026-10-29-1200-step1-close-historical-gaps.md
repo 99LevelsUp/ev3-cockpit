@@ -259,7 +259,13 @@ Scenarios, all catalogued in the lab already and unmeasured:
    command rather than waiting for the heartbeat. The way back needs the brick to reappear on
    the bus — 4.4–21 s after the plug signal, which includes the walk to the brick — and then
    opens in tens of milliseconds, so how often USB discovery polls decides how soon traffic
-   returns to USB. One run per brick; the reappearance spread is not explained yet.
+   returns to USB. One run per brick. The owner plugged each cable back as soon as the signal
+   sounded, so the spread is the brick's or the host's, not the person's: CCC 4.4 s against
+   18.7–21.1 s for AAA and BBB. **Hypothesis, unmeasured:** CCC is the one brick on firmware
+   V1.09H, AAA and BBB run V1.10E; or Windows treats the bricks' composite device (HID + mass
+   storage) differently on re-arrival. Telling them apart needs the Kernel-PnP arrival time
+   against the probe's first sighting, and more than one run per brick. Not blocking: Bluetooth
+   carries the traffic meanwhile.
 
 Non-blocking for U1–U2; U3.1's final shape waits for point 1, and D2's shape for point 4.
 
