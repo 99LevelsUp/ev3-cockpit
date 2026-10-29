@@ -11,6 +11,7 @@ import { ProtocolError } from '../errors/CockpitError';
 import { concatBytes, uint16le, uint32le, lc0, lcs, cString, gv0, gv1 } from './ev3Bytecode';
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
+	COM_SET_SUB, COM_HARDWARE, MAX_BRICK_NAME_LENGTH,
 	INPUT_DEVICE_SUB, FILE_SUB, FILENAME_SUB,
 } from './ev3Packet';
 
@@ -111,6 +112,12 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 		return buildButtonsCommand();
 	case 'info':
 		return buildInfoCommand();
+	case 'brick:setName':
+		return buildSetBrickNameCommand(command.name);
+	case 'brick:setBluetooth':
+		return buildComSetFlagCommand(COM_SET_SUB.SET_ON_OFF, command.on);
+	case 'brick:setBluetoothVisible':
+		return buildComSetFlagCommand(COM_SET_SUB.SET_VISIBLE, command.visible);
 	case 'fs:list':
 		return buildFsListCommand(command.path);
 	case 'fs:read':
@@ -267,6 +274,57 @@ function buildInfoCommand(): EncodedCommand {
 	readString(EV3_OPCODE.UI_READ, UI_READ_SUB.GET_FW_BUILD, LEN_FW_BUILD, OFF_FW_BUILD);
 
 	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: concatBytes(...ops) };
+}
+
+/**
+ * Rename the brick.
+ *
+ * No reply is asked for: the firmware answers nothing useful, and the only way to know the
+ * rename took is to read the name back with `info`. The harness that renames bricks does
+ * exactly that.
+ *
+ * Length is checked here rather than left to the brick because the firmware's rejection is
+ * silent — `ValidateString` fails, `DspStat` stays untouched, and the caller sees a command
+ * that appeared to work on a brick that did not change its name.
+ */
+function buildSetBrickNameCommand(name: string): EncodedCommand {
+	if (name.length > MAX_BRICK_NAME_LENGTH) {
+		throw new ProtocolError(
+			`Brick name is ${name.length} characters; the firmware accepts at most ${MAX_BRICK_NAME_LENGTH}.`
+		);
+	}
+
+	// Asks for a reply even though it reads nothing back: the channel matches every command
+	// to a reply packet by message counter, so a NO_REPLY command would simply time out. Zero
+	// globals means the brick answers with a bare status.
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(0),
+			new Uint8Array([EV3_OPCODE.COM_SET, COM_SET_SUB.SET_BRICKNAME]),
+			lcs(name),
+		),
+	};
+}
+
+/**
+ * Switch one of the brick's radios on, or make it discoverable.
+ *
+ * Both subcodes read the same two parameters — which radio, then the flag — so they share a
+ * builder. Sending only the flag would have the firmware read the flag as the hardware
+ * selector and then take whatever followed as the value, which is the kind of mistake that
+ * looks like a dead command rather than a malformed one.
+ */
+function buildComSetFlagCommand(subcode: number, value: boolean): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(0),
+			new Uint8Array([EV3_OPCODE.COM_SET, subcode]),
+			lc0(COM_HARDWARE.BT),
+			lc0(value ? 1 : 0),
+		),
+	};
 }
 
 // ── System commands (filesystem) ────────────────────────────────────

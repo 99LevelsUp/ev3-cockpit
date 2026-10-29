@@ -16,6 +16,14 @@ interface MockBrickState {
 	readonly config: MockBrickConfig;
 	readonly filesystem: MockFilesystem;
 	connected: boolean;
+	/**
+	 * Name set by `brick:setName`, which wins over the configured one.
+	 *
+	 * Separate from `config` because the configuration is what the workspace declared and a
+	 * rename is what happened at run time — flattening the two would make a mock brick's
+	 * config lie about where its name came from.
+	 */
+	renamedTo?: string;
 }
 
 /**
@@ -173,7 +181,25 @@ export class MockTransportProvider implements TransportProvider {
 			return { kind: 'buttons', state: { left: false, right: false, up: false, down: false, enter: false, back: false } };
 
 		case 'info':
-			return { kind: 'info', displayName: state.config.displayName, firmwareVersion: state.config.firmwareVersion };
+			return {
+				kind: 'info',
+				displayName: state.renamedTo ?? state.config.displayName,
+				firmwareVersion: state.config.firmwareVersion,
+			};
+
+		case 'brick:setName':
+			// A rename the mock actually honours, so a caller that renames and reads back sees
+			// what a real brick would rather than the old name. The config itself is readonly
+			// by contract, so the override lives beside it.
+			state.renamedTo = command.name;
+			return { kind: command.kind };
+
+		case 'brick:setBluetooth':
+		case 'brick:setBluetoothVisible':
+			// Accepted and forgotten. The mock has no radio, and pretending to track a flag
+			// nothing here can act on would be the kind of divergence that made mocked
+			// recovery pass while the real transports had none.
+			return { kind: command.kind };
 
 		case 'fs:list':
 			// The mock has no packet ceiling, so a listing is always complete.

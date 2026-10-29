@@ -251,6 +251,58 @@ describe('ev3Commands — buildCommand', () => {
 		assert.equal(result.payload[3], 0x0d, 'expected GET_BRICKNAME subcode');
 	});
 
+	it('names the radio before the flag when switching Bluetooth', () => {
+		// SET_ON_OFF reads two DATA8 parameters — which radio, then the value. Sending only
+		// the flag would have the firmware take it as the hardware selector and then read
+		// whatever followed as the value, which fails as a command that appears to do nothing
+		// rather than one that errors. Read from c_com.c, `case SET_ON_OFF`.
+		const result = buildCommand({ kind: 'brick:setBluetooth', on: true });
+		assert.equal(result.payload[2], 0xd4, 'expected opCOM_SET');
+		assert.equal(result.payload[3], 0x01, 'expected SET_ON_OFF subcode');
+		assert.equal(result.payload[4], 0x02, 'expected HW_BT as the first argument');
+		assert.equal(result.payload[5], 0x01, 'expected the on flag as the second argument');
+	});
+
+	it('switches visibility through its own subcode, same argument shape', () => {
+		const result = buildCommand({ kind: 'brick:setBluetoothVisible', visible: false });
+		assert.equal(result.payload[2], 0xd4, 'expected opCOM_SET');
+		assert.equal(result.payload[3], 0x02, 'expected SET_VISIBLE subcode');
+		assert.equal(result.payload[4], 0x02, 'expected HW_BT as the first argument');
+		assert.equal(result.payload[5], 0x00, 'expected the cleared flag as the second argument');
+	});
+
+	it('asks for a reply when writing a setting, though it reads nothing back', () => {
+		// The command channel matches every command to a reply by message counter, so a
+		// no-reply command would sit until the send timed out.
+		for (const command of [
+			{ kind: 'brick:setName', name: 'AAA2' },
+			{ kind: 'brick:setBluetooth', on: false },
+			{ kind: 'brick:setBluetoothVisible', visible: true },
+		] as const) {
+			assert.equal(
+				buildCommand(command).type, EV3_COMMAND.DIRECT_COMMAND_REPLY,
+				`${command.kind} must expect a reply`
+			);
+		}
+	});
+
+	it('sends the new name as a string parameter', () => {
+		const result = buildCommand({ kind: 'brick:setName', name: 'AAA2' });
+		assert.equal(result.payload[2], 0xd4, 'expected opCOM_SET');
+		assert.equal(result.payload[3], 0x08, 'expected SET_BRICKNAME subcode');
+		assert.equal(result.payload[4], 0x84, 'expected an LCS string marker');
+		assert.equal(
+			Buffer.from(result.payload.slice(5, 9)).toString('ascii'), 'AAA2',
+			'expected the name itself to follow'
+		);
+	});
+
+	it('refuses a name the firmware would reject in silence', () => {
+		// ValidateString fails and the firmware simply does not change the name — no error
+		// comes back, so a caller would believe a rename that never happened.
+		assert.throws(() => buildCommand({ kind: 'brick:setName', name: 'x'.repeat(119) }));
+	});
+
 	it('reads buttons through opUI_BUTTON, not opUI_READ', () => {
 		// A real brick rejects the whole command when button state is requested as
 		// opUI_READ subcode 0x0d (which is GET_ADDRESS), so this asserts the opcode.

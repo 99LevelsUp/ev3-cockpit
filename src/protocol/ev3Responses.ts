@@ -128,6 +128,13 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 		return parseButtons(reply.payload);
 	case 'info':
 		return parseInfo(reply.payload);
+	case 'brick:setName':
+	case 'brick:setBluetooth':
+	case 'brick:setBluetoothVisible':
+		// Nothing to parse: validateReply above has already rejected an error status, and a
+		// successful settings write carries no payload. Whether the setting actually took is
+		// only observable on the brick afterwards.
+		return { kind: command.kind };
 	case 'fs:list':
 		return parseFsList(reply.payload);
 	case 'fs:read':
