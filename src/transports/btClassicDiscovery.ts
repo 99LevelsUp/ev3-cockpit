@@ -56,8 +56,8 @@ export interface BtClassicDiscoveryOptions {
 	 * The shared RFCOMM queue, so pairing takes the radio slot rather than racing a connect
 	 * for it.
 	 *
-	 * Belongs here rather than at the call site: Windows carries exactly one RFCOMM channel
-	 * and pairing uses it like any connect does. Wrapping the queue around `pair()` somewhere
+	 * Belongs here rather than at the call site: pairing pages the radio like any connect
+	 * does, and the queue keeps two of those from running at once. Wrapping the queue around `pair()` somewhere
 	 * up in the composition root would leave the invariant true only for whoever remembered
 	 * to wrap, and the next caller would find out the hard way.
 	 *

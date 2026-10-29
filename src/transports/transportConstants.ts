@@ -172,9 +172,9 @@ export const BT = {
 	 * (DESIGN §3.3) instead of queuing indefinitely.
 	 *
 	 * Comfortably above the 30 s cooldown ceiling (`ERROR_RECOVERY_COOLDOWN_MS`, which
-	 * `BtConnectionQueue`'s backoff never exceeds), so this only fires when the wait is
-	 * for the transport's one slot to be released by another connected brick — the
-	 * ceiling-reached case — never for an ordinary cooldown.
+	 * `BtConnectionQueue`'s backoff never exceeds), so this only fires when another open or
+	 * pairing holds the slot for longer — a pairing waiting for a person at the brick can —
+	 * never for an ordinary cooldown.
 	 */
 	QUEUE_ACQUIRE_TIMEOUT_MS: 45000,
 	/** Default EV3 pairing PIN. */

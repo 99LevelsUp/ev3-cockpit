@@ -1,9 +1,11 @@
 /**
- * Bluetooth connection queue — serializes RFCOMM connections.
+ * Bluetooth connection queue — serializes the *opening* of RFCOMM connections and pairing
+ * attempts, so two of them never page the radio at once.
  *
- * Windows only supports one active RFCOMM connection at a time (error 121
- * on second connection). This queue enforces that constraint with mandatory
- * inter-connection cooldowns derived from lab measurements.
+ * It used to be described as enforcing "one active RFCOMM connection at a time". That was the
+ * old testlab's claim; measured 29.10.2026, the host holds two sessions to two bricks at once,
+ * so callers release the slot as soon as the connection is open (`BtTransportProvider`). The
+ * cooldowns are still under measurement (step-1 plan, U3.2).
  */
 
 import { BT, FIRMWARE_SAFETY } from './transportConstants';
@@ -21,8 +23,8 @@ interface QueueEntry {
 /**
  * Serialized RFCOMM connection queue.
  *
- * Ensures only one Bluetooth RFCOMM connection is active at a time
- * and enforces inter-connection cooldowns to prevent Windows BT stack errors.
+ * Grants one slot at a time and spaces the grants by the inter-connection and error-recovery
+ * cooldowns.
  */
 export class BtConnectionQueue {
 	private readonly maxConcurrent: number;
@@ -53,14 +55,14 @@ export class BtConnectionQueue {
 	}
 
 	/**
-	 * Acquire a connection slot. Returns a release callback that MUST be called
-	 * when the connection is no longer needed.
+	 * Acquire a slot. Returns a release callback that MUST be called once the operation the
+	 * slot was for (an open, a pairing) has finished, passing the error if it failed.
 	 *
 	 * @throws {TransportError} When no slot opens up within `acquireTimeoutMs`. A cooldown
-	 *   wait never takes that long (the backoff caps at `backoffMax`), so this only fires
-	 *   when the transport's session ceiling is genuinely reached — another brick holds
-	 *   the one slot for as long as it stays connected — per DESIGN §3.3: fail with a
-	 *   stated reason rather than queue indefinitely.
+	 *   wait never takes that long (the backoff caps at `backoffMax`), so this fires when
+	 *   another open or pairing holds the slot for longer — a pairing can, since it waits for
+	 *   a person at the brick. Per DESIGN §3.3: fail with a stated reason rather than queue
+	 *   indefinitely.
 	 */
 	async acquire(brickId: string): Promise<(error?: unknown) => void> {
 		return new Promise<() => void>((resolve, reject) => {
@@ -72,8 +74,8 @@ export class BtConnectionQueue {
 				reject(new TransportError(
 					`BT connection queue timed out after ${this.acquireTimeoutMs} ms waiting for `
 					+ `a slot for ${brickId} (${this.activeCount}/${this.maxConcurrent} in use). `
-					+ 'The transport\'s session ceiling is reached — disconnect the brick holding '
-					+ 'it before connecting another over Bluetooth.'
+					+ 'Bluetooth is busy opening another connection or pairing a brick; try '
+					+ 'again once that has finished.'
 				));
 			}, this.acquireTimeoutMs);
 			entry.timeoutTimer.unref?.();

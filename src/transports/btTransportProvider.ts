@@ -49,7 +49,6 @@ interface BtSession {
 	adapter: TransportAdapter;
 	backend: BtBackend;
 	messageCounter: number;
-	queueRelease?: (error?: unknown) => void;
 }
 
 // ── LEGO OUI filter ─────────────────────────────────────────────────
@@ -162,7 +161,10 @@ export class BtTransportProvider implements TransportProvider {
 			throw new ConnectionError(`Cannot extract MAC address from brick key: ${brickKey}`);
 		}
 
-		// Acquire connection queue slot (serialized RFCOMM)
+		// The queue serialises *opening*, not holding. Measured 29.10.2026 on this host's weakest
+		// adapter: two sessions to two bricks held at once answered every request, so a session
+		// that kept the slot for its whole life only stopped a second brick from connecting at
+		// all (step-1 plan, U3.1; scripts/bt-radio-probe.js).
 		let queueRelease: ((error?: unknown) => void) | undefined;
 		if (this.connectionQueue) {
 			queueRelease = await this.connectionQueue.acquire(mac);
@@ -170,8 +172,9 @@ export class BtTransportProvider implements TransportProvider {
 
 		try {
 			const { adapter, backend } = await this.connectWithFallback(mac);
-			this.sessions.set(brickKey, { adapter, backend, messageCounter: 0, queueRelease });
+			this.sessions.set(brickKey, { adapter, backend, messageCounter: 0 });
 			this.preferredBackend.set(mac, backend);
+			queueRelease?.();
 			return { brickKey, transport: Transport.BT };
 		} catch (error) {
 			// Tell the queue it failed, so the next attempt waits out the longer recovery
@@ -185,11 +188,7 @@ export class BtTransportProvider implements TransportProvider {
 		const session = this.sessions.get(brickKey);
 		if (!session) { return; }
 		this.sessions.delete(brickKey);
-		try {
-			await session.adapter.close();
-		} finally {
-			session.queueRelease?.();
-		}
+		await session.adapter.close();
 	}
 
 	async sendPacket(
@@ -237,7 +236,6 @@ export class BtTransportProvider implements TransportProvider {
 		this.disposed = true;
 		for (const [, session] of this.sessions) {
 			void session.adapter.close();
-			session.queueRelease?.();
 		}
 		this.sessions.clear();
 		this.connectionQueue?.dispose();
