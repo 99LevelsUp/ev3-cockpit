@@ -24,6 +24,10 @@ const argAfter = (flag, fallback) => {
 const HELPER = argAfter('--helper');
 const MINUTES = Number.parseFloat(argAfter('--minutes', '20'));
 const STOP = argAfter('--stop-file');
+// Optional rotation: every N seconds the PC beeps three times and the phase number goes up, so
+// a person can move the bricks between fixed positions and the log says which layout it was.
+const ROTATE_S = Number.parseFloat(argAfter('--rotate-every', '0'));
+const PHASES = Number.parseInt(argAfter('--phases', '0'), 10);
 const LIVE_WINDOW_S = 12;
 const AQS_ALL = 'System.Devices.DevObjectType:=5 AND System.Devices.Aep.ProtocolId:="{E0CBF06C-CD8B-4647-BB8A-263B43F0F974}" '
 	+ 'AND System.Devices.Aep.Bluetooth.IssueInquiry:=System.StructuredQueryType.Boolean#True';
@@ -49,22 +53,37 @@ function helper(args, onEvent) {
 
 const lego = (mac) => typeof mac === 'string' && mac.toUpperCase().startsWith(LEGO);
 
+function beep(pattern) {
+	const script = pattern.map(([hz, ms]) => `[console]::beep(${hz},${ms})`).join(';');
+	spawn('powershell', ['-NoProfile', '-Command', script], { stdio: 'ignore', windowsHide: true });
+}
+
 async function main() {
-	const end = Date.now() + MINUTES * 60000;
+	const started = Date.now();
+	const end = ROTATE_S && PHASES ? started + ROTATE_S * PHASES * 1000 : started + MINUTES * 60000;
 	let cycle = 0;
-	console.log(`start ${clock()}; time | cycle | source | mac | name | signal | present`);
+	let phase = 1;
+	console.log(`start ${clock()}; time | cycle | phase | source | mac | name | signal | present`);
 	while (Date.now() < end && !(STOP && fs.existsSync(STOP))) {
 		cycle += 1;
+		if (ROTATE_S) {
+			const due = Math.floor((Date.now() - started) / (ROTATE_S * 1000)) + 1;
+			if (due > phase) {
+				phase = due;
+				beep([[1500, 150], [1500, 150], [1500, 150]]);
+				console.log(`${clock()} | ${cycle} | ${phase} | ROTATE | | | |`);
+			}
+		}
 		await helper(['--scan', '--inquiry-seconds', '1', '--timeout-seconds', '20'], (e) => {
 			if (e.type === 'device' && e.paired && lego(e.mac)) {
-				console.log(`${clock()} | ${cycle} | records | ${e.mac} | ${e.name} | ${e.signal} |`);
+				console.log(`${clock()} | ${cycle} | ${phase} | records | ${e.mac} | ${e.name} | ${e.signal} |`);
 			}
 		});
 		await helper(['--watch-raw', '--aqs', AQS_ALL, '--inquiry-seconds', String(LIVE_WINDOW_S), '--timeout-seconds', String(LIVE_WINDOW_S + 15)], (e) => {
 			if ((e.type === 'rawAdded' || e.type === 'rawUpdated') && lego(e.mac)) {
-				console.log(`${clock()} | ${cycle} | ${e.type === 'rawAdded' ? 'live+' : 'live~'} | ${e.mac} | ${e.name ?? ''} | ${e.signal} | ${e.present}`);
+				console.log(`${clock()} | ${cycle} | ${phase} | ${e.type === 'rawAdded' ? 'live+' : 'live~'} | ${e.mac} | ${e.name ?? ''} | ${e.signal} | ${e.present}`);
 			} else if (e.type === 'rawRemoved' && lego(e.mac)) {
-				console.log(`${clock()} | ${cycle} | live- | ${e.mac} | | |`);
+				console.log(`${clock()} | ${cycle} | ${phase} | live- | ${e.mac} | | |`);
 			}
 		});
 	}
