@@ -25,6 +25,7 @@ import {
 } from './windowsBluetooth';
 import { BT } from './transportConstants';
 import { formatMac } from './btSppDiscovery';
+import type { BtConnectionQueue } from './btConnectionQueue';
 
 /** Configuration for {@link BtClassicDiscovery}. */
 export interface BtClassicDiscoveryOptions {
@@ -45,6 +46,20 @@ export interface BtClassicDiscoveryOptions {
 	pairDevice?: (mac: string) => Promise<{ ok: boolean; reason?: string }>;
 	/** Removes a pairing. */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	/**
+	 * The shared RFCOMM queue, so pairing takes the radio slot rather than racing a connect
+	 * for it.
+	 *
+	 * Belongs here rather than at the call site: Windows carries exactly one RFCOMM channel
+	 * and pairing uses it like any connect does. Wrapping the queue around `pair()` somewhere
+	 * up in the composition root would leave the invariant true only for whoever remembered
+	 * to wrap, and the next caller would find out the hard way.
+	 *
+	 * Consequence worth knowing rather than working around: the queue's inter-connection
+	 * cooldown applies, so the first connect after a pairing waits it out. That is correct —
+	 * they are the same radio — but it does make that one connect look slow.
+	 */
+	connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
 }
 
 /** Outcome of a pairing operation. */
@@ -63,6 +78,7 @@ export class BtClassicDiscovery {
 	private readonly onCacheUnavailable?: (reason: string) => void;
 	private readonly pairDevice: (mac: string) => Promise<PairingResult>;
 	private readonly unpairDevice: (mac: string) => PairingResult;
+	private readonly connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
 
 	constructor(options: BtClassicDiscoveryOptions = {}) {
 		this.listDevices = options.listDevices ?? (() => listBluetoothDevices());
@@ -70,6 +86,7 @@ export class BtClassicDiscovery {
 		this.onCacheUnavailable = options.onCacheUnavailable;
 		this.pairDevice = options.pairDevice ?? pairBluetoothDevice;
 		this.unpairDevice = options.unpairDevice ?? removeBluetoothDevice;
+		this.connectionQueue = options.connectionQueue;
 	}
 
 	/**
@@ -84,11 +101,18 @@ export class BtClassicDiscovery {
 	 * same one, and the brick displays it when asked.
 	 */
 	pair = async (mac: string): Promise<PairingResult> => {
-		try {
-			return await this.pairDevice(mac);
-		} catch (error) {
-			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-		}
+		const attempt = async (): Promise<PairingResult> => {
+			try {
+				return await this.pairDevice(mac);
+			} catch (error) {
+				// Includes the helper being missing entirely, which arrives as a
+				// BackendUnavailableError and is an install fault rather than a refusal — the
+				// message says so, and `pair` stays a function that answers instead of throwing.
+				return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+			}
+		};
+
+		return this.connectionQueue ? this.connectionQueue.enqueue(mac, attempt) : attempt();
 	};
 
 	/**

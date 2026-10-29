@@ -25,6 +25,13 @@ CLAUDE.md
 # Never commit it — it is a large third-party corpus, not ours to redistribute.
 /ev3-resources
 
+# The Bluetooth pairing helper's build output. The C# source under
+# native/bt-pairing-helper/ is committed; everything the toolchain generates from it is not.
+# `npm run build:helper` regenerates native/bin/, and `npm run package` does it for you.
+/native/bin/
+/native/bt-pairing-helper/bin/
+/native/bt-pairing-helper/obj/
+
 # Playwright
 /test-results/
 /playwright-report/

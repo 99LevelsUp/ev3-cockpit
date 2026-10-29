@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.86",
+  "version": "0.2.88",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -31,14 +31,20 @@
         "command": "ev3-cockpit.showStorage",
         "title": "Show Storage on Active Brick",
         "category": "EVƎ Cockpit"
+      },
+      {
+        "command": "ev3-cockpit.connectBluetoothBrick",
+        "title": "Connect a Brick over Bluetooth",
+        "category": "EVƎ Cockpit"
       }
     ]
   },
   "scripts": {
     "compile": "tsc",
     "lint": "eslint src --ext .ts",
+    "build:helper": "dotnet publish native/bt-pairing-helper -c Release -o native/bin",
     "build:dev": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js --sourcemap",
-    "package": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js",
+    "package": "npm run build:helper && esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js",
     "test:unit": "node scripts/run-unit-tests.cjs",
     "test-smoke": "npm run test:unit",
     "test:host": "node scripts/runTests.js",
