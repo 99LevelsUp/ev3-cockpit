@@ -200,3 +200,42 @@ describe('BtTransportProvider — the connection queue', () => {
 		provider.dispose();
 	});
 });
+
+describe('BtTransportProvider — reconnecting to the same brick', () => {
+	const KEY_B = makeBrickKey(Transport.BT, '00:16:53:aa:bb:dd');
+	const opens = () => {
+		const at: Array<{ mac: string; ms: number }> = [];
+		const started = Date.now();
+		const backends = new Map<BtBackend, BtAdapterFactory>([['winsock', (mac) => adapterThat(() => {
+			at.push({ mac, ms: Date.now() - started });
+			return Promise.resolve();
+		})]]);
+		return { at, backends };
+	};
+
+	it('gives a brick its gap after a close before connecting to it again', async () => {
+		// Measured 29.10.2026: a connect 0-2 s after a clean close failed with WSA 10064, and
+		// that sequence was what tipped the old blocking connect into its collapse.
+		const { at, backends } = opens();
+		const provider = new BtTransportProvider({ backends, reconnectGapAfterCloseMs: 150 });
+
+		await provider.connect(KEY);
+		await provider.disconnect(KEY);
+		await provider.connect(KEY);
+
+		assert.ok(at[1].ms - at[0].ms >= 140, `reopened after ${at[1].ms - at[0].ms} ms`);
+		provider.dispose();
+	});
+
+	it('does not make another brick wait for that gap', async () => {
+		const { at, backends } = opens();
+		const provider = new BtTransportProvider({ backends, reconnectGapAfterCloseMs: 500 });
+
+		await provider.connect(KEY);
+		await provider.disconnect(KEY);
+		await provider.connect(KEY_B);
+
+		assert.ok(at[1].ms < 100, `the other brick waited ${at[1].ms} ms`);
+		provider.dispose();
+	});
+});

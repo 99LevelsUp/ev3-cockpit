@@ -18,6 +18,7 @@ import {
 	macToBtAddr,
 	isInvalidSocket,
 	SOCKET_ERROR,
+	WSAEWOULDBLOCK,
 } from '../transports/windowsWinsock';
 import { BackendUnavailableError, TimeoutError, TransportError } from '../errors/CockpitError';
 
@@ -26,9 +27,16 @@ const MAC = '00:16:53:aa:bb:cc';
 /** A `ws2_32.dll` that does whatever a test needs it to. */
 class FakeWinsock implements Winsock2Api {
 	socketHandle: SocketHandle = 42;
+	/** What `connect` returns when not held: `0` connected at once, or SOCKET_ERROR. */
 	connectResult = 0;
-	/** Never settles until {@link finishConnect} is called. */
+	/** Starts the connect in the background: pending until {@link finishConnect}. */
 	holdConnect = false;
+	/** Where a held connect stands, as `connectState` reports it. */
+	pending: 'pending' | 'connected' | 'failed' = 'pending';
+	/** `SO_ERROR` of a connect that failed in the background. */
+	failCode = 0;
+	nonBlockingCalls: boolean[] = [];
+	connectCalls = 0;
 	lastErrorCode = 0;
 	closed: SocketHandle[] = [];
 	sent: Uint8Array[] = [];
@@ -40,27 +48,43 @@ class FakeWinsock implements Winsock2Api {
 	/** Delivered once `inbound` runs dry: `0` is an orderly close. */
 	recvAtEnd?: number;
 
-	private connectSettle?: (value: number) => void;
 	lastAddress?: BluetoothAddress;
 
 	socket(): SocketHandle {
 		return this.socketHandle;
 	}
 
-	/** When set, `connect` rejects with this instead of returning a code. */
+	/** When set, `connect` throws this instead of returning a code. */
 	connectThrows?: Error;
 
-	connect(_socket: SocketHandle, address: BluetoothAddress): Promise<number> {
-		this.lastAddress = address;
-		if (this.connectThrows) { return Promise.reject(this.connectThrows); }
-		if (!this.holdConnect) { return Promise.resolve(this.connectResult); }
-		return new Promise<number>((resolve) => { this.connectSettle = resolve; });
+	setNonBlocking(_socket: SocketHandle, on: boolean): number {
+		this.nonBlockingCalls.push(on);
+		return 0;
 	}
 
-	/** Lets a held connect land, the way an abort makes the real call return. */
+	connect(_socket: SocketHandle, address: BluetoothAddress): number {
+		this.lastAddress = address;
+		this.connectCalls += 1;
+		if (this.connectThrows) { throw this.connectThrows; }
+		if (!this.holdConnect) { return this.connectResult; }
+		this.pending = 'pending';
+		this.lastErrorCode = WSAEWOULDBLOCK;
+		return SOCKET_ERROR;
+	}
+
+	connectState(): 'pending' | 'connected' | 'failed' {
+		return this.pending;
+	}
+
+	socketError(): number {
+		return this.failCode;
+	}
+
+	/** Lets a held connect land: `0` connected, anything else failed with that code. */
 	finishConnect(result: number): void {
-		this.connectSettle?.(result);
-		this.connectSettle = undefined;
+		if (result === 0) { this.pending = 'connected'; return; }
+		this.pending = 'failed';
+		this.failCode = result;
 	}
 
 	send(_socket: SocketHandle, data: Uint8Array, length: number): number {
@@ -212,6 +236,57 @@ describe('BtWinsockAdapter — opening', () => {
 		await opening;
 
 		assert.equal(adapter.isOpen, false, 'a late success must not resurrect the adapter');
+	});
+
+	it('connects without blocking, then returns the socket to blocking mode', async () => {
+		const api = new FakeWinsock();
+		api.holdConnect = true;
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api, connectTimeoutMs: 2000 });
+
+		const opening = adapter.open();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(adapter.isOpen, false, 'still pending, and nothing waited on a thread for it');
+		api.finishConnect(0);
+		await opening;
+
+		assert.equal(adapter.isOpen, true);
+		assert.deepEqual(api.nonBlockingCalls, [true, false]);
+		await adapter.close();
+	});
+
+	it('reports the error the connect actually ended with', async () => {
+		// Read through SO_ERROR on the socket itself. The blocking version read the thread's
+		// last error on a different thread from the one that made the call, and reported
+		// codes like 10048 and 10038 that had nothing to do with the connect.
+		const api = new FakeWinsock();
+		api.holdConnect = true;
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api, connectTimeoutMs: 2000 });
+
+		const opening = adapter.open();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		api.finishConnect(10064);
+
+		await assert.rejects(opening, /WSA error 10064/);
+		assert.deepEqual(api.closed, [42]);
+	});
+
+	it('leaves nothing behind after a deadline: the next open reaches the stack at once', async () => {
+		// Measured 29.10.2026 with the blocking version: after four deadlines in one process,
+		// later connects failed in a millisecond without reaching the radio, and the process
+		// could not exit. Nothing here may stay parked once a deadline has passed.
+		const api = new FakeWinsock();
+		api.holdConnect = true;
+		const first = new BtWinsockAdapter({ mac: MAC, winsockApi: api, connectTimeoutMs: 20 });
+		await assert.rejects(first.open(), TimeoutError);
+
+		api.holdConnect = false;
+		api.connectResult = 0;
+		const second = new BtWinsockAdapter({ mac: MAC, winsockApi: api, connectTimeoutMs: 20 });
+		await second.open();
+
+		assert.equal(api.connectCalls, 2);
+		assert.equal(second.isOpen, true);
+		await second.close();
 	});
 });
 

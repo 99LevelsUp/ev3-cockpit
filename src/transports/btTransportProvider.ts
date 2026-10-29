@@ -75,6 +75,11 @@ export interface BtTransportProviderOptions {
 	 * on the next scan as though nothing happened.
 	 */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	/**
+	 * How long a brick gets after its connection is closed before the next connect to it
+	 * (default {@link BT.RECONNECT_GAP_AFTER_CLOSE_MS}). Per brick: other bricks are not held.
+	 */
+	reconnectGapAfterCloseMs?: number;
 }
 
 /**
@@ -96,6 +101,9 @@ export class BtTransportProvider implements TransportProvider {
 	private readonly unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 	private readonly sessions = new Map<BrickKey, BtSession>();
 	private readonly preferredBackend = new Map<string, BtBackend>();
+	/** When each brick's last connection was closed, by MAC. */
+	private readonly closedAt = new Map<string, number>();
+	private readonly reconnectGapAfterCloseMs: number;
 	private disposed = false;
 
 	constructor(options?: BtTransportProviderOptions) {
@@ -103,6 +111,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.discoverDevices = options?.discoverDevices;
 		this.connectionQueue = options?.connectionQueue;
 		this.unpairDevice = options?.unpairDevice;
+		this.reconnectGapAfterCloseMs = options?.reconnectGapAfterCloseMs ?? BT.RECONNECT_GAP_AFTER_CLOSE_MS;
 		this.capabilities = {
 			supportsSignalInfo: false,
 			supportsForget: Boolean(this.unpairDevice),
@@ -165,6 +174,17 @@ export class BtTransportProvider implements TransportProvider {
 		// adapter: two sessions to two bricks held at once answered every request, so a session
 		// that kept the slot for its whole life only stopped a second brick from connecting at
 		// all (step-1 plan, U3.1; scripts/bt-radio-probe.js).
+		// The brick needs a moment after a close before it accepts a new link: page scan comes
+		// back only once its side of the old one is torn down. Measured 29.10.2026: a connect
+		// 0-2 s after a clean close failed at once with WSA 10064, and it was always that
+		// sequence that started the blocked-connect collapse the Winsock adapter now avoids.
+		// Waited before taking the queue slot, so other bricks are not held up by it.
+		const closedAt = this.closedAt.get(mac);
+		if (closedAt !== undefined) {
+			const wait = closedAt + this.reconnectGapAfterCloseMs - Date.now();
+			if (wait > 0) { await new Promise((resolve) => setTimeout(resolve, wait)); }
+		}
+
 		let queueRelease: ((error?: unknown) => void) | undefined;
 		if (this.connectionQueue) {
 			queueRelease = await this.connectionQueue.acquire(mac);
@@ -188,7 +208,12 @@ export class BtTransportProvider implements TransportProvider {
 		const session = this.sessions.get(brickKey);
 		if (!session) { return; }
 		this.sessions.delete(brickKey);
-		await session.adapter.close();
+		try {
+			await session.adapter.close();
+		} finally {
+			const mac = this.extractMac(brickKey);
+			if (mac) { this.closedAt.set(mac, Date.now()); }
+		}
 	}
 
 	async sendPacket(
