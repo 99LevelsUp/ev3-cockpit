@@ -185,6 +185,21 @@ Scope rule: **below the `TransportProvider` contract, Windows only.** Nothing ab
    and the same after a failed connect. Then set `INTER_CONNECTION_COOLDOWN_MS` and the error
    recovery policy from the numbers, and decide whether the exponential growth stays. No value
    changes before the data exist.
+
+   **Run on psk1 only** (owner: the second host is not available, and the cockpit ships first;
+   psk1's Realtek adapter is the hard case). `scripts/bt-gap-sweep.js`: per brick a chain of
+   open → `info` → close, each preceded by a gap drawn in shuffled order from {0, 2, 5, 15,
+   30} s, 8 per gap per brick, queue cooldowns at zero, bricks one after another.
+   **Decision rule, fixed before the run (29.10.2026):** after a clean close the gap becomes
+   the shortest one whose open rate is no more than 10 percentage points below the 15 s rate;
+   after a failure, the same against 30 s. Pooled over the three bricks, reported per brick.
+
+   **Already measured, 29.10.2026, and it changes U3.1** (`scripts/bt-radio-probe.js`, psk1,
+   CCC and BBB): two Bluetooth sessions to two bricks held at once, 115/115 replies each with
+   no interference; a 30 s live inquiry beside both sessions left them at 100 % with unchanged
+   round trips. "One RFCOMM connection per host" does not hold, and neither does the need to
+   keep the scan away from open sessions. The queue only has to serialise *opening*, and a
+   session must not hold its slot while it lives.
 3. **Hold the link.** Verify, don't assume, that nothing in the session runtime closes and
    reopens a healthy BT session (heartbeat failures, transport guard); EV3 Lab's one connect
    per session is the pattern the lab endorses.
