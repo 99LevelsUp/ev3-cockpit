@@ -212,6 +212,34 @@ describe('BtClassicDiscovery — pairing', () => {
 		assert.deepEqual(enqueued, ['00:16:53:42:D9:F2']);
 	});
 
+	it('answers instead of throwing when the queue refuses the slot', async () => {
+		// A connected Bluetooth brick holds the only slot, so the queue's acquire timeout fires
+		// before the pairing attempt ever runs. That still has to come back as a reason the
+		// command can show, not as an exception nobody catches.
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => Promise.resolve({ ok: true }),
+			connectionQueue: {
+				enqueue: <T>(): Promise<T> => Promise.reject(new Error('no Bluetooth slot within 45 s')),
+			},
+		});
+
+		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'),
+			{ ok: false, reason: 'no Bluetooth slot within 45 s' });
+	});
+
+	it('hands this pairing\'s progress listener to the binding', async () => {
+		const heard: string[] = [];
+		const discovery = new BtClassicDiscovery({
+			pairDevice: (_mac, onEvent) => {
+				onEvent?.({ type: 'searching', mac: '00:16:53:42:D9:F2' });
+				return Promise.resolve({ ok: true });
+			},
+		});
+
+		await discovery.pair('00:16:53:42:D9:F2', (event) => heard.push(event.type));
+		assert.deepEqual(heard, ['searching']);
+	});
+
 	it('still pairs when no queue was supplied', async () => {
 		// The queue is optional so the discovery layer stays usable on its own; a missing one
 		// must not silently skip the pairing itself.

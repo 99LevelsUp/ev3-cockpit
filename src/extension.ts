@@ -97,12 +97,6 @@ export function activate(context: vscode.ExtensionContext): void {
 	// other happens only when a backend cannot run on this host at all — a failed connect
 	// ends the attempt, because the channel it just disturbed needs the cooldown more than
 	// it needs another immediate try.
-	// Where a pairing in progress sends its protocol events. The helper's pairing function is
-	// built once, at activation, but the thing that wants to hear about it is whichever
-	// command invocation is running — so the command parks a listener here for the duration
-	// and clears it afterwards.
-	let pairingProgress: ((event: BtPairingEvent) => void) | undefined;
-
 	const btBackend = new BtSppBackend();
 	// One queue for the whole transport: connects and pairing attempts are the same single
 	// RFCOMM channel, so they have to take turns rather than race.
@@ -114,10 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			`BT device cache unavailable, falling back to the COM port scan: ${reason}`
 		),
 		connectionQueue: btQueue,
-		pairDevice: createHelperPairing({
-			helperPath: btHelperPath,
-			onEvent: (event) => { pairingProgress?.(event); },
-		}),
+		pairDevice: createHelperPairing({ helperPath: btHelperPath }),
 	});
 	const btProvider = services.add(new BtTransportProvider({
 		discoverDevices: btDiscovery.discover,
@@ -291,7 +282,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const paired = picked.paired || await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: pairing ${label}`, cancellable: false },
 			async (progress) => {
-				pairingProgress = (event) => {
+				const result = await btDiscovery.pair(picked.mac, (event: BtPairingEvent) => {
 					logger.debug(`Pairing ${picked.mac}: ${JSON.stringify(event)}`);
 					// Prompt on `found`, not on `pairingRequested`: by the time the brick is
 					// asking, whoever is meant to press it has seconds. On `found` they have
@@ -299,18 +290,13 @@ export function activate(context: vscode.ExtensionContext): void {
 					if (event.type === 'found' && event.alreadyPaired === false) {
 						progress.report({ message: 'Confirm on the brick\'s display, then accept PIN 1234.' });
 					}
-				};
-				try {
-					const result = await btDiscovery.pair(picked.mac);
-					if (!result.ok) {
-						logger.warn(`Pairing ${picked.mac} failed: ${result.reason ?? 'no reason given'}`);
-						void vscode.window.showErrorMessage(
-							`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
-					}
-					return result.ok;
-				} finally {
-					pairingProgress = undefined;
+				});
+				if (!result.ok) {
+					logger.warn(`Pairing ${picked.mac} failed: ${result.reason ?? 'no reason given'}`);
+					void vscode.window.showErrorMessage(
+						`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
 				}
+				return result.ok;
 			});
 		if (!paired) { return; }
 
