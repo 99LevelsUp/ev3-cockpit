@@ -12,6 +12,7 @@ import {
 import { buildCommand } from '../protocol/ev3Commands';
 import { parseResponse } from '../protocol/ev3Responses';
 import type { Ev3Packet } from '../protocol/ev3Packet';
+import { ProtocolError } from '../errors/CockpitError';
 
 // ── Bytecode encoding ───────────────────────────────────────────────
 
@@ -300,7 +301,18 @@ describe('ev3Commands — buildCommand', () => {
 	it('refuses a name the firmware would reject in silence', () => {
 		// ValidateString fails and the firmware simply does not change the name — no error
 		// comes back, so a caller would believe a rename that never happened.
-		assert.throws(() => buildCommand({ kind: 'brick:setName', name: 'x'.repeat(119) }));
+		assert.throws(() => buildCommand({ kind: 'brick:setName', name: 'x'.repeat(119) }), ProtocolError);
+		assert.doesNotThrow(() => buildCommand({ kind: 'brick:setName', name: 'x'.repeat(118) }));
+	});
+
+	it('refuses a character outside the firmware\'s name set', () => {
+		// ValidChars gives the name bit to letters, digits, '_' and '-' only. A space or an
+		// accented letter fails the whole rename as silently as an over-long name.
+		for (const name of ['my brick', 'Kostička', 'a.b', '']) {
+			assert.throws(
+				() => buildCommand({ kind: 'brick:setName', name }), ProtocolError, `expected "${name}" refused`);
+		}
+		assert.doesNotThrow(() => buildCommand({ kind: 'brick:setName', name: 'Robot_2-B' }));
 	});
 
 	it('reads buttons through opUI_BUTTON, not opUI_READ', () => {
