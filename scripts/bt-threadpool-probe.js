@@ -37,6 +37,9 @@ const { Transport } = require(out('contracts/enums'));
 const mac = (process.argv[2] ?? '').toUpperCase();
 const i = process.argv.indexOf('--attempts');
 const ATTEMPTS = i >= 0 ? Number.parseInt(process.argv[i + 1], 10) : 10;
+const g = process.argv.indexOf('--gap-ms');
+// 0 by default: the probe provokes the fast-reconnect sequence on purpose.
+const GAP_MS = g >= 0 ? Number.parseInt(process.argv[g + 1], 10) : 0;
 const t0 = Date.now();
 const log = (line) => console.log(`${String(Math.round((Date.now() - t0) / 1000)).padStart(4)} s  ${line}`);
 
@@ -50,13 +53,12 @@ async function poolCheck() {
 }
 
 async function main() {
-	console.log(`UV_THREADPOOL_SIZE=${process.env.UV_THREADPOOL_SIZE ?? '(default 4)'}; ${mac}; ${ATTEMPTS} attempts, no gap`);
+	console.log(`UV_THREADPOOL_SIZE=${process.env.UV_THREADPOOL_SIZE ?? '(default 4)'}; ${mac}; ${ATTEMPTS} attempts, reconnect gap ${GAP_MS} ms`);
 	const queue = new BtConnectionQueue({ interConnectionCooldownMs: 0, errorRecoveryCooldownMs: 0 });
-	// No reconnect gap: this probe provokes the fast-reconnect sequence on purpose.
 	const bt = new BtTransportProvider({
 		backends: new Map([['winsock', (m) => new BtWinsockAdapter({ mac: m })]]),
 		connectionQueue: queue,
-		reconnectGapAfterCloseMs: 0,
+		reconnectGapAfterCloseMs: GAP_MS,
 	});
 	const key = makeBrickKey(Transport.BT, mac);
 	log(`before any connect: ${await poolCheck()}`);
