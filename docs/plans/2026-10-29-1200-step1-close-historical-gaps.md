@@ -225,6 +225,18 @@ Scope rule: **below the `TransportProvider` contract, Windows only.** Nothing ab
    per-brick reconnect gap keeps the trigger away; whether an abortive close or time clears
    the state is the next measurement.
 
+   **Follow-up, same evening** (`scripts/bt-abort-probe.js`, `bt-threadpool-probe.js --gap-ms`):
+   - The stuck state is **temporary**: after the trigger, connects time out for about two
+     minutes, then reach the radio again in the same process — with an abortive close
+     (`SO_LINGER {1,0}`) the next tries gave 10064 and then an open, with a plain close a
+     timeout and then an ordinary 10060. One run each; the abortive close is not adopted on
+     that evidence.
+   - **With the 5 s reconnect gap the trigger does not occur:** 12 attempts on CCC, no 10064,
+     no 15 s hang, no 10048 — five opens and seven ordinary 10060 page timeouts, this host's
+     known rate. The gap stays at 5 s until the sweep replaces it.
+   - The gap sweep has to be rerun with `reconnectGapAfterCloseMs: 0` in the provider it
+     builds, or the provider's own gap will mask the short gaps it is measuring.
+
    **Already measured, 29.10.2026, and it changes U3.1** (`scripts/bt-radio-probe.js`, psk1,
    CCC and BBB): two Bluetooth sessions to two bricks held at once, 115/115 replies each with
    no interference; a 30 s live inquiry beside both sessions left them at 100 % with unchanged
