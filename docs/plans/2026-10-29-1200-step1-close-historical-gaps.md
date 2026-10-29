@@ -287,6 +287,70 @@ Scenarios, all catalogued in the lab already and unmeasured:
 
 Non-blocking for U1–U2; U3.1's final shape waits for point 1, and D2's shape for point 4.
 
+## 4a. What the scan shows — proposal for the owner (29.10.2026)
+
+The owner's requirements for the list a user picks a brick from: **the name that is on the
+brick**, **the channels it is available on**, and **an order** — signal strength being the
+one candidate so far. Measured the same day; nothing below is built.
+
+### Name — only the brick itself is a reliable source
+
+`scripts/name-source-probe.js` renamed CCC over USB (CCC → CCCx → CCC) and read every source:
+
+| source | after rename to CCCx | after renaming back |
+|---|---|---|
+| `info` over USB | CCCx | CCC |
+| USB discovery (libusb product string, fresh provider too) | **CCC — stale** | CCC |
+| Bluetooth scan (Windows' record of a paired brick) | **CCC — stale** | **CCCx — stale** |
+| `info` over Bluetooth | CCCx | CCC |
+| TCP beacon | not measured — no brick had Wi-Fi on | |
+
+The USB string is fixed when the cable is plugged in; Windows' Bluetooth record catches up
+only at the next Bluetooth connection. So:
+
+- **The cockpit keeps a confirmed name per brick** (identity = the twelve hex digits that are
+  both USB serial and BT address), set every time it reads `info` from the brick — on
+  connect, after its own rename — and later persisted (Phase 6).
+- **A brick that appears on USB is asked its name at once.** It costs one round trip (~6 ms),
+  and an extra USB link beside an open Bluetooth one is measured safe (U4.4).
+- **Bluetooth is not connected just to read a name** — on a weak adapter that is a 5 s attempt
+  that fails half the time. Until the brick has been asked, the list shows the discovery name
+  marked as unconfirmed (how it looks is the panel's call).
+- To check: the TCP beacon is sent by the brick and should carry its current name (owner
+  offered to switch Wi-Fi on after the gap sweep).
+
+### Channels
+
+Per brick: **USB** when it is on the bus; **TCP** when its beacon is heard; **Bluetooth** when
+it answered — a live connection, or a live inquiry hit. One catch, and it is finding #2 of
+the review: Windows lists every *paired* brick whether it is switched on or not, and the
+current helper's live inquiry covers only *unpaired* devices. For a paired brick not in use
+there is today no cheap evidence that it is on. Options: show it as "known, not heard"
+(a fourth icon state), or teach the helper an inquiry that includes paired devices — to be
+measured, not assumed.
+
+### Order — signal strength, and what else
+
+Signal strength **as the helper reads it today is not usable**: for paired bricks it reported
+16, 2 and −19, values that never updated during a 20 s scan; a live reading exists only for
+unpaired bricks heard by inquiry. Even a live reading swings by tens of dBm between scans, so
+sorting by its raw value would make the list jump (review finding #13). Proposed instead,
+in this order:
+
+1. **Bricks in use** (connected) — what the user is working with.
+2. **On USB** — physically at the computer; the strongest evidence of nearness there is.
+3. **Last used** — the brick the user connected most recently (needs persistence, Phase 6);
+   for a returning user the best guess of what they want.
+4. **Heard on Bluetooth, by signal in coarse bands** (near / middle / far, with hysteresis so a
+   brick changes band only on a clear move) — this is where the owner's signal idea lives,
+   once the helper can read it for paired bricks too.
+5. **On TCP only.**
+6. **Known but not heard** — greyed.
+
+Within a group, by name, so the list stays still. One more idea, not an order but the same
+problem: **"identify"** — make the chosen brick beep or blink its LED, so the user can tell two
+bricks with similar names apart before connecting.
+
 ## 5. Explicitly not in step 1
 
 - Rest of Phase 3 (3.2, 3.4–3.7) and Phase 4 API — they sit above the contract and are the
