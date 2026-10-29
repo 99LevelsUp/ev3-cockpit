@@ -194,6 +194,14 @@ Scope rule: **below the `TransportProvider` contract, Windows only.** Nothing ab
    the shortest one whose open rate is no more than 10 percentage points below the 15 s rate;
    after a failure, the same against 30 s. Pooled over the three bricks, reported per brick.
 
+   **First run void (29.10.2026, 16:00–16:50):** 1 open in 120. Every attempt followed whatever
+   came before it, so after the first failure each one was "after a failure" and the chain
+   never returned to the question; CCC opened three times in a row minutes later. Redesigned
+   before the second run: a measured gap always follows a clean close, and a failure is
+   followed by recovery retries with a random pause of 1, 5 or 15 s — those are the
+   after-failure data. Rule for them, fixed now: the error-recovery pause becomes the shortest
+   one whose success rate is no more than 10 points below the 15 s rate.
+
    **Already measured, 29.10.2026, and it changes U3.1** (`scripts/bt-radio-probe.js`, psk1,
    CCC and BBB): two Bluetooth sessions to two bricks held at once, 115/115 replies each with
    no interference; a 30 s live inquiry beside both sessions left them at 100 % with unchanged
