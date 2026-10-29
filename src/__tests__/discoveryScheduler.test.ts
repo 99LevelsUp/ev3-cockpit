@@ -26,7 +26,7 @@ function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryI
 function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): TransportProvider {
 	return {
 		transport,
-		capabilities: { supportsSignalInfo: false, supportsForget: false } satisfies TransportCapabilities,
+		capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false } satisfies TransportCapabilities,
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
@@ -230,7 +230,7 @@ describe('DiscoveryScheduler — error resilience', () => {
 		const registry = new ProviderRegistry();
 		const failingProvider: TransportProvider = {
 			transport: Transport.Mock,
-			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			async discover(): Promise<DiscoveryScanResult> { throw new Error('scan failed'); },
 			async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport: Transport.Mock }; },
 			async disconnect(): Promise<void> { /* noop */ },
@@ -298,7 +298,7 @@ describe('DiscoveryScheduler -- skipped transports must not accrue misses', () =
 
 		const provider: TransportProvider = {
 			transport: Transport.Mock,
-			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover: () => {
 				discoverCalls += 1;
 				if (discoverCalls === 1) {
@@ -352,7 +352,7 @@ describe('DiscoveryScheduler — a failed scan is not a scan', () => {
 
 		const provider: TransportProvider = {
 			transport: Transport.TCP,
-			capabilities: { supportsSignalInfo: false, supportsForget: false },
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover(): Promise<DiscoveryScanResult> {
 				return failNext
 					? Promise.reject(new Error('TCP discovery is disabled for this provider'))

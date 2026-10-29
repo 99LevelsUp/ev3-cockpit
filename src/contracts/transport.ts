@@ -19,6 +19,20 @@ export interface TransportCapabilities {
 	 * can decide whether to offer the action without probing for a method.
 	 */
 	readonly supportsForget: boolean;
+	/**
+	 * Provider can execute a composed telemetry frame.
+	 *
+	 * True for every transport that puts bytes on a wire, because a frame is bytecode and
+	 * the brick's own VM runs it. False for a provider that simulates command *semantics*
+	 * instead — the mock answers typed commands and has no interpreter, so a frame is the
+	 * one command it cannot serve.
+	 *
+	 * Declared rather than inferred from `createCommandChannel` being present, for the same
+	 * reason as `supportsForget`: telemetry has to decide whether to start on a session
+	 * without first sending a frame to find out. The alternative is discovering it as a
+	 * thrown error on every tick.
+	 */
+	readonly supportsTelemetryFrames: boolean;
 }
 
 /**
