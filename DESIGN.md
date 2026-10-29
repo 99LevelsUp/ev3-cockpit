@@ -295,15 +295,22 @@ the WinRT helper for pairing (the data channel stays on Winsock; WinRT reaches t
 only through that helper process, the exclusion above stands for the runtime), and the plain
 TCP socket.
 
-Three things in this section are **assumptions, not measurements**, and are marked so here
-rather than corrected, because the corrections are open work (step-1 plan, U3/U4):
+Three things in this section were **assumptions, not measurements**. Measured on psk1 on
+29.10.2026 (step-1 plan, U3/U4), with what changed:
 
-- **"One RFCOMM connection at a time."** Comes from the old testlab; nothing has measured two
-  Bluetooth bricks at once since. It matters: a session holds the queue's only slot for its
-  whole life, so today the cockpit cannot keep two bricks on Bluetooth.
-- **The queue's cooldowns.** Waiting longer never raised the open rate (plan 2.8.16). The
-  ~50 % connect failures they were written against belong to one host's Realtek adapter; the
-  same stack on an Intel adapter opened 96 %.
+- **"One RFCOMM connection at a time" — does not hold.** Two sessions to two bricks answered
+  115/115 each, held at once, and a live inquiry beside them cost nothing. The queue now
+  serialises *opening* only; a session no longer holds its slot, so several bricks can be on
+  Bluetooth together.
+- **The queue's cooldowns — decided (D3).** What the bricks need is a gap after *their own*
+  close: a reconnect 0 s after a clean close gave WSA 10064 on all three bricks and locked the
+  brick out for minutes; 5 s did not. The provider waits `RECONNECT_GAP_AFTER_CLOSE_MS` (5 s)
+  per brick. The queue's 15 s between bricks and 30 s after a failure stay for the release,
+  as slow and safe; tuning them is post-release work. The ~50 % connect failures belong to
+  one host's Realtek adapter; the same stack on an Intel adapter opened 96 %.
+- **The connect itself** ran blocking on a koffi worker thread and was "aborted" by closing the
+  socket, which did not end it: four deadlines in one process ended Bluetooth until the
+  process exited. It is now non-blocking, polled with `select` on the main thread.
 - **"One active transport per brick"** in the transport guard. Measured 29.10.2026 on all
   three bricks and both firmware versions: USB and Bluetooth open to the same brick at once,
   even with commands in flight on both, answered every request with no freeze; a USB cable

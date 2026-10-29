@@ -2,8 +2,11 @@
 
 **Status, 29.10.2026:** approved by the owner. **U1 done** (the 03–10.09 work landed in themed
 commits, reviewed, eight confirmed findings fixed or deferred — #2 goes with D2). **U2 done**
-(plan and code agree; 2.8.11 and 2.8.16 closed). **U4.4 and U4.5 measured** on psk1 (see U4).
-Open: U3, U4.1–U4.3. D1 and D3 still to confirm; D2 decided; D4 done as proposed.
+(plan and code agree; 2.8.11 and 2.8.16 closed). **U3 done** (queue serialises opening only;
+non-blocking Winsock connect; per-brick 5 s reconnect gap; 2.8.18 finished). **U4** measured on
+psk1 instead of the lab route (owner: the lab is auxiliary, the second host is not available):
+dual link, cable pull, two sessions, inquiry beside sessions, gap after close; the rest is in
+the post-release list (§8). D1–D5 decided; D4 done as proposed. **Step 1 is complete.**
 Lab-side corrections are out of scope: the lab is an auxiliary project (owner, 29.10.2026).
 
 **Inputs read:** `ev3-lab-communication` at `f5d5458` (`results/REPORT.md` §Rozhodnutí,
@@ -504,7 +507,10 @@ bricks with similar names apart before connecting.
   it, and the arena failover costs no Bluetooth connect. Still to measure before the cockpit
   relies on it: a physical cable pull with Bluetooth live, and the lab's NF1 (its runner
   enforces the old rule) needs the same correction.
-- **D3 — Cooldown values**, once U3.2's numbers are in.
+- **D3 — Cooldown values. Decided by the owner, 29.10.2026:** a per-brick gap of 5 s after a
+  close before reconnecting (0 s locked a brick out for minutes on all three bricks); the
+  queue's 15 s between bricks and 30 s after a failure stay for the release. Tuning goes to
+  the post-release list.
 - **D5 — Order of the brick list. Decided by the owner, 29.10.2026:** (1) bricks on USB first,
   whatever their Bluetooth state — a cable means the brick is on this desk; (2) then, without
   USB, bricks paired with this computer; (3) then unpaired bricks by distance — the live
@@ -521,3 +527,22 @@ bricks with similar names apart before connecting.
 - `IMPLEMENTATION_PLAN.md` §2/§3 match the checkboxes, and the checkboxes match the code.
 - 2.8.11 and 2.8.16 are closed with evidence; the scan cannot run beside a BT connect; cooldowns
   are either changed from measured numbers or left with a note saying why.
+
+## 8. After the release
+
+Deferred on purpose — the goal is a working cockpit first, then user feedback (owner,
+29.10.2026). Each item names what decides it:
+
+- **Order of unpaired bricks by live signal** (D5 group 3): measure an unpaired brick's live
+  inquiry signal against distance (one brick unpaired, measured, re-paired); moving average
+  and hysteresis as the owner proposed; band edges on more than one computer.
+- **Live presence of paired bricks:** the helper's inquiry watcher with paired devices included
+  (`--watch-raw`) reported nothing; whether Windows' records refresh without an inquiry.
+- **Queue pause tuning** (D3): 2 s vs 5 s after a close, shorter pauses between bricks and
+  after a failure — a sweep without 0 s, with several minutes to recover.
+- **Abortive close** (`SO_LINGER {1,0}`) on an abandoned connect: looked better in one run.
+- **Second host and other adapters:** everything above was measured on one Realtek host.
+- **TCP provider:** its first `discover()` returns nothing until beacons arrive.
+- **Already planned items outside step 1:** 1.11.14 (registry record after remove), 1.11.11
+  (Linux Bluetooth), review finding #2 (paired-but-off bricks shown as present; partly answered
+  by D5's ordering).
