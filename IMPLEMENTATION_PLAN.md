@@ -835,7 +835,7 @@ Build the source of truth for connected bricks.
       when there is no bonding on record to remove, not a bug.
     - Yesterday's (01.09) two successful pairings were the standalone net10 CsWinRT scratchpad
       probe, *not* `native/bt-pairing-helper/` — that day's own status note already says the
-      net48 port "spolehlivě nenachází CCC." The helper had never completed a pairing before
+      net48 port does not reliably find CCC. The helper had never completed a pairing before
       today; there was no contradiction to reconcile.
     - The helper's `inquiryTimedOut`/`seen` diagnostic (now also covering `Updated`/`Removed`)
       paid for itself repeatedly — kept as a permanent field in the JSON-lines protocol.

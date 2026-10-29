@@ -23,7 +23,7 @@ import {
 import { BackendUnavailableError } from '../errors/CockpitError';
 
 const HELPER = 'C:\\fake\\bt-pairing-helper.exe';
-const MAC = '00:16:53:F0:0B:0B';
+const MAC = '00:16:53:00:00:0B';
 
 /** What the fake helper process should do on this run. */
 interface FakeRun {
@@ -325,7 +325,7 @@ describe('createHelperPairing — host and process wiring', () => {
 // ════════════════════════════════════════════════════════════════════
 
 const device = (over: Record<string, unknown> = {}) => JSON.stringify({
-	type: 'device', mac: '00:16:53:F0:0B:0B', name: 'BBB', paired: false, signal: -40, atMs: 100,
+	type: 'device', mac: '00:16:53:00:00:0B', name: 'BBB', paired: false, signal: -40, atMs: 100,
 	...over,
 });
 
@@ -339,8 +339,8 @@ describe('scanForBricks', () => {
 	it('reports the bricks the helper saw', async () => {
 		const { scan } = scanWith({
 			lines: [
-				device({ mac: '00:16:53:F0:0B:0B', name: 'BBB', paired: true, signal: -35 }),
-				device({ mac: '00:16:53:F0:0C:0C', name: 'CCC', paired: false, signal: -43 }),
+				device({ mac: '00:16:53:00:00:0B', name: 'BBB', paired: true, signal: -35 }),
+				device({ mac: '00:16:53:00:00:0C', name: 'CCC', paired: false, signal: -43 }),
 				JSON.stringify({ type: 'scanComplete', count: 2, atMs: 20000 }),
 			],
 			exitCode: 0,
@@ -372,8 +372,8 @@ describe('scanForBricks', () => {
 		// The radio hears headphones and phones too. A picker that offers them is a bug.
 		const { scan } = scanWith({
 			lines: [
-				device({ mac: '12:34:56:78:9A:BC', name: 'SPEAKER1', paired: true }),
-				device({ mac: '00:16:53:F0:0B:0B', name: 'BBB' }),
+				device({ mac: 'AA:BB:CC:00:00:01', name: 'Headphones', paired: true }),
+				device({ mac: '00:16:53:00:00:0B', name: 'BBB' }),
 			],
 			exitCode: 0,
 		}, { ouiFilter: '001653' });

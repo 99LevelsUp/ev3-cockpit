@@ -17,7 +17,7 @@ import { describe, it } from 'node:test';
 
 import { UsbTransportProvider } from '../transports/usbTransportProvider';
 
-const SERIAL = '001653F00A0A';
+const SERIAL = '00165300000A';
 
 /** What node-hid reports: present, but carrying the stale cached product string. */
 const hidDevice = {
