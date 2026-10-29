@@ -193,6 +193,35 @@ describe('BtClassicDiscovery — pairing', () => {
 		assert.deepEqual(result, { ok: false, reason: 'koffi is not installed' });
 	});
 
+	it('takes the radio slot through the shared queue', async () => {
+		// Pairing and connecting are the same one RFCOMM channel. Before this the two could
+		// be in flight at once — a pairing attempt started while a connect held the slot, and
+		// whichever lost looked like a flaky radio.
+		const enqueued: string[] = [];
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => Promise.resolve({ ok: true }),
+			connectionQueue: {
+				enqueue: async <T>(brickId: string, task: () => Promise<T>): Promise<T> => {
+					enqueued.push(brickId);
+					return task();
+				},
+			},
+		});
+
+		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'), { ok: true });
+		assert.deepEqual(enqueued, ['00:16:53:42:D9:F2']);
+	});
+
+	it('still pairs when no queue was supplied', async () => {
+		// The queue is optional so the discovery layer stays usable on its own; a missing one
+		// must not silently skip the pairing itself.
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => Promise.resolve({ ok: true }),
+		});
+
+		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'), { ok: true });
+	});
+
 	it('unpairs through the binding', () => {
 		const asked: string[] = [];
 		const discovery = new BtClassicDiscovery({

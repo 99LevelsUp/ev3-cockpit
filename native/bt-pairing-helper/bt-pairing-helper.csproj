@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    net48, not net10: no runtime to install (ships with Windows already), the owner's explicit
+    call after comparing against net10, see IMPLEMENTATION_PLAN.md 2.8.18. WinRT is reached
+    through Microsoft.Windows.SDK.Contracts (the pre-CsWinRT IL projection), because CsWinRT
+    itself needs a windows10.0.x-suffixed TFM that net48 does not have.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>BtPairingHelper</RootNamespace>
+    <AssemblyName>bt-pairing-helper</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!--
+      Not for UI. No window is ever created or shown: Program.cs runs the pairing ceremony
+      on a dedicated STA thread pumped by System.Windows.Forms.Application.Run(), which is
+      the message loop WinRT needs to deliver PairingRequested back to this process (see
+      PairOnStaThreadAsync's doc comment, 03.09.2026).
+    -->
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.22621.2428" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+</Project>
