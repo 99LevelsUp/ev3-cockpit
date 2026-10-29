@@ -303,7 +303,7 @@ one candidate so far. Measured the same day; nothing below is built.
 | USB discovery (libusb product string, fresh provider too) | **CCC — stale** | CCC |
 | Bluetooth scan (Windows' record of a paired brick) | **CCC — stale** | **CCCx — stale** |
 | `info` over Bluetooth | CCCx | CCC |
-| TCP beacon | not measured — no brick had Wi-Fi on | |
+| TCP beacon (AAA, Wi-Fi on, rename AAA → AAAx → AAA) | AAAx within 8–12 s | AAA within 4–8 s |
 
 The USB string is fixed when the cable is plugged in; Windows' Bluetooth record catches up
 only at the next Bluetooth connection. So:
@@ -316,8 +316,10 @@ only at the next Bluetooth connection. So:
 - **Bluetooth is not connected just to read a name** — on a weak adapter that is a 5 s attempt
   that fails half the time. Until the brick has been asked, the list shows the discovery name
   marked as unconfirmed (how it looks is the panel's call).
-- To check: the TCP beacon is sent by the brick and should carry its current name (owner
-  offered to switch Wi-Fi on after the gap sweep).
+- **The TCP beacon carries the current name** (measured on AAA, 29.10.2026): a second truthful
+  source, free while the brick is on Wi-Fi. Its key is `tcp:` + the same twelve hex digits.
+  Note for the provider: its first `discover()` returns nothing — beacons arrive every few
+  seconds — so a caller has to ask again rather than read an empty first answer as "none".
 
 ### Channels
 
@@ -341,7 +343,25 @@ plausible. Across four scans with nothing moving, the values did move: CCC 16/15
 2/2/2/11, AAA 16/−19/−19/−15. **Open, and decisive:** whether the value follows distance or
 is a record from the last contact — one brick carried to another room and back, a scan each
 time. If it follows distance, it can order the list once smoothed into bands; sorting by the
-raw value would make the list jump either way (review finding #13). Proposed order, in this
+raw value would make the list jump either way (review finding #13).
+
+**Measured with the owner, 29.10.2026** (`scripts/signal-monitor.js`, one reading about every
+14 s, BBB carried slowly to another room and back, AAA and CCC left at the computer):
+
+| | at the computer | walking away | middle distance | farthest | coming back | back |
+|---|---|---|---|---|---|---|
+| BBB (moved) | 13 | −17, −33 | −19 … −21 for 3 min | −67 | −59 | −15 |
+| CCC (still) | 19, then −9 … −13 throughout | | | | | |
+| AAA (still) | −15 … −33 throughout | | | | | |
+
+**The signal follows distance, coarsely.** Far away BBB read −59/−67, near the computer +13 to
+−20; the still bricks wandered by up to ~30 (CCC stepped from 19 to −13 without moving). So it
+supports bands — at the computer / further / far, with hysteresis — not a fine order between
+two nearby bricks. The value is refreshed irregularly (one number held for three minutes),
+which suits a slowly changing list. One walk, one brick: enough to say "bands, yes", not to set
+the band edges. Open: the live watcher with inquiry on for paired devices (`--watch-raw`)
+reported nothing for any brick, yet the records kept changing while it ran — whether they
+refresh without an inquiry running is the next thing to check. Proposed order, in this
 order:
 
 1. **Bricks in use** (connected) — what the user is working with.
