@@ -11,7 +11,7 @@ import { ProtocolError } from '../errors/CockpitError';
 import { concatBytes, uint16le, uint32le, lc0, lcs, cString, gv0, gv1 } from './ev3Bytecode';
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
-	COM_SET_SUB, COM_HARDWARE, MAX_BRICK_NAME_LENGTH,
+	COM_SET_SUB, COM_HARDWARE, MAX_BRICK_NAME_LENGTH, BRICK_NAME_PATTERN,
 	INPUT_DEVICE_SUB, FILE_SUB, FILENAME_SUB,
 } from './ev3Packet';
 
@@ -279,15 +279,20 @@ function buildInfoCommand(): EncodedCommand {
 /**
  * Rename the brick.
  *
- * No reply is asked for: the firmware answers nothing useful, and the only way to know the
- * rename took is to read the name back with `info`. The harness that renames bricks does
- * exactly that.
+ * The reply carries nothing useful, and the only way to know the rename took is to read the
+ * name back with `info`. The harness that renames bricks does exactly that.
  *
- * Length is checked here rather than left to the brick because the firmware's rejection is
- * silent — `ValidateString` fails, `DspStat` stays untouched, and the caller sees a command
- * that appeared to work on a brick that did not change its name.
+ * Characters and length are checked here rather than left to the brick because the
+ * firmware's rejection is silent — `ValidateString` fails, `DspStat` stays untouched, and the
+ * caller sees a command that appeared to work on a brick that did not change its name.
  */
 function buildSetBrickNameCommand(name: string): EncodedCommand {
+	if (!BRICK_NAME_PATTERN.test(name)) {
+		throw new ProtocolError(
+			`Brick name "${name}" is not one the firmware accepts: letters, digits, "_" and "-" only, `
+				+ 'no spaces or accented letters.'
+		);
+	}
 	if (name.length > MAX_BRICK_NAME_LENGTH) {
 		throw new ProtocolError(
 			`Brick name is ${name.length} characters; the firmware accepts at most ${MAX_BRICK_NAME_LENGTH}.`
