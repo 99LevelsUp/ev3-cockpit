@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import { DisposableStore } from './events';
 import {
 	ProviderRegistry,
@@ -6,12 +7,16 @@ import {
 	BtConnectionQueue, BtWinsockAdapter, BtClassicDiscovery,
 } from './transports';
 import type { BtBackend, BtAdapterFactory } from './transports';
+import {
+	createHelperPairing, scanForBricks, BtPairingEvent, ScannedBrick,
+} from './transports/btPairingHelper';
+import { BT } from './transports/transportConstants';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
-import { ConnectionState, PresenceState } from './contracts';
+import { ConnectionState, PresenceState, Transport, makeBrickKey } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -71,8 +76,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	// They are not any more: a paired brick whose outgoing port Windows never created is
 	// invisible to a port scan and perfectly reachable over a socket.
 	//
-	// Nothing here pairs anything -- that is still the user's action on their own machine,
-	// and a brick they have not paired does not appear. See plan 1.11.13.
+	// Pairing goes through the net48 WinRT helper (`native/bin/bt-pairing-helper.exe`,
+	// published by `npm run build:helper`). The legacy `bthprops.cpl` path it replaces cannot
+	// work from any host: Windows' own Bluetooth service owns the single authentication
+	// callback slot, so this side of the PIN exchange never gets asked. See plan 2.8.18.
 	//
 	// The connection queue is not optional. Windows carries exactly **one** RFCOMM/SPP
 	// channel: a second connection fails with error 121 until the first is fully released,
@@ -90,12 +97,27 @@ export function activate(context: vscode.ExtensionContext): void {
 	// other happens only when a backend cannot run on this host at all — a failed connect
 	// ends the attempt, because the channel it just disturbed needs the cooldown more than
 	// it needs another immediate try.
+	// Where a pairing in progress sends its protocol events. The helper's pairing function is
+	// built once, at activation, but the thing that wants to hear about it is whichever
+	// command invocation is running — so the command parks a listener here for the duration
+	// and clears it afterwards.
+	let pairingProgress: ((event: BtPairingEvent) => void) | undefined;
+
 	const btBackend = new BtSppBackend();
+	// One queue for the whole transport: connects and pairing attempts are the same single
+	// RFCOMM channel, so they have to take turns rather than race.
+	const btQueue = services.add(new BtConnectionQueue());
+	const btHelperPath = path.join(context.extensionPath, 'native', 'bin', 'bt-pairing-helper.exe');
 	const btDiscovery = new BtClassicDiscovery({
 		portScan: btBackend.discover,
 		onCacheUnavailable: (reason) => logger.warn(
 			`BT device cache unavailable, falling back to the COM port scan: ${reason}`
 		),
+		connectionQueue: btQueue,
+		pairDevice: createHelperPairing({
+			helperPath: btHelperPath,
+			onEvent: (event) => { pairingProgress?.(event); },
+		}),
 	});
 	const btProvider = services.add(new BtTransportProvider({
 		discoverDevices: btDiscovery.discover,
@@ -104,7 +126,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			['winsock', (mac) => new BtWinsockAdapter({ mac })],
 			['spp', btBackend.adapterFor],
 		]),
-		connectionQueue: services.add(new BtConnectionQueue()),
+		connectionQueue: btQueue,
 	}));
 	registry.register(btProvider);
 	logger.info('BT transport registered (Winsock RFCOMM, SPP fallback; bthprops discovery)');
@@ -209,6 +231,109 @@ export function activate(context: vscode.ExtensionContext): void {
 		})));
 
 	logger.info('Filesystem commands registered');
+
+	// ── Bluetooth: pick a brick and connect to it ───────────────
+	// A palette command for the same reason the filesystem ones exist: this needs a consumer
+	// before the panel arrives, and it has to be exercisable by hand against a real brick.
+	// The panel (Phase 5) is where this belongs for a real user.
+	//
+	// The whole interaction is picking a brick by name. Pairing is not something a user should
+	// have to think about, let alone do first in Windows: if the brick they picked has never
+	// been paired, this pairs it and then connects. Nobody who owns a Mindstorms brick knows
+	// its MAC address, and nothing should ask them for one.
+	services.add(vscode.commands.registerCommand('ev3-cockpit.connectBluetoothBrick', async () => {
+		interface BrickItem extends vscode.QuickPickItem { brick: ScannedBrick }
+
+		const picker = vscode.window.createQuickPick<BrickItem>();
+		picker.title = 'EVƎ Cockpit: connect a brick over Bluetooth';
+		picker.placeholder = 'Looking for bricks in range…';
+		picker.busy = true;
+
+		const scan = scanForBricks({
+			helperPath: btHelperPath,
+			ouiFilter: BT.LEGO_OUI,
+			onChange: (bricks) => {
+				// Sorting happens here, not in the scan: which brick belongs at the top is a
+				// question about the person at the screen. Strongest signal first, so the one
+				// somebody is walking towards the computer holding climbs the list as they
+				// approach and is top by the time they arrive. The list is meant to move.
+				picker.items = [...bricks]
+					.sort((a, b) =>
+						(b.signal ?? Number.NEGATIVE_INFINITY) - (a.signal ?? Number.NEGATIVE_INFINITY))
+					.map((brick) => ({
+						label: brick.name || `EV3 [${brick.mac}]`,
+						description: brick.paired ? 'paired' : 'new',
+						detail: brick.mac,
+						brick,
+					}));
+			},
+			onComplete: () => {
+				picker.busy = false;
+				picker.placeholder = picker.items.length
+					? 'Pick a brick'
+					: 'No bricks in range. Check that the brick is on, with Bluetooth and visibility enabled.';
+			},
+		});
+
+		const picked = await new Promise<ScannedBrick | undefined>((resolve) => {
+			picker.onDidAccept(() => resolve(picker.selectedItems[0]?.brick));
+			picker.onDidHide(() => resolve(undefined));
+			picker.show();
+		});
+		picker.hide();
+		picker.dispose();
+		scan.cancel();
+
+		if (!picked) { return; }
+		const brickKey = makeBrickKey(Transport.BT, picked.mac);
+		const label = picked.name || picked.mac;
+
+		const paired = picked.paired || await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: pairing ${label}`, cancellable: false },
+			async (progress) => {
+				pairingProgress = (event) => {
+					logger.debug(`Pairing ${picked.mac}: ${JSON.stringify(event)}`);
+					// Prompt on `found`, not on `pairingRequested`: by the time the brick is
+					// asking, whoever is meant to press it has seconds. On `found` they have
+					// the whole ceremony.
+					if (event.type === 'found' && event.alreadyPaired === false) {
+						progress.report({ message: 'Confirm on the brick\'s display, then accept PIN 1234.' });
+					}
+				};
+				try {
+					const result = await btDiscovery.pair(picked.mac);
+					if (!result.ok) {
+						logger.warn(`Pairing ${picked.mac} failed: ${result.reason ?? 'no reason given'}`);
+						void vscode.window.showErrorMessage(
+							`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
+					}
+					return result.ok;
+				} finally {
+					pairingProgress = undefined;
+				}
+			});
+		if (!paired) { return; }
+
+		await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: connecting to ${label}`, cancellable: false },
+			async () => {
+				// A freshly paired brick is not in the discovery list yet — the OS knows the
+				// pairing immediately, the next scheduled scan is up to a poll interval away.
+				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
+				try {
+					await sessionManager.connect(brickKey, Transport.BT, label);
+					logger.info(`Connected to ${label} over Bluetooth`);
+					void vscode.window.showInformationMessage(`EVƎ Cockpit: connected to ${label}.`);
+				} catch (error) {
+					const err = error instanceof Error ? error : new Error(String(error));
+					logger.error(`Connecting to ${label} failed`, err);
+					void vscode.window.showErrorMessage(
+						`EVƎ Cockpit: could not connect to ${label} — ${err.message}`);
+				}
+			});
+	}));
+
+	logger.info('Bluetooth connect command registered');
 
 	// Phase 3+: telemetry runtime, public API, UI panel wired here.
 }

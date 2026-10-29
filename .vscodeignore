@@ -2,6 +2,10 @@
 .vscode-test/**
 src/**
 hooks/**
+# The pairing helper's C# source and its intermediate build output. What ships is the
+# published result in native/bin/ (exe plus its dependencies), which is deliberately not
+# excluded — without it the extension cannot pair a brick at all.
+native/bt-pairing-helper/**
 scripts/**
 tests/**
 out/__tests__/**
