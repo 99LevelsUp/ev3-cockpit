@@ -237,6 +237,18 @@ Scope rule: **below the `TransportProvider` contract, Windows only.** Nothing ab
    - The gap sweep has to be rerun with `reconnectGapAfterCloseMs: 0` in the provider it
      builds, or the provider's own gap will mask the short gaps it is measuring.
 
+   **Third sweep, on the fixed adapter (29.10.2026, 8 minutes):** the process ran clean and
+   exited, but the run ended early and the pre-registered rule cannot be applied — too few
+   data. What it did show, without exception: a 0 s gap after a clean close gave 10064 on all
+   three bricks, each followed by minutes in which nothing connected (15 s timeouts, 10048);
+   the sweep's eight recovery retries were not enough and it gave each brick up. 5 s, 15 s and
+   30 s after a clean close opened (one ordinary 10060). AAA also fell into the state with a
+   5 s retry after a *failed* connect, which the queue's 30 s error recovery covers.
+   **Proposed D3 for the release:** keep the per-brick 5 s gap after a close; keep the queue's
+   15 s / 30 s pauses (slow, safe); tuning (2 s vs 5 s, shorter queue pauses) goes to the
+   post-release backlog, with a sweep that leaves out 0 s and waits several minutes to
+   recover.
+
    **Already measured, 29.10.2026, and it changes U3.1** (`scripts/bt-radio-probe.js`, psk1,
    CCC and BBB): two Bluetooth sessions to two bricks held at once, 115/115 replies each with
    no interference; a 30 s live inquiry beside both sessions left them at 100 % with unchanged
