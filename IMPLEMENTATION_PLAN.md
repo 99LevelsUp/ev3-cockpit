@@ -15,14 +15,24 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0 and Phase 2 are complete. Phase 1 is substantially complete but carries named gaps:
-1.6.10 mock config loading, 1.8.4 transport guard wiring,
-1.11 BT backends and discovery (1.11.7a discovery wiring,
-1.11.12 bounded ceiling failure), 1.12.4 per-transport contract tests. Phase 3 work starts
-from here; those gaps are carried, not closed.
+Phase 0 is complete. Phase 2 meets its Definition of Done, and carries named BT items that
+sit above that bar (2.8.10a telemetry gating, 2.8.12 remaining hardware scenarios, 2.8.13
+cross-transport brick name, 2.8.18 shipping the pairing path into the extension). Phase 1 is
+substantially complete but carries three gaps:
+
+- **1.6.10 mock config loading** — `extension.ts` always uses `DEFAULT_MOCK_CONFIG`.
+- **1.11.11 `BtBluezBackend`** (Linux BT) — not written; REQUIREMENTS §12 makes Linux a
+  required platform, blocked on having no Linux host to develop against.
+- **1.11.9 classic BT RSSI** — checked and closed as unavailable: Windows exposes no Win32
+  API for it through this backend. Carried as a documented limitation, not open work.
+
+Phase 3 work starts from here; those gaps are carried, not closed.
 
 This list is the single enumeration of Phase 1's open work — the Phase Overview table below
 points here rather than repeating it, because the duplicate copy drifted twice during review.
+It drifted again anyway: until 03.09.2026 it still named 1.8.4, 1.11.7a, 1.11.12 and 1.12.4
+as open, months after each was checked off. **Verify this section against the checkboxes
+before trusting it**; the checkboxes are the ground truth, this is a summary of them.
 
 - extension skeleton ✅
 - build and lint pipeline ✅
@@ -30,10 +40,14 @@ points here rather than repeating it, because the duplicate copy drifted twice d
 - base folder structure (`src/contracts/`, etc.) ✅
 - shared contracts, error model, and event infrastructure ✅
 - EV3 protocol layer (bytecode, packets, commands, responses) ✅
-- transport adapters and providers (USB, TCP; BT is SPP-only — see 1.11) ✅
-- transport guard (built, not yet wired into any provider — see 1.8.4), BT connection queue, pending reply utilities ✅
+- transport adapters and providers — USB (HID + preferred libusb), TCP, BT (Winsock RFCOMM
+  preferred, SPP fallback) ✅
+- transport guard (wired into `SessionManager`, 1.8.4), BT connection queue, pending reply utilities ✅
 - session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- 207 unit tests + 3 extension-host integration tests passing ✅
+- per-transport contract compliance tests for USB/TCP/BT (1.12.4) ✅
+- BT pairing from the cockpit — proven end-to-end in the standalone net48 helper
+  (`native/bt-pairing-helper/`), **not yet wired into the extension** (2.8.18) ⚠
+- 379 unit tests + 4 extension-host integration tests passing ✅
 - implementation of telemetry, API, and UI ⬜ starts in Phase 3
 
 ## 3. Phase Overview
@@ -42,8 +56,8 @@ points here rather than repeating it, because the duplicate copy drifted twice d
 | :--- | :--- | :--- |
 | 0 | Project foundation and contracts | ✅ done |
 | 1 | Transport contracts and discovery | ⚠ gaps (see §2) |
-| 2 | Session runtime and lifecycle | ✅ done |
-| 3 | Telemetry and adaptive throttling | ⬜ planned |
+| 2 | Session runtime and lifecycle | ✅ DoD met, BT items carried (see §2) |
+| 3 | Telemetry and adaptive throttling | 🔄 in progress — rows, assembler, scheduler and 3.3 done; 3.2, 3.4–3.7 open |
 | 4 | Public API and filesystem services | ⬜ planned |
 | 5 | Cockpit panel and UX | ⬜ planned |
 | 6 | Persistence, favorites, and remembered devices | ⬜ planned |
@@ -146,7 +160,13 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.5.1 Unified discovery model across all providers
   - [x] 1.5.2 State machine per brick: `remembered` / `available` / `unavailable` / `removed`
   - [x] 1.5.3 Merge with remembered bricks from persistence
-  - [x] 1.5.4 Stable ordering algorithm (by transport group, then by signal or brickKey)
+  - [x] 1.5.4 **Removed by decision, 03.09.2026 — the discovery layer does not order anything.**
+    It used to: transport group, then signal, then brickKey. That is a display decision taken
+    three layers below the display, and it cannot serve the case it would matter for — a panel
+    showing the brick somebody is carrying towards the computer climbing the list as its signal
+    rises. `PresenceAggregator` now keeps a record of what exists and what is true about each
+    brick; every view sorts it for itself. Same rule applies to `scanForBricks`, which reports
+    bricks in the order it first saw them and leaves ordering to the picker (DESIGN §4.2)
   - [x] 1.5.5 Event emission on presence state changes
   - [x] 1.5.6 Read model for the discovery list (single observable collection)
 - [ ] **1.6 Mock Transport** — config loading outstanding (1.6.10)
@@ -267,6 +287,23 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     questions and only looked alike while the runtime went through a serial port: a paired
     brick whose outgoing port Windows never created is invisible to a scan and perfectly
     reachable over a socket. No inquiry is issued, so it costs no air time
+  - [ ] 1.11.14 **"Remove this brick" should leave nothing behind — including the registry
+    record.** `BluetoothRemoveDevice` drops the pairing and the `BTHENUM\DEV_<mac>` PnP node,
+    but the brick's entry under
+    `HKLM:\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\<mac>` survives it.
+    That record is not cosmetic: it is what lets the watcher's cache pass answer for a brick
+    in milliseconds, so a brick the user believes they removed is still half-known to the
+    host — it keeps its cached name and reappears instantly rather than through an inquiry.
+    Measured 03–04.09.2026, and deleting the key by hand is what made a genuine "this machine
+    has never met this brick" test possible at all.
+
+    **Not a small change, and the reason matters:** that key is owned by `SYSTEM`, not by
+    Administrators. A normal extension host cannot delete it, and taking ownership needs
+    elevation. So this is a design question before it is an implementation one — what does
+    "remove" promise, and does the cockpit ask for elevation, offer the manual steps, or
+    state plainly that the OS keeps a record it cannot reach? Whatever the answer, it must
+    not be a UAC prompt the user cannot decline and still use the product, and the
+    no-reboot rule from 2.8.18 applies here too.
   - [x] 1.11.13 **Pair and unpair, in the discovery layer**, 28.08.2026. The owner asked for
     this on 27.08.2026 — *„zarizeni se maji pripojovat primo k cockpitu bez nutnosti
     ovladat to z windows“* — and placed it on 28.08.2026: pairing belongs to discovery, not
@@ -731,6 +768,89 @@ Build the source of truth for connected bricks.
     Helper is a net48 console app under `native/bt-pairing-helper/`, built via `dotnet publish`,
     spawned once per pairing attempt (no daemon), JSON-lines over stdout
 
+    **02–03.09.2026 — two real bugs found and fixed, neither one the radio.** The 02.09
+    session opened with `DeviceWatcher` finding nothing at all for any brick, and closed
+    03.09 with the helper's first-ever successful, inquiry-driven pairing (BBB, `Paired`).
+    Root cause was two independent bugs stacked, not a degraded radio or a `bthserv` restart
+    gone wrong — a raw Winsock RFCOMM connect (`BtWinsockAdapter`, bypasses the watcher
+    entirely) succeeded on both CCC and BBB throughout, so the radio was never the problem:
+
+    1. **The watcher was scoped correctly but under-subscribed.** `GetDeviceSelectorFromPairingState(false)`
+       is the right selector — see point 2 — but the helper subscribed only `watcher.Added`.
+       Microsoft's own docs (`DeviceWatcher.Updated` remarks): *"An app must subscribe to all
+       of the added, removed, and updated events to be notified when there are device
+       additions, removals or updates."* Confirmed empirically with a fake-MAC survey run:
+       identical selector, identical 45 s window, only the handler set differed — the full
+       set (`Added`+`Updated`+`Removed`+`EnumerationCompleted`) delivered live-inquiry results
+       through the whole window; `Added`-only delivered nothing. Fixed by always subscribing
+       all four, even though only `Added`'s payload is used.
+    2. **`BluetoothDevice.GetDeviceSelector()` is not "unfiltered."** Emitting its AQS string
+       showed `IsPaired:=True OR IssueInquiry:=False` — paired-only, inquiry explicitly
+       disabled. It was chosen 02.09 to fix the already-paired-blind-spot (a watcher scoped
+       to unpaired-only can't see a brick the host still remembers), but it can never find a
+       brick the host doesn't already know, for any wait. The comment in `Program.cs` calling
+       it "unfiltered... one selector covers both" was wrong and has been removed. The
+       correct fix for the blind-spot is a separate already-paired check, not widening this
+       selector — not yet built, see the two-path design note below.
+    3. **Pairing itself had a third, separate bug**: even once discovery worked, `PairAsync`
+       returned `Failed`/`AuthenticationTimeout` in three real attempts and `PairingRequested`
+       never fired — including a run where the `DeviceWatcher` was deliberately kept alive
+       through the whole pairing attempt (ruling out watcher lifetime as the cause). `Main`'s
+       own apartment measured `MTA` (a console app's `async Task<int> Main` cannot be
+       `[STAThread]`). WinRT event callbacks raised off a background COM thread need a message
+       loop to marshal into; an MTA thread blocked in `await` has none. Fix: run the whole
+       pairing ceremony (`PairingRequested` subscription + `PairAsync`) on a dedicated STA
+       thread pumped by `System.Windows.Forms.Application.Run()` (`PairOnStaThreadAsync` in
+       `Program.cs`; `UseWindowsForms` in the `.csproj` is for that message loop only, no UI
+       is ever created). One run: `pairingRequested kind=ProvidePin` fired, `result: Paired`,
+       `BTHENUM\DEV_001653518739` reappeared. **Reproduced n=3, the third after a full PC
+       reboot** — unpair, then pair, first AEP query of a fresh boot: same
+       `pairingRequested kind=ProvidePin` → `result: Paired`, bond verified. The reboot run
+       matters because it shows the fix does not lean on accumulated session or service
+       state; treat STA as settled, not pending reproduction.
+
+       **Not reproducible on this bench, and that is the honest status of the one remaining
+       verification**: no run has chained a fresh over-the-air *inquiry* straight into a pair,
+       because all three bricks are permanently known to this PC and the cache pass always
+       answers first (see the cache-pass note below). The two halves are each proven
+       independently — live inquiry (the survey run: BBB found at 4738 ms, RSSI `Updated`
+       events continuing 45 s past `EnumerationCompleted`) and pairing (n=3). Confirm the
+       chained path on first contact with a brick this machine has never seen; do not delete
+       registry state to force it.
+
+    **Settled side-findings from the same investigation:**
+    - `HKLM:\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices` is a device-name
+      cache that outlives `BluetoothRemoveDevice` and Windows Settings' own "Odstranit" —
+      confirmed on three separate occasions (CCC twice, one via a green-dot Settings row with
+      no underlying `BTHENUM\DEV_` node at all). It never *caused* a failure, but it is not
+      merely cosmetic either: it is part of what makes the watcher's cache pass answer
+      instantly. **A `found` under ~100 ms is a cache pass, never inquiry** — the BT inquiry
+      floor is over a second — so a fast find is not evidence that live inquiry works. That
+      distinction cost a full day. Which store serves which case is not fully pinned down:
+      BBB was found 8 ms into the first AEP query after a reboot and does have a registry
+      record, while AAA and CCC were found just as fast earlier the same day and have no
+      record in that key at all — so at least part of the fast path is DAS's own in-boot
+      memory, warmed by any prior query.
+      `removeBluetoothDevice` returning `error 1168` (`ERROR_NOT_FOUND`) is correct behaviour
+      when there is no bonding on record to remove, not a bug.
+    - Yesterday's (01.09) two successful pairings were the standalone net10 CsWinRT scratchpad
+      probe, *not* `native/bt-pairing-helper/` — that day's own status note already says the
+      net48 port "spolehlivě nenachází CCC." The helper had never completed a pairing before
+      today; there was no contradiction to reconcile.
+    - The helper's `inquiryTimedOut`/`seen` diagnostic (now also covering `Updated`/`Removed`)
+      paid for itself repeatedly — kept as a permanent field in the JSON-lines protocol.
+
+    **New hard requirement (Petr, 02.09.2026):** the shipped extension must never restart
+    `bthserv`, and no recovery path 2.8.18 offers a stuck user may require rebooting the PC —
+    "restart your computer" is not an acceptable ask of an end user and would cost the
+    extension a bad review, not just a bad afternoon.
+
+    **Not yet built: the two-path discovery design** the above evidence now supports —
+    check already-paired via a direct read (`FromPairingState(true)` or
+    `FromBluetoothAddressAsync`, no watcher needed) first; only run the `FromPairingState(false)`
+    live-inquiry watcher if that comes back not-paired. This replaces the wrong "one selector
+    covers both" idea. Scoped as new work, not done alongside tonight's fixes.
+
   - [ ] **Backlog, not scheduled: a pure-Node alternative to the net48 helper process.**
     01.09.2026, the owner asked to try a path with no .NET at all before accepting the helper.
     Investigated: **NodeRT** (the only existing "WinRT as a Node native addon" project) is dead
@@ -822,14 +942,18 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Verified in unit tests that discriminate: removing the in-flight guard does not make the
     suite fail, it makes it hang, which is a stronger signal than a red assertion.
 
-    Still open: the scheduler currently takes a `FrameSender` directly. Routing it through the
-    per-brick `commandQueue` (the `telemetry:frame` command variant exists for exactly this) is
-    what makes telemetry interleave with the heartbeat rather than run beside it — 3.3
+    Closed by 3.3: the scheduler took a `FrameSender` directly and now gets one that goes
+    through the per-brick `commandQueue`. See 3.3 for what that changed and what it measured.
   - [ ] 3.1.7a **Mock telemetry has no answer.** `MockTransportProvider` refuses a
     `telemetry:frame` because it dispatches typed commands and a composed frame is bytecode.
     Refusing is right — a plausible-looking buffer would be parsed into numbers that came from
     nowhere — but it leaves the mock unable to serve the panel. Either give the mock a small
-    bytecode interpreter, or let the scheduler take a row-level fake for mock sessions
+    bytecode interpreter, or let the scheduler take a row-level fake for mock sessions.
+
+    **Still open, but no longer a runtime surprise (3.3):** the limitation is now declared as
+    `TransportCapabilities.supportsTelemetryFrames`, so the service skips a mock session
+    instead of throwing once per tick. A mock brick still shows no telemetry, which is what
+    blocks the panel from being developed against it
   - [ ] 3.1.8 Frame assembler — owns global-buffer offsets. Lays out 32-bit results 4-byte
     aligned, because `opINPUT_READSI` (the opcode we use) rejects an unaligned one and answers
     `DIRECT_REPLY_ERROR` carrying the previous buffer. The constraint is per opcode, not
@@ -1194,11 +1318,60 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     have never heard of
   - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory. The opcode is known: `opCOM_SET` (0xD4) with `SET_BRICKNAME` (0x08), both already declared in `ev3Packet.ts`; the read side (1.7.10) confirms the matching getter works
   - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
-- [ ] **3.3 Telemetry scheduler**
-  - [ ] 3.3.1 Foreground loop — fastest frequency, full `ports` + `system` data
-  - [ ] 3.3.2 Subscribed loop — per-category, reduced frequency
-  - [ ] 3.3.3 Minimal loop — heartbeat only, no extended telemetry
-  - [ ] 3.3.4 Mode switching on foreground/background transitions
+- [ ] **3.3 Telemetry scheduler** — `src/telemetry/brickTelemetry.ts` (one brick's loop),
+  `src/telemetry/telemetryService.ts` (which brick runs one), `telemetryConstants.ts` (cadence).
+
+  **Frames now go through the per-brick `CommandQueue` as `telemetry:frame`**, which is what
+  makes them take turns with the heartbeat instead of running beside it. Two writers on one
+  serial link, each blind to the other's outstanding command, was the arrangement 3.1.7 left
+  behind.
+
+  **Two things this uncovered, both of which needed a decision rather than code:**
+
+  - **The packet budget belongs to the link, not the session, and the session outlives the
+    link.** `attemptReconnect` reuses its `SessionResources` and only rewires the executor, so
+    a USB brick that comes back on the HID fallback keeps a loop built for libusb. `limits` is
+    therefore a *function* the scheduler calls each tick, not a value it is handed once. This
+    is the same class of bug as the filesystem's — which dodges it by rebuilding its surface
+    per operation — and the failure mode is silent: the firmware answers a truncated request
+    rather than complaining.
+  - **The mock cannot serve a frame, and that had to become visible in the type system.** It
+    dispatches typed commands and has no bytecode interpreter, so `telemetry:frame` throws
+    (3.1.7a). Rather than a transport-name check in the service, `TransportCapabilities` gained
+    `supportsTelemetryFrames`, declared the way `supportsForget` is: telemetry decides whether
+    to start on a session without first sending a frame to find out. 3.1.7a stays open — the
+    mock still cannot serve telemetry, it just says so now instead of throwing every tick.
+
+  **Measured on a brick** (AAA over libusb, whole stack: service → scheduler → assembler →
+  queue → adapter), two runs of 10 s:
+
+  | Tick | Ticks | Frames | Skipped | Failed | Max queue depth | Heartbeat |
+  |---|---|---|---|---|---|---|
+  | 100 ms (USB cadence) | 92 | 92 | 0 | 0 | 0 | never missed |
+  | 5 ms (past what the link serves) | 1286 | 1123 | 162 | 0 | **1** | never missed |
+
+  The first run is the cadence check and proves little on its own: nothing ever contended, so
+  a depth of 0 says no queue formed rather than that a queue is handled. **The second run is
+  the claim.** At a period the link cannot serve, telemetry declined 12.6% of its ticks and the
+  queue never held more than one waiting entry — so it stands down rather than piling frames in
+  front of the heartbeat, which stayed `ok` throughout. 26 rows carried values in both runs.
+
+  Reproduce with `node scripts/telemetry-queue-probe.js [seconds] [tickMs]`; it drives the
+  shipped objects rather than rebuilding a sender, which is the only way the numbers say
+  anything about the product.
+
+  **Not yet wired into `extension.ts`.** `TelemetryService` is constructed by the probe and by
+  tests, and by nothing else — so the foreground brick has no telemetry in the running
+  extension today. Deliberate: nothing consumes row values until the read model (3.5), and
+  wiring it earlier would run a loop whose output goes nowhere. Wire it when 3.5 lands.
+
+  - [x] 3.3.1 Foreground loop — the active brick, at its transport's measured cadence
+  - [ ] 3.3.2 Subscribed loop — per-row, reduced frequency. **Blocked on 3.3.5**: deliberately
+    absent rather than stubbed, since a mode nothing can subscribe to is a branch no test reaches
+  - [x] 3.3.3 Minimal loop — every other connected brick: heartbeat and reconnect only, no
+    telemetry at all
+  - [x] 3.3.4 Mode switching on foreground/background transitions, and on the active brick
+    leaving or re-entering `Connected`
   - [ ] 3.3.5 Subscription registry — **rewrite against rows before implementing**
     (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
     so releasing one claim recomputes the effective interval from those that remain. A registry
@@ -1227,8 +1400,24 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.7.4 Stale snapshot expiry tests
   - [ ] 3.7.5 Read model aggregation tests
   - [ ] 3.7.6 Multi-brick concurrent telemetry tests
-- [ ] **3.8 Per-mode timing constants** — base interval for `foreground`/`subscribed`/`minimal`, min/max clamp, a **per-transport foreground target and floor** (DESIGN §9.2), latency and queue-depth thresholds, placed alongside the empirical values in
-  `transportConstants.ts`. Derive them from the **measured sustained rates** in DESIGN §9.2 — USB 176 cmd/s, TCP 62 cmd/s, BT 10.7 cmd/s — with the worst-case round trips (USB 9 ms, TCP 58 ms, BT 121 ms) as the lower-bound check. Bluetooth is the case that constrains the design: a floor must leave headroom for the heartbeat and for user commands, so the foreground target there cannot approach 10 Hz. Do **not** seed these from `MAX_COMMANDS_PER_SEC` or `COMMAND_RTT_MS`: the first was retracted in §9.2, and the second was pessimistic by ~50x on USB and is being replaced by the measurements, not read.
+- [ ] **3.8 Per-mode timing constants** — partially landed as `src/telemetry/telemetryConstants.ts`.
+
+  Done: the **per-transport foreground target and floor**, derived from §9.2's sustained rates
+  and each stated as the share of the link it consumes — USB 100/50 ms (6%/11%), TCP 200/100 ms
+  (8%/16%), BT 500/250 ms (19%/37%). Bluetooth set the shape: at 10.7 cmd/s a "10 Hz
+  everywhere" target would eat the whole link and leave nothing for the heartbeat.
+
+  Still open: the `subscribed` interval (needs 3.3.5), and the latency and queue-depth
+  thresholds (need 3.4, which 3.1.4e has re-aimed at the brick's own state).
+
+  **Deviation from this task as written:** these live in `telemetry/telemetryConstants.ts`, not
+  alongside the empirical values in `transportConstants.ts`. A tick period is a telemetry
+  policy derived *from* the transport measurements, not another transport constant, and putting
+  it next to them invites exactly the confusion 3.8 warns about — the retracted
+  `MAX_COMMANDS_PER_SEC` and the 50x-pessimistic `COMMAND_RTT_MS` sit in that file too. The
+  derivation is written out in the new file's header so the link to §9.2 is not lost.
+
+  Original task text follows. Derive them from the **measured sustained rates** in DESIGN §9.2 — USB 176 cmd/s, TCP 62 cmd/s, BT 10.7 cmd/s — with the worst-case round trips (USB 9 ms, TCP 58 ms, BT 121 ms) as the lower-bound check. Bluetooth is the case that constrains the design: a floor must leave headroom for the heartbeat and for user commands, so the foreground target there cannot approach 10 Hz. Do **not** seed these from `MAX_COMMANDS_PER_SEC` or `COMMAND_RTT_MS`: the first was retracted in §9.2, and the second was pessimistic by ~50x on USB and is being replaced by the measurements, not read.
 
 ### Definition of Done
 
