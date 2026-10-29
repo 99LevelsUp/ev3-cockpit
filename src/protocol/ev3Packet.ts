@@ -144,9 +144,36 @@ export const COM_GET_SUB = {
 
 /** Subcodes for opCOM_SET (`COM_SET_SUBCODE` in the firmware). */
 export const COM_SET_SUB = {
-	/** Rename the brick. Needed by plan task 3.2.4; not wired into a command yet. */
+	/**
+	 * Switch a radio on or off. Reads **two** DATA8 parameters — the hardware selector
+	 * ({@link COM_HARDWARE}) and then the flag (`c_com.c`, `case SET_ON_OFF`).
+	 */
+	SET_ON_OFF: 0x01,
+	/** Make the brick discoverable. Same two-parameter shape as {@link COM_SET_SUB.SET_ON_OFF}. */
+	SET_VISIBLE: 0x02,
+	/** Rename the brick. Takes one string parameter. */
 	SET_BRICKNAME: 0x08,
 } as const;
+
+/**
+ * Which radio a `COM_SET`/`COM_GET` subcode is talking about (`HWTYPE` in the firmware).
+ *
+ * Easy to miss and impossible to guess: `SET_ON_OFF` and `SET_VISIBLE` both take this before
+ * their actual argument, so a single-argument call silently addresses the wrong hardware.
+ */
+export const COM_HARDWARE = {
+	USB: 1,
+	BT: 2,
+	WIFI: 3,
+} as const;
+
+/**
+ * Longest brick name the firmware accepts.
+ *
+ * `vmBRICKNAMESIZE` is 120 including the terminator and the check is a strict `>`, so 118
+ * characters is what actually fits.
+ */
+export const MAX_BRICK_NAME_LENGTH = 118;
 
 /**
  * Subcodes for opUI_BUTTON.

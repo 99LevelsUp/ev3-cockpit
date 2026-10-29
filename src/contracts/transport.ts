@@ -74,6 +74,34 @@ export type BrickCommand =
 		/** Declared globals word followed by bytecode, from `buildTelemetryFrame`. */
 		readonly payload: Uint8Array;
 	}
+	/**
+	 * Rename the brick.
+	 *
+	 * The one command here that changes what the brick *is* rather than reading it. The
+	 * firmware writes the name to `./settings/BrickName`, calls `sethostname`, and pushes it
+	 * straight into the Bluetooth controller via `cBtSetName` — so the advertised BT name
+	 * changes without a reboot (read from `c_com.c`, `case SET_BRICKNAME`).
+	 *
+	 * The firmware validates the string and rejects anything from `vmBRICKNAMESIZE` (120)
+	 * bytes including the terminator, so 118 characters is the usable ceiling.
+	 */
+	| { readonly kind: 'brick:setName'; readonly name: string }
+	/**
+	 * Switch the brick's Bluetooth radio on or off.
+	 *
+	 * Takes the hardware selector the firmware expects (`HW_BT`) as well as the flag —
+	 * `SET_ON_OFF` reads two `DATA8` parameters, not one.
+	 *
+	 * **Expect this to fail while the radio is busy, and retry rather than give up.**
+	 * `BtSetOnOff` returns FAIL for exactly one reason: the HCI socket is mid-operation
+	 * (`c_bt.c`). Asking for a state the brick is already in is *not* a failure — the
+	 * firmware handles that and answers OK. Measured 04.09.2026: the command errored
+	 * immediately after 30 s of Bluetooth scanning and succeeded first try a few seconds
+	 * later, with nothing else changed.
+	 */
+	| { readonly kind: 'brick:setBluetooth'; readonly on: boolean }
+	/** Make the brick discoverable, or stop it answering inquiries. Same two-parameter shape. */
+	| { readonly kind: 'brick:setBluetoothVisible'; readonly visible: boolean }
 	| { readonly kind: 'fs:list'; readonly path: string }
 	| { readonly kind: 'fs:read'; readonly path: string }
 	| { readonly kind: 'fs:write'; readonly path: string; readonly content: string }
@@ -159,6 +187,17 @@ export interface FsListResponse {
 }
 export interface FsReadResponse { readonly kind: 'fs:read'; readonly content: string }
 export interface FsWriteResponse { readonly kind: 'fs:write' }
+
+/**
+ * Acknowledgement of a setting written to the brick.
+ *
+ * Carries nothing back. The firmware answers a bare status and rejects a bad value in
+ * silence, so the only proof a rename or a radio toggle took effect is to observe the brick
+ * afterwards — read the name back with `info`, or watch whether it still answers an inquiry.
+ */
+export interface BrickSettingResponse {
+	readonly kind: 'brick:setName' | 'brick:setBluetooth' | 'brick:setBluetoothVisible';
+}
 export interface FsExistsResponse { readonly kind: 'fs:exists'; readonly exists: boolean }
 export interface FsDeleteResponse { readonly kind: 'fs:delete'; readonly deleted: boolean }
 
@@ -241,6 +280,7 @@ export type BrickResponse =
 	| FsListResponse
 	| FsReadResponse
 	| FsWriteResponse
+	| BrickSettingResponse
 	| FsExistsResponse
 	| FsDeleteResponse
 	| TelemetryFrameResponse;
