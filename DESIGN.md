@@ -292,8 +292,13 @@ Responsibilities:
 - data normalization,
 - `available / lost / removed` transitions,
 - tracking of remembered devices,
-- merging runtime information with persisted metadata,
-- stable ordering of the discovery list.
+- merging runtime information with persisted metadata.
+
+It does **not** order the list. Which brick belongs at the top is a question about the person
+reading the screen, not about discovery: a panel may want the brick someone is carrying
+towards the computer to climb the list as its signal rises, and no ordering chosen down here
+could serve that. The aggregator records what exists and what is true about it; every view
+sorts it for itself.
 
 ### 4.3 Session Manager
 
@@ -381,6 +386,28 @@ Priority belongs to truncation order within a tick (§9.1b), not to modes. A mod
 often the tick fires and which rows are eligible; it never competes with another mode for the
 brick, because a brick has exactly one tick.
 
+**A frame goes out through the session's own command queue**, as the `telemetry:frame`
+command, not straight at the transport. That is what makes telemetry take turns with the
+heartbeat rather than run beside it — two writers on one serial link, each blind to the
+other's outstanding command, is the arrangement this replaced.
+
+Two consequences worth stating, because both were found by building it:
+
+- **The tick period comes from the transport, and the figures are measured** (§9.2, and
+  `telemetry/telemetryConstants.ts` for the derivation): USB 100 ms, TCP 200 ms, BT 500 ms.
+  Bluetooth sets the shape — at 10.7 commands a second, a uniform 10 Hz target would consume
+  the whole link and leave nothing for the heartbeat.
+- **The packet budget is a property of the live link, not of the session**, so the scheduler
+  re-reads it every tick rather than being handed it once. A session outlives its link:
+  reconnect reuses the same session resources and only rewires the executor, so a USB brick
+  that returns on the 64-byte HID fallback would otherwise keep composing frames sized for
+  libusb's 1024. The firmware answers a truncated request rather than complaining, so the
+  failure would be silent.
+
+A transport that simulates command *semantics* rather than framing — the mock — cannot
+execute a composed frame at all, and says so through `TransportCapabilities`. A brick on such
+a transport runs in `minimal` regardless of whether it is the active one.
+
 ### 4.5 Adaptive Throttling
 
 The speed of telemetry is governed by an **Adaptive Throttling** mechanism.
@@ -399,6 +426,10 @@ The mechanism scales **the base tick period** (§9.5) — the single knob — ba
   leaving the median alone.
 - ~~**Queue depth**~~: retired as an input. With one telemetry frame in flight per brick
   (§9.1b) depth is 0 or 1 by construction, so it measures the invariant, not the brick.
+  **Now measured rather than argued**: driven at a 5 ms tick over libusb — a period the link
+  cannot serve — the queue never held more than one waiting entry across 1286 ticks, while the
+  scheduler declined 162 of them and the heartbeat never missed. Depth stayed pinned to the
+  invariant exactly as predicted, which is the strongest case for not reading it.
 
 The throttling applies to telemetry delivery scheduling only — it has no effect on user-facing UI logic or explicit commands.
 
