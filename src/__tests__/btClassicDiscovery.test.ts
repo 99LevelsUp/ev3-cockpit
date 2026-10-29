@@ -21,7 +21,7 @@ const LEGO_OUI = '001653';
 
 function cached(over: Partial<BluetoothDeviceInfo> = {}): BluetoothDeviceInfo {
 	return {
-		mac: '00165342d9f2',
+		mac: '00165300000c',
 		name: 'CCC',
 		connected: false,
 		remembered: true,
@@ -33,8 +33,8 @@ function cached(over: Partial<BluetoothDeviceInfo> = {}): BluetoothDeviceInfo {
 
 function scanned(over: Partial<BtDiscoveryDevice> = {}): BtDiscoveryDevice {
 	return {
-		mac: '00:16:53:42:D9:F2',
-		name: 'EV3 [00:16:53:42:D9:F2]',
+		mac: '00:16:53:00:00:0C',
+		name: 'EV3 [00:16:53:00:00:0C]',
 		connected: false,
 		remembered: true,
 		authenticated: false,
@@ -84,7 +84,7 @@ describe('BtClassicDiscovery', () => {
 		// The whole reason this class exists: the port scan sees nothing and the transport
 		// could open this brick without trouble.
 		assert.equal(found.length, 1);
-		assert.equal(found[0].mac, '00:16:53:42:D9:F2');
+		assert.equal(found[0].mac, '00:16:53:00:00:0C');
 	});
 
 	it('uses the cached name when Windows has one', async () => {
@@ -108,7 +108,7 @@ describe('BtClassicDiscovery', () => {
 
 		// Measured on all three bricks: Windows fills szName only while connected, so a
 		// remembered brick arrives unnamed. This file briefly claimed otherwise.
-		assert.equal(brick.name, 'EV3 [00:16:53:42:D9:F2]');
+		assert.equal(brick.name, 'EV3 [00:16:53:00:00:0C]');
 	});
 
 	it('falls back to the port scan when the cache cannot be read', async () => {
@@ -122,7 +122,7 @@ describe('BtClassicDiscovery', () => {
 		const found = await discovery.discover();
 
 		assert.equal(found.length, 1);
-		assert.equal(found[0].name, 'EV3 [00:16:53:42:D9:F2]');
+		assert.equal(found[0].name, 'EV3 [00:16:53:00:00:0C]');
 		assert.deepEqual(reasons, ['koffi is not installed']);
 	});
 
@@ -137,7 +137,7 @@ describe('BtClassicDiscovery', () => {
 		// An empty cache is not proof there is no brick — no inquiry has run, and a pairing
 		// made long ago can age out. Discarding a port the scan can see would lose a brick.
 		assert.equal(found.length, 1);
-		assert.equal(found[0].mac, '00:16:53:42:D9:F2');
+		assert.equal(found[0].mac, '00:16:53:00:00:0C');
 	});
 
 	it('runs the port scan even when the cache answers', async () => {
@@ -176,7 +176,7 @@ describe('BtClassicDiscovery — pairing', () => {
 			pairDevice: () => Promise.resolve({ ok: false, reason: 'Windows refused the pairing (error 1223).' }),
 		});
 
-		const result = await discovery.pair('00:16:53:42:D9:F2');
+		const result = await discovery.pair('00:16:53:00:00:0C');
 
 		// A user closing the dialog is an answer, not a fault.
 		assert.equal(result.ok, false);
@@ -188,7 +188,7 @@ describe('BtClassicDiscovery — pairing', () => {
 			pairDevice: () => Promise.reject(new Error('koffi is not installed')),
 		});
 
-		const result = await discovery.pair('00:16:53:42:D9:F2');
+		const result = await discovery.pair('00:16:53:00:00:0C');
 
 		assert.deepEqual(result, { ok: false, reason: 'koffi is not installed' });
 	});
@@ -208,8 +208,8 @@ describe('BtClassicDiscovery — pairing', () => {
 			},
 		});
 
-		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'), { ok: true });
-		assert.deepEqual(enqueued, ['00:16:53:42:D9:F2']);
+		assert.deepEqual(await discovery.pair('00:16:53:00:00:0C'), { ok: true });
+		assert.deepEqual(enqueued, ['00:16:53:00:00:0C']);
 	});
 
 	it('answers instead of throwing when the queue refuses the slot', async () => {
@@ -223,7 +223,7 @@ describe('BtClassicDiscovery — pairing', () => {
 			},
 		});
 
-		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'),
+		assert.deepEqual(await discovery.pair('00:16:53:00:00:0C'),
 			{ ok: false, reason: 'no Bluetooth slot within 45 s' });
 	});
 
@@ -231,12 +231,12 @@ describe('BtClassicDiscovery — pairing', () => {
 		const heard: string[] = [];
 		const discovery = new BtClassicDiscovery({
 			pairDevice: (_mac, onEvent) => {
-				onEvent?.({ type: 'searching', mac: '00:16:53:42:D9:F2' });
+				onEvent?.({ type: 'searching', mac: '00:16:53:00:00:0C' });
 				return Promise.resolve({ ok: true });
 			},
 		});
 
-		await discovery.pair('00:16:53:42:D9:F2', (event) => heard.push(event.type));
+		await discovery.pair('00:16:53:00:00:0C', (event) => heard.push(event.type));
 		assert.deepEqual(heard, ['searching']);
 	});
 
@@ -247,7 +247,7 @@ describe('BtClassicDiscovery — pairing', () => {
 			pairDevice: () => Promise.resolve({ ok: true }),
 		});
 
-		assert.deepEqual(await discovery.pair('00:16:53:42:D9:F2'), { ok: true });
+		assert.deepEqual(await discovery.pair('00:16:53:00:00:0C'), { ok: true });
 	});
 
 	it('unpairs through the binding', () => {
@@ -256,7 +256,7 @@ describe('BtClassicDiscovery — pairing', () => {
 			unpairDevice: (mac) => { asked.push(mac); return { ok: true }; },
 		});
 
-		assert.deepEqual(discovery.unpair('00:16:53:42:D9:F2'), { ok: true });
-		assert.deepEqual(asked, ['00:16:53:42:D9:F2']);
+		assert.deepEqual(discovery.unpair('00:16:53:00:00:0C'), { ok: true });
+		assert.deepEqual(asked, ['00:16:53:00:00:0C']);
 	});
 });

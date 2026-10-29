@@ -20,7 +20,7 @@ import { TelemetryService } from '../telemetry/telemetryService';
 import { TELEMETRY_CADENCE, cadenceFor } from '../telemetry/telemetryConstants';
 import { RowLifetime, TelemetryRow } from '../telemetry/telemetryRow';
 
-const USB_KEY = makeBrickKey(Transport.USB, '0016535D7E2D');
+const USB_KEY = makeBrickKey(Transport.USB, '00165300000A');
 const MOCK_KEY = makeBrickKey(Transport.Mock, 'brick-a');
 
 function row(id: string, bytes = 1, lifetime?: RowLifetime): TelemetryRow {
