@@ -1,30 +1,7 @@
 import * as vscode from 'vscode';
-import {
-	Transport, BrickKey, PresenceState, DiscoveryItem,
-} from '../contracts';
+import { BrickKey, PresenceState, DiscoveryItem } from '../contracts';
 import { createTypedEvent, TypedEvent } from '../events';
 import { DiscoveryScheduler, PresenceChangeEvent } from './discoveryScheduler';
-
-// ── Ordering ────────────────────────────────────────────────────────
-
-const TRANSPORT_ORDER: Record<Transport, number> = {
-	[Transport.Mock]: 0,
-	[Transport.USB]: 1,
-	[Transport.TCP]: 2,
-	[Transport.BT]: 3,
-};
-
-function compareItems(a: DiscoveryItem, b: DiscoveryItem): number {
-	const groupDiff = TRANSPORT_ORDER[a.transport] - TRANSPORT_ORDER[b.transport];
-	if (groupDiff !== 0) { return groupDiff; }
-
-	// Within a group: by signal strength descending (if available), then by brickKey
-	const aSignal = a.signalInfo?.rssi ?? -Infinity;
-	const bSignal = b.signalInfo?.rssi ?? -Infinity;
-	if (aSignal !== bSignal) { return bSignal - aSignal; }
-
-	return (a.brickKey as string).localeCompare(b.brickKey as string);
-}
 
 // ── Events ──────────────────────────────────────────────────────────
 
@@ -36,14 +13,20 @@ export interface DiscoveryListChangeEvent {
 
 /**
  * Unifies discovery output from the scheduler with remembered bricks from
- * persistence into a single, stably-ordered discovery list.
+ * persistence into a single discovery list.
  *
  * The aggregator is the single read model for the discovery list — both the
  * Cockpit UI and the public API consume it.
+ *
+ * It keeps a record of which bricks exist and what is currently true about each one. It does
+ * not order them, and deliberately so: what belongs at the top of a list is a question about
+ * the person reading it, not about discovery. A panel that wants the brick someone is
+ * carrying to climb towards the top as they walk over sorts by signal; another view may want
+ * something else entirely. Both are UI decisions, and neither is improved by this layer
+ * having an opinion first.
  */
 export class PresenceAggregator implements vscode.Disposable {
 	private readonly items = new Map<BrickKey, DiscoveryItem>();
-	private sortedCache: DiscoveryItem[] | null = null;
 
 	private readonly listChanged: TypedEvent<DiscoveryListChangeEvent>;
 	private readonly presenceChanged: TypedEvent<PresenceChangeEvent>;
@@ -70,12 +53,12 @@ export class PresenceAggregator implements vscode.Disposable {
 
 	// ── Read model ──────────────────────────────────────────────────
 
-	/** Get the current discovery list, stably ordered. */
+	/**
+	 * The bricks currently known, in no particular order — sorting belongs to whoever is
+	 * displaying them.
+	 */
 	getDiscoveryList(): ReadonlyArray<DiscoveryItem> {
-		if (!this.sortedCache) {
-			this.sortedCache = [...this.items.values()].sort(compareItems);
-		}
-		return this.sortedCache;
+		return [...this.items.values()];
 	}
 
 	/** Get a single brick's current state. */
@@ -97,7 +80,6 @@ export class PresenceAggregator implements vscode.Disposable {
 				});
 			}
 		}
-		this.invalidateCache();
 		this.emitListChanged();
 	}
 
@@ -108,7 +90,6 @@ export class PresenceAggregator implements vscode.Disposable {
 		const existing = this.items.get(brickKey);
 		if (!existing) { return; }
 		this.items.set(brickKey, { ...existing, ...patch });
-		this.invalidateCache();
 		this.emitListChanged();
 	}
 
@@ -120,7 +101,6 @@ export class PresenceAggregator implements vscode.Disposable {
 		this.listChanged.dispose();
 		this.presenceChanged.dispose();
 		this.items.clear();
-		this.sortedCache = null;
 	}
 
 	// ── Internals ───────────────────────────────────────────────────
@@ -131,7 +111,6 @@ export class PresenceAggregator implements vscode.Disposable {
 		} else {
 			this.items.set(e.brickKey, this.mergeLocalMetadata(e.brickKey, e.item));
 		}
-		this.invalidateCache();
 		this.presenceChanged.fire(e);
 		this.emitListChanged();
 	}
@@ -141,7 +120,6 @@ export class PresenceAggregator implements vscode.Disposable {
 		for (const [key, item] of tracked) {
 			this.items.set(key, this.mergeLocalMetadata(key, item));
 		}
-		this.invalidateCache();
 		this.emitListChanged();
 	}
 
@@ -164,10 +142,6 @@ export class PresenceAggregator implements vscode.Disposable {
 			favorite: existing.favorite,
 			connected: existing.connected,
 		};
-	}
-
-	private invalidateCache(): void {
-		this.sortedCache = null;
 	}
 
 	private emitListChanged(): void {
