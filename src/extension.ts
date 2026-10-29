@@ -239,6 +239,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		picker.title = 'EVƎ Cockpit: connect a brick over Bluetooth';
 		picker.placeholder = 'Looking for bricks in range…';
 		picker.busy = true;
+		// The list re-sorts while someone is choosing from it; the highlight has to stay on
+		// the brick they arrowed to, not on whatever row it used to be.
+		picker.keepScrollPosition = true;
 
 		const scan = scanForBricks({
 			helperPath: btHelperPath,
@@ -248,6 +251,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				// question about the person at the screen. Strongest signal first, so the one
 				// somebody is walking towards the computer holding climbs the list as they
 				// approach and is top by the time they arrive. The list is meant to move.
+				const focusedMac = picker.activeItems[0]?.brick.mac;
 				picker.items = [...bricks]
 					.sort((a, b) =>
 						(b.signal ?? Number.NEGATIVE_INFINITY) - (a.signal ?? Number.NEGATIVE_INFINITY))
@@ -257,6 +261,8 @@ export function activate(context: vscode.ExtensionContext): void {
 						detail: brick.mac,
 						brick,
 					}));
+				const focused = picker.items.find((item) => item.brick.mac === focusedMac);
+				if (focused) { picker.activeItems = [focused]; }
 			},
 			onComplete: () => {
 				picker.busy = false;
@@ -264,6 +270,14 @@ export function activate(context: vscode.ExtensionContext): void {
 					? 'Pick a brick'
 					: 'No bricks in range. Check that the brick is on, with Bluetooth and visibility enabled.';
 			},
+		});
+		// A helper that cannot start at all (missing from the install, or not Windows) rejects
+		// rather than ending; without this the picker would spin with nothing to show for it.
+		scan.done.catch((error: unknown) => {
+			const err = error instanceof Error ? error : new Error(String(error));
+			logger.error('Bluetooth scan could not run', err);
+			picker.busy = false;
+			picker.placeholder = `Bluetooth scan could not run: ${err.message}`;
 		});
 
 		const picked = await new Promise<ScannedBrick | undefined>((resolve) => {
