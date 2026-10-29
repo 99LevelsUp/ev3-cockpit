@@ -81,8 +81,13 @@ describe('PresenceAggregator — discovery list', () => {
 	});
 });
 
-describe('PresenceAggregator — stable ordering', () => {
-	it('orders by transport group (mock < usb < tcp < bt)', async () => {
+describe('PresenceAggregator — the list is a record, not a display', () => {
+	it('reports every brick across every transport, without imposing an order', async () => {
+		// This layer used to sort: transport group first, then signal, then brickKey. That was
+		// a display decision made three layers below the display. What belongs at the top is a
+		// question about the person reading the list — a panel may want the brick someone is
+		// walking towards the computer with to climb as its signal rises, and no ordering
+		// chosen here could serve that. So the aggregator keeps a record and the UI sorts.
 		const registry = new ProviderRegistry();
 		registry.register(makeFakeProvider(Transport.BT, [makeItem('bt1', Transport.BT)]));
 		registry.register(makeFakeProvider(Transport.Mock, [makeItem('m1', Transport.Mock)]));
@@ -95,24 +100,25 @@ describe('PresenceAggregator — stable ordering', () => {
 		await scheduler.scanOnce();
 		const list = aggregator.getDiscoveryList();
 
-		assert.equal(list[0].transport, Transport.Mock);
-		assert.equal(list[1].transport, Transport.USB);
-		assert.equal(list[2].transport, Transport.TCP);
-		assert.equal(list[3].transport, Transport.BT);
+		assert.deepEqual(
+			[...list.map((item) => item.transport)].sort(),
+			[Transport.BT, Transport.Mock, Transport.TCP, Transport.USB].sort()
+		);
 
 		teardown(aggregator, scheduler, registry);
 	});
 
-	it('orders by brickKey within the same transport group', async () => {
+	it('keeps every brick it was told about, whatever order they arrived in', async () => {
 		const items = [makeItem('c'), makeItem('a'), makeItem('b')];
 		const { registry, scheduler, aggregator } = setup(items);
 
 		await scheduler.scanOnce();
-		const list = aggregator.getDiscoveryList();
+		const keys = aggregator.getDiscoveryList().map((item) => item.brickKey);
 
-		assert.equal(list[0].brickKey, makeBrickKey(Transport.Mock, 'a'));
-		assert.equal(list[1].brickKey, makeBrickKey(Transport.Mock, 'b'));
-		assert.equal(list[2].brickKey, makeBrickKey(Transport.Mock, 'c'));
+		assert.equal(keys.length, 3);
+		for (const id of ['a', 'b', 'c']) {
+			assert.ok(keys.includes(makeBrickKey(Transport.Mock, id)), `${id} is missing`);
+		}
 
 		teardown(aggregator, scheduler, registry);
 	});
