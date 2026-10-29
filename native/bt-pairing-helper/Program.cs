@@ -95,12 +95,42 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// How many inquiry windows a pairing gets before it reports NotFound. One window missed a
+    /// brick that was in range more than once (plan 2.8.18); the overall --timeout-seconds
+    /// still bounds the whole run, so a second window never outlives the process deadline.
+    /// </summary>
+    private const int MaxInquiryWindows = 2;
+
     private static async Task<int> RunAsync(
         string mac, string pin, int inquirySeconds, CancellationToken cancellationToken)
     {
         Emit(new { type = "searching", mac });
 
-        var (info, seen, watcher) = await WatchForDeviceAsync(mac, TimeSpan.FromSeconds(inquirySeconds), cancellationToken);
+        // A brick this host already has a bond with is answered from Windows' own records, with
+        // no air time. It has to be: the inquiry watcher below is scoped to unpaired devices
+        // and cannot see such a brick at all, so without this a paired brick came back
+        // NotFound after a full inquiry window (plan 2.8.18, the two-path design).
+        var targetSuffix = mac.Replace(":", "").Replace("-", "").ToLowerInvariant();
+        var bonded = await DeviceInformation
+            .FindAllAsync(BluetoothDevice.GetDeviceSelectorFromPairingState(true))
+            .AsTask(cancellationToken);
+        foreach (var known in bonded)
+        {
+            if (!IdMatchesMac(known.Id, targetSuffix)) { continue; }
+            Emit(new { type = "found", id = known.Id, name = known.Name, alreadyPaired = true, seen = new List<string>() });
+            Emit(new { type = "alreadyPaired", mac });
+            return 0;
+        }
+
+        DeviceInformation? info = null;
+        DeviceWatcher? watcher = null;
+        var seen = new List<string>();
+        for (var window = 1; window <= MaxInquiryWindows && info is null; window++)
+        {
+            if (window > 1) { Emit(new { type = "inquiryRetry", window }); }
+            (info, seen, watcher) = await WatchForDeviceAsync(mac, TimeSpan.FromSeconds(inquirySeconds), cancellationToken);
+        }
         if (info is null)
         {
             Emit(new { type = "result", status = "NotFound", ok = false });
