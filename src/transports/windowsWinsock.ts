@@ -40,6 +40,8 @@ export const EV3_RFCOMM_CHANNEL = 1;
 export const WSAETIMEDOUT = 10060;
 /** `WSAECONNREFUSED` — the peer is reachable but refused the channel. */
 export const WSAECONNREFUSED = 10061;
+/** `WSAEWOULDBLOCK` — a non-blocking connect has started and is still in progress. */
+export const WSAEWOULDBLOCK = 10035;
 
 // ── API surface ─────────────────────────────────────────────────────
 
@@ -67,18 +69,31 @@ export interface BluetoothAddress {
 export interface Winsock2Api {
 	/** Creates an unconnected socket, or an invalid handle on failure. */
 	socket(family: number, type: number, protocol: number): SocketHandle;
+	/** Switches the socket into or out of non-blocking mode. `0` on success. */
+	setNonBlocking(socket: SocketHandle, on: boolean): number;
 	/**
-	 * Connects to `address`, resolving with `0` on success or {@link SOCKET_ERROR}.
+	 * Starts a connect to `address`. Synchronous: on a non-blocking socket it returns
+	 * {@link SOCKET_ERROR} with {@link WSAEWOULDBLOCK} at once and the connect proceeds in the
+	 * stack; {@link connectState} says when it has landed.
 	 *
-	 * Runs off the main thread: an RFCOMM connect blocks for seconds, and the extension
-	 * host cannot afford to. Closing the socket from another thread aborts it.
+	 * It used to run a blocking connect on a koffi worker thread and abort it by closing the
+	 * socket from the main thread. Measured 29.10.2026: closing did not end the blocked call.
+	 * After four connects ran into the deadline in one process, every later connect failed
+	 * without reaching the radio and the process could not exit (`scripts/bt-threadpool-probe.js`).
 	 */
-	connect(socket: SocketHandle, address: BluetoothAddress): Promise<number>;
+	connect(socket: SocketHandle, address: BluetoothAddress): number;
+	/**
+	 * Where a non-blocking connect stands, without blocking: `select` with a zero timeout,
+	 * once on the write set (connected) and once on the exception set (failed).
+	 */
+	connectState(socket: SocketHandle): 'pending' | 'connected' | 'failed';
+	/** The error a failed non-blocking connect ended with (`SO_ERROR`). */
+	socketError(socket: SocketHandle): number;
 	/** Sends bytes, returning how many were accepted or {@link SOCKET_ERROR}. */
 	send(socket: SocketHandle, data: Uint8Array, length: number): number;
 	/** Receives into `buffer`, returning byte count, `0` at end of stream, or {@link SOCKET_ERROR}. */
 	recv(socket: SocketHandle, buffer: Uint8Array, length: number): number;
-	/** Closes the socket. Also the way to abort a connect that is still in flight. */
+	/** Closes the socket. Also the way to abandon a non-blocking connect still in flight. */
 	closesocket(socket: SocketHandle): number;
 	/** True when `socket` has bytes waiting. Never blocks. */
 	hasPendingData(socket: SocketHandle): number;
@@ -98,10 +113,8 @@ interface KoffiLike {
 	array(type: string, length: number): unknown;
 }
 
-/** Signature of a `koffi` function that also offers an off-thread call. */
-type KoffiFunc = ((...args: unknown[]) => number) & {
-	async(...args: unknown[]): void;
-};
+/** Signature of a `koffi` function. */
+type KoffiFunc = (...args: unknown[]) => number;
 
 /**
  * Loads the Winsock bindings, or explains why this host cannot have them.
@@ -180,30 +193,38 @@ export function loadWinsock2(): Winsock2Api {
 			'int __stdcall select(int, COCKPIT_FD_SET_BTH*, COCKPIT_FD_SET_BTH*, COCKPIT_FD_SET_BTH*, COCKPIT_TIMEVAL_BTH*)'
 		) as KoffiFunc;
 		const rawLastError = lib.func('int __stdcall WSAGetLastError()') as KoffiFunc;
+		const rawIoctl = lib.func('int __stdcall ioctlsocket(uintptr, int32, _Inout_ uint32*)') as KoffiFunc;
+		const rawGetSockOpt = lib.func(
+			'int __stdcall getsockopt(uintptr, int, int, _Out_ int32*, _Inout_ int32*)'
+		) as KoffiFunc;
 
 		const emptyFdArray = new Array<number>(63).fill(0);
+		const oneSocket = (socket: SocketHandle) => ({ fd_count: 1, fd_array: [Number(socket), ...emptyFdArray] });
+		// Zero timeout: poll, never block. The extension host runs on this thread.
+		const noWait = { tv_sec: 0, tv_usec: 0 };
+		// `FIONBIO` is 0x8004667E; as the signed 32-bit `long` the call takes, that is negative.
+		const FIONBIO = 0x8004667E | 0;
+		const SOL_SOCKET = 0xffff;
+		const SO_ERROR = 0x1007;
 
 		cached = {
 			socket: (family, type, protocol) => rawSocket(family, type, protocol),
-			connect: (socket, address) => new Promise<number>((resolve, reject) => {
-				rawConnect.async(
-					socket, address, SOCKADDR_BTH_SIZE,
-					(error: Error | null, result: number) => {
-						if (error) { reject(error); } else { resolve(result); }
-					}
-				);
-			}),
+			setNonBlocking: (socket, on) => rawIoctl(socket, FIONBIO, [on ? 1 : 0]),
+			connect: (socket, address) => rawConnect(socket, address, SOCKADDR_BTH_SIZE),
+			connectState: (socket) => {
+				if (rawSelect(0, null, oneSocket(socket), null, noWait) > 0) { return 'connected'; }
+				if (rawSelect(0, null, null, oneSocket(socket), noWait) > 0) { return 'failed'; }
+				return 'pending';
+			},
+			socketError: (socket) => {
+				const value = [0];
+				rawGetSockOpt(socket, SOL_SOCKET, SO_ERROR, value, [4]);
+				return value[0];
+			},
 			send: (socket, data, length) => rawSend(socket, data, length, 0),
 			recv: (socket, buffer, length) => rawRecv(socket, buffer, length, 0),
 			closesocket: (socket) => rawClose(socket),
-			hasPendingData: (socket) => rawSelect(
-				0,
-				{ fd_count: 1, fd_array: [Number(socket), ...emptyFdArray] },
-				null,
-				null,
-				// Zero timeout: poll, never block. The extension host runs on this thread.
-				{ tv_sec: 0, tv_usec: 0 }
-			),
+			hasPendingData: (socket) => rawSelect(0, oneSocket(socket), null, null, noWait),
 			lastError: () => rawLastError(),
 		};
 		return cached;

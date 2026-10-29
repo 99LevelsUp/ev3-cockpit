@@ -4,10 +4,9 @@
  * The preferred BT backend. The testlab compared the candidates against live bricks and
  * chose this one; {@link BtSppAdapter} stays behind it as the path that needs no FFI.
  *
- * Nothing here paces connections. Windows carries one RFCOMM channel at a time and that
- * limit is enforced in `BtTransportProvider` through `BtConnectionQueue`, where every
- * brick's attempts are visible at once. An adapter that also queued would either deadlock
- * against the provider's slot or serve a second cooldown on top of it.
+ * Nothing here paces connections. That belongs to `BtTransportProvider` and its
+ * `BtConnectionQueue`, where every brick's attempts are visible at once; an adapter that also
+ * queued would either deadlock against the provider's slot or serve a second cooldown on top.
  */
 
 import { TransportAdapter, SendOptions } from './transportAdapter';
@@ -31,7 +30,11 @@ import {
 	SOCK_STREAM,
 	SOCKET_ERROR,
 	EV3_RFCOMM_CHANNEL,
+	WSAEWOULDBLOCK,
 } from './windowsWinsock';
+
+/** How often a connect in progress is checked (ms). Each check is two zero-timeout `select`s. */
+const CONNECT_POLL_MS = 50;
 
 /**
  * Receive poll interval while an exchange is outstanding (ms).
@@ -93,7 +96,6 @@ export class BtWinsockAdapter implements TransportAdapter {
 	private receiveBuffer: Buffer = Buffer.alloc(0);
 	private pendingReply?: PendingReply;
 	private pollTimer?: ReturnType<typeof setTimeout>;
-	private connectTimer?: ReturnType<typeof setTimeout>;
 
 	constructor(options: BtWinsockAdapterOptions) {
 		if (!options.mac?.trim()) {
@@ -134,55 +136,60 @@ export class BtWinsockAdapter implements TransportAdapter {
 			);
 		}
 
-		// An RFCOMM connect can block for as long as the peer stays silent, and the caller
-		// is holding the host's only Bluetooth slot while it does. Closing the socket is
-		// what aborts it: the pending call returns an error rather than staying parked.
-		let abandoned = false;
-		const expiry = new Promise<never>((_, reject) => {
-			const timer = setTimeout(() => {
-				abandoned = true;
-				api.closesocket(socket);
-				reject(new TimeoutError(
-					`BT connect to ${this.mac} timed out after ${this.connectTimeoutMs} ms.`
-				));
-			}, this.connectTimeoutMs);
-			timer.unref?.();
-			this.connectTimer = timer;
-		});
-
-		let result: number;
-		try {
-			result = await Promise.race([
-				api.connect(socket, {
-					addressFamily: AF_BTH,
-					btAddr,
-					serviceClassId: new Uint8Array(16),
-					port: this.channel,
-				}),
-				expiry,
-			]);
-		} catch (error) {
-			if (error instanceof TimeoutError) {
-				// The timer already closed it; that is how it aborted the call.
-				throw error;
-			}
-			// The FFI itself threw, which the two paths below do not cover. Leaving the
-			// handle open here is what costs on Windows: the socket stays charged against
-			// the one RFCOMM channel with nothing left holding a reference to it.
+		// Non-blocking, and checked from a timer on this thread. The blocking connect this
+		// replaced ran on a koffi worker and was "aborted" by closing the socket from here;
+		// measured 29.10.2026, that did not end the blocked call, and after four deadlines in
+		// one process Bluetooth stopped working until the process exited. Nothing below
+		// blocks, so a deadline is a plain `closesocket` on a socket nobody is waiting in.
+		const failed = (code: number): TransportError => {
 			api.closesocket(socket);
-			throw new TransportError(`BT connect to ${this.mac} failed.`, error);
-		} finally {
-			if (this.connectTimer) { clearTimeout(this.connectTimer); this.connectTimer = undefined; }
+			return new TransportError(`BT connect to ${this.mac} failed (WSA error ${code}).`);
+		};
+		if (api.setNonBlocking(socket, true) !== 0) {
+			throw failed(api.lastError());
 		}
 
-		if (result === SOCKET_ERROR || abandoned) {
-			// The other ordering: the connect landed between the timer firing and this line.
-			// Whoever ends up holding an open socket is the one who closes it.
+		let started: number;
+		try {
+			started = api.connect(socket, {
+				addressFamily: AF_BTH,
+				btAddr,
+				serviceClassId: new Uint8Array(16),
+				port: this.channel,
+			});
+		} catch (error) {
+			// The FFI itself threw. A handle left open here would have nothing referencing it.
+			api.closesocket(socket);
+			throw new TransportError(`BT connect to ${this.mac} failed.`, error);
+		}
+		if (started === SOCKET_ERROR) {
+			// Read on this thread, straight after the call: the error code is per thread, and
+			// reading it anywhere else reports whatever that thread did last.
 			const code = api.lastError();
-			if (!abandoned) { api.closesocket(socket); }
-			throw new TransportError(
-				`BT connect to ${this.mac} failed (WSA error ${code}).`
-			);
+			if (code !== WSAEWOULDBLOCK) { throw failed(code); }
+
+			const deadline = Date.now() + this.connectTimeoutMs;
+			for (;;) {
+				const state = api.connectState(socket);
+				if (state === 'connected') { break; }
+				if (state === 'failed') { throw failed(api.socketError(socket)); }
+				if (Date.now() >= deadline) {
+					api.closesocket(socket);
+					throw new TimeoutError(
+						`BT connect to ${this.mac} timed out after ${this.connectTimeoutMs} ms.`
+					);
+				}
+				// Never sleep past the deadline: a connect that lands after it was given up on is
+				// not adopted, because its socket is already closed by then.
+				const pause = Math.max(0, Math.min(CONNECT_POLL_MS, deadline - Date.now()));
+				await new Promise((resolve) => setTimeout(resolve, pause));
+			}
+		}
+
+		// Back to blocking for the exchange path, which was written for it and polls with
+		// `select` before every `recv` anyway.
+		if (api.setNonBlocking(socket, false) !== 0) {
+			throw failed(api.lastError());
 		}
 
 		this.api = api;
@@ -204,7 +211,6 @@ export class BtWinsockAdapter implements TransportAdapter {
 		this._isOpen = false;
 
 		if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = undefined; }
-		if (this.connectTimer) { clearTimeout(this.connectTimer); this.connectTimer = undefined; }
 		this.doRejectPendingReply(new TransportError('BT Winsock adapter closed while waiting for reply.'));
 		this.receiveBuffer = Buffer.alloc(0);
 

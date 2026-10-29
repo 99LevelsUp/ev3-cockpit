@@ -177,6 +177,14 @@ export const BT = {
 	 * never for an ordinary cooldown.
 	 */
 	QUEUE_ACQUIRE_TIMEOUT_MS: 45000,
+	/**
+	 * Gap between closing a brick's connection and connecting to it again (ms). Per brick.
+	 *
+	 * **Provisional**, from the observations of 29.10.2026: 0-2 s after a clean close the
+	 * connect failed at once with WSA 10064 (five times); 5 s and more after one it opened.
+	 * LEGO's EV3 Lab waits the same 5 s. To be replaced by the gap sweep (step-1 plan, U3.2).
+	 */
+	RECONNECT_GAP_AFTER_CLOSE_MS: 5000,
 	/** Default EV3 pairing PIN. */
 	PAIRING_PIN: '1234',
 } as const;

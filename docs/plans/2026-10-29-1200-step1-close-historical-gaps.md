@@ -202,6 +202,29 @@ Scope rule: **below the `TransportProvider` contract, Windows only.** Nothing ab
    after-failure data. Rule for them, fixed now: the error-recovery pause becomes the shortest
    one whose success rate is no more than 10 points below the 15 s rate.
 
+   **Both sweeps measured a bug, not the gaps (found 29.10.2026, evening).** The Winsock
+   adapter ran its blocking connect on a koffi worker and "aborted" it at the deadline by
+   closing the socket; that did not end the call. `scripts/bt-threadpool-probe.js`: after
+   four deadlines in one process every later connect failed in under a millisecond without
+   reaching the radio, and the process could not exit — both sweep processes were still alive
+   hours later, holding their connects. The trigger in every case was a reconnect to the same
+   brick 0–2 s after a clean close (WSA 10064), which commit c61599f had made possible by
+   releasing the queue slot at open. The earlier explanation ("a self-sustaining failure
+   chain") was wrong. Also void: the observation that AAA with Wi-Fi on timed out over
+   Bluetooth, and the rotation test ran beside a hung process (D5 does not rest on it).
+   Fix: non-blocking connect polled with `select` on the main thread, error read through
+   `SO_ERROR`, and a per-brick reconnect gap after a close (provisional 5 s).
+   **Hardware check, criteria fixed before the run:** with the gap disabled, the probe's
+   process exits by itself; no attempt fails in under 5 ms with 10048; after a deadline the
+   next connect in the same process reaches the radio (a real WSA code, or an open).
+   **Result (same evening, CCC, 12 attempts, no gap):** the process now exits by itself — the
+   leaked worker threads are gone — and error codes are read on the calling thread. The other
+   two criteria **failed**: after four abandoned connects, Windows answered every further
+   connect in this process with WSA 10048 at once, without the radio. Closing a socket with a
+   pending RFCOMM connect does not cancel it in the stack; only the process exit does. The
+   per-brick reconnect gap keeps the trigger away; whether an abortive close or time clears
+   the state is the next measurement.
+
    **Already measured, 29.10.2026, and it changes U3.1** (`scripts/bt-radio-probe.js`, psk1,
    CCC and BBB): two Bluetooth sessions to two bricks held at once, 115/115 replies each with
    no interference; a 30 s live inquiry beside both sessions left them at 100 % with unchanged
