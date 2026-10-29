@@ -170,7 +170,14 @@ export interface BrickScanOptions extends Omit<BtPairingHelperOptions, 'onEvent'
 	 * All it owes the caller is an accurate record of what is visible.
 	 */
 	onChange?: (bricks: ScannedBrick[]) => void;
-	/** Called once the helper reports the scan finished on its own. */
+	/**
+	 * Called once when the scan ends on its own — with `scanComplete`, or with the helper
+	 * exiting without it (a crash, a kill from outside). Not called for a scan the caller
+	 * cancelled, and not called when the helper could not start at all: that rejects `done`.
+	 *
+	 * The exit without `scanComplete` counts as an end because a picker waiting for the line
+	 * would otherwise spin forever on a helper that is already gone.
+	 */
 	onComplete?: (count: number) => void;
 	/** Restricts the list to bricks; anything else the radio hears is dropped. */
 	ouiFilter?: string;
@@ -262,6 +269,13 @@ export function scanForBricks(options: BrickScanOptions): BrickScan {
 
 	const changed = (): void => onChange?.([...found.values()]);
 
+	let ended = false;
+	const end = (): void => {
+		if (ended) { return; }
+		ended = true;
+		onComplete?.(found.size);
+	};
+
 	const run = runHelper([
 		'--scan',
 		'--inquiry-seconds', String(Math.round(inquirySeconds)),
@@ -298,7 +312,7 @@ export function scanForBricks(options: BrickScanOptions): BrickScan {
 			break;
 		}
 		case 'scanComplete':
-			onComplete?.(found.size);
+			end();
 			break;
 		default:
 			break;
@@ -308,8 +322,16 @@ export function scanForBricks(options: BrickScanOptions): BrickScan {
 	return {
 		// A cancelled scan still answers with what it saw. The caller cancelled because they
 		// already picked something out of that list, not because the list was worthless.
-		done: run.done.then(() => [...found.values()]),
-		cancel: run.cancel,
+		done: run.done.then(() => {
+			end();
+			return [...found.values()];
+		}),
+		cancel: () => {
+			// Whoever cancelled has moved on; telling them the scan ended would be news about a
+			// list they no longer show.
+			ended = true;
+			run.cancel();
+		},
 	};
 }
 
