@@ -36,7 +36,17 @@ const TYPE_TERMINAL = 124;
 
 export interface SchedulerOptions {
 	readonly rows: readonly TelemetryRow[];
-	readonly limits: FrameLimits;
+	/**
+	 * The link's packet budget, or a function returning it.
+	 *
+	 * A function is what a live session needs. `maxPacketBytes` is a property of the link
+	 * rather than of the transport, and a session outlives its link: `attemptReconnect`
+	 * reuses the same session resources and only rewires the executor, so a USB brick that
+	 * comes back on the HID fallback keeps a scheduler that was built for libusb. Fixed
+	 * limits would then compose 1024-byte frames for a 64-byte link, and the failure is
+	 * silent truncation rather than an error.
+	 */
+	readonly limits: FrameLimits | (() => FrameLimits);
 	readonly send: FrameSender;
 	/** Milliseconds between ticks. Throttling moves this and nothing else (§9.5). */
 	readonly tickPeriodMs: number;
@@ -165,7 +175,8 @@ export class TelemetryScheduler {
 
 		let frame: AssembledFrame;
 		try {
-			frame = assembleFrame(candidates, this.options.limits);
+			// Resolved per tick, not per scheduler: see `SchedulerOptions.limits`.
+			frame = assembleFrame(candidates, this.resolveLimits());
 		} catch (error) {
 			this.framesFailed += 1;
 			this.options.onError?.(error);
@@ -184,6 +195,12 @@ export class TelemetryScheduler {
 		} finally {
 			this.inFlight = false;
 		}
+	}
+
+	/** The packet budget in force right now. */
+	private resolveLimits(): FrameLimits {
+		const { limits } = this.options;
+		return typeof limits === 'function' ? limits() : limits;
 	}
 
 	/**

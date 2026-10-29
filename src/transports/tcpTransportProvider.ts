@@ -73,7 +73,7 @@ export interface TcpTransportProviderOptions {
  */
 export class TcpTransportProvider implements TransportProvider {
 	readonly transport = Transport.TCP;
-	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
+	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: true };
 
 	private readonly options: TcpTransportProviderOptions;
 	private readonly sessions = new Map<BrickKey, TcpSession>();
