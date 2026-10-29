@@ -286,7 +286,7 @@ describe('BtConnectionQueue', () => {
 		assert.equal(queue.pending, 0);
 	});
 
-	it('fails a queued acquire with a stated reason once the ceiling wait times out', async () => {
+	it('fails a queued acquire with a stated reason once the slot wait times out', async () => {
 		// 1.11.12: BtConnectionQueue.acquire() used to queue forever once the one slot
 		// was held by another connected brick -- a second brick's connect neither
 		// resolved nor failed. DESIGN §3.3 requires a stated failure instead.
@@ -300,7 +300,7 @@ describe('BtConnectionQueue', () => {
 			const release = await queue.acquire('brick1');
 			await assert.rejects(
 				queue.acquire('brick2'),
-				/timed out.*waiting for a slot.*ceiling/s
+				/timed out.*waiting for a slot.*busy opening another connection/s
 			);
 			release();
 		} finally {
