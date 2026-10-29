@@ -189,7 +189,7 @@ export interface BrickScanOptions extends Omit<BtPairingHelperOptions, 'onEvent'
  */
 export function createHelperPairing(
 	options: BtPairingHelperOptions
-): (mac: string) => Promise<HelperPairingResult> {
+): (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<HelperPairingResult> {
 	const {
 		pin = BT.PAIRING_PIN,
 		inquirySeconds = DEFAULT_INQUIRY_SECONDS,
@@ -197,7 +197,10 @@ export function createHelperPairing(
 		onEvent,
 	} = options;
 
-	return (mac: string) => {
+	// Two listeners because two parties want the events: whoever built the function (logging,
+	// for every pairing) and whoever is waiting on this one pairing (its progress prompt). A
+	// per-call listener is what keeps two pairings from talking over each other's prompt.
+	return (mac: string, onCallEvent?: (event: BtPairingEvent) => void) => {
 		let result: { status: string; ok: boolean } | undefined;
 		let helperError: string | undefined;
 		let alreadyPaired = false;
@@ -225,6 +228,7 @@ export function createHelperPairing(
 				break;
 			}
 			onEvent?.(event);
+			onCallEvent?.(event);
 		});
 
 		return run.done.then((outcome) => interpret({

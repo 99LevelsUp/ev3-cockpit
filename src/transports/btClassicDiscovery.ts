@@ -26,6 +26,7 @@ import {
 import { BT } from './transportConstants';
 import { formatMac } from './btSppDiscovery';
 import type { BtConnectionQueue } from './btConnectionQueue';
+import type { BtPairingEvent } from './btPairingHelper';
 
 /** Configuration for {@link BtClassicDiscovery}. */
 export interface BtClassicDiscoveryOptions {
@@ -42,8 +43,13 @@ export interface BtClassicDiscoveryOptions {
 	portScan?: () => Promise<BtDiscoveryDevice[]>;
 	/** Called when the cache cannot be read, once per scan. */
 	onCacheUnavailable?: (reason: string) => void;
-	/** Pairs with a device. Injectable for the same reason as {@link listDevices}. */
-	pairDevice?: (mac: string) => Promise<{ ok: boolean; reason?: string }>;
+	/**
+	 * Pairs with a device. Injectable for the same reason as {@link listDevices}.
+	 *
+	 * `onEvent` carries the progress of this one pairing; a binding without progress events
+	 * (the legacy `bthprops.cpl` path) simply ignores it.
+	 */
+	pairDevice?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<{ ok: boolean; reason?: string }>;
 	/** Removes a pairing. */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 	/**
@@ -76,7 +82,7 @@ export class BtClassicDiscovery {
 	private readonly listDevices: () => BluetoothDeviceInfo[];
 	private readonly portScan?: () => Promise<BtDiscoveryDevice[]>;
 	private readonly onCacheUnavailable?: (reason: string) => void;
-	private readonly pairDevice: (mac: string) => Promise<PairingResult>;
+	private readonly pairDevice: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
 	private readonly unpairDevice: (mac: string) => PairingResult;
 	private readonly connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
 
@@ -99,20 +105,34 @@ export class BtClassicDiscovery {
 	 *
 	 * Windows shows its own dialog and the user types the brick's PIN. Every EV3 uses the
 	 * same one, and the brick displays it when asked.
+	 *
+	 * @param onEvent Progress of this pairing only, so the caller can prompt the user at the
+	 *   right moment without sharing a listener with any other pairing in flight.
 	 */
-	pair = async (mac: string): Promise<PairingResult> => {
+	pair = async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+		const failed = (error: unknown): PairingResult =>
+			({ ok: false, reason: error instanceof Error ? error.message : String(error) });
+
 		const attempt = async (): Promise<PairingResult> => {
 			try {
-				return await this.pairDevice(mac);
+				return await this.pairDevice(mac, onEvent);
 			} catch (error) {
 				// Includes the helper being missing entirely, which arrives as a
 				// BackendUnavailableError and is an install fault rather than a refusal — the
 				// message says so, and `pair` stays a function that answers instead of throwing.
-				return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+				return failed(error);
 			}
 		};
 
-		return this.connectionQueue ? this.connectionQueue.enqueue(mac, attempt) : attempt();
+		if (!this.connectionQueue) { return attempt(); }
+		try {
+			return await this.connectionQueue.enqueue(mac, attempt);
+		} catch (error) {
+			// The queue itself can refuse before the attempt ever runs: no slot within its
+			// acquire timeout (a connected Bluetooth brick holds the only one), or a disposed
+			// queue. Same contract as above — an answer, not a throw.
+			return failed(error);
+		}
 	};
 
 	/**

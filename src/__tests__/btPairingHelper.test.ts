@@ -33,8 +33,13 @@ interface FakeRun {
 	exitCode?: number | null;
 	/** Never emits `close` on its own — the wrapper's kill guard has to end it. */
 	neverExits?: boolean;
-	/** Thrown synchronously by `spawn`, the way ENOENT arrives. */
+	/** Thrown synchronously by `spawn`. */
 	throwOnSpawn?: Error;
+	/**
+	 * Emitted as the child's `'error'` event after `spawn` returned, with no `close` — the way
+	 * Node's `child_process.spawn` reports ENOENT for a missing executable.
+	 */
+	errorAfterSpawn?: Error;
 }
 
 interface FakeSpawn {
@@ -73,6 +78,10 @@ function fakeSpawn(run: FakeRun): FakeSpawn {
 		};
 
 		queueMicrotask(() => {
+			if (run.errorAfterSpawn) {
+				child.emit('error', run.errorAfterSpawn);
+				return;
+			}
 			for (const line of run.lines ?? []) { stdout.push(`${line}\n`); }
 			stdout.push(null);
 			if (run.stderr) { stderr.push(run.stderr); }
@@ -231,6 +240,27 @@ describe('createHelperPairing — host and process wiring', () => {
 		const enoent = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
 		const { pair } = pairWith({ throwOnSpawn: enoent });
 		await assert.rejects(() => pair(MAC), BackendUnavailableError);
+	});
+
+	it('reports a helper that fails after spawning as a backend problem too', async () => {
+		// Node reports a missing executable as an 'error' event on the child, not as a throw
+		// from spawn, so this is the path a real missing helper takes.
+		const enoent = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
+		const { pair } = pairWith({ errorAfterSpawn: enoent });
+		await assert.rejects(() => pair(MAC), BackendUnavailableError);
+	});
+
+	it('tells this pairing\'s own listener, beside the one it was built with', async () => {
+		// Two pairings in flight must not share a progress prompt: each call carries its own.
+		const built: string[] = [];
+		const mine: string[] = [];
+		const { pair } = pairWith(
+			{ lines: [FOUND, JSON.stringify({ type: 'result', status: 'Paired', ok: true })], exitCode: 0 },
+			{ onEvent: (event) => built.push(event.type) }
+		);
+		await pair(MAC, (event) => mine.push(event.type));
+		assert.deepEqual(mine, ['found', 'result']);
+		assert.deepEqual(built, ['found', 'result']);
 	});
 
 	it('passes the mac, pin and windows through to the helper', async () => {
