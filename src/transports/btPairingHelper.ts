@@ -25,6 +25,8 @@ export type BtPairingEvent =
 	| { type: 'searching'; mac: string }
 	| { type: 'found'; id: string; name: string; alreadyPaired: boolean; seen?: string[] }
 	| { type: 'alreadyPaired'; mac: string }
+	/** The first inquiry window missed the brick and a second one is starting. */
+	| { type: 'inquiryRetry'; window: number }
 	| { type: 'pairingRequested'; kind: string }
 	| { type: 'watcherEnumerationCompleted'; status: string; atMs: number }
 	| { type: 'watcherStopped'; status: string; atMs: number }
