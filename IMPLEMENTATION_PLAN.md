@@ -788,7 +788,12 @@ Build the source of truth for connected bricks.
     `IndexOf(...) >= 0` instead). Known future cost, not today's problem: Microsoft's own
     direction eventually forces a net10 migration; that migration is separate work, later
 
-  - [ ] 2.8.18 **Ship the WinRT pairing path in the extension, not just the probe.** Needs: the
+  - [x] 2.8.18 **Ship the WinRT pairing path in the extension, not just the probe.**
+    **Done 29.10.2026:** wired into the extension (03.09), serialized on the shared queue, UI
+    prompt on `found`, and the two missing pieces — the already-paired fast path in pairing mode
+    (verified on CCC: answered in 362 ms instead of NotFound after a full window) and a second
+    inquiry window. Still unverified on this bench: a fresh inquiry chained into a pairing of a
+    brick this machine has never met. Original entry: Needs: the
     helper serialized against the same `BtConnectionQueue` the rest of BT already shares, so a
     pairing attempt and a connect attempt never contend for the one radio slot; a bounded retry
     around the live-inquiry step (a single 15 s window missed CCC more than once, and a
@@ -875,9 +880,9 @@ Build the source of truth for connected bricks.
     "restart your computer" is not an acceptable ask of an end user and would cost the
     extension a bad review, not just a bad afternoon.
 
-    **Half built (29.10.2026): the two-path discovery design** the above evidence now supports —
-    scan mode (`ScanAsync`) does it, pairing mode (`RunAsync`) still starts the unpaired-only
-    watcher and cannot see a brick the host already remembers. The design:
+    **Built (29.10.2026): the two-path discovery design** the above evidence supports — scan
+    mode (`ScanAsync`) and pairing mode (`RunAsync`) both check the bonded devices first. The
+    design:
     check already-paired via a direct read (`FromPairingState(true)` or
     `FromBluetoothAddressAsync`, no watcher needed) first; only run the `FromPairingState(false)`
     live-inquiry watcher if that comes back not-paired. This replaces the wrong "one selector
