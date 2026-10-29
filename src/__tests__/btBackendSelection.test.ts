@@ -10,6 +10,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { BtTransportProvider, BtBackend, BtAdapterFactory } from '../transports/btTransportProvider';
+import { BtConnectionQueue } from '../transports/btConnectionQueue';
 import { TransportAdapter } from '../transports/transportAdapter';
 import { BackendUnavailableError, TransportError, ConnectionError } from '../errors/CockpitError';
 import { Transport, makeBrickKey } from '../contracts';
@@ -147,5 +148,55 @@ describe('BtTransportProvider — forgetting', () => {
 		});
 
 		await assert.rejects(provider.forget(KEY), /device is in use/);
+	});
+});
+
+describe('BtTransportProvider — the connection queue', () => {
+	const KEY_B = makeBrickKey(Transport.BT, '00:16:53:aa:bb:dd');
+	const quickQueue = () => new BtConnectionQueue({
+		interConnectionCooldownMs: 0, errorRecoveryCooldownMs: 0, acquireTimeoutMs: 200,
+	});
+
+	it('lets a second brick connect while the first stays connected', async () => {
+		// Measured 29.10.2026: this host holds two Bluetooth sessions at once. A session that
+		// kept the queue's only slot for its whole life made the second connect wait out the
+		// acquire timeout and fail, so the cockpit could never hold two bricks on Bluetooth.
+		const queue = quickQueue();
+		const provider = new BtTransportProvider({
+			backends: new Map<BtBackend, BtAdapterFactory>([['winsock', () => adapterThat(() => Promise.resolve())]]),
+			connectionQueue: queue,
+		});
+
+		await provider.connect(KEY);
+		const second = await provider.connect(KEY_B);
+
+		assert.equal(second.brickKey, KEY_B);
+		provider.dispose();
+	});
+
+	it('still opens one connection at a time', async () => {
+		// What the queue is still for: two opens must not page the radio at once.
+		let releaseFirst: () => void = () => {};
+		const order: string[] = [];
+		const provider = new BtTransportProvider({
+			backends: new Map<BtBackend, BtAdapterFactory>([['winsock', (mac) => adapterThat(() => {
+				order.push(`open ${mac}`);
+				return mac === MAC
+					? new Promise<void>((resolve) => { releaseFirst = () => { order.push(`opened ${mac}`); resolve(); }; })
+					: Promise.resolve();
+			})]]),
+			connectionQueue: new BtConnectionQueue({
+				interConnectionCooldownMs: 0, errorRecoveryCooldownMs: 0, acquireTimeoutMs: 2000,
+			}),
+		});
+
+		const first = provider.connect(KEY);
+		const second = provider.connect(KEY_B);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.deepEqual(order, [`open ${MAC}`], 'the second open must wait for the first');
+		releaseFirst();
+		await Promise.all([first, second]);
+		assert.deepEqual(order, [`open ${MAC}`, `opened ${MAC}`, 'open 00:16:53:aa:bb:dd']);
+		provider.dispose();
 	});
 });
