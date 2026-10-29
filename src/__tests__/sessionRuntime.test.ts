@@ -505,7 +505,20 @@ describe('SessionManager', () => {
 			};
 
 			unlimited['handleHeartbeatFailure'](keyA, new Error('cable pulled'));
-			await new Promise((resolve) => setTimeout(resolve, 400));
+
+			// Poll rather than sleep a fixed span. What this test discriminates is a *ceiling*
+			// counted in attempts, not a throughput: a fixed window turns the assertion into a
+			// bet on how many retry cycles the machine fits into it, and that bet loses under
+			// load. Measured on a loaded runner: 7 attempts in 400 ms against a 10-20 ms
+			// backoff, so ~40-57 ms a cycle rather than the ~20 the backoff alone implies.
+			// Where the extra goes is not this test's business — noted, not chased.
+			//
+			// With a ceiling of ten in place the count parks at ten and this loop burns its
+			// whole budget, which is the failure the assertion below names.
+			const deadline = Date.now() + 5000;
+			while (attempts <= 10 && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
 
 			assert.ok(attempts > 10,
 				`only ${attempts} attempts — the session gave up while it was still signed in`);
