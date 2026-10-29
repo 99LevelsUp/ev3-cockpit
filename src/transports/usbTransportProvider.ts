@@ -95,7 +95,7 @@ export interface UsbTransportProviderOptions {
  */
 export class UsbTransportProvider implements TransportProvider {
 	readonly transport = Transport.USB;
-	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false };
+	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: true };
 
 	private readonly sessions = new Map<BrickKey, UsbSession>();
 

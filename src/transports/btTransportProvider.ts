@@ -107,6 +107,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.capabilities = {
 			supportsSignalInfo: false,
 			supportsForget: Boolean(this.unpairDevice),
+			supportsTelemetryFrames: true,
 		};
 	}
 

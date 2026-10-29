@@ -42,6 +42,10 @@ export class MockTransportProvider implements TransportProvider {
 	readonly capabilities: TransportCapabilities = {
 		supportsForget: false,
 		supportsSignalInfo: false,
+		// No bytecode interpreter: this provider dispatches typed commands, so a composed
+		// frame is the one thing it cannot answer. Declared so telemetry skips the session
+		// rather than throwing on every tick — see `executeCommand`'s `telemetry:frame` case.
+		supportsTelemetryFrames: false,
 	};
 
 	private readonly bricks = new Map<BrickKey, MockBrickState>();
