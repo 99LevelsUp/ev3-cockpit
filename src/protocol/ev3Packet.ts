@@ -176,6 +176,16 @@ export const COM_HARDWARE = {
 export const MAX_BRICK_NAME_LENGTH = 118;
 
 /**
+ * Characters the firmware accepts in a brick name: ASCII letters, digits, `_` and `-`.
+ *
+ * `ValidChars` in `lms2012.c` gives the name bit (`vmCHARSET_NAME`) to nothing else — not a
+ * space, not a dot, nothing outside 0x00–0x7F — and one character without it fails the whole
+ * rename. Being ASCII-only, a name that matches has as many bytes as characters, so
+ * {@link MAX_BRICK_NAME_LENGTH} can be checked against `length`.
+ */
+export const BRICK_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
  * Subcodes for opUI_BUTTON.
  *
  * Button state is not an opUI_READ subcode. Asking opUI_READ for 0x0d (which is
