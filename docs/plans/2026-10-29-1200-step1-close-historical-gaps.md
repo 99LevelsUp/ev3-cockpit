@@ -331,11 +331,18 @@ measured, not assumed.
 
 ### Order — signal strength, and what else
 
-Signal strength **as the helper reads it today is not usable**: for paired bricks it reported
-16, 2 and −19, values that never updated during a 20 s scan; a live reading exists only for
-unpaired bricks heard by inquiry. Even a live reading swings by tens of dBm between scans, so
-sorting by its raw value would make the list jump (review finding #13). Proposed instead,
-in this order:
+Signal strength **is not yet known to be usable**, and an earlier wording of this paragraph
+claimed more than the data show (corrected after the owner's question, 29.10.2026). For paired
+bricks the helper reads Windows' records once per scan, so a value cannot change *within* a
+scan — that it did not was no evidence of anything. Microsoft does not document the unit of
+`System.Devices.Aep.SignalStrength`; classic Bluetooth commonly reports RSSI relative to the
+ideal receive range (0 fine, positive stronger, negative weaker), so positive values are
+plausible. Across four scans with nothing moving, the values did move: CCC 16/15/11/13, BBB
+2/2/2/11, AAA 16/−19/−19/−15. **Open, and decisive:** whether the value follows distance or
+is a record from the last contact — one brick carried to another room and back, a scan each
+time. If it follows distance, it can order the list once smoothed into bands; sorting by the
+raw value would make the list jump either way (review finding #13). Proposed order, in this
+order:
 
 1. **Bricks in use** (connected) — what the user is working with.
 2. **On USB** — physically at the computer; the strongest evidence of nearness there is.
