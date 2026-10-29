@@ -242,6 +242,24 @@ Scenarios, all catalogued in the lab already and unmeasured:
    others stand by (§6, D2).
 5. **S9.5 / S9.8 — cost of failing over USB → BT** when the cable is pulled, each direction
    separately. The arena scenario in D2 is exactly this.
+   **Measured on psk1 29.10.2026 with the owner pulling the cable at the brick end**
+   (`scripts/cable-pull-probe.js`; USB carries `info` every 250 ms, Bluetooth stands by with
+   one `info` a second, traffic moves to Bluetooth on the first USB failure and back after
+   the brick reappears on USB):
+
+   | brick | BT while the cable came out | BT carrying traffic alone | USB loss seen | brick back on USB after the plug signal | USB reopen |
+   |---|---|---|---|---|---|
+   | AAA | 18/18 | 111/111 | first failed call, `LIBUSB_ERROR_IO` in 6 ms | 21.1 s | 17 ms |
+   | BBB | 4/4 | 101/101 | 259 ms after the last good reply (one tick), failing call 1 ms | 18.7 s | 20 ms |
+   | CCC | 4/4 | 47/47 | 255 ms after the last good reply (one tick), failing call 7 ms | 4.4 s | 30 ms |
+
+   Bluetooth on standby lost nothing while the cable came out, and carried the traffic on its
+   own with p50 93–109 ms, p95 ≤ 182 ms. A pulled cable is not a timeout: the next USB call
+   fails at once with `LIBUSB_ERROR_IO`, so the cockpit can fail over on the first failed
+   command rather than waiting for the heartbeat. The way back needs the brick to reappear on
+   the bus — 4.4–21 s after the plug signal, which includes the walk to the brick — and then
+   opens in tens of milliseconds, so how often USB discovery polls decides how soon traffic
+   returns to USB. One run per brick; the reappearance spread is not explained yet.
 
 Non-blocking for U1–U2; U3.1's final shape waits for point 1, and D2's shape for point 4.
 
