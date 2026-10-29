@@ -424,4 +424,40 @@ describe('scanForBricks', () => {
 		await scan.done;
 		assert.equal(reported, 1);
 	});
+
+	it('ends the scan when the helper exits without saying it finished', async () => {
+		// A crash or an outside kill never sends scanComplete. A picker waiting for that line
+		// would spin forever on a helper that is already gone.
+		let reported: number | undefined;
+		const { scan } = scanWith({ lines: [device()], exitCode: 2 },
+			{ onComplete: (count: number) => { reported = count; } });
+		await scan.done;
+		assert.equal(reported, 1);
+	});
+
+	it('reports the end only once when the helper does say it finished', async () => {
+		let calls = 0;
+		const { scan } = scanWith({
+			lines: [device(), JSON.stringify({ type: 'scanComplete', count: 1, atMs: 20000 })],
+			exitCode: 0,
+		}, { onComplete: () => { calls += 1; } });
+		await scan.done;
+		assert.equal(calls, 1);
+	});
+
+	it('says nothing about the end of a scan the caller cancelled', async () => {
+		let reported: number | undefined;
+		const { scan } = scanWith({ lines: [device()], neverExits: true },
+			{ onComplete: (count: number) => { reported = count; } });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		scan.cancel();
+		await scan.done;
+		assert.equal(reported, undefined);
+	});
+
+	it('rejects a scan whose helper cannot start', async () => {
+		const enoent = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
+		const { scan } = scanWith({ errorAfterSpawn: enoent });
+		await assert.rejects(() => scan.done, BackendUnavailableError);
+	});
 });
