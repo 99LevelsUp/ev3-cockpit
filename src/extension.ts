@@ -81,15 +81,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	// work from any host: Windows' own Bluetooth service owns the single authentication
 	// callback slot, so this side of the PIN exchange never gets asked. See plan 2.8.18.
 	//
-	// The connection queue is not optional. Windows carries exactly **one** RFCOMM/SPP
-	// channel: a second connection fails with error 121 until the first is fully released,
-	// and recovery is about 10 s after a clean close and 30 s or more after a failure. That
-	// was measured in the testlab long before this code existed, and `BtConnectionQueue` was
-	// written from those numbers — but nothing ever passed it in, so every Bluetooth
-	// connection went straight at the adapter with no pacing at all.
-	//
-	// What that looked like from outside: the first connect in a session worked and the next
-	// one failed, seemingly at random, differently on each brick.
+	// The connection queue serialises every Bluetooth connect and pairing attempt, and a
+	// session holds its slot while it lives. That rests on the old testlab's finding that
+	// Windows carries one RFCOMM connection at a time; no measurement since has checked it.
+	// Its cooldowns (15 s after a clean close, 30 s and growing after a failure) are not
+	// supported either: waiting longer never raised the open rate (plan 2.8.16), and the
+	// ~50 % failure rate behind them belongs to the Realtek adapter of one host — the same
+	// Winsock RFCOMM stack on an Intel adapter opened 96 % (ev3-lab-communication,
+	// win32-bt-2026-10.md §8).
+	// Both are open items of the step-1 plan (U3), not settled design.
 	//
 	// Two backends. Winsock2 opens an AF_BTH RFCOMM socket through koffi and is what the
 	// testlab measured and chose; SPP goes through the COM port and stays behind it because

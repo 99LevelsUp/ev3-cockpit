@@ -1,7 +1,9 @@
 # EVƎ Cockpit - Implementation Plan
 
-> Version: 2026-08-20
-> Repository state: Phases 0-2 implemented; Phase 3 is the next work item.
+> Version: 2026-10-29
+> Repository state: Phases 0-2 implemented, Phase 3 and the filesystem part of Phase 4 partly built.
+> Goal of the current work: publish a working cockpit first; user feedback and the deferred items come after.
+> Active step: `docs/plans/2026-10-29-1200-step1-close-historical-gaps.md`.
 
 This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete implementation order.
 
@@ -15,40 +17,45 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 ## 2. Current Starting State
 
-Phase 0 is complete. Phase 2 meets its Definition of Done, and carries named BT items that
-sit above that bar (2.8.10a telemetry gating, 2.8.12 remaining hardware scenarios, 2.8.13
-cross-transport brick name, 2.8.18 shipping the pairing path into the extension). Phase 1 is
-substantially complete but carries three gaps:
+**Checked against the code on 29.10.2026.** This section has drifted from the checkboxes four
+times; the checkboxes are the ground truth and this is a summary of them. Verify before
+trusting it.
 
-- **1.6.10 mock config loading** — `extension.ts` always uses `DEFAULT_MOCK_CONFIG`.
-- **1.11.11 `BtBluezBackend`** (Linux BT) — not written; REQUIREMENTS §12 makes Linux a
-  required platform, blocked on having no Linux host to develop against.
-- **1.11.9 classic BT RSSI** — checked and closed as unavailable: Windows exposes no Win32
-  API for it through this backend. Carried as a documented limitation, not open work.
+Built and passing (427 unit tests, 4 extension-host integration tests):
 
-Phase 3 work starts from here; those gaps are carried, not closed.
+- extension skeleton, build, lint and test pipeline, base folder structure ✅
+- shared contracts, error model, event infrastructure ✅
+- EV3 protocol layer, including the brick setting commands (rename, Bluetooth on/off,
+  visibility) ✅
+- transport adapters and providers — USB (libusb preferred, HID fallback), TCP, Bluetooth
+  (Winsock RFCOMM preferred, SPP fallback) ✅
+- transport guard, Bluetooth connection queue, pending-reply utilities ✅
+- session runtime — session entry, session manager, heartbeat, reconnect, command queue ✅
+- per-transport contract compliance tests (1.12.4) ✅
+- Bluetooth pairing and picking a brick by name from the extension, through the net48 WinRT
+  helper (2.8.18, partly — see below) ✅
+- telemetry rows, frame assembler, scheduler, the per-brick loop and the service choosing the
+  foreground brick (3.1.5, 3.3) ✅ — **not wired into `extension.ts`** until the read model (3.5)
+- filesystem service and file transfer — chunked, with progress, cancellation and stall
+  detection (4.6.1–4.6.3, 4.6.5–4.6.12, 4.6.14–4.6.15) ✅
 
-This list is the single enumeration of Phase 1's open work — the Phase Overview table below
-points here rather than repeating it, because the duplicate copy drifted twice during review.
-It drifted again anyway: until 03.09.2026 it still named 1.8.4, 1.11.7a, 1.11.12 and 1.12.4
-as open, months after each was checked off. **Verify this section against the checkboxes
-before trusting it**; the checkboxes are the ground truth, this is a summary of them.
+Open, by phase:
 
-- extension skeleton ✅
-- build and lint pipeline ✅
-- test runner infrastructure ✅
-- base folder structure (`src/contracts/`, etc.) ✅
-- shared contracts, error model, and event infrastructure ✅
-- EV3 protocol layer (bytecode, packets, commands, responses) ✅
-- transport adapters and providers — USB (HID + preferred libusb), TCP, BT (Winsock RFCOMM
-  preferred, SPP fallback) ✅
-- transport guard (wired into `SessionManager`, 1.8.4), BT connection queue, pending reply utilities ✅
-- session runtime (session entry, session manager, heartbeat, reconnect, command queue) ✅
-- per-transport contract compliance tests for USB/TCP/BT (1.12.4) ✅
-- BT pairing from the cockpit — proven end-to-end in the standalone net48 helper
-  (`native/bt-pairing-helper/`), **not yet wired into the extension** (2.8.18) ⚠
-- 379 unit tests + 4 extension-host integration tests passing ✅
-- implementation of telemetry, API, and UI ⬜ starts in Phase 3
+- **Phase 1:** 1.6.10 mock configuration from a workspace file; 1.11.14 what "remove this
+  brick" leaves in the Windows registry; 1.11.11 Linux Bluetooth (blocked: no Linux host);
+  1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows, carried as a limitation).
+- **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
+  hardware scenarios; 2.8.13 one brick across transports — decided 29.10.2026 (step-1 plan,
+  D2: one brick, channels preferred USB → BT → TCP), not built; 2.8.18 the already-paired
+  check before pairing and a bounded retry around the inquiry.
+- **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
+  object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
+  state in a read model; open — 3.1.4 peripheral-type enum, 3.2 data models, 3.3.2/3.3.5
+  subscriptions, 3.4 adaptive throttling, 3.5 read model, 3.6 stale snapshots, 3.8 remaining
+  constants.
+- **Phase 4:** the public API (4.2–4.5, 4.7, 4.8), program control (4.7a), 4.6.4 per-transport
+  chunk size, 4.6.13 remaining file subcodes, 4.6.16 libusb on Linux, 4.9 sibling consumers.
+- **Phases 5–7:** not started.
 
 ## 3. Phase Overview
 
@@ -57,9 +64,9 @@ before trusting it**; the checkboxes are the ground truth, this is a summary of 
 | 0 | Project foundation and contracts | ✅ done |
 | 1 | Transport contracts and discovery | ⚠ gaps (see §2) |
 | 2 | Session runtime and lifecycle | ✅ DoD met, BT items carried (see §2) |
-| 3 | Telemetry and adaptive throttling | 🔄 in progress — rows, assembler, scheduler and 3.3 done; 3.2, 3.4–3.7 open |
-| 4 | Public API and filesystem services | ⬜ planned |
-| 5 | Cockpit panel and UX | ⬜ planned |
+| 3 | Telemetry and adaptive throttling | 🔄 in progress — loop and service built, not wired; read model, subscriptions, throttling open |
+| 4 | Public API and filesystem services | 🔄 filesystem built; public API not started |
+| 5 | Cockpit panel and UX | ⬜ planned — UX direction for the discovery row decided (step-1 plan, D2) |
 | 6 | Persistence, favorites, and remembered devices | ⬜ planned |
 | 7 | Hardening, tests, and release discipline | ⬜ planned |
 
@@ -252,9 +259,10 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
         `useDiscovery: true`, and the adapter could never bind the beacon port because the
         provider already held it — so connecting to a brick found by discovery always failed
 - [ ] **1.11 BT Transport** — connect, discovery, pairing and the queue are built and wired;
-  remaining open items are a still-unexplained connect failure (2.8.16), signal strength
-  (1.11.9, blocked — no Win32 API for classic BT RSSI), and the Linux backend (1.11.11,
-  blocked — no Linux host)
+  the connect failure rate is explained (2.8.16: this host's adapter). Remaining open items:
+  what "remove this brick" leaves in the registry (1.11.14), signal strength (1.11.9, blocked
+  — no Win32 API for classic BT RSSI), and the Linux backend (1.11.11, blocked — no Linux
+  host)
   - [~] 1.11.1 ~~`BtRfcommAdapter` — multi-backend orchestrator~~ **Not needed.**
     `BtTransportProvider` already holds the backend map and chooses between them; a second
     orchestrator between it and the adapters would have nothing to do.
@@ -473,7 +481,8 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
   - [x] 1.13.1 TransportProvider contract compliance tests (run against Mock)
   - [x] 1.13.2 Discovery scheduler tests (timing, dedup, timeout)
   - [x] 1.13.3 Presence Aggregator state machine tests
-  - [x] 1.13.4 Stable ordering tests
+  - [~] 1.13.4 ~~Stable ordering tests~~ **Gone with 1.5.4 (03.09.2026):** the aggregator no
+    longer orders anything, and its test now asserts exactly that
   - [x] 1.13.5 Mock configuration **validation** tests (`validateMockConfig`); loading tests belong with 1.6.10
 
 ### Definition of Done
@@ -602,7 +611,16 @@ Build the source of truth for connected bricks.
   - [ ] 2.8.10a **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
     one place: telemetry should run exactly while a brick is signed in *and* available, and
     stop the moment either drops. Belongs with the telemetry runtime wiring in 3.3
-  - [ ] 2.8.11 **Bluetooth cannot yet hold a session, and that blocks its scenarios.** Measured
+  - [x] 2.8.11 **Bluetooth cannot yet hold a session, and that blocks its scenarios.**
+    **Closed 29.10.2026.** Both halves are answered. The once-per-process refusal below was the
+    SPP backend on this host; Winsock RFCOMM, the preferred backend since 1.11.3, opens
+    repeatedly in one process (2.8.14) and holds a session: on 29.10.2026 it held a live link
+    to each of the three bricks for the length of each run (up to about a minute) with every
+    reply delivered, beside an open USB
+    link and through a pulled USB cable (`scripts/dual-channel-probe.js`,
+    `scripts/cable-pull-probe.js`, step-1 plan U4). What is left is the open *rate*, which is
+    2.8.16's and is a property of this host's adapter. Original entry, measured
+  
     27.08.2026 across all three bricks, in a fresh process each time:
 
     ```
@@ -709,6 +727,18 @@ Build the source of truth for connected bricks.
     and reproducible enough to be a real host or radio-side timeout distinct from ours —
     Windows' own answer to an RFCOMM request that goes nowhere — rather than noise. Nothing
     here identifies its source; that is the open thread 2.8.16 hands off, not a solved one.
+
+    **Source identified, 29.10.2026, by ev3-lab-communication** (`docs/findings/win32-bt-2026-10.md`
+    §7–8): 5.12 s is the controller's default HCI page timeout, and the failure rate belongs to
+    this host's Bluetooth adapter, not to Bluetooth, the backend, the pacing or the bricks. The
+    lab ran the same Winsock RFCOMM stack with the same bricks on two hosts: psk1 (this machine,
+    Realtek `VID_0BDA&PID_C123`) opened 52/105, a second desktop with an Intel adapter 101/105.
+    Windows' event log on psk1 records `BTHUSB` ID 3 — the adapter stopped answering HCI
+    commands — during the worst pass. Consequences for the product: the cockpit must expect a
+    host where a Bluetooth connect fails half the time and retry without a long cooldown
+    (step-1 plan U3.2 measures the right gap), and no diagnosis of a user's Bluetooth trouble
+    should start from the brick. Which Realtek property causes it (power management, driver)
+    is not established and does not need to be for the product.
 
     \* Three of the six 60 s-step attempts are not clean data: 1.11.12's ceiling-reached
     timeout defaults to 45 s, shorter than a 60 s cooldown, so it fired as a false "no slot"
@@ -845,7 +875,9 @@ Build the source of truth for connected bricks.
     "restart your computer" is not an acceptable ask of an end user and would cost the
     extension a bad review, not just a bad afternoon.
 
-    **Not yet built: the two-path discovery design** the above evidence now supports —
+    **Half built (29.10.2026): the two-path discovery design** the above evidence now supports —
+    scan mode (`ScanAsync`) does it, pairing mode (`RunAsync`) still starts the unpaired-only
+    watcher and cannot see a brick the host already remembers. The design:
     check already-paired via a direct read (`FromPairingState(true)` or
     `FromBluetoothAddressAsync`, no watcher needed) first; only run the `FromPairingState(false)`
     live-inquiry watcher if that comes back not-paired. This replaces the wrong "one selector
@@ -1300,7 +1332,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     settles — including in the mode that worked a moment earlier. Mode switching therefore
     needs a settling policy, and 3.1.5's batching cannot span modes of one device
   - [ ] 3.1.4 `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
-  - [ ] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the brick's own sustained rate, measured in §9.2: 176 commands/second on USB, 62 on TCP, **10.7 on Bluetooth**. At four commands per frame Bluetooth gives under 3 Hz with nothing left for the heartbeat, and batching is what buys that back. The earlier version of this task cited a `MAX_COMMANDS_PER_SEC = 10` guard in §4.1 as the binding constraint; §4.1 now specifies a ≤200/s backstop that is deliberately not a meter on normal traffic, and §9.2 retracted the 10 as a figure that came from nowhere and is 17x low on USB. The open question that followed from that guard — whether its budget counted the heartbeat — is moot under a backstop and is withdrawn.
+  - [x] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the brick's own sustained rate, measured in §9.2: 176 commands/second on USB, 62 on TCP, **10.7 on Bluetooth**. At four commands per frame Bluetooth gives under 3 Hz with nothing left for the heartbeat, and batching is what buys that back. The earlier version of this task cited a `MAX_COMMANDS_PER_SEC = 10` guard in §4.1 as the binding constraint; §4.1 now specifies a ≤200/s backstop that is deliberately not a meter on normal traffic, and §9.2 retracted the 10 as a figure that came from nowhere and is 17x low on USB. The open question that followed from that guard — whether its budget counted the heartbeat — is moot under a backstop and is withdrawn.
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
   - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
 - [ ] **3.2 Telemetry data models**
@@ -1316,7 +1348,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     identified by layer *and* number. Keep the raw type code alongside the resolved name — a
     closed vocabulary throws away the one thing a consumer could use to recognise a device we
     have never heard of
-  - [ ] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory. The opcode is known: `opCOM_SET` (0xD4) with `SET_BRICKNAME` (0x08), both already declared in `ev3Packet.ts`; the read side (1.7.10) confirms the matching getter works
+  - [x] 3.2.4 Extend `BrickCommand`/`ev3Commands`/`ev3Responses` with a brick-name **write** command. The union is read-only for device state today, yet 5.7.2 and DESIGN §12.3 make renaming mandatory. The opcode is known: `opCOM_SET` (0xD4) with `SET_BRICKNAME` (0x08), both already declared in `ev3Packet.ts`; the read side (1.7.10) confirms the matching getter works. **Done 03.09.2026** as `brick:setName`, beside `brick:setBluetooth` and `brick:setBluetoothVisible`; the guard follows the firmware's `ValidChars` name set, not just its length (29.10.2026)
   - [ ] 3.2.5 Define one canonical peripheral-type vocabulary. The protocol layer emits `touch`/`color`/`ultrasonic`, the mock emits `touch-sensor`/`color-sensor`/`ultrasonic-sensor`; Phase 3 detection and Phase 5 visual styles would inherit both
 - [ ] **3.3 Telemetry scheduler** — `src/telemetry/brickTelemetry.ts` (one brick's loop),
   `src/telemetry/telemetryService.ts` (which brick runs one), `telemetryConstants.ts` (cadence).
@@ -1394,7 +1426,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.6.2 Configurable stale timeout
   - [ ] 3.6.3 Clear stale data after timeout
 - [ ] **3.7 Unit tests**
-  - [ ] 3.7.1 Telemetry scheduler mode switching tests
+  - [x] 3.7.1 Telemetry scheduler mode switching tests — `brickTelemetry.test.ts`: foreground
+    vs minimal, hand-over on an active-brick change, stop when the brick disconnects
   - [ ] 3.7.2 Adaptive throttling response to latency changes
   - [ ] 3.7.3 Category subscription add/remove tests
   - [ ] 3.7.4 Stale snapshot expiry tests
@@ -1466,13 +1499,15 @@ Export a stable API for other extensions without giving them direct access to th
   `docs/ideation/2026-08-20-filesystem-protocol-survey.md`. That contract replaces the five
   operations this section used to list, which came from what seemed obvious rather than from
   what the protocol offers
-  - [ ] 4.6.1 `FileTransferService` above the command layer — chunked upload and download via
-    `CONTINUE_DOWNLOAD` / `CONTINUE_UPLOAD`, which are declared but never sent today, so
-    `fs:write` drops content and `fs:read` truncates while both report success (R1)
-  - [ ] 4.6.2 Progress reporting and cancellation, no size ceiling — Bluetooth is bandwidth-bound
+  - [x] 4.6.1 `FileTransferService` above the command layer — chunked upload and download via
+    `CONTINUE_DOWNLOAD` / `CONTINUE_UPLOAD` (R1). Done: `fs/fileTransferService.ts`, multi-packet
+    transfers covered in `fileTransfer.test.ts`; the "declared but never sent" premise is history
+  - [x] 4.6.2 Progress reporting and cancellation, no size ceiling — Bluetooth is bandwidth-bound
     at ~11 KB/s, and whether a slow transfer is worth waiting for is the consumer's call (R2, R3)
-  - [ ] 4.6.3 Stall detection per transport — replaces the total-time deadline this plan called
-    1.8.5b: with progress visible, “no progress for N seconds” is the signal that matters (R3)
+  - [x] 4.6.3 Stall detection per transport — replaces the total-time deadline this plan called
+    1.8.5b: with progress visible, “no progress for N seconds” is the signal that matters (R3). Done as one
+    default window (`DEFAULT_STALL_TIMEOUT_MS`, 10 s) a caller can override; not yet tuned per
+    transport, which no measurement has asked for
   - [ ] 4.6.4 Per-transport chunk size — USB takes the report payload; TCP and BT take the largest
     the firmware accepts, which is unmeasured (R4)
   - [x] 4.6.5 `list` with `CONTINUE_LIST_FILES` paging, typed entries carrying the byte
@@ -1637,7 +1672,7 @@ Build the main product UX on top of the finished runtime.
   - [ ] 5.6.3 Active brick read model drives tab content
 - [ ] **5.7 Config mode**
   - [ ] 5.7.1 Gear icon toggles between normal and config mode (same tab)
-  - [ ] 5.7.2 Editable brick name with auto-save (depends on 3.2.4 — the protocol has no name-write command)
+  - [ ] 5.7.2 Editable brick name with auto-save (the protocol side, 3.2.4, is done)
   - [ ] 5.7.3 System and technical information display (read-only)
   - [ ] 5.7.4 Visual style toggle (`numeric` / `visual`)
   - [ ] 5.7.5 Status bar configuration

@@ -1,7 +1,10 @@
 # Step 1: close the historical gaps, using what the communication lab found
 
-**Status:** proposed 29.10.2026, not started. Waiting for the owner's go and for the decisions
-in §6.
+**Status, 29.10.2026:** approved by the owner. **U1 done** (the 03–10.09 work landed in themed
+commits, reviewed, eight confirmed findings fixed or deferred — #2 goes with D2). **U2 done**
+(plan and code agree; 2.8.11 and 2.8.16 closed). **U4.4 and U4.5 measured** on psk1 (see U4).
+Open: U3, U4.1–U4.3. D1 and D3 still to confirm; D2 decided; D4 done as proposed.
+Lab-side corrections are out of scope: the lab is an auxiliary project (owner, 29.10.2026).
 
 **Inputs read:** `ev3-lab-communication` at `f5d5458` (`results/REPORT.md` §Rozhodnutí,
 `docs/findings/win32-bt-2026-10.md`, `docs/findings/win32-otos-usb-tcp-2026-10.md`,
