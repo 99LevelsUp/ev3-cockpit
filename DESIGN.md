@@ -283,6 +283,35 @@ loop, not for the rates a working caller can reach.
 backend. A serialized queue enforces it — a 15-second gap after a connection is released
 cleanly, 30 seconds after one that failed, and exponential backoff on repeated errors.
 
+#### What the communication lab confirmed, and what is still assumed (29.10.2026)
+
+`ev3-lab-communication` rebuilt every candidate technology independently and measured it on
+two Windows hosts, a Raspberry Pi 5 and Linux. Its report calls every channel undecided, but
+only because it counts scenarios it has not written yet (file operations beyond the basic
+ones, throughput, recovery, several bricks at once). On the data it has, it confirms each
+choice above for Windows: libusb ahead of HID (1024-byte frames, the brick's real name),
+Winsock RFCOMM ahead of SPP (works on both adapters measured; SPP transfers nothing on one),
+the WinRT helper for pairing (the data channel stays on Winsock; WinRT reaches the extension
+only through that helper process, the exclusion above stands for the runtime), and the plain
+TCP socket.
+
+Three things in this section are **assumptions, not measurements**, and are marked so here
+rather than corrected, because the corrections are open work (step-1 plan, U3/U4):
+
+- **"One RFCOMM connection at a time."** Comes from the old testlab; nothing has measured two
+  Bluetooth bricks at once since. It matters: a session holds the queue's only slot for its
+  whole life, so today the cockpit cannot keep two bricks on Bluetooth.
+- **The queue's cooldowns.** Waiting longer never raised the open rate (plan 2.8.16). The
+  ~50 % connect failures they were written against belong to one host's Realtek adapter; the
+  same stack on an Intel adapter opened 96 %.
+- **"One active transport per brick"** in the transport guard. Measured 29.10.2026 on all
+  three bricks and both firmware versions: USB and Bluetooth open to the same brick at once,
+  even with commands in flight on both, answered every request with no freeze; a USB cable
+  pulled with Bluetooth standing by lost nothing on Bluetooth, and the next USB call failed at
+  once with `LIBUSB_ERROR_IO`. The rule as written has no evidence behind it. Not measured:
+  file transfer or full-rate telemetry on two links at once. The design this points to (plan
+  D2) keeps several links open and sends traffic over one.
+
 ### 4.2 Presence Aggregator
 
 The Presence Aggregator unifies discovery output from all providers into a single discovery model.
