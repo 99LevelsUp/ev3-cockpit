@@ -458,6 +458,14 @@ bricks with similar names apart before connecting.
   relies on it: a physical cable pull with Bluetooth live, and the lab's NF1 (its runner
   enforces the old rule) needs the same correction.
 - **D3 — Cooldown values**, once U3.2's numbers are in.
+- **D5 — Order of the brick list. Decided by the owner, 29.10.2026:** (1) bricks on USB first,
+  whatever their Bluetooth state — a cable means the brick is on this desk; (2) then, without
+  USB, bricks paired with this computer; (3) then unpaired bricks by distance — the live
+  inquiry signal smoothed with a moving average and hysteresis; within each group by name.
+  The aim is the competition room: a hundred bricks in range, the user's own at the top
+  without scrolling; telling apart two bricks on the same desk is not a goal. Group 3's
+  distance ordering needs its measurement (one brick unpaired) and may ship as name order
+  first; the post-release backlog takes thresholds on other computers.
 - **D4 — Commit split** as in U1, or a different grouping.
 
 ## 7. Done when
