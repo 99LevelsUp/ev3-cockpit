@@ -219,6 +219,27 @@ Scenarios, all catalogued in the lab already and unmeasured:
    command does pair → connect, so a reconnect shortly after is exactly that pattern.
 4. **S7.2 / S9.9 — USB and Bluetooth open to the same brick at once.** The input D2's model
    needs (§6): does the firmware tolerate two live links, and what happens to replies.
+   **Measured on psk1 29.10.2026, through the cockpit's own providers** (owner's go;
+   `scripts/dual-channel-probe.js`, libusb + Winsock RFCOMM behind `BtConnectionQueue`, `info`
+   commands only, each link counting in its own message range):
+
+   | brick (fw) | USB alone | alternating USB/BT | concurrent, both in flight | USB closed, BT alone | USB back beside BT | USB alone afterwards |
+   |---|---|---|---|---|---|---|
+   | AAA (V1.10E) | 50/50 | 50/50 + 50/50 | 50/50 + 50/50 | 15/15 | 15/15 + 15/15 | 5/5 |
+   | BBB (V1.10E) | 50/50 | 50/50 + 50/50 | 50/50 + 50/50 | 15/15 | 15/15 + 15/15 | 5/5 |
+   | CCC (V1.09H) | 50/50 | 50/50 + 50/50 | 50/50 + 50/50 | 15/15 | 15/15 + 15/15 | 5/5 |
+
+   No freeze, no reply delivered to the wrong link, every brick answered USB alone afterwards.
+   USB round trip is unaffected by the open Bluetooth link (p50 6–8 ms, p95 ≤ 20 ms); Bluetooth
+   slows when both are in flight (p50 56–72 → 92–107 ms, p95 ≤ 211 ms), which reads as the brick
+   serving one request at a time. USB reopened beside a live Bluetooth link in 21–59 ms.
+
+   **What this does not cover:** a physical cable pull (phase 5 closes USB in software),
+   system commands — file transfer — on both links at once, telemetry at full rate on both,
+   and anything longer than about a minute per brick. So the measured claim is "a brick
+   tolerates a second open link and answers both", not "two links may carry arbitrary
+   traffic". That is enough for D2's model as long as traffic goes over one channel and the
+   others stand by (§6, D2).
 5. **S9.5 / S9.8 — cost of failing over USB → BT** when the cable is pulled, each direction
    separately. The arena scenario in D2 is exactly this.
 
@@ -262,6 +283,15 @@ Non-blocking for U1–U2; U3.1's final shape waits for point 1, and D2's shape f
   not exist (lab `testlab-inventory.md` §1). Either green means "link open" and NF1 is
   measured and lifted (U4.4), or green means "allowed and ready" with one link open at a time
   and failover paying the BT connect cost (U4.5). Not implemented in step 1.
+
+  **Owner's call 29.10.2026: measure first. Measured the same day (U4.4): three bricks, two
+  firmware versions, 100 % on both links, no freeze.** NF1 as written ("one active transport
+  per brick") is not supported by evidence. Proposed replacement: **several links may be open
+  to one brick; traffic goes over one of them — the preferred available channel — and the
+  others stand by** (heartbeat only). Green then means "link open", as the owner's sketch has
+  it, and the arena failover costs no Bluetooth connect. Still to measure before the cockpit
+  relies on it: a physical cable pull with Bluetooth live, and the lab's NF1 (its runner
+  enforces the old rule) needs the same correction.
 - **D3 — Cooldown values**, once U3.2's numbers are in.
 - **D4 — Commit split** as in U1, or a different grouping.
 
