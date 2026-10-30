@@ -454,3 +454,24 @@ U1 → U2 → U3 → U4 → U5 lands the runtime model, unit-tested with fake pr
 ## Appendix
 
 U6 and U10 record their tables and verdicts here.
+
+### U6 — Bluetooth presence methods, measured 30.10.2026 (psk1, Realtek adapter)
+
+`scripts/bt-presence-probe.js`, helper `--sdp` (uncached RFCOMM service query) and `--watch-raw` with the all-devices selector. Each brick put by the owner in one state per run; after every SDP query one Bluetooth connect + `info` through the shipped provider.
+
+| run | brick | state | SDP: link / services | SDP time | connect right after | live inquiry |
+|---|---|---|---|---|---|---|
+| 1 | AAA | on, visible | (not logged) | 0.6–5.4 s | 2/3 | 0/3 |
+| 1 | BBB | off | (not logged) | 5.3–5.5 s | 0/3 | 0/3 |
+| 1 | CCC | on, hidden | (not logged) | 0.6–5.5 s | 2/3 | 0/3 |
+| 2 | AAA | off | Disconnected/0 ×4 | 5.3–5.5 s | 0/4 | — |
+| 2 | BBB | on, hidden | Connected/1 ×4 | 0.5–2.0 s | 4/4 | — |
+| 2 | CCC | on, visible | Connected/1 ×2, Disconnected/0 ×2 | 1.1–5.2 s | 2/4 | — |
+
+- The query's own `Success` means nothing: Windows answers it for a brick that is off too, after about 5.3 s. What separates is the link status and the service count.
+- **Connected with one service only ever came from a brick that was on** (0 of 7 queries to an off brick). Disconnected came from every off brick and also from on bricks, 2 of 4 for CCC in run 2; each time the connect right after failed with WSA 10060 too, which is this adapter's usual paging failure (2.8.16), not the method.
+- It works with visibility off (BBB 4/4). The live inquiry heard nobody, an on and visible brick included, confirming 29.10.2026: it is not a candidate.
+- No lock-out: every connect after a query that reached the brick opened. A query to an off brick costs about 5.3 s of radio.
+- Not measured separately: connects under a background inquiry. U7 holds the connection queue for the inquiry, so a connect never overlaps one.
+
+**Verdict against the rule written before the run:** the SDP query does not separate on from off in every repetition, so it does not qualify as written. It is one-sided: an answer proves the brick is on; silence is "off, or the adapter missed it". Taken to the owner (Goal Capsule stop condition).
