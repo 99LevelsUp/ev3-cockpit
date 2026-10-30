@@ -14,7 +14,7 @@
  */
 
 import {
-	Transport, BrickKey, makeBrickKey, brickKeyId,
+	Transport, BrickKey, makeBrickKey, brickKeyId, brickIdOf,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
 	PresenceState,
@@ -162,7 +162,8 @@ export class BtTransportProvider implements TransportProvider {
 				const presence = dev.remembered ? this.presence?.presenceOf(dev.mac) : undefined;
 				items.push({
 					brickKey,
-					displayName: dev.name || `EV3 [${dev.mac}]`,
+					// No name: the brick's id, as USB shows one and the brick's own display does.
+					displayName: dev.name || brickIdOf(brickKey),
 					// Windows' record catches up with a rename only at the next connection.
 					nameSource: dev.name ? 'bt-cache' : 'fallback',
 					transport: Transport.BT,
@@ -179,9 +180,10 @@ export class BtTransportProvider implements TransportProvider {
 			const listed = new Set(devices.map((dev) => normaliseMac(dev.mac)));
 			for (const brick of this.presence?.unpairedBricks() ?? []) {
 				if (!isLegoMac(brick.mac) || listed.has(normaliseMac(brick.mac))) { continue; }
+				const sightingKey = makeBrickKey(Transport.BT, brick.mac);
 				items.push({
-					brickKey: makeBrickKey(Transport.BT, brick.mac),
-					displayName: brick.name || `EV3 [${brick.mac}]`,
+					brickKey: sightingKey,
+					displayName: brick.name || brickIdOf(sightingKey),
 					// The name an inquiry hears is the brick's own, but nothing has confirmed it.
 					nameSource: brick.name ? 'bt-cache' : 'fallback',
 					transport: Transport.BT,

@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { TransportProvider } from '../contracts';
+import { BrickId, BrickKey, TransportProvider } from '../contracts';
 import { DisposableStore } from '../events';
 import {
 	ProviderRegistry,
@@ -21,6 +21,7 @@ import { BtPresenceMonitor } from '../transports/btPresence';
 import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { BrickManager } from './brickManager';
+import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
 import { PresenceAggregator } from './presenceAggregator';
 import { SessionManager } from './sessionManager';
@@ -43,6 +44,11 @@ export interface RuntimeOptions {
 	 * False in the extension's test host, whose suite must not page real bricks.
 	 */
 	readonly startPresence: boolean;
+	/**
+	 * Register the simulated bricks beside the real transports. For development only: a user
+	 * has no use for six robots that are not there, and they fill the log.
+	 */
+	readonly mockBricks?: boolean;
 	/**
 	 * Register these providers instead of the real ones, for tests. The Bluetooth pairing and
 	 * presence pieces are then not built.
@@ -78,13 +84,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		({ btDiscovery, btPresence } = registerRealProviders(services, registry, options, () => refreshDiscovery()));
 	}
 
-	// ── Sessions ────────────────────────────────────────────────
-	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));
-	services.add(sessionManager.onSessionStateChange(e => {
-		log.info(`Session: ${e.brickKey} ${e.previousState} → ${e.newState}`);
-	}));
-
 	// ── Discovery ───────────────────────────────────────────────
+	// Built before the sessions so every log line can name the brick it is about.
 	const scheduler = services.add(new DiscoveryScheduler(registry));
 	const aggregator = services.add(new PresenceAggregator(scheduler, registry));
 	services.add(aggregator.onListChanged(e => {
@@ -92,7 +93,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 			e.items.map(i => `${i.name.value} [${i.channels.map(c => `${c.transport}:${c.state}`).join(' ')}]`));
 	}));
 	services.add(aggregator.onPresenceChanged(e => {
-		log.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState ?? 'new'} → ${e.currentState}`);
+		// The brick's name, not this channel's: a channel that has none yet would otherwise
+		// print a different name for the same brick.
+		log.info(`Presence: ${channelLabel(aggregator, e.item.brickKey)} ${e.previousState ?? 'new'} → ${e.currentState}`);
+	}));
+
+	// ── Sessions ────────────────────────────────────────────────
+	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));
+	services.add(sessionManager.onSessionStateChange(e => {
+		log.info(`Session: ${channelLabel(aggregator, e.brickKey)} ${e.previousState} → ${e.newState}`);
 	}));
 	services.add(scheduler.onScanFailed(e => {
 		log.error(`Discovery scan failed on ${e.transport}`,
@@ -106,10 +115,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		sessionManager, aggregator, providerRegistry: registry, log,
 	}));
 	services.add(bricks.onRouteChange(e => {
-		log.info(`Route: ${e.brickId} ${e.previous ?? 'none'} → ${e.current ?? 'none'}`);
+		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');
+		log.info(`Route: ${brickLabel(aggregator, e.brickId)} ${over(e.previous)} → ${over(e.current)}`);
 	}));
 	services.add(bricks.onActiveBrickChange(e => {
-		log.info(`Active brick: ${e.previous ?? 'none'} → ${e.current ?? 'none'}`);
+		const label = (id?: BrickId): string => (id ? brickLabel(aggregator, id) : 'none');
+		log.info(`Active brick: ${label(e.previous)} → ${label(e.current)}`);
 	}));
 
 	scheduler.start();
@@ -131,7 +142,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	};
 }
 
-/** The mock, USB, TCP and Bluetooth providers, with Bluetooth pairing and presence. */
+/** The USB, TCP and Bluetooth providers, with Bluetooth pairing and presence; the mock if asked. */
 function registerRealProviders(
 	services: DisposableStore,
 	registry: ProviderRegistry,
@@ -140,9 +151,11 @@ function registerRealProviders(
 ): { btDiscovery: BtClassicDiscovery; btPresence: BtPresenceMonitor } {
 	const { log } = options;
 
-	// Mock transport (always — for development and testing)
-	registry.register(services.add(new MockTransportProvider(DEFAULT_MOCK_CONFIG)));
-	log.info(`Mock transport registered (${DEFAULT_MOCK_CONFIG.bricks.length} brick(s))`);
+	// Mock transport: simulated bricks, for development only.
+	if (options.mockBricks) {
+		registry.register(services.add(new MockTransportProvider(DEFAULT_MOCK_CONFIG)));
+		log.info(`Mock transport registered (${DEFAULT_MOCK_CONFIG.bricks.length} brick(s))`);
+	}
 
 	// USB transport: discovery over node-hid, connections over libusb where it can claim
 	// the interface. The provider logs which backend each connection landed on, because a
