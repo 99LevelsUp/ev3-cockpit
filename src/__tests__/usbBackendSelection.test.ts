@@ -70,6 +70,55 @@ function providerWith(config: {
 	});
 }
 
+/** Adapters that share one device: a second open while it is claimed fails, as on Windows. */
+function claimingProvider(): UsbTransportProvider {
+	let claimed = false;
+	const make = (label: string, maxPacketBytes: number) => {
+		let open = false;
+		return {
+			open(): Promise<void> {
+				if (claimed) { return Promise.reject(new Error('LIBUSB_ERROR_BUSY')); }
+				claimed = true; open = true;
+				return Promise.resolve();
+			},
+			close(): Promise<void> { if (open) { claimed = false; } open = false; return Promise.resolve(); },
+			send(): Promise<Uint8Array> { return Promise.resolve(new Uint8Array()); },
+			get isOpen(): boolean { return open; },
+			get maxPacketBytes(): number | undefined { return open ? maxPacketBytes : undefined; },
+			deviceLocation: { busNumber: 2, deviceAddress: 10 },
+			label,
+		};
+	};
+	return new UsbTransportProvider({
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		createLibusbAdapter: () => make('libusb', 1024) as any,
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		createHidAdapter: () => ({ ...make('hid', USB.MAX_WRITE_PACKET_BYTES), open: () => Promise.resolve() }) as any,
+	});
+}
+
+describe('USB name probe', () => {
+	it('makes a connect wait for an open probe, so it lands on libusb rather than HID', async () => {
+		const provider = claimingProvider();
+		const probe = await provider.openProbe(KEY);
+		const connecting = provider.connect(KEY);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(provider.backendFor(KEY), undefined, 'the connect must wait for the probe');
+
+		await probe.close();
+		await connecting;
+		assert.equal(provider.backendFor(KEY), 'libusb');
+		provider.dispose();
+	});
+
+	it('refuses a probe of a brick that has a session', async () => {
+		const provider = claimingProvider();
+		await provider.connect(KEY);
+		await assert.rejects(provider.openProbe(KEY), /has a session/);
+		provider.dispose();
+	});
+});
+
 describe('USB backend selection', () => {
 	it('prefers libusb, and never opens the HID path when it succeeds', async () => {
 		const opened: string[] = [];
