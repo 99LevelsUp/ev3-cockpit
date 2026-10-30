@@ -33,6 +33,15 @@ export interface TransportCapabilities {
 	 * thrown error on every tick.
 	 */
 	readonly supportsTelemetryFrames: boolean;
+	/**
+	 * A failed connect is retried only when the brick is seen again, never on a timer.
+	 *
+	 * True for Bluetooth: every attempt pages the one radio, and a reconnect too soon after a
+	 * close locked a brick out for minutes on all three bricks measured (step-1 plan, D3).
+	 * Omitted means a failed connect is retried on a backoff while the brick stays visible —
+	 * a cable or a socket costs nothing to try again.
+	 */
+	readonly rejoinOnEvidenceOnly?: boolean;
 }
 
 /**

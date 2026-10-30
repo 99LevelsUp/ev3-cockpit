@@ -7,7 +7,7 @@
  * at each call site, which is how the probes ended up hardcoding it.
  */
 
-import { BrickCommand, BrickKey, BrickResponse, SendCommandOptions, Transport } from '../contracts';
+import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
 import { brickKeyTransport } from '../contracts/brickKey';
 import { USB } from '../transports/transportConstants';
 import { FilesystemService } from './filesystemService';
@@ -16,7 +16,7 @@ import { FileTransferService } from './fileTransferService';
 /** What this module needs of a session manager. Narrow, so a test can stand in for one. */
 export interface BrickSender {
 	send(
-		brickKey: BrickKey,
+		brickKey: BrickRef,
 		command: BrickCommand,
 		options?: SendCommandOptions,
 	): Promise<BrickResponse>;
@@ -27,7 +27,7 @@ export interface BrickSender {
 	 * Optional so a test double need not implement it; absent, the transport's own
 	 * conservative figure applies.
 	 */
-	maxPacketBytes?(brickKey: BrickKey): number | undefined;
+	maxPacketBytes?(brickKey: BrickRef): number | undefined;
 }
 
 export interface BrickFilesystem {
@@ -59,7 +59,7 @@ export function maxPacketBytesFor(transport: Transport | undefined): number | un
  */
 export function createBrickFilesystem(
 	sender: BrickSender,
-	brickKey: BrickKey,
+	brickKey: BrickRef,
 ): BrickFilesystem {
 	const send = (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> =>
 		sender.send(brickKey, command, options);
