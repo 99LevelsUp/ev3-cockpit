@@ -20,22 +20,21 @@
 
 import * as vscode from 'vscode';
 
-import { BrickCommand, BrickKey, BrickResponse, SendCommandOptions } from '../contracts';
-import { brickKeyTransport } from '../contracts/brickKey';
+import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
 import { ActivityMode, ConnectionState } from '../contracts/enums';
 import { ProviderRegistry } from '../transports/providerRegistry';
-import { BrickTelemetry, createBrickTelemetry } from './brickTelemetry';
+import { BrickTelemetry, createBrickTelemetry, transportFor } from './brickTelemetry';
 import { RowValue, TelemetryRow } from './telemetryRow';
 
 /** One brick's telemetry values, tagged with where they came from. */
 export interface TelemetryValuesEvent {
-	readonly brickKey: BrickKey;
+	readonly brickKey: BrickRef;
 	readonly values: readonly RowValue[];
 }
 
 /** A telemetry frame that failed, tagged with the brick whose loop produced it. */
 export interface TelemetryErrorEvent {
-	readonly brickKey: BrickKey;
+	readonly brickKey: BrickRef;
 	readonly error: unknown;
 }
 
@@ -47,21 +46,31 @@ export interface TelemetryErrorEvent {
  */
 export interface TelemetryHost {
 	send(
-		brickKey: BrickKey,
+		brickKey: BrickRef,
 		command: BrickCommand,
 		options?: SendCommandOptions,
 	): Promise<BrickResponse>;
-	maxPacketBytes?(brickKey: BrickKey): number | undefined;
-	getActiveBrickKey(): BrickKey | undefined;
-	getSession(brickKey: BrickKey): { readonly connectionState: ConnectionState } | undefined;
+	maxPacketBytes?(brickKey: BrickRef): number | undefined;
+	/** See {@link TelemetrySender.transportOf}. */
+	transportOf?(brickKey: BrickRef): Transport | undefined;
+	getActiveBrickKey(): BrickRef | undefined;
+	getSession(brickKey: BrickRef): { readonly connectionState: ConnectionState } | undefined;
 	readonly onSessionStateChange: vscode.Event<{
-		readonly brickKey: BrickKey;
+		readonly brickKey: BrickRef;
 		readonly newState: ConnectionState;
 	}>;
 	readonly onActiveBrickChange: vscode.Event<{
-		readonly previousBrickKey: BrickKey | undefined;
-		readonly newBrickKey: BrickKey | undefined;
+		readonly previousBrickKey: BrickRef | undefined;
+		readonly newBrickKey: BrickRef | undefined;
 	}>;
+	/**
+	 * Fired when a brick's traffic moves to another channel.
+	 *
+	 * The loop's cadence and frame size belong to the channel it started on, so the active
+	 * brick's loop restarts: a loop that began at USB's 100 ms would otherwise keep that
+	 * period over Bluetooth, whose floor is 250 ms, and crowd out every other command.
+	 */
+	readonly onRouteChange?: vscode.Event<{ readonly brickKey: BrickRef }>;
 }
 
 export interface TelemetryServiceOptions {
@@ -75,7 +84,7 @@ export interface TelemetryServiceOptions {
 }
 
 export class TelemetryService implements vscode.Disposable {
-	private readonly loops = new Map<BrickKey, BrickTelemetry>();
+	private readonly loops = new Map<BrickRef, BrickTelemetry>();
 	private readonly subscriptions: vscode.Disposable[] = [];
 	private disposed = false;
 
@@ -95,6 +104,11 @@ export class TelemetryService implements vscode.Disposable {
 				if (event.previousBrickKey) { this.stopFor(event.previousBrickKey); }
 				this.reconcile(event.newBrickKey);
 			}),
+			...(host.onRouteChange ? [host.onRouteChange((event) => {
+				if (event.brickKey !== host.getActiveBrickKey()) { return; }
+				this.stopFor(event.brickKey);
+				this.reconcile(event.brickKey);
+			})] : []),
 			host.onSessionStateChange((event) => {
 				// Only the active brick's state is interesting: nothing else is running.
 				if (event.brickKey !== host.getActiveBrickKey()) { return; }
@@ -111,7 +125,7 @@ export class TelemetryService implements vscode.Disposable {
 	}
 
 	/** The mode a brick is currently being driven in. */
-	modeOf(brickKey: BrickKey): ActivityMode {
+	modeOf(brickKey: BrickRef): ActivityMode {
 		if (this.loops.has(brickKey)) { return ActivityMode.Foreground; }
 		return this.options.host.getSession(brickKey) === undefined
 			? ActivityMode.None
@@ -119,7 +133,7 @@ export class TelemetryService implements vscode.Disposable {
 	}
 
 	/** The running loop for a brick, for tests and hardware probes. */
-	loopFor(brickKey: BrickKey): BrickTelemetry | undefined {
+	loopFor(brickKey: BrickRef): BrickTelemetry | undefined {
 		return this.loops.get(brickKey);
 	}
 
@@ -135,7 +149,7 @@ export class TelemetryService implements vscode.Disposable {
 	// ── Internal ────────────────────────────────────────────────────
 
 	/** Starts the foreground loop for this brick if it can and should run one. */
-	private reconcile(brickKey: BrickKey | undefined): void {
+	private reconcile(brickKey: BrickRef | undefined): void {
 		if (this.disposed || !brickKey) { return; }
 		if (this.loops.has(brickKey)) { return; }
 		if (this.options.host.getSession(brickKey)?.connectionState !== ConnectionState.Connected) {
@@ -156,7 +170,7 @@ export class TelemetryService implements vscode.Disposable {
 		loop.start();
 	}
 
-	private stopFor(brickKey: BrickKey): void {
+	private stopFor(brickKey: BrickRef): void {
 		const loop = this.loops.get(brickKey);
 		if (!loop) { return; }
 		this.loops.delete(brickKey);
@@ -170,8 +184,8 @@ export class TelemetryService implements vscode.Disposable {
 	 * provider that cannot serve frames would otherwise announce itself as a thrown error
 	 * on every tick, for as long as the brick stayed active.
 	 */
-	private servesFrames(brickKey: BrickKey): boolean {
-		const transport = brickKeyTransport(brickKey);
+	private servesFrames(brickKey: BrickRef): boolean {
+		const transport = transportFor(this.options.host, brickKey);
 		if (transport === undefined) { return false; }
 		return this.options.providerRegistry.get(transport)
 			?.capabilities.supportsTelemetryFrames === true;

@@ -15,6 +15,8 @@ import {
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
 import { ChannelChangedError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
+import { TelemetryService } from '../telemetry/telemetryService';
+import { cadenceFor } from '../telemetry/telemetryConstants';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
@@ -104,9 +106,9 @@ const usbKey = makeBrickKey(Transport.USB, '00165342D9F2');
 const btKey = makeBrickKey(Transport.BT, '00:16:53:42:D9:F2');
 const CCC = brickIdOf(usbKey);
 
-function world() {
-	const usb = fakeChannel(Transport.USB, 30);
-	const bt = fakeChannel(Transport.BT, 20, { rejoinOnEvidenceOnly: true });
+function world(frames = false) {
+	const usb = fakeChannel(Transport.USB, 30, { supportsTelemetryFrames: frames });
+	const bt = fakeChannel(Transport.BT, 20, { rejoinOnEvidenceOnly: true, supportsTelemetryFrames: frames });
 	const registry = new ProviderRegistry();
 	registry.register(usb.provider);
 	registry.register(bt.provider);
@@ -127,7 +129,7 @@ function world() {
 	const done = () => {
 		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
 	};
-	return { usb, bt, scheduler, aggregator, sessionManager, bricks, show, hide, done };
+	return { usb, bt, registry, scheduler, aggregator, sessionManager, bricks, show, hide, done };
 }
 
 const battery: BrickCommand = { kind: 'battery' };
@@ -351,6 +353,30 @@ describe('BrickManager — a transfer keeps its channel', () => {
 		await assert.rejects(transfer, ChannelChangedError);
 		assert.deepEqual(w.bt.sent.filter((k) => k.startsWith('fs:')), []);
 		w.done();
+	});
+});
+
+describe('BrickManager — telemetry follows the route', () => {
+	it('restarts the active brick loop at the Bluetooth cadence when traffic moves off USB', async () => {
+		const w = world(true);
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		const telemetry = new TelemetryService({ host: w.bricks.telemetryHost(), providerRegistry: w.registry });
+		try {
+			assert.equal(telemetry.loopFor(CCC)?.tickPeriodMs, cadenceFor(Transport.USB).foregroundMs);
+
+			w.usb.failing = true;   // cable out
+			await assert.rejects(w.bricks.send(CCC, battery));
+			await waitFor(() => w.bricks.routeOf(CCC) === btKey, 1000);
+
+			assert.equal(telemetry.loopFor(CCC)?.tickPeriodMs, cadenceFor(Transport.BT).foregroundMs);
+		} finally {
+			// A running loop holds a timer; left behind, it keeps the test process alive.
+			telemetry.dispose();
+			w.done();
+		}
 	});
 });
 
