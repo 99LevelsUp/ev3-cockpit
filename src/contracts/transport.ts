@@ -326,6 +326,16 @@ export interface TransportProvider extends vscode.Disposable {
 	/** Which transport this provider handles. */
 	readonly transport: Transport;
 
+	/**
+	 * How strongly traffic prefers this transport when a brick is reachable over several;
+	 * higher wins.
+	 *
+	 * Declared here, by each transport, so nothing above the providers names one: a new
+	 * transport sets its own priority and routing picks it up unchanged. USB 30, Bluetooth 20,
+	 * TCP 10, mock 0 — the owner's order, USB → BT → TCP (step-1 plan, D2).
+	 */
+	readonly priority: number;
+
 	/** Declared capabilities of this provider. */
 	readonly capabilities: TransportCapabilities;
 

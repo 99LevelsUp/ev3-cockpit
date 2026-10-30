@@ -766,6 +766,7 @@ function createStallableProvider(): {
 
 	const provider: TransportProvider = {
 		transport: Transport.Mock,
+		priority: 0,
 		capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 		discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
 		connect: (brickKey) => {
@@ -818,6 +819,7 @@ describe('SessionManager -- TransportGuard wiring', () => {
 	function makeFakeUsbProvider(): TransportProvider {
 		return {
 			transport: Transport.USB,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover: () => Promise.resolve({ transport: Transport.USB, items: [] }),
 			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.USB }),
@@ -932,6 +934,7 @@ describe('SessionManager -- one brick over two channels', () => {
 		const state = { failing: false };
 		const provider: TransportProvider = {
 			transport,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover: () => Promise.resolve({ transport, items: [] }),
 			connect: (brickKey) => Promise.resolve({ brickKey, transport }),
@@ -1104,6 +1107,7 @@ describe('SessionManager -- abandoned connect must not touch a newer session', (
 
 		const provider: TransportProvider = {
 			transport: Transport.Mock,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
 			connect: (brickKey) => {

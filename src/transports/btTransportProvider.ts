@@ -90,6 +90,8 @@ export interface BtTransportProviderOptions {
  */
 export class BtTransportProvider implements TransportProvider {
 	readonly transport = Transport.BT;
+	/** Below a cable, above Wi-Fi. */
+	readonly priority = 20;
 	// supportsForget follows whether an unpair hook was supplied: without one, forget()
 	// drops this provider's bookkeeping and leaves the OS pairing in place, and a brick
 	// that comes straight back is worse than a button that was never offered.
@@ -136,12 +138,14 @@ export class BtTransportProvider implements TransportProvider {
 				items.push({
 					brickKey,
 					displayName: dev.name || `EV3 [${dev.mac}]`,
+					// Windows' record catches up with a rename only at the next connection.
+					nameSource: dev.name ? 'bt-cache' : 'fallback',
 					transport: Transport.BT,
 					presenceState: PresenceState.Available,
 					remembered: dev.remembered,
+					paired: dev.remembered,
 					connected: this.sessions.has(brickKey),
 					favorite: false,
-					availableTransports: [Transport.BT],
 					lastSeenAt: now,
 				});
 			}

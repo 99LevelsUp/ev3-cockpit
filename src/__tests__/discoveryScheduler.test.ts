@@ -18,7 +18,6 @@ function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryI
 		remembered: false,
 		connected: false,
 		favorite: false,
-		availableTransports: [transport],
 		lastSeenAt: Date.now(),
 	};
 }
@@ -26,6 +25,7 @@ function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryI
 function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): TransportProvider {
 	return {
 		transport,
+		priority: 0,
 		capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false } satisfies TransportCapabilities,
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
@@ -230,6 +230,7 @@ describe('DiscoveryScheduler — error resilience', () => {
 		const registry = new ProviderRegistry();
 		const failingProvider: TransportProvider = {
 			transport: Transport.Mock,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			async discover(): Promise<DiscoveryScanResult> { throw new Error('scan failed'); },
 			async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport: Transport.Mock }; },
@@ -292,12 +293,12 @@ describe('DiscoveryScheduler -- skipped transports must not accrue misses', () =
 			remembered: false,
 			connected: false,
 			favorite: false,
-			availableTransports: [Transport.Mock],
 			lastSeenAt: 0,
 		};
 
 		const provider: TransportProvider = {
 			transport: Transport.Mock,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover: () => {
 				discoverCalls += 1;
@@ -352,6 +353,7 @@ describe('DiscoveryScheduler — a failed scan is not a scan', () => {
 
 		const provider: TransportProvider = {
 			transport: Transport.TCP,
+			priority: 0,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			discover(): Promise<DiscoveryScanResult> {
 				return failNext

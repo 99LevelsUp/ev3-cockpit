@@ -16,7 +16,7 @@ import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
 import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
-import { ConnectionState, PresenceState, Transport, makeBrickKey } from './contracts';
+import { PresenceState, Transport, makeBrickKey } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -134,11 +134,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// ── Discovery & presence ────────────────────────────────────
 	const scheduler = services.add(new DiscoveryScheduler(registry));
-	const aggregator = services.add(new PresenceAggregator(scheduler));
+	const aggregator = services.add(new PresenceAggregator(scheduler, registry));
 
 	aggregator.onListChanged(e => {
 		logger.debug(`Discovery list updated (${e.items.length} brick(s)):`,
-			e.items.map(i => i.displayName));
+			e.items.map(i => `${i.name.value} [${i.channels.map(c => `${c.transport}:${c.state}`).join(' ')}]`));
 	});
 	aggregator.onPresenceChanged(e => {
 		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState ?? 'new'} → ${e.currentState}`);
@@ -153,13 +153,10 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	});
 
-	// The discovery list owns `connected` locally, and nothing was telling it. Without
-	// this the flag stayed false for every brick no matter how many were connected --
-	// `updateBrick` had no caller outside the tests.
+	// A channel's state in the list follows its session: connected, lost while it reconnects,
+	// available again once signed out.
 	services.add(sessionManager.onSessionStateChange(e => {
-		aggregator.updateBrick(e.brickKey, {
-			connected: e.newState === ConnectionState.Connected,
-		});
+		aggregator.updateChannelSession(e.brickKey, e.newState);
 	}));
 
 	services.add(scheduler.onScanFailed(e => {

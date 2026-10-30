@@ -73,6 +73,8 @@ export interface TcpTransportProviderOptions {
  */
 export class TcpTransportProvider implements TransportProvider {
 	readonly transport = Transport.TCP;
+	/** Wi-Fi is the slowest and least steady link the brick has. */
+	readonly priority = 10;
 	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: true };
 
 	private readonly options: TcpTransportProviderOptions;
@@ -140,12 +142,13 @@ export class TcpTransportProvider implements TransportProvider {
 			items.push({
 				brickKey,
 				displayName: info.name || `EV3 [${info.ip}]`,
+				// The beacon follows a rename within seconds (measured 29.10.2026).
+				nameSource: info.name ? 'beacon' : 'fallback',
 				transport: Transport.TCP,
 				presenceState: PresenceState.Available,
 				remembered: false,
 				connected: this.sessions.has(brickKey),
 				favorite: false,
-				availableTransports: [Transport.TCP],
 				lastSeenAt: entry.receivedAt,
 			});
 		}
