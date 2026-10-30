@@ -14,7 +14,7 @@
  * starves the heartbeat and trips reconnect on a brick that is merely busy.
  */
 
-import { BrickCommand, BrickKey, BrickResponse, SendCommandOptions } from '../contracts';
+import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
 import { brickKeyTransport } from '../contracts/brickKey';
 import { maxPacketBytesFor } from '../fs/brickFilesystem';
 import { FIRMWARE_BUFFER_BYTES } from '../protocol/ev3Commands';
@@ -27,18 +27,31 @@ import { cadenceFor } from './telemetryConstants';
 /** What this module needs of a session manager. Narrow, so a test can stand in for one. */
 export interface TelemetrySender {
 	send(
-		brickKey: BrickKey,
+		brickKey: BrickRef,
 		command: BrickCommand,
 		options?: SendCommandOptions,
 	): Promise<BrickResponse>;
 
 	/** Largest packet the live link carries, when the sender knows. */
-	maxPacketBytes?(brickKey: BrickKey): number | undefined;
+	maxPacketBytes?(brickKey: BrickRef): number | undefined;
+
+	/**
+	 * The transport a brick's traffic goes over now.
+	 *
+	 * For a sender addressed by brick, where the key names no transport and the answer
+	 * moves with the route. Omitted, the transport is read from the key.
+	 */
+	transportOf?(brickKey: BrickRef): Transport | undefined;
+}
+
+/** The transport behind a key: the sender's answer when it routes, else the key's own. */
+export function transportFor(sender: TelemetrySender, brickKey: BrickRef): Transport | undefined {
+	return sender.transportOf?.(brickKey) ?? brickKeyTransport(brickKey);
 }
 
 export interface BrickTelemetryOptions {
 	readonly sender: TelemetrySender;
-	readonly brickKey: BrickKey;
+	readonly brickKey: BrickRef;
 	/** Rows to drive. Defaults to the full EV3 catalogue. */
 	readonly rows?: readonly TelemetryRow[];
 	/** Tick period in ms. Defaults to the transport's foreground cadence (DESIGN §9.2). */
@@ -75,10 +88,10 @@ export interface BrickTelemetry {
  */
 export function frameLimitsFor(
 	sender: TelemetrySender,
-	brickKey: BrickKey,
+	brickKey: BrickRef,
 ): FrameLimits {
 	const live = sender.maxPacketBytes?.(brickKey);
-	const fallback = maxPacketBytesFor(brickKeyTransport(brickKey));
+	const fallback = maxPacketBytesFor(transportFor(sender, brickKey));
 	return { maxPacketBytes: live ?? fallback ?? FIRMWARE_BUFFER_BYTES };
 }
 
@@ -90,7 +103,8 @@ export function frameLimitsFor(
  */
 export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelemetry {
 	const { sender, brickKey } = options;
-	const transport = brickKeyTransport(brickKey);
+	// Fixed for the loop's life: a route change restarts the loop rather than retiming it.
+	const transport = transportFor(sender, brickKey);
 	const tickPeriodMs = options.tickPeriodMs ?? cadenceFor(transport).foregroundMs;
 
 	const scheduler = new TelemetryScheduler({

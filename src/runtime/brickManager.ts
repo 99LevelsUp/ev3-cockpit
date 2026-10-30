@@ -18,6 +18,7 @@ import {
 	ChannelChangedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { PinnedLink } from '../fs/fileTransferService';
+import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { PresenceAggregator } from './presenceAggregator';
@@ -254,6 +255,47 @@ export class BrickManager implements vscode.Disposable {
 	maxPacketBytes(brickId: BrickId): number | undefined {
 		const route = this.routes.get(brickId);
 		return route ? this.sessionManager.maxPacketBytes(route) : undefined;
+	}
+
+	/** The transport a brick's traffic goes over now, or undefined when none is connected. */
+	transportOfBrick(brickId: BrickId): Transport | undefined {
+		const route = this.routes.get(brickId);
+		return route ? this.transportOf(route) : undefined;
+	}
+
+	/**
+	 * This layer as a telemetry host: the active brick's loop runs over whichever channel
+	 * carries its traffic, at that channel's cadence, and restarts when the route moves.
+	 *
+	 * A brick counts as connected while it has a route and as reconnecting while it is
+	 * signed in without one, which is what the loop needs to know to run or wait.
+	 */
+	telemetryHost(): TelemetryHost {
+		const asBrick = (key: string): BrickId => key as BrickId;
+		return {
+			send: (key, command, options) => this.send(asBrick(key), command, options),
+			maxPacketBytes: (key) => this.maxPacketBytes(asBrick(key)),
+			transportOf: (key) => this.transportOfBrick(asBrick(key)),
+			getActiveBrickKey: () => this.activeBrickId,
+			getSession: (key) => {
+				if (this.routes.has(asBrick(key))) { return { connectionState: ConnectionState.Connected }; }
+				return this.signedIn.has(asBrick(key))
+					? { connectionState: ConnectionState.Reconnecting }
+					: undefined;
+			},
+			onSessionStateChange: (listener, thisArgs, disposables) => this.onRouteChange(
+				(e) => {
+					listener.call(thisArgs, {
+						brickKey: e.brickId,
+						newState: e.current ? ConnectionState.Connected : ConnectionState.Reconnecting,
+					});
+				}, undefined, disposables),
+			onActiveBrickChange: (listener, thisArgs, disposables) => this.onActiveBrickChange(
+				(e) => { listener.call(thisArgs, { previousBrickKey: e.previous, newBrickKey: e.current }); },
+				undefined, disposables),
+			onRouteChange: (listener, thisArgs, disposables) => this.onRouteChange(
+				(e) => { listener.call(thisArgs, { brickKey: e.brickId }); }, undefined, disposables),
+		};
 	}
 
 	// ── Active brick ────────────────────────────────────────────────
