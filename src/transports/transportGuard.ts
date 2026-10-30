@@ -2,33 +2,37 @@
  * Transport guard — per-brick firmware protection layer.
  *
  * Enforces:
- * - One active transport per brick
- * - Transport switch cooldown (prevents firmware freeze under multi-transport bombardment)
- * - Command rate limiting (≤10 cmd/s sliding window)
- * - Consecutive failure tracking with degradation
+ * - Command rate limiting (≤10 cmd/s sliding window), per brick across all its channels
+ * - Consecutive failure tracking with degradation, per channel
+ *
+ * Two keys, because the two protections are about different things. Firmware stress is a
+ * property of the brick: commands arriving over USB and Bluetooth at once still land on one
+ * VM, so the rate window is shared by every channel to that brick (`BrickId`). Failures are a
+ * property of a link: a pulled cable fails every USB send while the Bluetooth link to the same
+ * brick is healthy, and counting those failures against the brick would degrade it and block
+ * the standby channel the cockpit is about to fail over to (`BrickKey`).
+ *
+ * It used to enforce "one active transport per brick" and a 2 s cooldown before switching,
+ * after DESIGN §4.1's "firmware freeze under multi-transport bombardment". Measured
+ * 29.10.2026 on three bricks and two firmware versions — USB and Bluetooth open to one brick,
+ * commands in flight on both — nothing froze (step-1 plan, U4.4), and the incident record the
+ * rule cited does not exist. Both are gone.
  */
 
 import { FIRMWARE_SAFETY } from './transportConstants';
 
-/** Per-brick transport state tracked by the guard. */
-interface BrickGuardState {
-	activeTransport: string | undefined;
-	/** The transport last opened, remembered past a close so a same-transport reconnect
-	 * can be told apart from an actual switch. */
-	lastTransport: string | undefined;
-	lastCloseTs: number;
-	commandTimestamps: number[];
+/** Per-channel health tracked by the guard. */
+interface ChannelHealth {
 	consecutiveFailures: number;
 	degraded: boolean;
 	lastRttMs: number | undefined;
 }
 
-/** Callback fired when a brick's degradation state changes. */
-export type DegradationCallback = (brickId: string, degraded: boolean) => void;
+/** Callback fired when a channel's degradation state changes. */
+export type DegradationCallback = (channelKey: string, degraded: boolean) => void;
 
 export interface TransportGuardOptions {
 	maxCommandsPerSec?: number;
-	switchCooldownMs?: number;
 	degradationThreshold?: number;
 	onDegradationChange?: DegradationCallback;
 }
@@ -38,174 +42,122 @@ export interface TransportGuardOptions {
  */
 export class TransportGuard {
 	private readonly maxCommandsPerSec: number;
-	private readonly switchCooldownMs: number;
 	private readonly degradationThreshold: number;
 	private readonly onDegradationChange?: DegradationCallback;
-	private readonly bricks = new Map<string, BrickGuardState>();
+	/** Send timestamps within the last second, by brick. */
+	private readonly commandTimestamps = new Map<string, number[]>();
+	private readonly channels = new Map<string, ChannelHealth>();
 
 	constructor(options?: TransportGuardOptions) {
 		this.maxCommandsPerSec = options?.maxCommandsPerSec ?? FIRMWARE_SAFETY.MAX_COMMANDS_PER_SEC;
-		this.switchCooldownMs = options?.switchCooldownMs ?? FIRMWARE_SAFETY.TRANSPORT_SWITCH_COOLDOWN_MS;
 		this.degradationThreshold = options?.degradationThreshold ?? FIRMWARE_SAFETY.DEGRADATION_THRESHOLD;
 		this.onDegradationChange = options?.onDegradationChange;
 	}
 
 	/**
-	 * Register a brick opening a transport. Enforces one-at-a-time and switch cooldown.
+	 * Clears a channel's failure history and RTT.
 	 *
-	 * The cooldown guards against **switching** transports rapidly (DESIGN §4.1's firmware
-	 * freeze under multi-transport bombardment) — reopening the *same* transport right
-	 * after closing it is an ordinary reconnect and is not gated here; that pacing belongs
-	 * to whatever paces reconnects for that transport (e.g. `BtConnectionQueue`,
-	 * `ReconnectStrategy`).
+	 * Call when the channel's session ends or reconnects. The failures that degraded it belonged
+	 * to the link that just closed or died, not to whatever opens next — and `checkRateLimit`
+	 * has no path back from `degraded` except `recordSuccess`, which a degraded channel can never
+	 * reach on its own, since every send is refused before it reaches the transport. A cable that
+	 * comes back would otherwise be refused for good.
 	 */
-	openTransport(brickId: string, transport: string): void {
-		const state = this.getOrCreate(brickId);
-
-		if (state.activeTransport && state.activeTransport !== transport) {
-			throw new Error(
-				`Brick ${brickId} already has active transport "${state.activeTransport}". `
-				+ `Close it before opening "${transport}".`
-			);
-		}
-
-		if (!state.activeTransport && state.lastTransport && state.lastTransport !== transport
-			&& state.lastCloseTs > 0) {
-			const elapsed = Date.now() - state.lastCloseTs;
-			if (elapsed < this.switchCooldownMs) {
-				throw new Error(
-					`Transport switch cooldown: ${this.switchCooldownMs - elapsed}ms remaining for ${brickId}.`
-				);
-			}
-		}
-
-		state.activeTransport = transport;
-		state.lastTransport = transport;
-	}
-
-	/**
-	 * Mark a brick's transport as closed.
-	 */
-	closeTransport(brickId: string): void {
-		const state = this.bricks.get(brickId);
-		if (!state) {
+	resetHealth(channelKey: string): void {
+		const health = this.channels.get(channelKey);
+		if (!health) {
 			return;
 		}
-		state.activeTransport = undefined;
-		state.lastCloseTs = Date.now();
-	}
-
-	/**
-	 * Clears degradation and rate-limit history without touching the switch-cooldown clock.
-	 *
-	 * Call when a session ends. The failures that degraded a brick belonged to the
-	 * connection that just closed, not to whatever connects next — and `checkRateLimit`
-	 * has no path back from `degraded` except `recordSuccess`, which a degraded brick can
-	 * never reach on its own, since every send is refused before it reaches the transport.
-	 * `forget` would also do this, but it drops `lastCloseTs` with it, and losing that is
-	 * what a rapid reconnect's switch cooldown depends on.
-	 */
-	resetHealth(brickId: string): void {
-		const state = this.bricks.get(brickId);
-		if (!state) {
-			return;
-		}
-		state.consecutiveFailures = 0;
-		state.commandTimestamps = [];
-		state.lastRttMs = undefined;
-		if (state.degraded) {
-			state.degraded = false;
-			this.onDegradationChange?.(brickId, false);
+		health.consecutiveFailures = 0;
+		health.lastRttMs = undefined;
+		if (health.degraded) {
+			health.degraded = false;
+			this.onDegradationChange?.(channelKey, false);
 		}
 	}
 
 	/**
-	 * Check rate limit before sending a command. Throws if the window is full.
+	 * Check before sending a command over `channelKey` to `brickId`. Throws if the channel is
+	 * degraded or the brick's window is full.
 	 */
-	checkRateLimit(brickId: string): void {
-		const state = this.getOrCreate(brickId);
-
-		if (state.degraded) {
-			throw new Error(`Brick ${brickId} is degraded — sends blocked until recovery.`);
+	checkRateLimit(brickId: string, channelKey: string): void {
+		if (this.channels.get(channelKey)?.degraded) {
+			throw new Error(`Channel ${channelKey} is degraded — sends blocked until recovery.`);
 		}
 
 		const now = Date.now();
 		const windowStart = now - 1000;
-		state.commandTimestamps = state.commandTimestamps.filter((ts) => ts > windowStart);
+		const timestamps = (this.commandTimestamps.get(brickId) ?? []).filter((ts) => ts > windowStart);
 
-		if (state.commandTimestamps.length >= this.maxCommandsPerSec) {
+		if (timestamps.length >= this.maxCommandsPerSec) {
+			this.commandTimestamps.set(brickId, timestamps);
 			throw new Error(
 				`Rate limit: ${this.maxCommandsPerSec} commands/sec exceeded for ${brickId}.`
 			);
 		}
 
-		state.commandTimestamps.push(now);
+		timestamps.push(now);
+		this.commandTimestamps.set(brickId, timestamps);
 	}
 
 	/**
-	 * Record a successful send. Resets failure counter.
+	 * Record a successful send. Resets the channel's failure counter.
 	 */
-	recordSuccess(brickId: string, rttMs?: number): void {
-		const state = this.getOrCreate(brickId);
-		state.consecutiveFailures = 0;
+	recordSuccess(channelKey: string, rttMs?: number): void {
+		const health = this.getOrCreate(channelKey);
+		health.consecutiveFailures = 0;
 		if (rttMs !== undefined) {
-			state.lastRttMs = rttMs;
+			health.lastRttMs = rttMs;
 		}
-		if (state.degraded) {
-			state.degraded = false;
-			this.onDegradationChange?.(brickId, false);
+		if (health.degraded) {
+			health.degraded = false;
+			this.onDegradationChange?.(channelKey, false);
 		}
 	}
 
 	/**
-	 * Record a send failure. May trigger degradation.
+	 * Record a send failure. May degrade the channel.
 	 */
-	recordFailure(brickId: string): void {
-		const state = this.getOrCreate(brickId);
-		state.consecutiveFailures += 1;
+	recordFailure(channelKey: string): void {
+		const health = this.getOrCreate(channelKey);
+		health.consecutiveFailures += 1;
 
-		if (!state.degraded && state.consecutiveFailures >= this.degradationThreshold) {
-			state.degraded = true;
-			this.onDegradationChange?.(brickId, true);
+		if (!health.degraded && health.consecutiveFailures >= this.degradationThreshold) {
+			health.degraded = true;
+			this.onDegradationChange?.(channelKey, true);
 		}
 	}
 
-	/** Whether a brick is currently degraded. */
-	isDegraded(brickId: string): boolean {
-		return this.bricks.get(brickId)?.degraded ?? false;
+	/** Whether a channel is currently degraded. */
+	isDegraded(channelKey: string): boolean {
+		return this.channels.get(channelKey)?.degraded ?? false;
 	}
 
-	/** Last recorded RTT for a brick. */
-	getLastRttMs(brickId: string): number | undefined {
-		return this.bricks.get(brickId)?.lastRttMs;
+	/** Last recorded RTT for a channel. */
+	getLastRttMs(channelKey: string): number | undefined {
+		return this.channels.get(channelKey)?.lastRttMs;
 	}
 
-	/** Remove all state for a brick. */
-	forget(brickId: string): void {
-		this.bricks.delete(brickId);
+	/** Remove all state held under `id`, whether it names a brick or a channel. */
+	forget(id: string): void {
+		this.commandTimestamps.delete(id);
+		this.channels.delete(id);
 	}
 
 	/** Remove all state. */
 	dispose(): void {
-		this.bricks.clear();
+		this.commandTimestamps.clear();
+		this.channels.clear();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	private getOrCreate(brickId: string): BrickGuardState {
-		let state = this.bricks.get(brickId);
-		if (!state) {
-			state = {
-				activeTransport: undefined,
-				lastTransport: undefined,
-				lastCloseTs: 0,
-				commandTimestamps: [],
-				consecutiveFailures: 0,
-				degraded: false,
-				lastRttMs: undefined,
-			};
-			this.bricks.set(brickId, state);
+	private getOrCreate(channelKey: string): ChannelHealth {
+		let health = this.channels.get(channelKey);
+		if (!health) {
+			health = { consecutiveFailures: 0, degraded: false, lastRttMs: undefined };
+			this.channels.set(channelKey, health);
 		}
-		return state;
+		return health;
 	}
 }

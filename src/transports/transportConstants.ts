@@ -210,9 +210,7 @@ export const FIRMWARE_SAFETY = {
 	MAX_COMMANDS_PER_SEC: 200,
 	/** Minimum heartbeat interval (ms) — below this risks firmware stress. */
 	MIN_HEARTBEAT_INTERVAL_MS: 3000,
-	/** Cooldown between transport mode switches (ms). */
-	TRANSPORT_SWITCH_COOLDOWN_MS: 2000,
-	/** Number of consecutive failures before marking brick as degraded. */
+	/** Number of consecutive failures before marking a channel as degraded. */
 	DEGRADATION_THRESHOLD: 3,
 	/** Reconnect backoff base interval (ms). */
 	RECONNECT_BASE_MS: 1000,

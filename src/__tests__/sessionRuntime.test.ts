@@ -845,7 +845,7 @@ describe('SessionManager -- TransportGuard wiring', () => {
 		// The cooldown guards against *switching* transports rapidly, not against
 		// reconnecting the same one -- an ordinary disconnect/reconnect must not eat a
 		// 2 s (default) wait it never asked for.
-		const guard = new TransportGuard({ switchCooldownMs: 200 });
+		const guard = new TransportGuard();
 		const { manager } = makeManager(guard);
 		const key = makeBrickKey(Transport.Mock, 'brick-a');
 
@@ -857,12 +857,12 @@ describe('SessionManager -- TransportGuard wiring', () => {
 		);
 	});
 
-	it('refuses switching transports within the cooldown, guarded by physical brick id', async () => {
-		// DESIGN §4.1's switch cooldown protects the firmware from a rapid *transport*
-		// switch -- guarded by the brick's physical id (brickKeyId), not the
-		// transport-qualified key, so the same physical brick reachable over two
-		// transports is covered even though each has its own brickKey.
-		const guard = new TransportGuard({ switchCooldownMs: 200 });
+	it('switches a brick to another transport straight after closing the first', async () => {
+		// There used to be a 2 s switch cooldown here, after DESIGN §4.1's "firmware freeze
+		// under multi-transport bombardment". Measured 29.10.2026 on three bricks and two
+		// firmware versions, with both links open and commands in flight on both: no freeze
+		// (step-1 plan, U4.4). The cooldown had nothing behind it and is gone.
+		const guard = new TransportGuard();
 		const registry = new ProviderRegistry();
 		registry.register(new MockTransportProvider(mockConfig));
 		registry.register(makeFakeUsbProvider());
@@ -879,18 +879,7 @@ describe('SessionManager -- TransportGuard wiring', () => {
 
 		await manager.connect(mockKey, Transport.Mock);
 		await manager.disconnect(mockKey);
-
-		await assert.rejects(
-			manager.connect(usbKey, Transport.USB),
-			/cooldown/i,
-			'switching to a different transport inside the cooldown window should be refused'
-		);
-
-		await new Promise((resolve) => setTimeout(resolve, 220));
-		await assert.doesNotReject(
-			manager.connect(usbKey, Transport.USB),
-			'the switch should go through once the cooldown has elapsed'
-		);
+		await assert.doesNotReject(manager.connect(usbKey, Transport.USB));
 		manager.dispose();
 	});
 
@@ -898,7 +887,7 @@ describe('SessionManager -- TransportGuard wiring', () => {
 		// checkRateLimit() has no path back from `degraded` except recordSuccess(), which a
 		// degraded brick can never reach on its own -- every send is refused before it
 		// reaches the transport. Only a disconnect (SessionManager.resetHealth()) clears it.
-		const guard = new TransportGuard({ degradationThreshold: 2, switchCooldownMs: 0 });
+		const guard = new TransportGuard({ degradationThreshold: 2 });
 		const { manager, provider } = makeManager(guard);
 		const key = makeBrickKey(Transport.Mock, 'brick-a');
 
@@ -930,6 +919,135 @@ describe('SessionManager -- TransportGuard wiring', () => {
 			manager.send(key, { kind: 'battery' }),
 			'a fresh connect after disconnect should not inherit the old degradation'
 		);
+	});
+});
+
+describe('SessionManager -- one brick over two channels', () => {
+	// Synthetic addresses in the bench's OUI; one brick, reached over USB and Bluetooth.
+	const usbKey = makeBrickKey(Transport.USB, '00165300000A');
+	const btKey = makeBrickKey(Transport.BT, '00:16:53:00:00:0A');
+
+	/** A channel whose commands succeed or fail as the test says, at the command level. */
+	function makeChannelProvider(transport: Transport) {
+		const state = { failing: false };
+		const provider: TransportProvider = {
+			transport,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport, items: [] }),
+			connect: (brickKey) => Promise.resolve({ brickKey, transport }),
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.reject(new Error('not used: the channel below answers commands')),
+			createCommandChannel: () => ({
+				execute: () => state.failing
+					? Promise.reject(new Error(`${transport} link down`))
+					: Promise.resolve({ kind: 'battery', level: 80 }),
+			}),
+			dispose: () => { /* nothing to release */ },
+		};
+		return { provider, state };
+	}
+
+	function makeTwoChannelManager(guard: TransportGuard) {
+		const usb = makeChannelProvider(Transport.USB);
+		const bt = makeChannelProvider(Transport.BT);
+		const registry = new ProviderRegistry();
+		registry.register(usb.provider);
+		registry.register(bt.provider);
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			// Long enough that no heartbeat fires during a test and muddies the counts.
+			heartbeatIntervalMs: 60_000,
+			reconnectBaseMs: 50,
+			reconnectMaxMs: 200,
+			transportGuard: guard,
+		});
+		return { manager, usb, bt };
+	}
+
+	it('opens USB and Bluetooth to the same brick at once', async () => {
+		const { manager } = makeTwoChannelManager(new TransportGuard());
+		await manager.connect(usbKey, Transport.USB);
+		await assert.doesNotReject(manager.connect(btKey, Transport.BT));
+		manager.dispose();
+	});
+
+	it('keeps sending over Bluetooth while the brick\'s USB channel is degraded', async () => {
+		const { manager, usb } = makeTwoChannelManager(new TransportGuard({ degradationThreshold: 2 }));
+		await manager.connect(usbKey, Transport.USB);
+		await manager.connect(btKey, Transport.BT);
+
+		usb.state.failing = true;
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }));
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }));
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }), /degraded/i);
+
+		await assert.doesNotReject(
+			manager.send(btKey, { kind: 'battery' }),
+			'a pulled cable must not block the healthy standby channel to the same brick'
+		);
+		manager.dispose();
+	});
+
+	it('closing the USB channel leaves the Bluetooth channel\'s failure count alone', async () => {
+		const { manager, bt } = makeTwoChannelManager(new TransportGuard({ degradationThreshold: 2 }));
+		await manager.connect(usbKey, Transport.USB);
+		await manager.connect(btKey, Transport.BT);
+
+		bt.state.failing = true;
+		await assert.rejects(manager.send(btKey, { kind: 'battery' }));
+		await manager.disconnect(usbKey);
+		await assert.rejects(manager.send(btKey, { kind: 'battery' }));
+		await assert.rejects(
+			manager.send(btKey, { kind: 'battery' }),
+			/degraded/i,
+			'the USB close must not have wiped the BT failure that came before it'
+		);
+		manager.dispose();
+	});
+
+	it('counts the rate limit across both channels of one brick, not per channel', async () => {
+		const guard = new TransportGuard({ maxCommandsPerSec: 3 });
+		const { manager } = makeTwoChannelManager(guard);
+		await manager.connect(usbKey, Transport.USB);
+		await manager.connect(btKey, Transport.BT);
+
+		await manager.send(usbKey, { kind: 'battery' });
+		await manager.send(btKey, { kind: 'battery' });
+		await manager.send(usbKey, { kind: 'battery' });
+		await assert.rejects(manager.send(btKey, { kind: 'battery' }), /rate limit/i);
+		manager.dispose();
+	});
+
+	it('a USB channel that reconnects after degrading carries traffic again', async () => {
+		const guard = new TransportGuard({ degradationThreshold: 2 });
+		const usb = makeChannelProvider(Transport.USB);
+		const registry = new ProviderRegistry();
+		registry.register(usb.provider);
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 60_000,
+			reconnectBaseMs: 20,
+			reconnectMaxMs: 40,
+			transportGuard: guard,
+		});
+		await manager.connect(usbKey, Transport.USB);
+
+		// The cable comes out: two sends fail and the channel degrades; the heartbeat (driven
+		// directly, its interval cannot go below 3 s) then notices and the session reconnects.
+		usb.state.failing = true;
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }));
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }));
+		assert.equal(guard.isDegraded(usbKey), true);
+		manager['handleHeartbeatFailure'](usbKey, new Error('cable out'));
+
+		// The cable goes back in: the link works again and the session reconnects.
+		usb.state.failing = false;
+		await waitFor(() => manager.getSession(usbKey)?.connectionState === ConnectionState.Connected, 2000);
+		await assert.doesNotReject(
+			manager.send(usbKey, { kind: 'battery' }),
+			'a reconnected channel must not stay refused as degraded'
+		);
+		manager.dispose();
 	});
 });
 
