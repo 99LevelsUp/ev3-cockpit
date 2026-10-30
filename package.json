@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.135",
+  "version": "0.2.136",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -25,22 +25,22 @@
       {
         "command": "ev3-cockpit.listProjects",
         "title": "List Projects on Active Brick",
-        "category": "EVƎ Cockpit"
+        "category": "EV3 Cockpit"
       },
       {
         "command": "ev3-cockpit.showStorage",
         "title": "Show Storage on Active Brick",
-        "category": "EVƎ Cockpit"
+        "category": "EV3 Cockpit"
       },
       {
         "command": "ev3-cockpit.connectBrick",
         "title": "Connect a Brick",
-        "category": "EVƎ Cockpit"
+        "category": "EV3 Cockpit"
       },
       {
         "command": "ev3-cockpit.disconnectBrick",
         "title": "Disconnect a Brick",
-        "category": "EVƎ Cockpit"
+        "category": "EV3 Cockpit"
       }
     ]
   },
