@@ -11,7 +11,7 @@ import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } 
 import { brickKeyTransport } from '../contracts/brickKey';
 import { USB } from '../transports/transportConstants';
 import { FilesystemService } from './filesystemService';
-import { FileTransferService } from './fileTransferService';
+import { FileTransferService, PinnedLink } from './fileTransferService';
 
 /** What this module needs of a session manager. Narrow, so a test can stand in for one. */
 export interface BrickSender {
@@ -28,6 +28,13 @@ export interface BrickSender {
 	 * conservative figure applies.
 	 */
 	maxPacketBytes?(brickKey: BrickRef): number | undefined;
+
+	/**
+	 * Holds one channel for a whole transfer, when the sender routes over several.
+	 *
+	 * Optional: a sender addressed by channel is already pinned to it.
+	 */
+	pin?(brickKey: BrickRef): PinnedLink;
 }
 
 export interface BrickFilesystem {
@@ -70,11 +77,15 @@ export function createBrickFilesystem(
 	const maxPacketBytes = sender.maxPacketBytes?.(brickKey)
 		?? maxPacketBytesFor(brickKeyTransport(brickKey));
 
+	// A sender that routes over several channels hands each transfer one to keep.
+	const pin = sender.pin?.bind(sender);
 	return {
 		files: new FilesystemService(send),
 		transfer: new FileTransferService(
 			send,
-			maxPacketBytes === undefined ? undefined : { maxPacketBytes },
+			pin
+				? { pin: () => pin(brickKey) }
+				: maxPacketBytes === undefined ? undefined : { maxPacketBytes },
 		),
 	};
 }

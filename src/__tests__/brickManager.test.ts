@@ -13,7 +13,8 @@ import {
 	BrickKey, DiscoveryItem, BrickCommand, SendCommandOptions,
 } from '../contracts';
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
-import { TransportError } from '../errors/CockpitError';
+import { ChannelChangedError, TransportError } from '../errors/CockpitError';
+import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
@@ -35,6 +36,15 @@ interface FakeChannel {
 	failing: boolean;
 	/** Commands that reached this channel, by kind. */
 	readonly sent: string[];
+	/** When set, a `fs:continueWrite` waits for it before answering: the middle of a transfer. */
+	gate?: Promise<void>;
+}
+
+/** A gate a test opens when it is done doing things in the middle of a transfer. */
+function gate(): { promise: Promise<void>; open: () => void } {
+	let open = () => { /* replaced below */ };
+	const promise = new Promise<void>((resolve) => { open = resolve; });
+	return { promise, open };
 }
 
 function fakeChannel(transport: Transport, priority: number, extra: Partial<TransportProvider['capabilities']> = {}): FakeChannel {
@@ -42,16 +52,23 @@ function fakeChannel(transport: Transport, priority: number, extra: Partial<Tran
 		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [],
 		provider: undefined as unknown as TransportProvider,
 	};
-	const execute = (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
+	const execute = async (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
 		channel.sent.push(command.kind);
 		if (options?.signal?.aborted) {
 			// What the USB adapter really reports for an abort.
-			return Promise.reject(new TransportError(`${transport} send aborted.`));
+			throw new TransportError(`${transport} send aborted.`);
 		}
 		if (channel.failing) {
-			return Promise.reject(new TransportError(`${transport} send failed: LIBUSB_ERROR_IO`));
+			throw new TransportError(`${transport} send failed: LIBUSB_ERROR_IO`);
 		}
-		return Promise.resolve({ kind: 'battery', level: 80 });
+		switch (command.kind) {
+			case 'fs:beginWrite': return { kind: 'fs:beginWrite', handle: 1, endOfFile: false };
+			case 'fs:continueWrite':
+				await channel.gate;
+				return { kind: 'fs:continueWrite', handle: 1, endOfFile: false };
+			case 'fs:closeHandle': return { kind: 'fs:closeHandle' };
+			default: return { kind: 'battery', level: 80 };
+		}
 	};
 	(channel as { provider: TransportProvider }).provider = {
 		transport,
@@ -283,6 +300,56 @@ describe('BrickManager — channels that come later', () => {
 		w.show.bt(); await w.scheduler.scanOnce();   // and back: new evidence
 		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
 		assert.equal(w.bt.connects, 2);
+		w.done();
+	});
+});
+
+describe('BrickManager — a transfer keeps its channel', () => {
+	const file = new Uint8Array(3000);   // a few chunks at the firmware's 1024-byte packet
+
+	it('finishes a Bluetooth transfer over Bluetooth when USB joins mid-way', async () => {
+		const w = world();
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		const middle = gate();
+		w.bt.gate = middle.promise;
+
+		const fs = createBrickFilesystem(w.bricks, CCC);
+		const transfer = fs.transfer.writeFile('/home/root/lms2012/prjs/a.rbf', file);
+		await waitFor(() => w.bt.sent.includes('fs:continueWrite'), 1000);
+
+		w.show.usb();   // the cable goes back in mid-transfer
+		await w.scheduler.scanOnce();
+		await waitFor(() => w.bricks.routeOf(CCC) === usbKey, 1000);
+		await w.bricks.send(CCC, battery);   // everyone else follows the new route
+
+		middle.open();
+		await transfer;
+		assert.deepEqual(w.usb.sent, ['battery'], 'no step of the transfer may have gone over USB');
+		assert.ok(w.bt.sent.filter((k) => k === 'fs:continueWrite').length >= 2);
+		w.done();
+	});
+
+	it('fails a USB transfer with "channel changed" when USB is lost mid-way, and sends no step over Bluetooth', async () => {
+		const w = world();
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		const middle = gate();
+		w.usb.gate = middle.promise;
+
+		const fs = createBrickFilesystem(w.bricks, CCC);
+		const transfer = fs.transfer.writeFile('/home/root/lms2012/prjs/a.rbf', file);
+		await waitFor(() => w.usb.sent.includes('fs:continueWrite'), 1000);
+
+		// The heartbeat finds the cable gone while a chunk is in flight.
+		w.sessionManager['handleHeartbeatFailure'](usbKey, new TransportError('cable out'));
+		middle.open();
+
+		await assert.rejects(transfer, ChannelChangedError);
+		assert.deepEqual(w.bt.sent.filter((k) => k.startsWith('fs:')), []);
 		w.done();
 	});
 });

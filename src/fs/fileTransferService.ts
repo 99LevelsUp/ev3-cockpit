@@ -38,6 +38,22 @@ export interface TransferProgress {
 	readonly total?: number;
 }
 
+/**
+ * One channel a transfer holds for its whole length.
+ *
+ * A transfer is a run of commands against one brick-side file handle, sized to one link's
+ * packets. When a brick is reached over several channels and traffic moves between them --
+ * a cable plugged back in moves it from Bluetooth to USB -- a transfer that followed would
+ * send chunks sized for one link over another, and address its handle over a link nobody
+ * has measured it on. So it keeps the channel it started on, and fails when that channel is
+ * lost rather than when a better one appears (step-2 plan, KD9).
+ */
+export interface PinnedLink {
+	readonly send: SendCommand;
+	/** Largest packet this channel carries; the firmware's buffer when omitted. */
+	readonly maxPacketBytes?: number;
+}
+
 export interface TransferServiceOptions {
 	/**
 	 * Largest EV3 packet the transport delivers, in bytes.
@@ -46,6 +62,48 @@ export interface TransferServiceOptions {
 	 * must pass its own, much smaller, figure.
 	 */
 	readonly maxPacketBytes?: number;
+	/**
+	 * Takes a channel at the start of each transfer, to send every step of it over.
+	 *
+	 * When given, it decides both where the transfer goes and the packet size; neither
+	 * `maxPacketBytes` nor the service's own `send` is used for transfers.
+	 */
+	readonly pin?: () => PinnedLink;
+}
+
+/** Chunk sizes for one link's packet size. */
+interface LinkSizes {
+	readonly maxPacketBytes: number;
+	/** Room for a CONTINUE_DOWNLOAD payload: the packet less its header and the handle. */
+	readonly maxChunkBytes: number;
+	/** Room for a BEGIN_UPLOAD reply's payload, which carries a 4-byte size as well. */
+	readonly maxReadBytes: number;
+}
+
+/** The link a transfer runs over: where it sends, and how large its chunks are. */
+interface TransferLink extends LinkSizes {
+	readonly send: SendCommand;
+}
+
+function sizesFor(maxPacketBytes: number): LinkSizes {
+	const maxChunkBytes = Math.min(
+		MAX_WRITE_CHUNK_BYTES,
+		maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1,
+	);
+	// Replies are bounded by the same packet size as sends. BEGIN_UPLOAD's reply header is
+	// the largest -- echo, status, a 4-byte size and the handle on top of the 6-byte
+	// envelope -- so size the request against that and every later chunk fits too.
+	const maxReadBytes = Math.min(
+		MAX_WRITE_CHUNK_BYTES - 4,
+		maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1 - 4 - 1,
+	);
+	if (maxReadBytes < 1) {
+		throw new ProtocolError(`A ${maxPacketBytes}-byte packet leaves no room for a read payload.`);
+	}
+	if (maxChunkBytes < 1) {
+		throw new ProtocolError(`A ${maxPacketBytes}-byte packet leaves no room for a transfer payload.`);
+	}
+	return { maxPacketBytes, maxChunkBytes, maxReadBytes };
 }
 
 export interface TransferOptions {
@@ -115,35 +173,25 @@ async function withStallTimeout<T>(
  * them, and the brick's handle table is what would run out.
  */
 export class FileTransferService {
-	/** Room for a CONTINUE_DOWNLOAD payload: the packet less its header and the handle. */
-	private readonly maxChunkBytes: number;
-	/** Room for a BEGIN_UPLOAD reply's payload, which carries a 4-byte size as well. */
-	private readonly maxReadBytes: number;
-	private readonly maxPacketBytes: number;
+	private readonly sizes?: LinkSizes;
+	private readonly pin?: () => PinnedLink;
 
 	constructor(private readonly send: SendCommand, options?: TransferServiceOptions) {
-		this.maxPacketBytes = options?.maxPacketBytes ?? FIRMWARE_BUFFER_BYTES;
-		this.maxChunkBytes = Math.min(
-			MAX_WRITE_CHUNK_BYTES,
-			this.maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1,
-		);
-		// Replies are bounded by the same packet size as sends. BEGIN_UPLOAD's reply
-		// header is the largest — echo, status, a 4-byte size and the handle on top of the
-		// 6-byte envelope — so size the request against that and every later chunk fits too.
-		this.maxReadBytes = Math.min(
-			MAX_WRITE_CHUNK_BYTES - 4,
-			this.maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1 - 4 - 1,
-		);
-		if (this.maxReadBytes < 1) {
-			throw new ProtocolError(
-				`A ${this.maxPacketBytes}-byte packet leaves no room for a read payload.`
-			);
+		this.pin = options?.pin;
+		// Checked here when the size is fixed, so a link too small to carry a transfer fails
+		// at construction rather than at the first file.
+		if (!this.pin) {
+			this.sizes = sizesFor(options?.maxPacketBytes ?? FIRMWARE_BUFFER_BYTES);
 		}
-		if (this.maxChunkBytes < 1) {
-			throw new ProtocolError(
-				`A ${this.maxPacketBytes}-byte packet leaves no room for a transfer payload.`
-			);
+	}
+
+	/** The link this transfer runs over, taken once at its start. */
+	private openLink(): TransferLink {
+		if (this.pin) {
+			const link = this.pin();
+			return { send: link.send, ...sizesFor(link.maxPacketBytes ?? FIRMWARE_BUFFER_BYTES) };
 		}
+		return { send: this.send, ...this.sizes! };
 	}
 
 	/**
@@ -155,11 +203,12 @@ export class FileTransferService {
 	 */
 	async writeFile(path: string, content: Uint8Array, options?: TransferOptions): Promise<void> {
 		assertPathFits(path);
+		const link = this.openLink();
 		const stallMs = options?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
 		const total = content.length;
 
 		const firstSize = Math.min(
-			maxFirstChunkBytes(path, this.maxPacketBytes),
+			maxFirstChunkBytes(path, link.maxPacketBytes),
 			total,
 		);
 		if (firstSize < 0) {
@@ -170,7 +219,7 @@ export class FileTransferService {
 
 		let sent = 0;
 		const begin = await withStallTimeout(
-			this.send({
+			link.send({
 				kind: 'fs:beginWrite',
 				path,
 				totalBytes: total,
@@ -192,9 +241,9 @@ export class FileTransferService {
 			while (sent < total && !endOfFile) {
 				this.assertNotAborted(options?.signal, handle);
 
-				const size = Math.min(this.maxChunkBytes, total - sent);
+				const size = Math.min(link.maxChunkBytes, total - sent);
 				const step = await withStallTimeout(
-					this.send({
+					link.send({
 						kind: 'fs:continueWrite',
 						handle,
 						chunk: content.subarray(sent, sent + size),
@@ -212,7 +261,7 @@ export class FileTransferService {
 		} catch (error) {
 			// The firmware only frees the handle on end-of-file or its own error path, so an
 			// abandoned transfer would otherwise hold one until the brick restarts.
-			await this.releaseHandle(handle);
+			await this.releaseHandle(link, handle);
 			throw error;
 		}
 
@@ -224,7 +273,7 @@ export class FileTransferService {
 		// On end-of-file the firmware has already closed and freed the handle; closing
 		// again would address a handle that no longer exists.
 		if (!endOfFile) {
-			await this.releaseHandle(handle);
+			await this.releaseHandle(link, handle);
 		}
 	}
 
@@ -236,11 +285,12 @@ export class FileTransferService {
 	 */
 	async readFile(path: string, options?: TransferOptions): Promise<Uint8Array> {
 		assertPathFits(path);
+		const link = this.openLink();
 		const stallMs = options?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
-		const want = this.maxReadBytes;
+		const want = link.maxReadBytes;
 
 		const begin = await withStallTimeout(
-			this.send({ kind: 'fs:beginRead', path, wantBytes: want }),
+			link.send({ kind: 'fs:beginRead', path, wantBytes: want }),
 			stallMs,
 			0,
 		);
@@ -260,7 +310,7 @@ export class FileTransferService {
 				this.assertNotAborted(options?.signal, handle);
 
 				const step = await withStallTimeout(
-					this.send({
+					link.send({
 						kind: 'fs:continueRead',
 						handle,
 						wantBytes: Math.min(want, total - received),
@@ -283,7 +333,7 @@ export class FileTransferService {
 				options?.onProgress?.({ transferred: received, total });
 			}
 		} catch (error) {
-			await this.releaseHandle(handle);
+			await this.releaseHandle(link, handle);
 			throw error;
 		}
 
@@ -293,7 +343,7 @@ export class FileTransferService {
 			);
 		}
 		if (!endOfFile) {
-			await this.releaseHandle(handle);
+			await this.releaseHandle(link, handle);
 		}
 
 		return Buffer.concat(parts.map((p) => Buffer.from(p)), total);
@@ -308,9 +358,9 @@ export class FileTransferService {
 	}
 
 	/** Best-effort handle release; a failure here must not mask the original error. */
-	private async releaseHandle(handle: number): Promise<void> {
+	private async releaseHandle(link: TransferLink, handle: number): Promise<void> {
 		try {
-			await this.send({ kind: 'fs:closeHandle', handle });
+			await link.send({ kind: 'fs:closeHandle', handle });
 		} catch {
 			// The handle is unusable either way, and the brick frees it on restart.
 		}
