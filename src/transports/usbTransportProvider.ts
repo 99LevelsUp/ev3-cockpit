@@ -9,7 +9,7 @@ import { Transport, BrickKey, makeBrickKey, brickKeyId } from '../contracts';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
-	PresenceState
+	PresenceState, ProbeLink,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
@@ -119,6 +119,13 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly listUsbDevices: typeof listLegoUsbDevices;
 	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	private disposed = false;
+	/**
+	 * Probe links open now. Their devices count as in use, so discovery and a connect leave
+	 * them alone until they close.
+	 */
+	private readonly probes = new Set<UsbLibusbAdapter>();
+	/** Per brick, the tail of the queue that connects and probes wait in. */
+	private readonly locks = new Map<BrickKey, Promise<void>>();
 	/** Guard against concurrent discover() calls overlapping on the same device. */
 	private discovering = false;
 
@@ -207,19 +214,82 @@ export class UsbTransportProvider implements TransportProvider {
 
 	async connect(brickKey: BrickKey): Promise<SessionHandle> {
 		this.assertNotDisposed();
-		if (this.sessions.has(brickKey)) {
-			throw new ConnectionError(`USB brick ${brickKey} is already connected.`);
+		// Waits for a probe of this brick to close first. A connect that raced one would lose
+		// the libusb claim to it and land, silently, on 64-byte HID.
+		const release = await this.lock(brickKey);
+		try {
+			if (this.sessions.has(brickKey)) {
+				throw new ConnectionError(`USB brick ${brickKey} is already connected.`);
+			}
+
+			const serial = this.extractSerial(brickKey);
+
+			// libusb first: it is the only path that carries a whole EV3 frame, and `copy` and
+			// `move` do not fit a HID write at all.
+			const libusbFailure = await this.tryLibusb(brickKey, serial);
+			if (!libusbFailure) {
+				return { brickKey, transport: Transport.USB };
+			}
+			return await this.connectOverHid(brickKey, serial, libusbFailure);
+		} finally {
+			release();
+		}
+	}
+
+	/**
+	 * Opens a libusb link outside any session, for one question such as the brick's name.
+	 *
+	 * The descriptor's name is fixed when the cable goes in, so a brick renamed since then
+	 * shows its old name until somebody asks it (measured 29.10.2026, step-1 plan §4a). An
+	 * open costs tens of milliseconds and nothing shared. libusb only: a HID probe could not
+	 * carry the reply's 72 bytes in one packet, and is not worth a second path.
+	 */
+	async openProbe(brickKey: BrickKey): Promise<ProbeLink> {
+		this.assertNotDisposed();
+		const release = await this.lock(brickKey);
+		let adapter: UsbLibusbAdapter | undefined;
+		try {
+			if (this.sessions.has(brickKey)) {
+				throw new ConnectionError(`USB brick ${brickKey} has a session; ask it instead.`);
+			}
+			const serial = this.extractSerial(brickKey);
+			adapter = this.makeLibusbAdapter({
+				...(serial ? { serial } : {}),
+				inUse: (location) => this.isInUse(location),
+			});
+			await adapter.open();
+		} catch (error) {
+			await adapter?.close().catch(() => { /* nothing to unwind */ });
+			release();
+			throw error;
 		}
 
-		const serial = this.extractSerial(brickKey);
+		const opened = adapter;
+		this.probes.add(opened);
+		let closed = false;
+		return {
+			sendPacket: (packet, options) => opened.send(packet, options),
+			close: async () => {
+				if (closed) { return; }
+				closed = true;
+				this.probes.delete(opened);
+				try { await opened.close(); } finally { release(); }
+			},
+		};
+	}
 
-		// libusb first: it is the only path that carries a whole EV3 frame, and `copy` and
-		// `move` do not fit a HID write at all.
-		const libusbFailure = await this.tryLibusb(brickKey, serial);
-		if (!libusbFailure) {
-			return { brickKey, transport: Transport.USB };
-		}
-		return this.connectOverHid(brickKey, serial, libusbFailure);
+	/** Waits its turn among the connects and probes of one brick; resolves to a release. */
+	private async lock(brickKey: BrickKey): Promise<() => void> {
+		const previous = this.locks.get(brickKey) ?? Promise.resolve();
+		let release!: () => void;
+		const mine = new Promise<void>((resolve) => { release = resolve; });
+		const tail = previous.then(() => mine);
+		this.locks.set(brickKey, tail);
+		await previous;
+		return () => {
+			release();
+			if (this.locks.get(brickKey) === tail) { this.locks.delete(brickKey); }
+		};
 	}
 
 	/** Opens the libusb link, returning the failure detail rather than throwing. */
@@ -329,16 +399,15 @@ export class UsbTransportProvider implements TransportProvider {
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	/** Whether a session already holds the device at this bus address. */
+	/** Whether a session or an open probe already holds the device at this bus address. */
 	private isInUse(location: { busNumber: number; deviceAddress: number }): boolean {
-		for (const session of this.sessions.values()) {
-			if (session.location
-				&& session.location.busNumber === location.busNumber
-				&& session.location.deviceAddress === location.deviceAddress) {
-				return true;
-			}
-		}
-		return false;
+		const held = [
+			...[...this.sessions.values()].map((session) => session.location),
+			...[...this.probes].map((probe) => probe.deviceLocation),
+		];
+		return held.some((at) => at !== undefined
+			&& at.busNumber === location.busNumber
+			&& at.deviceAddress === location.deviceAddress);
 	}
 
 	private extractSerial(brickKey: BrickKey): string | undefined {

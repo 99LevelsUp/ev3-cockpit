@@ -17,6 +17,7 @@ import { ChannelChangedError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { cadenceFor } from '../telemetry/telemetryConstants';
+import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../protocol/ev3Packet';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
@@ -40,6 +41,19 @@ interface FakeChannel {
 	readonly sent: string[];
 	/** When set, a `fs:continueWrite` waits for it before answering: the middle of a transfer. */
 	gate?: Promise<void>;
+	/** The name the brick answers `info` with; `info` is not recorded in `sent`. */
+	name: string;
+	/** Probes opened, when the transport offers them. */
+	probes: number;
+	/** When set, opening a probe fails with this. */
+	probeFailure?: string;
+}
+
+/** An `info` reply packet, as the brick sends it: the name in the first 16 bytes of 72. */
+function infoReply(request: Uint8Array, name: string): Uint8Array {
+	const payload = new Uint8Array(72);
+	payload.set(new TextEncoder().encode(name).subarray(0, 15), 0);
+	return encodeEv3Packet(decodeEv3Packet(request).messageCounter, EV3_REPLY.DIRECT_REPLY, payload);
 }
 
 /** A gate a test opens when it is done doing things in the middle of a transfer. */
@@ -49,12 +63,20 @@ function gate(): { promise: Promise<void>; open: () => void } {
 	return { promise, open };
 }
 
-function fakeChannel(transport: Transport, priority: number, extra: Partial<TransportProvider['capabilities']> = {}): FakeChannel {
+function fakeChannel(
+	transport: Transport,
+	priority: number,
+	extra: Partial<TransportProvider['capabilities']> = {},
+	probes = false,
+): FakeChannel {
 	const channel: FakeChannel = {
-		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [],
+		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [], name: 'CCC', probes: 0,
 		provider: undefined as unknown as TransportProvider,
 	};
 	const execute = async (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
+		if (command.kind === 'info' && !channel.failing) {
+			return { kind: 'info', displayName: channel.name };
+		}
 		channel.sent.push(command.kind);
 		if (options?.signal?.aborted) {
 			// What the USB adapter really reports for an abort.
@@ -69,6 +91,9 @@ function fakeChannel(transport: Transport, priority: number, extra: Partial<Tran
 				await channel.gate;
 				return { kind: 'fs:continueWrite', handle: 1, endOfFile: false };
 			case 'fs:closeHandle': return { kind: 'fs:closeHandle' };
+			case 'brick:setName':
+				channel.name = command.name;
+				return { kind: 'brick:setName' };
 			default: return { kind: 'battery', level: 80 };
 		}
 	};
@@ -88,6 +113,16 @@ function fakeChannel(transport: Transport, priority: number, extra: Partial<Tran
 		async disconnect(): Promise<void> { /* nothing to close */ },
 		async sendPacket(): Promise<Uint8Array> { throw new Error('not used: commands go through the channel below'); },
 		createCommandChannel: () => ({ execute }),
+		...(probes ? {
+			async openProbe() {
+				if (channel.probeFailure) { throw new Error(channel.probeFailure); }
+				channel.probes += 1;
+				return {
+					sendPacket: async (packet: Uint8Array) => infoReply(packet, channel.name),
+					close: async () => { /* nothing held */ },
+				};
+			},
+		} : {}),
 		dispose(): void { /* nothing to release */ },
 	};
 	return channel;
@@ -95,7 +130,7 @@ function fakeChannel(transport: Transport, priority: number, extra: Partial<Tran
 
 function item(brickKey: BrickKey, transport: Transport): DiscoveryItem {
 	return {
-		brickKey, displayName: 'CCC', transport, presenceState: PresenceState.Available,
+		brickKey, displayName: 'CCC', nameSource: 'usb-descriptor', transport, presenceState: PresenceState.Available,
 		remembered: false, connected: false, favorite: false, lastSeenAt: Date.now(),
 	};
 }
@@ -107,7 +142,7 @@ const btKey = makeBrickKey(Transport.BT, '00:16:53:42:D9:F2');
 const CCC = brickIdOf(usbKey);
 
 function world(frames = false) {
-	const usb = fakeChannel(Transport.USB, 30, { supportsTelemetryFrames: frames });
+	const usb = fakeChannel(Transport.USB, 30, { supportsTelemetryFrames: frames }, true);
 	const bt = fakeChannel(Transport.BT, 20, { rejoinOnEvidenceOnly: true, supportsTelemetryFrames: frames });
 	const registry = new ProviderRegistry();
 	registry.register(usb.provider);
@@ -377,6 +412,70 @@ describe('BrickManager — telemetry follows the route', () => {
 			telemetry.dispose();
 			w.done();
 		}
+	});
+});
+
+describe('BrickManager — the name the brick reports', () => {
+	const nameOf = (w: ReturnType<typeof world>) => w.aggregator.getBrick(CCC)?.name;
+
+	it('asks a brick that appears on USB for its name, once, without signing it in', async () => {
+		const w = world();
+		w.usb.name = 'CCCx';   // renamed since the cable went in; the descriptor still says CCC
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await waitFor(() => nameOf(w)?.value === 'CCCx', 1000);
+
+		assert.deepEqual(nameOf(w), { value: 'CCCx', source: 'brick', confirmed: true });
+		await w.scheduler.scanOnce();
+		assert.equal(w.usb.probes, 1);
+		assert.equal(w.usb.connects, 0, 'asking the name must not have opened a session');
+		w.done();
+	});
+
+	it('reads the name over the session when a signed-in brick gains a USB channel, without a probe', async () => {
+		const w = world();
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		w.usb.name = 'CCCj';
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await waitFor(() => nameOf(w)?.value === 'CCCj', 1000);
+		assert.equal(w.usb.probes, 0);
+		w.done();
+	});
+
+	it('keeps the descriptor name, unconfirmed, when the probe cannot open the device, and says so once', async () => {
+		const warnings: string[] = [];
+		const w = world();
+		w.bricks.dispose();
+		const bricks = new BrickManager({
+			sessionManager: w.sessionManager, aggregator: w.aggregator, providerRegistry: w.registry,
+			log: { warn: (message) => warnings.push(message) },
+		});
+		w.usb.probeFailure = 'LIBUSB_ERROR_BUSY';
+		w.show.usb(); await w.scheduler.scanOnce();
+		w.hide.usb(); await w.scheduler.scanOnce();
+		w.show.usb(); await w.scheduler.scanOnce();   // plugged in again
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		assert.deepEqual(nameOf(w), { value: 'CCC', source: 'usb-descriptor', confirmed: false });
+		assert.equal(warnings.length, 1);
+		bricks.dispose();
+		w.done();
+	});
+
+	it('shows a rename made through the cockpit as soon as the brick confirms it', async () => {
+		const w = world();
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		await w.bricks.send(CCC, { kind: 'brick:setName', name: 'Rover' });
+		await waitFor(() => nameOf(w)?.value === 'Rover', 1000);
+		assert.equal(nameOf(w)?.confirmed, true);
+		w.done();
 	});
 });
 

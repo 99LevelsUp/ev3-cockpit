@@ -111,6 +111,18 @@ export class PresenceAggregator implements vscode.Disposable {
 
 	// ── Mutations owned by the cockpit ──────────────────────────────
 
+	/**
+	 * Record the name the brick itself just gave, from an `info` reply.
+	 *
+	 * The most trustworthy source there is, alongside the TCP beacon: between the two, the
+	 * newer name wins.
+	 */
+	confirmName(brickId: BrickId, name: string): void {
+		const record = this.bricks.get(brickId);
+		if (!record) { return; }
+		if (this.setName(record, 'brick', name, Date.now())) { this.emitListChanged(); }
+	}
+
 	/** Update fields this list owns locally on a brick. */
 	updateBrick(brickId: BrickId, patch: Partial<Pick<BrickEntry, 'favorite' | 'remembered'>>): void {
 		const record = this.bricks.get(brickId);
@@ -191,9 +203,21 @@ export class PresenceAggregator implements vscode.Disposable {
 	}
 
 	private noteName(record: BrickRecord, item: DiscoveryItem, at: number): void {
-		const value = item.displayName.trim();
-		if (!value) { return; }
-		record.names.set(item.nameSource ?? 'fallback', { value, at });
+		this.setName(record, item.nameSource ?? 'fallback', item.displayName, at);
+	}
+
+	/**
+	 * Store a name from one source. Returns true when it changed.
+	 *
+	 * An unchanged name keeps the time it was first given. Otherwise a beacon repeating a name
+	 * every scan would always be the newest, and would overrule a rename the cockpit just read
+	 * back from the brick for the seconds until the beacon catches up.
+	 */
+	private setName(record: BrickRecord, source: NameSource, name: string, at: number): boolean {
+		const value = name.trim();
+		if (!value || record.names.get(source)?.value === value) { return false; }
+		record.names.set(source, { value, at });
+		return true;
 	}
 
 	private recordFor(brickId: BrickId): BrickRecord {
