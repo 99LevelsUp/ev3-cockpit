@@ -414,6 +414,35 @@ export class SessionManager implements vscode.Disposable {
 		void this.attemptReconnect(brickKey);
 	}
 
+	/**
+	 * Checks one channel now, outside the heartbeat's schedule, and reports whether it answered.
+	 *
+	 * For a caller that has just seen a command fail on this channel and needs to know at once
+	 * whether the link is gone — the brick layer, which has already moved traffic elsewhere
+	 * and wants the channel back if it was only a hiccup. Waiting for the heartbeat would take
+	 * two missed beats, about 6 s. A failure here is treated as the heartbeat would treat it:
+	 * the session goes to Reconnecting straight away, without waiting for a second miss,
+	 * because the failed command was the first.
+	 *
+	 * A reply that arrives but does not parse still proves the link, as it does for the
+	 * heartbeat.
+	 */
+	async probeNow(brickKey: BrickKey): Promise<boolean> {
+		const resources = this.sessions.get(brickKey);
+		if (!resources || resources.entry.connectionState !== ConnectionState.Connected) {
+			return false;
+		}
+		try {
+			await resources.commandQueue.send({ kind: 'battery' });
+			resources.entry.setHeartbeatState('ok');
+			return true;
+		} catch (error) {
+			if (error instanceof ProtocolError) { return true; }
+			this.handleHeartbeatFailure(brickKey, error);
+			return false;
+		}
+	}
+
 	private scheduleReconnect(brickKey: BrickKey): void {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {

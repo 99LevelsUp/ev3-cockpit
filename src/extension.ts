@@ -15,8 +15,8 @@ import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
-import { DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
-import { PresenceState, Transport, makeBrickKey } from './contracts';
+import { BrickManager, DiscoveryScheduler, PresenceAggregator, SessionManager } from './runtime';
+import { Transport, brickIdOf, makeBrickKey } from './contracts';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from './mock';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -142,22 +142,17 @@ export function activate(context: vscode.ExtensionContext): void {
 	});
 	aggregator.onPresenceChanged(e => {
 		logger.info(`Presence: ${e.item.displayName} [${e.item.transport}] ${e.previousState ?? 'new'} → ${e.currentState}`);
-
-		// A brick that has just become visible again is the evidence a reconnecting session
-		// is waiting for. Measured before this existed: a brick that boots in about 40 s took
-		// 121 s to be picked up, because the backoff had reached 30-second steps and waited
-		// them out beside a brick that was ready. Backoff remains the fallback wherever
-		// discovery cannot see — this only ever makes an attempt happen sooner.
-		if (e.currentState === PresenceState.Available) {
-			sessionManager.notifyBrickAvailable(e.brickKey);
-		}
 	});
 
-	// A channel's state in the list follows its session: connected, lost while it reconnects,
-	// available again once signed out.
-	services.add(sessionManager.onSessionStateChange(e => {
-		aggregator.updateChannelSession(e.brickKey, e.newState);
+	// Bricks rather than channels: signs a brick in over every channel it is available on and
+	// sends each command over the best connected one. It also keeps the list's channel states
+	// in step with the sessions, and hands a reconnecting session the sighting it waits for.
+	const brickManager = services.add(new BrickManager({
+		sessionManager, aggregator, providerRegistry: registry,
 	}));
+	brickManager.onRouteChange(e => {
+		logger.info(`Route: ${e.brickId} ${e.previous ?? 'none'} → ${e.current ?? 'none'}`);
+	});
 
 	services.add(scheduler.onScanFailed(e => {
 		logger.error(`Discovery scan failed on ${e.transport}`,
@@ -183,14 +178,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		what: string,
 		body: (fs: BrickFilesystem, brickKey: string) => Promise<void>,
 	): Promise<void> => {
-		const brickKey = sessionManager.getActiveBrickKey();
+		const brickKey = brickManager.getActiveBrickId();
 		if (!brickKey) {
 			void vscode.window.showWarningMessage(
 				`EV\u018E Cockpit: no active brick, so ${what} has nothing to talk to.`);
 			return;
 		}
 		try {
-			await body(createBrickFilesystem(sessionManager, brickKey), brickKey);
+			await body(createBrickFilesystem(brickManager, brickKey), brickKey);
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
 			logger.error(`${what} failed on ${brickKey}`, err);
@@ -318,7 +313,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				// pairing immediately, the next scheduled scan is up to a poll interval away.
 				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
 				try {
-					await sessionManager.connect(brickKey, Transport.BT, label);
+					await brickManager.signIn(brickIdOf(brickKey));
 					logger.info(`Connected to ${label} over Bluetooth`);
 					void vscode.window.showInformationMessage(`EVƎ Cockpit: connected to ${label}.`);
 				} catch (error) {
