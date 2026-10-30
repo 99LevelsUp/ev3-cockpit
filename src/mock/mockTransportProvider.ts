@@ -39,6 +39,8 @@ export interface MockTransportOptions {
 
 export class MockTransportProvider implements TransportProvider {
 	readonly transport = Transport.Mock;
+	/** Below every real transport. */
+	readonly priority = 0;
 	readonly capabilities: TransportCapabilities = {
 		supportsForget: false,
 		supportsSignalInfo: false,
@@ -375,7 +377,7 @@ export class MockTransportProvider implements TransportProvider {
 			remembered: false,
 			connected: state.connected,
 			favorite: false,
-			availableTransports: [Transport.Mock],
+			nameSource: 'brick',
 			lastSeenAt: now,
 		};
 	}

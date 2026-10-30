@@ -166,6 +166,7 @@ describe('telemetry cadence', () => {
 function fakeProvider(transport: Transport, supportsTelemetryFrames: boolean): TransportProvider {
 	return {
 		transport,
+		priority: 0,
 		capabilities: {
 			supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames,
 		},
