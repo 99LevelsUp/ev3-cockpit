@@ -85,6 +85,11 @@ export interface UsbLibusbAdapterOptions {
 	 * on hardware — connecting a second brick killed the first.
 	 */
 	inUse?: (location: UsbDeviceLocation) => boolean;
+	/**
+	 * Bytes asked for on top of the frame in every read. Defaults to {@link READ_OVERRUN_SLACK}
+	 * for this platform; tests set it to pin one behaviour.
+	 */
+	readSlackBytes?: number;
 	/** Injection seam for tests, which have no brick to enumerate. */
 	moduleLoader?: () => UsbModuleLike;
 }
@@ -100,6 +105,22 @@ const MAX_STALE_REPLIES = 4;
  * back by its endpoint timeout, the send budget; this only bounds a transfer sent without one.
  */
 const CLOSE_DRAIN_MAX_MS = 3000;
+
+/**
+ * One byte more than the frame on every read, on Windows only.
+ *
+ * libusb reaches the brick on Windows through its HID backend, which reads the report id
+ * along with the data and then copies the whole report — id byte included in the count —
+ * into the caller's buffer from one byte in: a 1024-byte read reports 1025 and writes one
+ * byte past the end. Measured 20 reads out of 20 (30.10.2026). Under Node the byte landed in
+ * slack and nobody saw it; in the extension host it hit memory that was not there and took
+ * the host down with an access violation, at random, often 0.5 s after activation. Asking for
+ * 1025 gives that byte somewhere to land, and the reply is found by its length prefix anyway.
+ *
+ * Not elsewhere: there libusb reads the endpoint itself, a full 1024-byte packet is not a
+ * short one, and a 1025-byte read would sit waiting for more until it timed out.
+ */
+const READ_OVERRUN_SLACK = process.platform === 'win32' ? 1 : 0;
 
 function loadUsbModule(): UsbModuleLike {
 	try {
@@ -145,6 +166,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private readonly interfaceNumber: number;
 	private readonly moduleLoader: () => UsbModuleLike;
 	private readonly inUse: (location: UsbDeviceLocation) => boolean;
+	private readonly readSlack: number;
 
 	private device?: UsbDeviceLike;
 	private claimed?: UsbInterfaceLike;
@@ -165,6 +187,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.interfaceNumber = options.interfaceNumber ?? 0;
 		this.moduleLoader = options.moduleLoader ?? loadUsbModule;
 		this.inUse = options.inUse ?? (() => false);
+		this.readSlack = options.readSlackBytes ?? READ_OVERRUN_SLACK;
 	}
 
 	get isOpen(): boolean {
@@ -211,10 +234,10 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		if (!device) { return; }
 
 		// A send that gave up on the JS side — a timeout, an abort — leaves its libusb transfer
-		// pending until libusb's own endpoint timeout calls it back. Releasing the interface and
-		// closing the device under it let that late callback land in freed native memory: the
-		// extension host died with an access violation in node-usb, minutes after a name probe
-		// had timed out (30.10.2026). So wait for libusb to hand every transfer back first.
+		// pending until libusb's own endpoint timeout calls it back, and node-usb refuses to close
+		// a device with a request pending. So wait for libusb to hand every transfer back first.
+		// (This was first blamed for the extension host's access violations of 30.10.2026; the
+		// cause turned out to be the read overrun, see READ_OVERRUN_SLACK.)
 		await this.waitForTransfers(CLOSE_DRAIN_MAX_MS);
 
 		// Release before close, and never let either failure mask the other: a device
@@ -427,7 +450,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	): Promise<Uint8Array> {
 		return this.withCancellation<Uint8Array>(
 			(resolve, reject) => {
-				this.submit(reject, (done) => this.inEndpoint!.transfer(this.frameBytes, (error, data) => {
+				this.submit(reject, (done) => this.inEndpoint!.transfer(this.frameBytes + this.readSlack, (error, data) => {
 					done();
 					if (error) {
 						reject(new TransportError(`USB receive failed: ${error.message}`, error));
