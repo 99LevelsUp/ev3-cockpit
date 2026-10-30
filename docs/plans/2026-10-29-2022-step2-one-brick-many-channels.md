@@ -498,3 +498,21 @@ U6 and U10 record their tables and verdicts here.
 - A Bluetooth join that failed at sign-in (WSA 10060, this adapter) rejoined by itself after the next presence answer, 40–60 s later, as designed (D3, KD10).
 - Harness lesson: phases run in separate processes reconnected Bluetooth seconds after the previous process had closed it, the too-soon reconnect that locks a brick out for minutes (D3); the provider's gap lives in the process. Phases now share one process. In the extension, one process, this does not arise; a window reload right after a disconnect could hit it.
 - Fixed on the way: a channel that will not join is now logged with its error; the USB provider no longer warns of a fallback to HID on every reconnect attempt while the cable is out, only when a HID link actually opens.
+
+### U10 gap — the extension host crashed, 30.10.2026 (psk1, three bricks on USB)
+
+The criteria above were proven in a Node 26 harness. The extension host is Electron 43.7.7 on Node 24.21, and it never ran libusb before the owner pressed F5: the host died with an access violation in node-usb, on connect and later 0.5 s after activation.
+
+Rule written before the fix: the cause is accepted only if it shows on every read, without waiting for a crash (the crash came and went over the evening, so a clean run proved nothing).
+
+| check | before | after |
+|---|---|---|
+| node-usb built from source with a linker map, crash symbolized | fault in `memcpy` under libusb `hid_copy_transfer_data`, event thread | — |
+| bare node-usb, 1024-byte read into a window of a larger buffer, byte past the window (Node 26 and Electron) | overwritten in 20 / 20 reads, `actualLength` 1025 | 1025-byte read: 0 / 20 |
+| shipped adapter, three bricks asked their names 50 rounds at once, Electron with forced GC every 2 ms | crashed (bare loop: 1 of 3) | 4 / 4 clean |
+| Extension Development Host launched with all three bricks on USB | crashed in 5 of 11 launches | 0 / 5 |
+
+- Verdict: the cause holds. libusb on Windows reaches the brick through its HID backend, reads the report id with the data and copies the whole count, id included, into the caller's buffer from one byte in: one byte past every read. Under Node it landed in slack. The adapter now asks for one byte more on Windows (`READ_OVERRUN_SLACK`).
+- A second, separate bug found on the way: `getDeviceList()` hands out one shared `Device` per device, so any opener's `close()` closed the handle for every holder; discovery and three name probes opened bricks over each other. Every device opening now runs alone on the bus, and a device stays in use until its link has closed.
+- The earlier fix (f9eb636, close waits for transfers in flight) was argued from the first crash and was not its cause; it stays, because node-usb refuses to close a device with a request pending.
+- Lesson: a harness on another runtime does not verify the shipped one. Hardware checks of the extension run in the Extension Development Host from now on.

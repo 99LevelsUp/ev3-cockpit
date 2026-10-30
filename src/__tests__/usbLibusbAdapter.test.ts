@@ -136,12 +136,13 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 	return { module: { getDeviceList: () => devices }, log };
 }
 
-function adapterFor(specs: FakeDeviceSpec[], serial?: string): {
+function adapterFor(specs: FakeDeviceSpec[], serial?: string, readSlackBytes = 0): {
 	adapter: UsbLibusbAdapter; log: Recorded;
 } {
 	const { module, log } = fakeUsb(specs);
 	const adapter = new UsbLibusbAdapter({
 		serial,
+		readSlackBytes,
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		moduleLoader: () => module as any,
 	});
@@ -230,6 +231,32 @@ describe('UsbLibusbAdapter — the transfer quirks', () => {
 		assert.equal(log.requestedReadLengths[0], FRAME);
 		assert.equal(reply.length, 2 + 6, 'length prefix plus the six declared bytes');
 		assert.deepEqual([...reply], [6, 0, 1, 0, 0x03, 0x02, 0x00, 0x63]);
+	});
+
+	it('gives libusb\'s Windows HID read the extra byte it writes past the frame', async () => {
+		// libusb on Windows copies the report id's byte too: a 1024-byte read writes 1025. That
+		// byte past a JS buffer took the extension host down (30.10.2026); a reply of 1025 bytes
+		// must still come out as the packet it declares.
+		const reply1025 = Buffer.concat([paddedReply(1, [0x02, 0x00, 0x63]), Buffer.from([0x00])]);
+		const { adapter, log } = adapterFor([{ replies: [reply1025] }], undefined, 1);
+		await adapter.open();
+		const reply = await adapter.send(new Uint8Array([0x00, 0x00]), { expectedMessageCounter: 1 });
+		await adapter.close();
+
+		assert.equal(log.requestedReadLengths[0], FRAME + 1);
+		assert.deepEqual([...reply], [6, 0, 1, 0, 0x03, 0x02, 0x00, 0x63]);
+	});
+
+	it('asks for the extra byte on Windows only, where libusb reads through HID', async () => {
+		const { module, log } = fakeUsb([{ replies: [paddedReply(1)] }]);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const adapter = new UsbLibusbAdapter({ moduleLoader: () => module as any });
+		await adapter.open();
+		await adapter.send(new Uint8Array([0x00, 0x00]));
+		await adapter.close();
+
+		// Elsewhere a full packet is not a short one, and a longer read would wait for more.
+		assert.equal(log.requestedReadLengths[0], process.platform === 'win32' ? FRAME + 1 : FRAME);
 	});
 
 	it('rejects a reply that declares more than the transfer carried', async () => {
