@@ -95,6 +95,12 @@ const TRANSFER_TYPE_INTERRUPT = 0x03;
 /** How many stale replies to step over before declaring the channel desynchronised. */
 const MAX_STALE_REPLIES = 4;
 
+/**
+ * Longest `close` waits for libusb to hand back transfers still in flight (ms). libusb calls each
+ * back by its endpoint timeout, the send budget; this only bounds a transfer sent without one.
+ */
+const CLOSE_DRAIN_MAX_MS = 3000;
+
 function loadUsbModule(): UsbModuleLike {
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -148,6 +154,9 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private _isOpen = false;
 	private opening?: Promise<void>;
 	private inFlight = false;
+	/** Transfers handed to libusb and not yet called back; `close` waits for none. */
+	private pendingTransfers = 0;
+	private readonly drainWaiters: (() => void)[] = [];
 
 	constructor(options: UsbLibusbAdapterOptions = {}) {
 		this.serial = options.serial?.trim().toLowerCase() || undefined;
@@ -188,7 +197,6 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		return this.opening;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/require-await
 	async close(): Promise<void> {
 		this._isOpen = false;
 		const device = this.device;
@@ -201,6 +209,13 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.inFlight = false;
 
 		if (!device) { return; }
+
+		// A send that gave up on the JS side — a timeout, an abort — leaves its libusb transfer
+		// pending until libusb's own endpoint timeout calls it back. Releasing the interface and
+		// closing the device under it let that late callback land in freed native memory: the
+		// extension host died with an access violation in node-usb, minutes after a name probe
+		// had timed out (30.10.2026). So wait for libusb to hand every transfer back first.
+		await this.waitForTransfers(CLOSE_DRAIN_MAX_MS);
 
 		// Release before close, and never let either failure mask the other: a device
 		// unplugged mid-session fails both, and leaking the handle would keep the next
@@ -392,13 +407,14 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 		return this.withCancellation(
 			(resolve, reject) => {
-				this.outEndpoint!.transfer(frame, (error) => {
+				this.submit(reject, (done) => this.outEndpoint!.transfer(frame, (error) => {
+					done();
 					if (error) {
 						reject(new TransportError(`USB send failed: ${error.message}`, error));
 					} else {
 						resolve();
 					}
-				});
+				}));
 			},
 			options,
 			timeoutMs,
@@ -411,7 +427,8 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	): Promise<Uint8Array> {
 		return this.withCancellation<Uint8Array>(
 			(resolve, reject) => {
-				this.inEndpoint!.transfer(this.frameBytes, (error, data) => {
+				this.submit(reject, (done) => this.inEndpoint!.transfer(this.frameBytes, (error, data) => {
+					done();
 					if (error) {
 						reject(new TransportError(`USB receive failed: ${error.message}`, error));
 						return;
@@ -430,11 +447,45 @@ export class UsbLibusbAdapter implements TransportAdapter {
 						return;
 					}
 					resolve(extracted.packet);
-				});
+				}));
 			},
 			options,
 			timeoutMs,
 		);
+	}
+
+	/**
+	 * Hands one transfer to libusb, counting it until libusb calls it back.
+	 *
+	 * The count is what `close` waits on; `done` must be the first thing the callback does.
+	 */
+	private submit(reject: (error: unknown) => void, transfer: (done: () => void) => void): void {
+		this.pendingTransfers += 1;
+		let finished = false;
+		const done = (): void => {
+			if (finished) { return; }
+			finished = true;
+			this.pendingTransfers -= 1;
+			if (this.pendingTransfers === 0) {
+				for (const resolve of this.drainWaiters.splice(0)) { resolve(); }
+			}
+		};
+		try {
+			transfer(done);
+		} catch (error) {
+			done();
+			reject(error);
+		}
+	}
+
+	/** Resolves once libusb has called back every transfer, or after `maxMs`, whichever is first. */
+	private waitForTransfers(maxMs: number): Promise<void> {
+		if (this.pendingTransfers === 0) { return Promise.resolve(); }
+		return new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, maxMs);
+			timer.unref?.();
+			this.drainWaiters.push(() => { clearTimeout(timer); resolve(); });
+		});
 	}
 
 	/**

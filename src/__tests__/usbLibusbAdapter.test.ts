@@ -24,6 +24,10 @@ interface Recorded {
 	claimed: number;
 	openedDevices: string[];
 	closedDevices: string[];
+	/** IN transfers held back by `holdReads`, to call back when the test decides. */
+	heldReads: ((error: Error | undefined, data?: Buffer) => void)[];
+	/** What happened, in order: `read-callback`, `release`, `close`. */
+	events: string[];
 }
 
 /** A reply in the brick's framing: length prefix, message counter, then a body. */
@@ -52,12 +56,14 @@ interface FakeDeviceSpec {
 	claimError?: string;
 	busNumber?: number;
 	deviceAddress?: number;
+	/** IN transfers never call back on their own: a read still in flight inside libusb. */
+	holdReads?: boolean;
 }
 
 function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unknown[] }; log: Recorded } {
 	const log: Recorded = {
 		sent: [], requestedReadLengths: [], closed: 0, released: 0, claimed: 0,
-		openedDevices: [], closedDevices: [],
+		openedDevices: [], closedDevices: [], heldReads: [], events: [],
 	};
 
 	const devices = specs.map((spec, index) => {
@@ -87,6 +93,10 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 					return;
 				}
 				log.requestedReadLengths.push(lengthOrData as number);
+				if (spec.holdReads) {
+					log.heldReads.push((error, data) => { log.events.push('read-callback'); callback(error, data); });
+					return;
+				}
 				const next = replies.shift();
 				setImmediate(() => next
 					? callback(undefined, next)
@@ -99,7 +109,7 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 			busNumber: spec.busNumber ?? 2,
 			deviceAddress: spec.deviceAddress ?? 10 + index,
 			open(): void { log.openedDevices.push(name); },
-			close(): void { log.closed += 1; log.closedDevices.push(name); },
+			close(): void { log.closed += 1; log.closedDevices.push(name); log.events.push('close'); },
 			interface(): unknown {
 				return {
 					endpoints,
@@ -109,6 +119,7 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 					},
 					release(_close: boolean, callback: () => void): void {
 						log.released += 1;
+						log.events.push('release');
 						callback();
 					},
 				};
@@ -136,6 +147,27 @@ function adapterFor(specs: FakeDeviceSpec[], serial?: string): {
 	});
 	return { adapter, log };
 }
+
+describe('UsbLibusbAdapter — closing with a transfer still in libusb', () => {
+	it('waits for an abandoned read to call back before releasing and closing the device', async () => {
+		// A send that timed out on the JS side leaves its libusb transfer pending. Releasing the
+		// interface and closing the device under it let the late callback land in freed native
+		// memory: the extension host crashed with an access violation in node-usb (30.10.2026),
+		// minutes after a name probe had timed out.
+		const { adapter, log } = adapterFor([{ serial: '001653AABBCC', holdReads: true }], '001653AABBCC');
+		await adapter.open();
+		log.events.length = 0;   // finding the device by serial opens and closes it once
+		await assert.rejects(adapter.send(replyPacket(1), { timeoutMs: 30 }), /budget/);
+
+		const closing = adapter.close();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.deepEqual(log.events, [], 'nothing may be released while libusb still holds a transfer');
+
+		log.heldReads.shift()!(new Error('LIBUSB_TRANSFER_CANCELLED'));
+		await closing;
+		assert.deepEqual(log.events, ['read-callback', 'release', 'close']);
+	});
+});
 
 describe('UsbLibusbAdapter — packet size', () => {
 	it('reports the frame the endpoint advertises, not an assumed figure', async () => {
