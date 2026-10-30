@@ -148,7 +148,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// sends each command over the best connected one. It also keeps the list's channel states
 	// in step with the sessions, and hands a reconnecting session the sighting it waits for.
 	const brickManager = services.add(new BrickManager({
-		sessionManager, aggregator, providerRegistry: registry,
+		sessionManager, aggregator, providerRegistry: registry, log: logger,
 	}));
 	brickManager.onRouteChange(e => {
 		logger.info(`Route: ${e.brickId} ${e.previous ?? 'none'} → ${e.current ?? 'none'}`);

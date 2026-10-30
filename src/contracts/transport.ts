@@ -320,6 +320,21 @@ export interface TelemetryFrameResponse {
 	readonly payload: Uint8Array;
 }
 
+/**
+ * A short-lived byte link to a brick outside any session.
+ *
+ * For one question asked without signing the brick in — its name, the moment it appears on
+ * the bus. Bytes only, like `sendPacket`: the command layer above frames the question.
+ * Close it promptly; while it is open the provider holds the device and a connect waits.
+ */
+export interface ProbeLink {
+	sendPacket(
+		packet: Uint8Array,
+		options?: SendCommandOptions & { expectedMessageCounter?: number },
+	): Promise<Uint8Array>;
+	close(): Promise<void>;
+}
+
 // ── Provider interface ───────────────────────────────────────────────
 
 /**
@@ -392,6 +407,18 @@ export interface TransportProvider extends vscode.Disposable {
 	 * from which backend the connection landed on. `undefined` means the firmware default.
 	 */
 	maxPacketBytes?(brickKey: BrickKey): number | undefined;
+
+	/**
+	 * Opens a {@link ProbeLink} to a brick that has no session.
+	 *
+	 * Present only where asking costs next to nothing: USB, where an open is tens of
+	 * milliseconds and touches nothing shared. Not Bluetooth, where every open pages the one
+	 * radio and fails half the time on a weak adapter.
+	 *
+	 * @throws When the device cannot be opened — held by another program, or the brick has a
+	 *   session (ask the session instead).
+	 */
+	openProbe?(brickKey: BrickKey): Promise<ProbeLink>;
 
 	/**
 	 * Attempt to re-establish a lost connection.

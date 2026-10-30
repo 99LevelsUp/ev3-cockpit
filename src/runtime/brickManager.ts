@@ -18,6 +18,7 @@ import {
 	ChannelChangedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { PinnedLink } from '../fs/fileTransferService';
+import { PacketCommandChannel } from '../commands/commandChannel';
 import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { ProviderRegistry } from '../transports/providerRegistry';
@@ -48,6 +49,8 @@ export interface BrickManagerOptions {
 	/** Backoff for retrying a failed join on a transport that allows timed retries. */
 	readonly rejoinBaseMs?: number;
 	readonly rejoinMaxMs?: number;
+	/** Where a name that could not be read is reported, once per channel. */
+	readonly log?: { warn(message: string): void };
 }
 
 // ── Per-brick sign-in state ─────────────────────────────────────────
@@ -90,6 +93,11 @@ export class BrickManager implements vscode.Disposable {
 	private readonly routes = new Map<BrickId, BrickKey>();
 	private activeBrickId?: BrickId;
 	private disposed = false;
+	private readonly log?: { warn(message: string): void };
+	/** Channels being asked their name without a session, so one sighting asks once. */
+	private readonly probing = new Set<BrickKey>();
+	/** Channels whose name probe has failed and been reported, so it is reported once. */
+	private readonly probeFailuresReported = new Set<BrickKey>();
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -106,6 +114,7 @@ export class BrickManager implements vscode.Disposable {
 		this.registry = options.providerRegistry;
 		this.rejoinBaseMs = options.rejoinBaseMs ?? FIRMWARE_SAFETY.RECONNECT_BASE_MS;
 		this.rejoinMaxMs = options.rejoinMaxMs ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
+		this.log = options.log;
 
 		this.subscriptions.push(
 			this.sessionManager.onSessionStateChange((e) => {
@@ -125,6 +134,7 @@ export class BrickManager implements vscode.Disposable {
 				// about 40 s took 121 s to be picked up, because the backoff had reached 30 s
 				// steps and waited them out beside a brick that was ready.
 				this.sessionManager.notifyBrickAvailable(e.brickKey);
+				this.probeName(e.brickKey);
 				const signIn = this.signedIn.get(brickIdOf(e.brickKey));
 				if (signIn?.awaitingEvidence.delete(e.brickKey)) {
 					this.reconcile(brickIdOf(e.brickKey));
@@ -212,12 +222,17 @@ export class BrickManager implements vscode.Disposable {
 		if (!route) {
 			throw new NotConnectedError(`Brick ${brickId} has no connected channel.`);
 		}
+		let response: BrickResponse;
 		try {
-			return await this.sessionManager.send(route, command, options);
+			response = await this.sessionManager.send(route, command, options);
 		} catch (error) {
 			if (isLinkFailure(error, options)) { this.dropFromRouting(route); }
 			throw error;
 		}
+		// The brick answers a rename with a bare status, and rejects a bad name in silence; the
+		// only proof it took is to read the name back.
+		if (command.kind === 'brick:setName') { void this.readNameOverSession(route); }
+		return response;
 	}
 
 	/**
@@ -369,6 +384,7 @@ export class BrickManager implements vscode.Disposable {
 			const name = this.aggregator.getBrick(brickId)?.name.value;
 			await this.sessionManager.connect(key, transport, name);
 			signIn.backoff.delete(key);
+			void this.readNameOverSession(key);
 			// Signed out while this join was in flight: the user asked for nothing to stay open.
 			if (this.signedIn.get(brickId) !== signIn) {
 				await this.sessionManager.disconnect(key);
@@ -405,6 +421,54 @@ export class BrickManager implements vscode.Disposable {
 		if (!signIn) { return; }
 		for (const timer of signIn.retryTimers.values()) { clearTimeout(timer); }
 		this.signedIn.delete(brickId);
+	}
+
+	// ── Internal: names ─────────────────────────────────────────────
+
+	/** Ask a channel's session for the brick's name and record it as confirmed. */
+	private async readNameOverSession(key: BrickKey): Promise<void> {
+		try {
+			const reply = await this.sessionManager.send(key, { kind: 'info' });
+			if (reply.kind === 'info') { this.aggregator.confirmName(brickIdOf(key), reply.displayName); }
+		} catch {
+			// The name stays what discovery said; the heartbeat deals with the link.
+		}
+	}
+
+	/**
+	 * Ask a brick that has just appeared for its name, without signing it in.
+	 *
+	 * Only where the transport offers a probe (USB), and only for a brick nobody is signed
+	 * into: a signed-in brick's join reads the name itself, and a probe would hold the device
+	 * the join is about to open.
+	 */
+	private probeName(key: BrickKey): void {
+		const provider = this.registry.get(this.transportOf(key));
+		if (!provider?.openProbe || this.probing.has(key)) { return; }
+		if (this.signedIn.has(brickIdOf(key)) || this.sessionManager.getSession(key)) { return; }
+
+		this.probing.add(key);
+		void (async () => {
+			try {
+				const link = await provider.openProbe!(key);
+				try {
+					const channel = new PacketCommandChannel(
+						(packet, options) => link.sendPacket(packet, options), provider.transport);
+					const reply = await channel.execute({ kind: 'info' });
+					if (reply.kind === 'info') { this.aggregator.confirmName(brickIdOf(key), reply.displayName); }
+				} finally {
+					await link.close();
+				}
+			} catch (error) {
+				if (!this.probeFailuresReported.has(key)) {
+					this.probeFailuresReported.add(key);
+					this.log?.warn(`Could not read the name of ${key} without connecting; showing `
+						+ `the USB descriptor's until it connects: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} finally {
+				this.probing.delete(key);
+			}
+		})();
 	}
 
 	// ── Internal: routing ───────────────────────────────────────────

@@ -39,7 +39,10 @@ function fakeProvider(transport: Transport, priority: number, items: DiscoveryIt
 		transport,
 		priority,
 		capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
-		async discover(): Promise<DiscoveryScanResult> { return { transport, items: [...items] }; },
+		// Stamped at each scan, as the real providers do.
+		async discover(): Promise<DiscoveryScanResult> {
+			return { transport, items: items.map((i) => ({ ...i, lastSeenAt: Date.now() })) };
+		},
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
 		async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
@@ -262,6 +265,21 @@ describe('PresenceAggregator — the name shown', () => {
 		await scheduler.scanOnce();
 
 		assert.equal(aggregator.getBrick(CCC_ID)?.name.value, 'CCCx');
+		done();
+	});
+
+	it('keeps a name the brick just confirmed while the beacon still repeats the old one', async () => {
+		// The cockpit renamed the brick and read the new name back; the beacon catches up
+		// seconds later. Until then it keeps announcing the old name every scan.
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.tcp.push(item(CCC.tcp, Transport.TCP, 'CCC', 'beacon'));
+		await scheduler.scanOnce();
+
+		aggregator.confirmName(CCC_ID, 'Rover');
+		await new Promise((resolve) => setTimeout(resolve, 5));   // the next scans are later
+		await scheduler.scanOnce();
+		await scheduler.scanOnce();
+		assert.equal(aggregator.getBrick(CCC_ID)?.name.value, 'Rover');
 		done();
 	});
 
