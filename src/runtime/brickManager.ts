@@ -12,7 +12,7 @@
 import * as vscode from 'vscode';
 import {
 	BrickCommand, BrickId, BrickKey, BrickResponse, ChannelState, ConnectionState,
-	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyTransport,
+	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyTransport, describeChannel,
 } from '../contracts';
 import {
 	ChannelChangedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
@@ -258,7 +258,7 @@ export class BrickManager implements vscode.Disposable {
 				if (this.sessionManager.getSession(key)?.connectionState !== ConnectionState.Connected
 					|| this.dropped.has(key)) {
 					throw new ChannelChangedError(
-						`The channel ${key} this operation started on was lost; start it again.`);
+						`The channel ${describeChannel(key)} this operation started on was lost; start it again.`);
 				}
 				try {
 					return await this.sessionManager.send(key, command);

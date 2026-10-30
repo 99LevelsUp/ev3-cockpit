@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
-import { BrickKey, brickIdOf } from '../contracts/brickKey';
+import { BrickKey, brickIdOf, describeChannel } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
 import { BrickCommand, BrickResponse, SendCommandOptions, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
@@ -97,7 +97,7 @@ export class SessionManager implements vscode.Disposable {
 	/** Connect to a brick via the specified transport. */
 	async connect(brickKey: BrickKey, transport: Transport, displayName?: string): Promise<void> {
 		if (this.sessions.has(brickKey)) {
-			throw new AlreadyConnectedError(`Brick ${brickKey} is already connected.`);
+			throw new AlreadyConnectedError(`Brick ${describeChannel(brickKey)} is already connected.`);
 		}
 
 		const provider = this.providerRegistry.get(transport);
@@ -195,7 +195,7 @@ export class SessionManager implements vscode.Disposable {
 	setActiveBrick(brickKey: BrickKey): void {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
-			throw new NotConnectedError(`Brick ${brickKey} is not connected.`);
+			throw new NotConnectedError(`Brick ${describeChannel(brickKey)} is not connected.`);
 		}
 
 		const previous = this.activeBrickKey;
@@ -264,7 +264,7 @@ export class SessionManager implements vscode.Disposable {
 	): Promise<BrickResponse> {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
-			return Promise.reject(new NotConnectedError(`Brick ${brickKey} is not connected.`));
+			return Promise.reject(new NotConnectedError(`Brick ${describeChannel(brickKey)} is not connected.`));
 		}
 		return resources.commandQueue.send(command, options);
 	}

@@ -14,7 +14,7 @@
  * starves the heartbeat and trips reconnect on a brick that is merely busy.
  */
 
-import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
+import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport, describeChannel } from '../contracts';
 import { brickKeyTransport } from '../contracts/brickKey';
 import { maxPacketBytesFor } from '../fs/brickFilesystem';
 import { FIRMWARE_BUFFER_BYTES } from '../protocol/ev3Commands';
@@ -118,7 +118,7 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 				// would hand the row parser a buffer laid out by somebody else's frame and
 				// produce readings that look plausible and came from nowhere.
 				throw new Error(
-					`Telemetry frame for ${brickKey} came back as '${response.kind}'.`
+					`Telemetry frame for ${describeChannel(brickKey)} came back as '${response.kind}'.`
 				);
 			}
 			return response.payload;
