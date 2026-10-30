@@ -124,7 +124,7 @@ The transport guard also contradicts D2. It enforces "one active transport per b
   - Failure counting and degradation are keyed by channel. Keyed by brick, a pulled cable's failures would degrade the brick and block the healthy Bluetooth standby — the failover this step exists for.
   - "One active transport" and `TRANSPORT_SWITCH_COOLDOWN_MS` go. U4.4 and the cable-pull run found no freeze with both links open and commands in flight on both. The rule's cited incident record does not exist (lab `testlab-inventory.md` §1).
   - Closing one channel no longer resets the whole brick's health.
-- KTD4. **Read model: the scheduler keeps tracking channels; the aggregator groups them into bricks.** Per-channel presence (available, unavailable, removed) is exactly what a channel's state is built from. The scheduler's miss counting stays as it is. The aggregator merges channel items by `BrickId` and overlays session state.
+- KTD4. **Read model: the scheduler keeps tracking channels; each channel's state is one state machine, the same for every transport; the aggregator groups channels into bricks.** A `BrickChannel` (one brick on one transport) owns its state and its valid transitions, the way `SessionEntry` already owns the connection state machine: an invalid transition throws instead of being silently derived. There is one `BrickChannel` class, not one per transport, because the machine is identical for USB, BT and TCP; everything that differs lives in the transport's provider (KTD10). Presence events from the scheduler (available, unavailable, removed), session state changes and presence-check answers are the inputs that drive transitions. The scheduler's miss counting stays as it is.
   - absent: the channel was never seen this session;
   - available: seen and not connected;
   - connected: a live session;
@@ -132,7 +132,7 @@ The transport guard also contradicts D2. It enforces "one active transport per b
 
   The presence verdict travels with the scan, not beside it: the BT provider's `discover()` keeps reporting every paired brick and carries a `heard` flag from the last check, so the verdict survives `rebuildFromScheduler` and a paired brick is never dropped (KD6). `DiscoveryItem` changes shape now, while the API (Phase 4) and the panel (Phase 5) have no consumers. A per-brick item carries the channel map; the old `transport`/`availableTransports` pair cannot say lost or connected.
 - KTD5. **Routing chooses a channel between commands; each channel keeps its own queue.**
-  - A command goes to the queue of the highest-priority connected channel at the moment it is dispatched. The order is USB → BT → TCP, then any other connected channel, so a single-channel brick (mock, TCP known only by IP) always routes to its one channel.
+  - A command goes to the queue of the highest-priority connected channel at the moment it is dispatched. Priority comes from each channel's provider (KTD10), USB → BT → TCP → mock, so a single-channel brick (mock, TCP known only by IP) always routes to its one channel.
   - A failure in flight surfaces to the caller (R8). A link-level failure on the route channel (any error that is not a `ProtocolError`, the heartbeat's own `isLinkFailure` rule) drops that channel from routing at once and triggers an immediate heartbeat probe; the session still reaches Reconnecting through the existing path. Waiting for the heartbeat instead would leave the route on a dead cable for two missed beats, about 6 s, and the cable-pull run showed the first USB call fails at once (`LIBUSB_ERROR_IO`).
   - The route is recomputed on every session state change and on every such drop. It is never pinned by a caller, except by the transfer rule below.
   - Multi-step operations pin the channel they start on and send every step over it, bypassing the route (KD9). A step fails with a "channel changed" error only when that channel has left Connected (R9). `maxPacketBytes` is read from the pinned channel at the moment the operation starts, so a transfer never chunks for one channel and sends over another.
@@ -152,6 +152,7 @@ The transport guard also contradicts D2. It enforces "one active transport per b
   - Microsoft documents neither method's behaviour toward a switched-off device, so U6 measures them before U7 builds one.
   - Both run through `BtConnectionQueue`, so they never race a connect or a pairing. They hold the slot for mutual exclusion only. Releasing it does not arm the 15 s inter-connection cooldown, and an unanswered check is a result, not an error, so it never arms the 30 s error backoff. Only the post-check gap U6 measures applies before the next connect. The inquiry window stays well below `QUEUE_ACQUIRE_TIMEOUT_MS` (45 s). Otherwise one presence round of three paired bricks plus an inquiry would hold the queue for about a minute, and a user connect behind it would time out.
   - An RFCOMM connect is not a candidate: on the weak adapter it fails half the time with the brick on, and a reconnect too soon after a close locks the brick out for minutes (D3).
+- KTD10. **What differs between transports lives only behind the `TransportProvider` interface, and that includes priority.** Each provider declares its channel priority (USB highest, then BT, then TCP, mock lowest) and the brick layer orders channels by it, with no transport named in the routing code. A new transport is then one more implementation of the interface, with no edit to the brick layer, the channel state machine or the route. (session-settled: user-directed — chosen over a priority list hardcoded in the brick layer: "kanál komunikace bude nějaký interface … jednotlivé instance usb, bt a tcp budou pouze implementovat ten interface, budou mít nějakou prioritu … stavový automat bude taky vlastností toho interface")
 - KTD9. **The runtime is composed in one function that the extension and the hardware harness both call.** Today the composition is inline in `activate()`. U10 must run the shipped wiring, not a hand-written copy, because a probe has diverged from the shipped code five times before (memory: the probe is more suspect than the shipped code).
 
 ### High-Level Technical Design
@@ -197,7 +198,7 @@ Route selection on every session state change of a signed-in brick (directional)
 
 ```text
 connected = channels whose session is Connected and not dropped by a link failure
-route     = first of [USB, BT, TCP, any other] in connected, else none
+route     = channel in connected with the highest provider priority, else none
 if route changed: bump route token, fire route-change event
 for each channel in Available and brick signed in: join (KD2)
 ```
@@ -260,14 +261,18 @@ U1 → U2 → U3 → U4 → U5 lands the runtime model, unit-tested with fake pr
 - **Goal:** the discovery list holds one entry per brick with every channel's state, the name with its trust, and the ordering data.
 - **Requirements:** R1, R2, R3, R4, R12.
 - **Dependencies:** U1.
-- **Files:** `src/contracts/models.ts`, `src/runtime/presenceAggregator.ts`, `src/transports/btTransportProvider.ts`, `src/transports/usbTransportProvider.ts`, `src/transports/tcpTransportProvider.ts`, `src/mock/mockTransportProvider.ts`, `src/__tests__/presenceAggregator.test.ts`, `src/__tests__/discoveryScheduler.test.ts`.
+- **Files:** `src/contracts/models.ts`, `src/contracts/transport.ts`, `src/runtime/brickChannel.ts` (new), `src/runtime/presenceAggregator.ts`, `src/transports/btTransportProvider.ts`, `src/transports/usbTransportProvider.ts`, `src/transports/tcpTransportProvider.ts`, `src/mock/mockTransportProvider.ts`, `src/__tests__/brickChannel.test.ts` (new), `src/__tests__/presenceAggregator.test.ts`, `src/__tests__/discoveryScheduler.test.ts`.
 - **Approach:**
-  1. Reshape `DiscoveryItem` into a per-brick item. It holds a `BrickId`; a per-channel record with its channel key, state, last seen and signal; a name with its source and a confirmed flag; and `paired`. It keeps `favorite` and `remembered`.
-  2. Providers report `paired` (BT, from the device cache's remembered flag) and their name source.
-  3. The aggregator merges channel items by `BrickId` and applies KTD4's state rules and KTD7's name precedence.
-  4. Session state reaches the aggregator through the existing `updateBrick` path, now per channel.
-- **Patterns to follow:** `mergeLocalMetadata` for local-owned fields; the scheduler's `PresenceChangeEvent` stays per channel.
+  1. `TransportProvider` gains a declared channel priority (KTD10); each provider sets its own.
+  2. `BrickChannel` owns the channel state machine and its transition table (KTD4), modelled on `SessionEntry`'s `VALID_TRANSITIONS`.
+  3. Reshape `DiscoveryItem` into a per-brick item. It holds a `BrickId`; a per-channel record with its channel key, state, last seen and signal; a name with its source and a confirmed flag; and `paired`. It keeps `favorite` and `remembered`.
+  4. Providers report `paired` (BT, from the device cache's remembered flag) and their name source.
+  5. The aggregator merges channel items by `BrickId` into bricks made of `BrickChannel`s, feeds them presence events and applies KTD7's name precedence.
+  6. Session state reaches each channel through the existing `updateBrick` path, now per channel.
+- **Patterns to follow:** `SessionEntry` for the state machine; `mergeLocalMetadata` for local-owned fields; the scheduler's `PresenceChangeEvent` stays per channel.
 - **Test scenarios:**
+  - Every valid channel transition in the HTD diagram is accepted; an invalid one (absent → connected) throws.
+  - A fake provider declaring a priority between USB and BT orders between them, with no change outside the fake.
   - A USB item and a BT item of CCC produce one entry with both channels available.
   - The USB channel going unavailable turns that channel lost while BT stays available.
   - A channel never seen this session is absent, not lost.
