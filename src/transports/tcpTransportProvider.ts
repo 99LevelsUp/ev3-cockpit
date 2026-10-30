@@ -9,7 +9,7 @@ import {
 	Transport, BrickKey, makeBrickKey, brickKeyId,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
-	PresenceState,
+	PresenceState, describeChannel,
 } from '../contracts';
 import { TransportError, ConnectionError } from '../errors/CockpitError';
 import { TcpSocketAdapter, TcpAdapterOptions, TcpDiscoveryInfo, parseBeaconMessage } from './tcpSocketAdapter';
@@ -159,7 +159,7 @@ export class TcpTransportProvider implements TransportProvider {
 	async connect(brickKey: BrickKey): Promise<SessionHandle> {
 		this.assertNotDisposed();
 		if (this.sessions.has(brickKey)) {
-			throw new ConnectionError(`TCP brick ${brickKey} is already connected.`);
+			throw new ConnectionError(`${describeChannel(brickKey)} is already connected.`);
 		}
 
 		const adapterOptions = this.buildAdapterOptions(brickKey);
@@ -168,7 +168,7 @@ export class TcpTransportProvider implements TransportProvider {
 			await adapter.open();
 		} catch (error) {
 			throw new ConnectionError(
-				`TCP connect failed for ${brickKey}: ${error instanceof Error ? error.message : String(error)}`,
+				`Connect failed for ${describeChannel(brickKey)}: ${error instanceof Error ? error.message : String(error)}`,
 				error
 			);
 		}
@@ -192,7 +192,7 @@ export class TcpTransportProvider implements TransportProvider {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
-			throw new TransportError(`TCP brick ${brickKey} is not connected.`);
+			throw new TransportError(`${describeChannel(brickKey)} is not connected.`);
 		}
 		return session.adapter.send(packet, options);
 	}
@@ -230,7 +230,7 @@ export class TcpTransportProvider implements TransportProvider {
 			// provider is listening it owns the beacon port, so the adapter's own bind
 			// fails with EADDRINUSE and the caller gets that instead of the real reason.
 			throw new ConnectionError(
-				`No address known for ${brickKey}. Its beacon has expired — wait for the next `
+				`No address known for ${describeChannel(brickKey)}. Its beacon has expired — wait for the next `
 				+ 'announcement, or configure a host explicitly.'
 			);
 		}

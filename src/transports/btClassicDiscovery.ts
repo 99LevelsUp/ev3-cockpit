@@ -10,7 +10,7 @@
  * It does **not** solve the naming problem, which this file claimed for a few hours before
  * anyone ran it against the real DLL. `szName` is populated only for devices Windows is
  * currently connected to; for a remembered brick it comes back empty, measured on all three
- * bricks on 28.08.2026. A brick still shows as `EV3 [00:16:53:42:D9:F2]` until something
+ * bricks on 28.08.2026. A brick still shows as its id, `00165342D9F2`, until something
  * asks the brick itself. See plan 2.8.13.
  *
  * Both sources run on every scan. The cache decides what exists and what it is called; the
@@ -180,7 +180,7 @@ export class BtClassicDiscovery {
 			return {
 				mac: formatMac(normalise(device.mac)),
 				// Usually empty: Windows fills szName only while it is connected to the
-				// device. The port scan's `EV3 [address]` is what a user normally sees.
+				// device. The port scan's name, the brick's id, is what a user normally sees.
 				name: device.name || fromPort?.name || '',
 				connected: device.connected,
 				remembered: device.remembered,

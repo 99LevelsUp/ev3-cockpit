@@ -15,6 +15,7 @@
  * their own machine; discovery reports what they have already set up.
  */
 
+import { describeAddress } from '../contracts';
 import { BT } from './transportConstants';
 import { TransportAdapter } from './transportAdapter';
 import { BtSppAdapter } from './btSppAdapter';
@@ -109,7 +110,7 @@ export class BtSppBackend {
 			const bare = macFromPnpId(port.pnpId);
 			if (!bare) { continue; }
 			const mac = formatMac(bare);
-			const name = `EV3 [${mac}]`;
+			const name = describeAddress(mac);
 			this.portByMac.set(mac, { mac, name, portPath: port.path });
 			devices.push({
 				mac,
@@ -135,7 +136,7 @@ export class BtSppBackend {
 		const peer = this.peerFor(mac);
 		if (!peer) {
 			throw new TransportError(
-				`No Bluetooth serial port for ${mac}. Pair the brick with this computer first, `
+				`No Bluetooth serial port for ${describeAddress(mac)}. Pair the brick with this computer first, `
 				+ 'then run discovery again.'
 			);
 		}

@@ -98,7 +98,7 @@ describe('BtSppBackend — discovery', () => {
 		const backend = new BtSppBackend(() => Promise.resolve([localised]));
 		const [device] = await backend.discover();
 
-		assert.equal(device.name, 'EV3 [00:16:53:AA:BB:CC]');
+		assert.equal(device.name, '001653AABBCC');
 	});
 
 	it('ignores the local incoming port, whose address is all zeros', async () => {

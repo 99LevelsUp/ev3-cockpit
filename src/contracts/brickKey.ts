@@ -40,6 +40,28 @@ export function brickIdOf(key: BrickKey): BrickId {
 	return (HARDWARE_ID.test(digits) ? digits : key) as BrickId;
 }
 
+/**
+ * A hardware address as a message shows it: the twelve digits without separators, as the
+ * brick's own display does. A Bluetooth MAC printed with colons beside a USB serial printed
+ * without them made one brick read as two. Anything else is shown as given.
+ */
+export function describeAddress(address: string): string {
+	const digits = address.replace(/[:-]/g, '').toUpperCase();
+	return HARDWARE_ID.test(digits) ? digits : address;
+}
+
+/**
+ * A channel key as a message shows it, for code that has no brick names to hand:
+ * `00165342D9F2 BT`. A key with no hardware identity (a mock, a TCP host) is shown as it is.
+ */
+export function describeChannel(key: BrickKey | string): string {
+	const transport = brickKeyTransport(key);
+	const id = brickKeyId(key);
+	if (!transport || !id) { return key; }
+	const address = describeAddress(id);
+	return HARDWARE_ID.test(address) ? `${address} ${transport.toUpperCase()}` : key;
+}
+
 /** Separator between the transport prefix and the transport-local identifier. */
 const SEPARATOR = ':';
 

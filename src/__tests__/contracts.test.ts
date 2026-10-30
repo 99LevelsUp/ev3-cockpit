@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId, brickIdOf } from '../contracts/index';
+import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId, brickIdOf, describeChannel, describeAddress } from '../contracts/index';
 import {
 	CockpitError, ErrorCode,
 	TransportError, ConnectionError, TimeoutError,
@@ -158,6 +158,20 @@ describe('brickIdOf', () => {
 	it('never truncates a malformed address into someone else\'s id', () => {
 		assert.equal(brickIdOf(makeBrickKey(Transport.BT, '00:16:53')), 'bt:00:16:53');
 		assert.equal(brickIdOf(makeBrickKey(Transport.USB, '00165342D9F2FF')), 'usb:00165342D9F2FF');
+	});
+});
+
+describe('describeChannel and describeAddress', () => {
+	it('shows one brick\'s id the same over USB and Bluetooth, as the brick does', () => {
+		assert.equal(describeChannel(makeBrickKey(Transport.USB, '00165342D9F2')), '00165342D9F2 USB');
+		assert.equal(describeChannel(makeBrickKey(Transport.BT, '00:16:53:42:D9:F2')), '00165342D9F2 BT');
+		assert.equal(describeAddress('00:16:53:42:d9:f2'), '00165342D9F2');
+	});
+
+	it('shows a key or address with no hardware identity as it is', () => {
+		assert.equal(describeChannel(makeBrickKey(Transport.TCP, '192.168.1.20')), 'tcp:192.168.1.20');
+		assert.equal(describeChannel(makeBrickKey(Transport.Mock, 'bender')), 'mock:bender');
+		assert.equal(describeAddress('00:16:53'), '00:16:53');
 	});
 });
 

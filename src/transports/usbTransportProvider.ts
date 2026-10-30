@@ -5,7 +5,7 @@
  * the USB adapter for raw I/O, and the protocol layer for command encoding/response parsing.
  */
 
-import { Transport, BrickKey, makeBrickKey, brickKeyId } from '../contracts';
+import { Transport, BrickKey, makeBrickKey, brickKeyId, describeChannel } from '../contracts';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
@@ -227,7 +227,7 @@ export class UsbTransportProvider implements TransportProvider {
 		const release = await this.lock(brickKey);
 		try {
 			if (this.sessions.has(brickKey)) {
-				throw new ConnectionError(`USB brick ${brickKey} is already connected.`);
+				throw new ConnectionError(`${describeChannel(brickKey)} is already connected.`);
 			}
 
 			const serial = this.extractSerial(brickKey);
@@ -258,7 +258,7 @@ export class UsbTransportProvider implements TransportProvider {
 		let opened: UsbLibusbAdapter;
 		try {
 			if (this.sessions.has(brickKey)) {
-				throw new ConnectionError(`USB brick ${brickKey} has a session; ask it instead.`);
+				throw new ConnectionError(`${describeChannel(brickKey)} has a session; ask it instead.`);
 			}
 			const serial = this.extractSerial(brickKey);
 			const adapter = this.makeLibusbAdapter({
@@ -359,7 +359,7 @@ export class UsbTransportProvider implements TransportProvider {
 		});
 		if (failure !== undefined) { return failure; }
 		this.log?.info(
-			`USB ${brickKey} connected over libusb, ${libusb.maxPacketBytes}-byte frames.`
+			`${describeChannel(brickKey)} connected over libusb, ${libusb.maxPacketBytes}-byte frames.`
 		);
 		return undefined;
 	}
@@ -384,7 +384,7 @@ export class UsbTransportProvider implements TransportProvider {
 			// Name both failures: "USB connect failed" against a working brick usually
 			// means the libusb claim lost to something, and only that message says so.
 			throw new ConnectionError(
-				`USB connect failed for ${brickKey}. libusb: ${libusbFailure}. HID: `
+				`Connect failed for ${describeChannel(brickKey)}. libusb: ${libusbFailure}. HID: `
 				+ `${hidError instanceof Error ? hidError.message : String(hidError)}`,
 				hidError
 			);
@@ -394,7 +394,7 @@ export class UsbTransportProvider implements TransportProvider {
 		// reconnect attempt fails both ways, and warning about a fallback that never came
 		// filled the log with a cost nobody was paying.
 		this.log?.warn(
-			`USB ${brickKey}: libusb unavailable (${libusbFailure}). Fell back to HID, `
+			`${describeChannel(brickKey)}: libusb unavailable (${libusbFailure}). Fell back to HID, `
 			+ `which delivers ${USB.MAX_WRITE_PACKET_BYTES} bytes per packet — transfers run `
 			+ 'about forty times slower and copy/move cannot be sent at all.'
 		);
@@ -431,7 +431,7 @@ export class UsbTransportProvider implements TransportProvider {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
-			throw new TransportError(`USB brick ${brickKey} is not connected.`);
+			throw new TransportError(`${describeChannel(brickKey)} is not connected.`);
 		}
 		return session.adapter.send(packet, options);
 	}
