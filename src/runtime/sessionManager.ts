@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
-import { BrickKey, brickKeyId } from '../contracts/brickKey';
+import { BrickKey, brickIdOf } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
 import { BrickCommand, BrickResponse, SendCommandOptions, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
@@ -120,17 +120,7 @@ export class SessionManager implements vscode.Disposable {
 		const resources: SessionResources = { entry, commandQueue, heartbeat, reconnect };
 		this.sessions.set(brickKey, resources);
 
-		// Guarded by the brick's physical identity (MAC/serial, not the transport-qualified
-		// key), so a brick reachable over two transports cannot be bombarded by both at once
-		// -- the concern DESIGN §4.1 names. Released in the catch below only if this attempt
-		// is the one that set it.
-		const guardId = brickKeyId(brickKey) ?? brickKey;
-		let guardOpened = false;
-
 		try {
-			this.transportGuard.openTransport(guardId, transport);
-			guardOpened = true;
-
 			const handle = await provider.connect(brickKey);
 
 			// disconnect() may have run while the provider was still connecting. It
@@ -152,7 +142,6 @@ export class SessionManager implements vscode.Disposable {
 			heartbeat.start();
 			reconnect.reset();
 		} catch (error) {
-			if (guardOpened) { this.transportGuard.closeTransport(guardId); }
 			entry.setError(error instanceof Error ? error.message : String(error));
 			entry.transition(ConnectionState.Disconnected);
 			this.sessions.delete(brickKey);
@@ -175,13 +164,11 @@ export class SessionManager implements vscode.Disposable {
 
 		const previousState = resources.entry.connectionState;
 		this.cleanupSession(resources);
-		// closeTransport() keeps the switch-cooldown clock running; resetHealth() drops the
-		// rate-limit window and degradation count, which are history the next connect should
-		// not inherit -- checkRateLimit() has no path back from `degraded` except
-		// recordSuccess(), which a degraded brick can never reach on its own.
-		const guardId = brickKeyId(brickKey) ?? brickKey;
-		this.transportGuard.closeTransport(guardId);
-		this.transportGuard.resetHealth(guardId);
+		// The channel's failures are history the next connect should not inherit --
+		// checkRateLimit() has no path back from `degraded` except recordSuccess(), which a
+		// degraded channel can never reach on its own. Only this channel: another channel to
+		// the same brick keeps its own count.
+		this.transportGuard.resetHealth(brickKey);
 
 		const provider = this.providerRegistry.get(resources.entry.transport);
 		try {
@@ -493,6 +480,9 @@ export class SessionManager implements vscode.Disposable {
 			resources.entry.setHandle(handle);
 			resources.entry.transition(ConnectionState.Connected);
 			resources.reconnect.reset();
+			// The failures that degraded this channel belonged to the link that died. Without
+			// this a cable that comes back after three failed sends stays refused for good.
+			this.transportGuard.resetHealth(brickKey);
 			this.fireStateChange(brickKey, ConnectionState.Reconnecting, ConnectionState.Connected);
 
 			this.wireExecutor(resources, provider);
@@ -534,7 +524,8 @@ export class SessionManager implements vscode.Disposable {
 	 */
 	private wireExecutor(resources: SessionResources, provider: TransportProvider): void {
 		const brickKey = resources.entry.brickKey;
-		const guardId = brickKeyId(brickKey) ?? brickKey;
+		// The rate window belongs to the brick, failures to this channel (see TransportGuard).
+		const brickId = brickIdOf(brickKey);
 		const channel = provider.createCommandChannel
 			? provider.createCommandChannel(brickKey)
 			: new PacketCommandChannel(
@@ -542,14 +533,14 @@ export class SessionManager implements vscode.Disposable {
 				provider.transport,
 			);
 		resources.commandQueue.setExecutor(async (cmd, options) => {
-			this.transportGuard.checkRateLimit(guardId);
+			this.transportGuard.checkRateLimit(brickId, brickKey);
 			const startedAt = Date.now();
 			try {
 				const response = await channel.execute(cmd, options);
-				this.transportGuard.recordSuccess(guardId, Date.now() - startedAt);
+				this.transportGuard.recordSuccess(brickKey, Date.now() - startedAt);
 				return response;
 			} catch (error) {
-				this.transportGuard.recordFailure(guardId);
+				this.transportGuard.recordFailure(brickKey);
 				throw error;
 			}
 		});

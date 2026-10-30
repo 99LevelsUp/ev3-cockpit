@@ -23,123 +23,122 @@ import {
 
 describe('TransportGuard', () => {
 	let guard: TransportGuard;
+	const brick = '00165300000A';
+	const usb = 'usb:00165300000A';
+	const bt = 'bt:00:16:53:00:00:0A';
 
 	beforeEach(() => {
 		guard = new TransportGuard({
 			maxCommandsPerSec: 3,
-			switchCooldownMs: 100,
 			degradationThreshold: 2,
 		});
-	});
-
-	it('allows opening a transport', () => {
-		assert.doesNotThrow(() => guard.openTransport('brick1', 'usb'));
-	});
-
-	it('rejects opening a different transport while one is active', () => {
-		guard.openTransport('brick1', 'usb');
-		assert.throws(() => guard.openTransport('brick1', 'tcp'), /already has active transport/);
-	});
-
-	it('allows reopening the same transport', () => {
-		guard.openTransport('brick1', 'usb');
-		assert.doesNotThrow(() => guard.openTransport('brick1', 'usb'));
-	});
-
-	it('enforces transport switch cooldown', () => {
-		guard.openTransport('brick1', 'usb');
-		guard.closeTransport('brick1');
-		// Immediately try to open different transport — should fail due to cooldown
-		assert.throws(() => guard.openTransport('brick1', 'tcp'), /cooldown/);
-	});
-
-	it('allows transport switch after cooldown', async () => {
-		guard = new TransportGuard({
-			maxCommandsPerSec: 3,
-			switchCooldownMs: 10,
-			degradationThreshold: 2,
-		});
-		guard.openTransport('brick1', 'usb');
-		guard.closeTransport('brick1');
-		await new Promise<void>((r) => setTimeout(r, 15));
-		assert.doesNotThrow(() => guard.openTransport('brick1', 'tcp'));
 	});
 
 	it('enforces rate limit', () => {
-		guard.checkRateLimit('brick1');
-		guard.checkRateLimit('brick1');
-		guard.checkRateLimit('brick1');
-		assert.throws(() => guard.checkRateLimit('brick1'), /Rate limit/);
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, usb);
+		assert.throws(() => guard.checkRateLimit(brick, usb), /Rate limit/);
+	});
+
+	it('shares one rate window across every channel to a brick', () => {
+		// Commands over USB and Bluetooth land on the same VM.
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, bt);
+		guard.checkRateLimit(brick, usb);
+		assert.throws(() => guard.checkRateLimit(brick, bt), /Rate limit/);
+	});
+
+	it('keeps separate rate windows for separate bricks', () => {
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, usb);
+		assert.doesNotThrow(() => guard.checkRateLimit('00165300000B', 'usb:00165300000B'));
 	});
 
 	it('resets rate limit after 1 second window', async () => {
 		guard = new TransportGuard({
 			maxCommandsPerSec: 2,
-			switchCooldownMs: 100,
 			degradationThreshold: 2,
 		});
-		guard.checkRateLimit('brick1');
-		guard.checkRateLimit('brick1');
-		assert.throws(() => guard.checkRateLimit('brick1'));
+		guard.checkRateLimit(brick, usb);
+		guard.checkRateLimit(brick, usb);
+		assert.throws(() => guard.checkRateLimit(brick, usb));
 		await new Promise<void>((r) => setTimeout(r, 1050));
-		assert.doesNotThrow(() => guard.checkRateLimit('brick1'));
+		assert.doesNotThrow(() => guard.checkRateLimit(brick, usb));
 	});
 
 	it('tracks consecutive failures and triggers degradation', () => {
-		let degradedBrick: string | undefined;
+		let degradedChannel: string | undefined;
 		let degradedState: boolean | undefined;
 		guard = new TransportGuard({
 			maxCommandsPerSec: 10,
-			switchCooldownMs: 100,
 			degradationThreshold: 2,
 			onDegradationChange: (id, state) => {
-				degradedBrick = id;
+				degradedChannel = id;
 				degradedState = state;
 			},
 		});
 
-		guard.recordFailure('brick1');
-		assert.equal(guard.isDegraded('brick1'), false);
+		guard.recordFailure(usb);
+		assert.equal(guard.isDegraded(usb), false);
 
-		guard.recordFailure('brick1');
-		assert.equal(guard.isDegraded('brick1'), true);
-		assert.equal(degradedBrick, 'brick1');
+		guard.recordFailure(usb);
+		assert.equal(guard.isDegraded(usb), true);
+		assert.equal(degradedChannel, usb);
 		assert.equal(degradedState, true);
 	});
 
-	it('blocks sends when degraded', () => {
-		guard.recordFailure('brick1');
-		guard.recordFailure('brick1');
-		assert.throws(() => guard.checkRateLimit('brick1'), /degraded/);
+	it('blocks sends on a degraded channel', () => {
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
+		assert.throws(() => guard.checkRateLimit(brick, usb), /degraded/);
+	});
+
+	it('does not block another channel to the same brick when one degrades', () => {
+		// A pulled cable fails every USB send; the Bluetooth standby must stay usable.
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
+		assert.doesNotThrow(() => guard.checkRateLimit(brick, bt));
 	});
 
 	it('resets degradation on success', () => {
-		guard.recordFailure('brick1');
-		guard.recordFailure('brick1');
-		assert.equal(guard.isDegraded('brick1'), true);
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
+		assert.equal(guard.isDegraded(usb), true);
 
-		guard.recordSuccess('brick1');
-		assert.equal(guard.isDegraded('brick1'), false);
+		guard.recordSuccess(usb);
+		assert.equal(guard.isDegraded(usb), false);
+	});
+
+	it('resetHealth clears one channel and leaves the others', () => {
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
+		guard.recordFailure(bt);
+		guard.recordFailure(bt);
+		guard.resetHealth(usb);
+		assert.equal(guard.isDegraded(usb), false);
+		assert.equal(guard.isDegraded(bt), true);
 	});
 
 	it('tracks RTT', () => {
-		assert.equal(guard.getLastRttMs('brick1'), undefined);
-		guard.recordSuccess('brick1', 42);
-		assert.equal(guard.getLastRttMs('brick1'), 42);
+		assert.equal(guard.getLastRttMs(usb), undefined);
+		guard.recordSuccess(usb, 42);
+		assert.equal(guard.getLastRttMs(usb), 42);
 	});
 
-	it('forgets brick state', () => {
-		guard.recordFailure('brick1');
-		guard.forget('brick1');
-		assert.equal(guard.isDegraded('brick1'), false);
-		assert.equal(guard.getLastRttMs('brick1'), undefined);
+	it('forgets channel state', () => {
+		guard.recordFailure(usb);
+		guard.forget(usb);
+		assert.equal(guard.isDegraded(usb), false);
+		assert.equal(guard.getLastRttMs(usb), undefined);
 	});
 
 	it('disposes all state', () => {
-		guard.openTransport('brick1', 'usb');
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
 		guard.dispose();
-		// After dispose, brick state is gone — no error for opening
-		assert.doesNotThrow(() => guard.openTransport('brick1', 'tcp'));
+		assert.doesNotThrow(() => guard.checkRateLimit(brick, usb));
 	});
 });
 
