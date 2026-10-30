@@ -1,33 +1,45 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, makeBrickKey, BrickKey, DiscoveryItem } from '../contracts';
-import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickCommand, BrickResponse } from '../contracts';
+import {
+	Transport, PresenceState, ChannelState, ConnectionState, makeBrickKey, brickIdOf,
+	BrickKey, DiscoveryItem, NameSource,
+} from '../contracts';
+import type { TransportProvider, SessionHandle, DiscoveryScanResult } from '../contracts';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
-import { PresenceAggregator, DiscoveryListChangeEvent } from '../runtime/presenceAggregator';
+import { PresenceAggregator } from '../runtime/presenceAggregator';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function makeItem(id: string, transport: Transport = Transport.Mock): DiscoveryItem {
+/** CCC on the bench, as each transport names it. */
+const CCC = {
+	usb: makeBrickKey(Transport.USB, '00165342D9F2'),
+	bt: makeBrickKey(Transport.BT, '00:16:53:42:D9:F2'),
+	tcp: makeBrickKey(Transport.TCP, '00165342d9f2'),
+};
+const CCC_ID = brickIdOf(CCC.usb);
+
+function item(brickKey: BrickKey, transport: Transport, displayName: string, nameSource?: NameSource): DiscoveryItem {
 	return {
-		brickKey: makeBrickKey(transport, id),
-		displayName: `Brick ${id}`,
+		brickKey,
+		displayName,
+		...(nameSource ? { nameSource } : {}),
 		transport,
 		presenceState: PresenceState.Available,
 		remembered: false,
 		connected: false,
 		favorite: false,
-		availableTransports: [transport],
 		lastSeenAt: Date.now(),
 	};
 }
 
-function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): TransportProvider {
+function fakeProvider(transport: Transport, priority: number, items: DiscoveryItem[]): TransportProvider {
 	return {
 		transport,
+		priority,
 		capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
-		async discover(): Promise<DiscoveryScanResult> { return { transport, items }; },
+		async discover(): Promise<DiscoveryScanResult> { return { transport, items: [...items] }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> { return { brickKey, transport }; },
 		async disconnect(): Promise<void> { /* noop */ },
 		async sendPacket(): Promise<Uint8Array> { return new Uint8Array(0); },
@@ -35,218 +47,276 @@ function makeFakeProvider(transport: Transport, items: DiscoveryItem[]): Transpo
 	};
 }
 
-function setup(items: DiscoveryItem[] = []) {
+/** Discovery over USB, BT and TCP, each with a list the test can change between scans. */
+function setup() {
+	const seen = { usb: [] as DiscoveryItem[], bt: [] as DiscoveryItem[], tcp: [] as DiscoveryItem[] };
 	const registry = new ProviderRegistry();
-	registry.register(makeFakeProvider(Transport.Mock, items));
-	const scheduler = new DiscoveryScheduler(registry, { unavailableAfterMisses: 2, removedAfterMisses: 3 });
-	const aggregator = new PresenceAggregator(scheduler);
-	return { registry, scheduler, aggregator };
+	registry.register(fakeProvider(Transport.USB, 30, seen.usb));
+	registry.register(fakeProvider(Transport.BT, 20, seen.bt));
+	registry.register(fakeProvider(Transport.TCP, 10, seen.tcp));
+	const scheduler = new DiscoveryScheduler(registry, { unavailableAfterMisses: 1, removedAfterMisses: 1 });
+	const aggregator = new PresenceAggregator(scheduler, registry);
+	const done = () => { aggregator.dispose(); scheduler.dispose(); registry.dispose(); };
+	return { seen, registry, scheduler, aggregator, done };
 }
 
-function teardown(...disposables: { dispose(): void }[]) {
-	for (const d of disposables) { d.dispose(); }
+function stateOf(aggregator: PresenceAggregator, transport: Transport): ChannelState {
+	return aggregator.getBrick(CCC_ID)?.channels.find((c) => c.transport === transport)?.state
+		?? ChannelState.Absent;
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
+// ── One brick, many channels ────────────────────────────────────────
 
-describe('PresenceAggregator — discovery list', () => {
-	it('provides an empty list initially', () => {
-		const { registry, scheduler, aggregator } = setup();
-		assert.deepEqual(aggregator.getDiscoveryList(), []);
-		teardown(aggregator, scheduler, registry);
-	});
-
-	it('populates after a scan', async () => {
-		const items = [makeItem('a'), makeItem('b')];
-		const { registry, scheduler, aggregator } = setup(items);
+describe('PresenceAggregator — one entry per brick', () => {
+	it('groups the USB and Bluetooth sightings of one brick into one entry', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC', 'usb-descriptor'));
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC', 'bt-cache'));
 
 		await scheduler.scanOnce();
+
+		const list = aggregator.getDiscoveryList();
+		assert.equal(list.length, 1);
+		assert.equal(list[0].brickId, '00165342D9F2');
+		assert.deepEqual(list[0].channels.map((c) => [c.transport, c.state]), [
+			[Transport.USB, ChannelState.Available],
+			[Transport.BT, ChannelState.Available],
+		]);
+		done();
+	});
+
+	it('turns a channel that disappears lost while the others stay available', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
+		await scheduler.scanOnce();
+
+		seen.usb.length = 0;   // the cable comes out
+		await scheduler.scanOnce();
+
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Lost);
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Available);
+		done();
+	});
+
+	it('reports a channel never seen this session as absent, not lost', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
+		await scheduler.scanOnce();
+
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Absent);
+		assert.equal(aggregator.getBrick(CCC_ID)?.channels.length, 1);
+		done();
+	});
+
+	it('keeps a TCP brick known only by its IP as its own one-channel entry', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
+		seen.tcp.push(item(makeBrickKey(Transport.TCP, '192.168.1.20'), Transport.TCP, 'EV3 [192.168.1.20]'));
+		await scheduler.scanOnce();
+
 		const list = aggregator.getDiscoveryList();
 		assert.equal(list.length, 2);
-
-		teardown(aggregator, scheduler, registry);
+		const byIp = list.find((b) => b.brickId === 'tcp:192.168.1.20');
+		assert.deepEqual(byIp?.channels.map((c) => c.transport), [Transport.TCP]);
+		done();
 	});
 
-	it('emits onListChanged after a scan', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
-
-		let fired = false;
-		aggregator.onListChanged(() => { fired = true; });
-
-		await scheduler.scanOnce();
-		assert.ok(fired);
-
-		teardown(aggregator, scheduler, registry);
-	});
-});
-
-describe('PresenceAggregator — the list is a record, not a display', () => {
-	it('reports every brick across every transport, without imposing an order', async () => {
-		// This layer used to sort: transport group first, then signal, then brickKey. That was
-		// a display decision made three layers below the display. What belongs at the top is a
-		// question about the person reading the list — a panel may want the brick someone is
-		// walking towards the computer with to climb as its signal rises, and no ordering
-		// chosen here could serve that. So the aggregator keeps a record and the UI sorts.
+	it('leaves a mock brick as one entry with one channel', async () => {
 		const registry = new ProviderRegistry();
-		registry.register(makeFakeProvider(Transport.BT, [makeItem('bt1', Transport.BT)]));
-		registry.register(makeFakeProvider(Transport.Mock, [makeItem('m1', Transport.Mock)]));
-		registry.register(makeFakeProvider(Transport.USB, [makeItem('u1', Transport.USB)]));
-		registry.register(makeFakeProvider(Transport.TCP, [makeItem('t1', Transport.TCP)]));
-
+		const mockKey = makeBrickKey(Transport.Mock, 'brick-a');
+		registry.register(fakeProvider(Transport.Mock, 0, [item(mockKey, Transport.Mock, 'Brick A', 'brick')]));
 		const scheduler = new DiscoveryScheduler(registry);
-		const aggregator = new PresenceAggregator(scheduler);
-
+		const aggregator = new PresenceAggregator(scheduler, registry);
 		await scheduler.scanOnce();
-		const list = aggregator.getDiscoveryList();
-
-		assert.deepEqual(
-			[...list.map((item) => item.transport)].sort(),
-			[Transport.BT, Transport.Mock, Transport.TCP, Transport.USB].sort()
-		);
-
-		teardown(aggregator, scheduler, registry);
-	});
-
-	it('keeps every brick it was told about, whatever order they arrived in', async () => {
-		const items = [makeItem('c'), makeItem('a'), makeItem('b')];
-		const { registry, scheduler, aggregator } = setup(items);
-
-		await scheduler.scanOnce();
-		const keys = aggregator.getDiscoveryList().map((item) => item.brickKey);
-
-		assert.equal(keys.length, 3);
-		for (const id of ['a', 'b', 'c']) {
-			assert.ok(keys.includes(makeBrickKey(Transport.Mock, id)), `${id} is missing`);
-		}
-
-		teardown(aggregator, scheduler, registry);
-	});
-});
-
-describe('PresenceAggregator — remembered bricks', () => {
-	it('merges remembered bricks into the list', () => {
-		const { registry, scheduler, aggregator } = setup();
-
-		const remembered: DiscoveryItem = {
-			...makeItem('old'),
-			presenceState: PresenceState.Remembered,
-			remembered: true,
-		};
-		aggregator.mergeRemembered([remembered]);
 
 		const list = aggregator.getDiscoveryList();
 		assert.equal(list.length, 1);
-		assert.equal(list[0].presenceState, PresenceState.Remembered);
-		assert.equal(list[0].remembered, true);
-
-		teardown(aggregator, scheduler, registry);
+		assert.equal(list[0].brickId, 'mock:brick-a');
+		assert.equal(list[0].name.value, 'Brick A');
+		aggregator.dispose(); scheduler.dispose(); registry.dispose();
 	});
 
-	it('enforces remembered: true invariant even if input omits it', () => {
-		const { registry, scheduler, aggregator } = setup();
-
-		// Pass an item with remembered: false — mergeRemembered must correct it
-		const badItem: DiscoveryItem = { ...makeItem('old'), presenceState: PresenceState.Remembered, remembered: false };
-		aggregator.mergeRemembered([badItem]);
-
-		const list = aggregator.getDiscoveryList();
-		assert.equal(list[0].remembered, true);
-
-		teardown(aggregator, scheduler, registry);
-	});
-
-	it('does not duplicate if a remembered brick is also discovered', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
-
-		const remembered: DiscoveryItem = {
-			...makeItem('a'),
-			presenceState: PresenceState.Remembered,
-			remembered: true,
-		};
-		aggregator.mergeRemembered([remembered]);
-
+	it('orders channels by the priority their providers declare, whatever the transport', async () => {
+		// A transport the brick layer has never heard of slots in by its own priority alone.
+		const registry = new ProviderRegistry();
+		registry.register(fakeProvider(Transport.USB, 30, [item(CCC.usb, Transport.USB, 'CCC')]));
+		registry.register(fakeProvider(Transport.BT, 20, [item(CCC.bt, Transport.BT, 'CCC')]));
+		registry.register(fakeProvider(Transport.TCP, 25, [item(CCC.tcp, Transport.TCP, 'CCC')]));
+		const scheduler = new DiscoveryScheduler(registry);
+		const aggregator = new PresenceAggregator(scheduler, registry);
 		await scheduler.scanOnce();
-		const list = aggregator.getDiscoveryList();
 
-		// Should be 1, not 2
-		assert.equal(list.length, 1);
-		assert.equal(list[0].presenceState, PresenceState.Available);
-
-		teardown(aggregator, scheduler, registry);
+		assert.deepEqual(aggregator.getBrick(CCC_ID)?.channels.map((c) => c.transport),
+			[Transport.USB, Transport.TCP, Transport.BT]);
+		aggregator.dispose(); scheduler.dispose(); registry.dispose();
 	});
 });
 
-describe('PresenceAggregator — updateBrick', () => {
-	it('updates connected and favorite flags', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
+// ── Sessions ────────────────────────────────────────────────────────
 
+describe('PresenceAggregator — channel state follows the session', () => {
+	it('marks a channel connected, lost while it reconnects, and available once signed out', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
 		await scheduler.scanOnce();
 
-		const key = makeBrickKey(Transport.Mock, 'a');
-		aggregator.updateBrick(key, { connected: true, favorite: true });
-
-		const brick = aggregator.getBrick(key);
-		assert.ok(brick);
-		assert.equal(brick!.connected, true);
-		assert.equal(brick!.favorite, true);
-
-		teardown(aggregator, scheduler, registry);
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Connected);
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Connected);
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Reconnecting);
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Lost);
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Connected);
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Disconnected);
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Available);
+		done();
 	});
 
-	it('preserves connected/favorite across scans', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
+	it('takes a connected session as proof the brick is there, before discovery lists it', () => {
+		const { aggregator, done } = setup();
+		aggregator.updateChannelSession(CCC.bt, ConnectionState.Connected);
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Connected);
+		done();
+	});
 
+	it('keeps a connected channel connected when a scan misses it', async () => {
+		// USB discovery skips a device its own transport holds claimed; the session decides.
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
 		await scheduler.scanOnce();
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Connected);
 
-		const key = makeBrickKey(Transport.Mock, 'a');
-		aggregator.updateBrick(key, { favorite: true });
-
-		// Another scan — should preserve favorite
+		seen.usb.length = 0;
 		await scheduler.scanOnce();
-
-		const brick = aggregator.getBrick(key);
-		assert.equal(brick!.favorite, true);
-
-		teardown(aggregator, scheduler, registry);
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Connected);
+		done();
 	});
 });
 
-describe('PresenceAggregator — presence forwarding', () => {
-	it('forwards presence change events from scheduler', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
+// ── Expiry ──────────────────────────────────────────────────────────
 
-		const events: import('../runtime/discoveryScheduler').PresenceChangeEvent[] = [];
-		aggregator.onPresenceChanged(e => events.push(e));
-
+describe('PresenceAggregator — bricks that leave', () => {
+	it('drops a stranger\'s brick once discovery gives up on all its channels', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
 		await scheduler.scanOnce();
-		assert.equal(events.length, 1);
-		assert.equal(events[0].currentState, PresenceState.Available);
 
-		teardown(aggregator, scheduler, registry);
+		seen.bt.length = 0;
+		for (let i = 0; i < 3; i++) { await scheduler.scanOnce(); }
+
+		assert.equal(aggregator.getBrick(CCC_ID), undefined);
+		done();
 	});
 
-	it('removes brick from list on Removed state', async () => {
-		const items = [makeItem('a')];
-		const { registry, scheduler, aggregator } = setup(items);
+	it('keeps a brick it was connected to, with the expired channel shown lost', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		await scheduler.scanOnce();
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Connected);
+		aggregator.updateChannelSession(CCC.usb, ConnectionState.Reconnecting);
 
+		seen.usb.length = 0;
+		for (let i = 0; i < 3; i++) { await scheduler.scanOnce(); }
+
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Lost);
+		done();
+	});
+
+	it('brings an expired channel back when it is seen again', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
+		await scheduler.scanOnce();
+		seen.usb.length = 0;
+		for (let i = 0; i < 3; i++) { await scheduler.scanOnce(); }
+
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		await scheduler.scanOnce();
+		assert.equal(stateOf(aggregator, Transport.USB), ChannelState.Available);
+		done();
+	});
+});
+
+// ── Name ────────────────────────────────────────────────────────────
+
+describe('PresenceAggregator — the name shown', () => {
+	it('prefers the TCP beacon\'s name, confirmed, over the USB descriptor', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC', 'usb-descriptor'));
+		await scheduler.scanOnce();
+		assert.deepEqual(aggregator.getBrick(CCC_ID)?.name,
+			{ value: 'CCC', source: 'usb-descriptor', confirmed: false });
+
+		// Renamed on the brick: the descriptor keeps the old name, the beacon has the new one.
+		seen.tcp.push(item(CCC.tcp, Transport.TCP, 'CCCx', 'beacon'));
+		await scheduler.scanOnce();
+		assert.deepEqual(aggregator.getBrick(CCC_ID)?.name,
+			{ value: 'CCCx', source: 'beacon', confirmed: true });
+		done();
+	});
+
+	it('does not let a later Windows Bluetooth record overrule a confirmed name', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.tcp.push(item(CCC.tcp, Transport.TCP, 'CCCx', 'beacon'));
+		await scheduler.scanOnce();
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC', 'bt-cache'));
+		await scheduler.scanOnce();
+
+		assert.equal(aggregator.getBrick(CCC_ID)?.name.value, 'CCCx');
+		done();
+	});
+
+	it('prefers the USB descriptor over the Bluetooth record while nothing is confirmed', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push(item(CCC.bt, Transport.BT, 'Xfer data to and from EV3 brick', 'bt-cache'));
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC', 'usb-descriptor'));
+		await scheduler.scanOnce();
+
+		assert.equal(aggregator.getBrick(CCC_ID)?.name.value, 'CCC');
+		done();
+	});
+});
+
+// ── Local metadata ──────────────────────────────────────────────────
+
+describe('PresenceAggregator — what the list owns', () => {
+	it('reports a brick paired when its Bluetooth channel says so', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push({ ...item(CCC.bt, Transport.BT, 'CCC'), paired: true });
+		await scheduler.scanOnce();
+		assert.equal(aggregator.getBrick(CCC_ID)?.paired, true);
+		done();
+	});
+
+	it('keeps favorite across scans', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		await scheduler.scanOnce();
+		aggregator.updateBrick(CCC_ID, { favorite: true });
+		await scheduler.scanOnce();
+		assert.equal(aggregator.getBrick(CCC_ID)?.favorite, true);
+		done();
+	});
+
+	it('merges a remembered brick once, and keeps it when its channels expire', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		aggregator.mergeRemembered([{ ...item(CCC.bt, Transport.BT, 'CCC'), presenceState: PresenceState.Remembered, remembered: true }]);
+		seen.bt.push(item(CCC.bt, Transport.BT, 'CCC'));
 		await scheduler.scanOnce();
 		assert.equal(aggregator.getDiscoveryList().length, 1);
 
-		// Brick disappears
-		items.length = 0;
+		seen.bt.length = 0;
+		for (let i = 0; i < 3; i++) { await scheduler.scanOnce(); }
+		assert.equal(aggregator.getBrick(CCC_ID)?.remembered, true);
+		done();
+	});
 
-		// Miss enough scans: unavailableAfterMisses=2, removedAfterMisses=3 → total 5
-		for (let i = 0; i < 5; i++) {
-			await scheduler.scanOnce();
-		}
-
-		assert.equal(aggregator.getDiscoveryList().length, 0);
-
-		teardown(aggregator, scheduler, registry);
+	it('forwards channel presence changes from the scheduler', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		const events: PresenceState[] = [];
+		aggregator.onPresenceChanged((e) => events.push(e.currentState));
+		seen.usb.push(item(CCC.usb, Transport.USB, 'CCC'));
+		await scheduler.scanOnce();
+		assert.deepEqual(events, [PresenceState.Available]);
+		done();
 	});
 });

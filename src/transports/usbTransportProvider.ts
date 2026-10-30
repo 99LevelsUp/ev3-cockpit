@@ -95,6 +95,8 @@ export interface UsbTransportProviderOptions {
  */
 export class UsbTransportProvider implements TransportProvider {
 	readonly transport = Transport.USB;
+	/** A cable means the brick is on this desk: the strongest channel there is. */
+	readonly priority = 30;
 	readonly capabilities: TransportCapabilities = { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: true };
 
 	private readonly sessions = new Map<BrickKey, UsbSession>();
@@ -184,18 +186,18 @@ export class UsbTransportProvider implements TransportProvider {
 			const brickKey = makeBrickKey(Transport.USB, serial);
 			// node-hid's product string is the last resort, not the second choice: it comes
 			// from the Windows descriptor cache, which is what libusb exists here to bypass.
-			const displayName = this.nameBySerial.get(serial.toLowerCase())
-				?? dev.product?.trim()
-				?? serial;
+			const descriptorName = this.nameBySerial.get(serial.toLowerCase()) ?? dev.product?.trim();
+			const displayName = descriptorName ?? serial;
 			items.push({
 				brickKey,
 				displayName,
+				// The descriptor is fixed when the cable goes in; a rename since then is not in it.
+				nameSource: descriptorName ? 'usb-descriptor' : 'fallback',
 				transport: Transport.USB,
 				presenceState: PresenceState.Available,
 				remembered: false,
 				connected: this.sessions.has(brickKey),
 				favorite: false,
-				availableTransports: [Transport.USB],
 				lastSeenAt: now,
 			});
 		}
