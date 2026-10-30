@@ -7,7 +7,7 @@
  *
  * Naming is deliberately not pinned to the cache. `szName` is filled only for a device
  * Windows is connected to, so a remembered brick arrives unnamed and the port scan's
- * `EV3 [address]` is what survives — which the test below states, so the next reader does not
+ * name is what survives — which the test below states, so the next reader does not
  * re-derive the disappointment.
  */
 

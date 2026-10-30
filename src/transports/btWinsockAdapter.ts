@@ -9,6 +9,7 @@
  * queued would either deadlock against the provider's slot or serve a second cooldown on top.
  */
 
+import { describeAddress } from '../contracts';
 import { TransportAdapter, SendOptions } from './transportAdapter';
 import { TransportError, TimeoutError, BackendUnavailableError } from '../errors/CockpitError';
 import {
@@ -143,7 +144,7 @@ export class BtWinsockAdapter implements TransportAdapter {
 		// blocks, so a deadline is a plain `closesocket` on a socket nobody is waiting in.
 		const failed = (code: number): TransportError => {
 			api.closesocket(socket);
-			return new TransportError(`BT connect to ${this.mac} failed (WSA error ${code}).`);
+			return new TransportError(`BT connect to ${describeAddress(this.mac)} failed (WSA error ${code}).`);
 		};
 		if (api.setNonBlocking(socket, true) !== 0) {
 			throw failed(api.lastError());
@@ -160,7 +161,7 @@ export class BtWinsockAdapter implements TransportAdapter {
 		} catch (error) {
 			// The FFI itself threw. A handle left open here would have nothing referencing it.
 			api.closesocket(socket);
-			throw new TransportError(`BT connect to ${this.mac} failed.`, error);
+			throw new TransportError(`BT connect to ${describeAddress(this.mac)} failed.`, error);
 		}
 		if (started === SOCKET_ERROR) {
 			// Read on this thread, straight after the call: the error code is per thread, and
@@ -176,7 +177,7 @@ export class BtWinsockAdapter implements TransportAdapter {
 				if (Date.now() >= deadline) {
 					api.closesocket(socket);
 					throw new TimeoutError(
-						`BT connect to ${this.mac} timed out after ${this.connectTimeoutMs} ms.`
+						`BT connect to ${describeAddress(this.mac)} timed out after ${this.connectTimeoutMs} ms.`
 					);
 				}
 				// Never sleep past the deadline: a connect that lands after it was given up on is

@@ -6,7 +6,7 @@
  */
 
 import { ConnectionState, ActivityMode, TelemetryCategory, Transport } from '../contracts/enums';
-import { BrickKey } from '../contracts/brickKey';
+import { BrickKey, describeChannel } from '../contracts/brickKey';
 import { HeartbeatState, ConnectedSession } from '../contracts/models';
 import { SessionHandle } from '../contracts/transport';
 import { InvalidTransitionError } from '../errors/CockpitError';
@@ -56,7 +56,7 @@ export class SessionEntry {
 		const allowed = VALID_TRANSITIONS[this._connectionState];
 		if (!allowed?.has(target)) {
 			throw new InvalidTransitionError(
-				`Invalid session transition: ${this._connectionState} → ${target} for ${this.brickKey}`
+				`Invalid session transition: ${this._connectionState} → ${target} for ${describeChannel(this.brickKey)}`
 			);
 		}
 		this._connectionState = target;

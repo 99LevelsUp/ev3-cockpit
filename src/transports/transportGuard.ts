@@ -19,6 +19,7 @@
  * rule cited does not exist. Both are gone.
  */
 
+import { describeChannel } from '../contracts';
 import { FIRMWARE_SAFETY } from './transportConstants';
 import { TransportError } from '../errors/CockpitError';
 
@@ -84,7 +85,7 @@ export class TransportGuard {
 	checkRateLimit(brickId: string, channelKey: string): void {
 		if (this.channels.get(channelKey)?.degraded) {
 			// A link fault, not a refusal of this one command: the brick layer fails over on it.
-			throw new TransportError(`Channel ${channelKey} is degraded — sends blocked until recovery.`);
+			throw new TransportError(`Channel ${describeChannel(channelKey)} is degraded — sends blocked until recovery.`);
 		}
 
 		const now = Date.now();

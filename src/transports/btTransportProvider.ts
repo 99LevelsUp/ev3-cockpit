@@ -17,7 +17,7 @@ import {
 	Transport, BrickKey, makeBrickKey, brickKeyId, brickIdOf,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
-	PresenceState,
+	PresenceState, describeAddress, describeChannel,
 } from '../contracts';
 import { TransportError, ConnectionError, BackendUnavailableError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
@@ -219,7 +219,7 @@ export class BtTransportProvider implements TransportProvider {
 	async connect(brickKey: BrickKey): Promise<SessionHandle> {
 		this.assertNotDisposed();
 		if (this.sessions.has(brickKey)) {
-			throw new ConnectionError(`BT brick ${brickKey} is already connected.`);
+			throw new ConnectionError(`${describeChannel(brickKey)} is already connected.`);
 		}
 
 		const mac = this.extractMac(brickKey);
@@ -281,7 +281,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.assertNotDisposed();
 		const session = this.sessions.get(brickKey);
 		if (!session) {
-			throw new TransportError(`BT brick ${brickKey} is not connected.`);
+			throw new TransportError(`${describeChannel(brickKey)} is not connected.`);
 		}
 		return session.adapter.send(packet, options);
 	}
@@ -309,7 +309,7 @@ export class BtTransportProvider implements TransportProvider {
 		const result = this.unpairDevice(mac);
 		if (!result.ok) {
 			throw new TransportError(
-				`Could not forget ${mac}: ${result.reason ?? 'the operating system refused.'}`
+				`Could not forget ${describeAddress(mac)}: ${result.reason ?? 'the operating system refused.'}`
 			);
 		}
 	}
@@ -360,7 +360,7 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		throw new ConnectionError(
-			`No BT backend can run on this host for ${mac}: ${unavailable.join('; ')}`
+			`No BT backend can run on this host for ${describeAddress(mac)}: ${unavailable.join('; ')}`
 		);
 	}
 
