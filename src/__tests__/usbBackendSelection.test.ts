@@ -119,6 +119,96 @@ describe('USB name probe', () => {
 	});
 });
 
+describe('USB bus sharing', () => {
+	const SERIALS = ['001653000001', '001653000002'];
+	const at = (i: number) => ({ busNumber: 2, deviceAddress: 10 + i });
+	const tick = () => new Promise((resolve) => setImmediate(resolve));
+	const ticks = async (n: number) => { for (let i = 0; i < n; i += 1) { await tick(); } };
+
+	/**
+	 * Adapters that open the way `findDevice` does: every EV3 not in use, in turn, then claim
+	 * their own. Opening a device another adapter holds claimed is what dropped a transfer in
+	 * flight into freed memory on hardware; here it is recorded as a violation.
+	 */
+	function busProvider(hooks: { afterClaim?: () => Promise<void>; onClose?: () => Promise<void> }) {
+		const claimedBy = new Map<number, string>();
+		const violations: string[] = [];
+		const provider = new UsbTransportProvider({
+			createLibusbAdapter: (options) => {
+				const mine = SERIALS.indexOf(options.serial!.toUpperCase());
+				let location: { busNumber: number; deviceAddress: number } | undefined;
+				return {
+					async open(): Promise<void> {
+						for (let i = 0; i < SERIALS.length; i += 1) {
+							if (options.inUse?.(at(i))) { continue; }
+							const holder = claimedBy.get(at(i).deviceAddress);
+							if (holder) { violations.push(`${options.serial} opened ${holder}'s claimed device`); }
+							await tick();
+						}
+						claimedBy.set(at(mine).deviceAddress, options.serial!);
+						location = at(mine);
+						await hooks.afterClaim?.();
+					},
+					async close(): Promise<void> {
+						// Like the real adapter: the location is gone at once, the claim only once
+						// libusb has handed back what was in flight.
+						const held = location;
+						location = undefined;
+						await hooks.onClose?.();
+						if (held) { claimedBy.delete(held.deviceAddress); }
+					},
+					send: () => Promise.resolve(new Uint8Array()),
+					get isOpen(): boolean { return location !== undefined; },
+					maxPacketBytes: 1024,
+					get deviceLocation() { return location; },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any;
+			},
+		});
+		return { provider, violations };
+	}
+
+	it('lets no probe open a device another probe has claimed but not yet returned from', async () => {
+		let claimedFirst!: () => void;
+		const firstHolds = new Promise<void>((resolve) => { claimedFirst = resolve; });
+		let calls = 0;
+		const { provider, violations } = busProvider({
+			afterClaim: () => (calls++ === 0 ? firstHolds : Promise.resolve()),
+		});
+
+		const first = provider.openProbe(makeBrickKey(Transport.USB, SERIALS[0]));
+		await ticks(10);
+		const second = provider.openProbe(makeBrickKey(Transport.USB, SERIALS[1]));
+		await ticks(10);
+		claimedFirst();
+		const probes = await Promise.all([first, second]);
+
+		assert.deepEqual(violations, []);
+		for (const probe of probes) { await probe.close(); }
+		provider.dispose();
+	});
+
+	it('keeps a closing probe\'s device in use until libusb has let go of it', async () => {
+		let letGo!: () => void;
+		const draining = new Promise<void>((resolve) => { letGo = resolve; });
+		let closes = 0;
+		const { provider, violations } = busProvider({
+			onClose: () => (closes++ === 0 ? draining : Promise.resolve()),
+		});
+
+		const first = await provider.openProbe(makeBrickKey(Transport.USB, SERIALS[0]));
+		const closing = first.close();
+		await ticks(5);
+		const second = await provider.openProbe(makeBrickKey(Transport.USB, SERIALS[1]));
+		letGo();
+		await closing;
+
+		assert.deepEqual(violations, []);
+		await second.close();
+		provider.dispose();
+	});
+});
+
 describe('USB backend selection', () => {
 	it('prefers libusb, and never opens the HID path when it succeeds', async () => {
 		const opened: string[] = [];
