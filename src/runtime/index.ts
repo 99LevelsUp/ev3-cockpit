@@ -11,3 +11,8 @@ export { HeartbeatMonitor } from './heartbeatMonitor';
 export type { HeartbeatMonitorOptions } from './heartbeatMonitor';
 export { ReconnectStrategy } from './reconnectStrategy';
 export type { ReconnectStrategyOptions } from './reconnectStrategy';
+export { BrickManager } from './brickManager';
+export type { BrickManagerOptions, RouteChangeEvent, ActiveBrickIdChangeEvent } from './brickManager';
+export { BrickChannel } from './brickChannel';
+export { BaseChannelStateMachine } from './channelStateMachine';
+export type { ChannelEvent, ChannelStateMachine } from './channelStateMachine';

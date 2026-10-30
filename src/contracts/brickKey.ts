@@ -18,6 +18,14 @@ export type BrickKey = string & { readonly __brand: 'BrickKey' };
  */
 export type BrickId = string & { readonly __brand: 'BrickId' };
 
+/**
+ * Either a brick or one channel to it — what a sender of commands accepts.
+ *
+ * The session manager is addressed by channel, the brick layer by brick; the services above
+ * them (filesystem, telemetry) send through whichever they were handed and need neither more.
+ */
+export type BrickRef = BrickKey | BrickId;
+
 const HARDWARE_ID = /^[0-9A-F]{12}$/;
 
 /**

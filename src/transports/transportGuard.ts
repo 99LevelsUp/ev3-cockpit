@@ -20,6 +20,7 @@
  */
 
 import { FIRMWARE_SAFETY } from './transportConstants';
+import { TransportError } from '../errors/CockpitError';
 
 /** Per-channel health tracked by the guard. */
 interface ChannelHealth {
@@ -82,7 +83,8 @@ export class TransportGuard {
 	 */
 	checkRateLimit(brickId: string, channelKey: string): void {
 		if (this.channels.get(channelKey)?.degraded) {
-			throw new Error(`Channel ${channelKey} is degraded — sends blocked until recovery.`);
+			// A link fault, not a refusal of this one command: the brick layer fails over on it.
+			throw new TransportError(`Channel ${channelKey} is degraded — sends blocked until recovery.`);
 		}
 
 		const now = Date.now();
