@@ -53,6 +53,15 @@ internal static class Program
             var aqs = ArgAfter(args, "--aqs") ?? BluetoothDevice.GetDeviceSelectorFromPairingState(false);
             return await WatchRawAsync(aqs, TimeSpan.FromSeconds(inquirySeconds), rawCts.Token);
         }
+        if (Array.IndexOf(args, "--sdp") >= 0)
+        {
+            if (string.IsNullOrWhiteSpace(mac))
+            {
+                Emit(new { type = "error", message = "--sdp needs --mac" });
+                return 2;
+            }
+            return await SdpAsync(mac!, TimeSpan.FromSeconds(timeoutSeconds));
+        }
 
         if (scan)
         {
@@ -268,6 +277,56 @@ internal static class Program
 
         Emit(new { type = "scanComplete", count = byAddress.Count, atMs = sw.ElapsedMilliseconds });
         return 0;
+    }
+
+    /// <summary>
+    /// Asks one device for its RFCOMM services, bypassing Windows' cache, and reports whether
+    /// it answered -- a candidate presence check for a paired brick (step-2 plan, U6).
+    ///
+    /// Windows lists a paired brick whether it is switched on or not. An uncached service query
+    /// has to reach the device itself, so an answer means the brick is there. Microsoft does not
+    /// document what it does toward a device that is off; that is what the measurement is for.
+    /// Exit code 0 answered, 1 no answer or timeout, 3 Windows does not know the address.
+    /// </summary>
+    private static async Task<int> SdpAsync(string mac, TimeSpan timeout)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            var device = await BluetoothDevice.FromBluetoothAddressAsync(MacToAddress(mac)).AsTask(cts.Token);
+            if (device is null)
+            {
+                Emit(new { type = "sdp", mac, answered = false, reason = "unknown address", elapsedMs = sw.ElapsedMilliseconds });
+                return 3;
+            }
+            using (device)
+            {
+                var result = await device.GetRfcommServicesAsync(BluetoothCacheMode.Uncached).AsTask(cts.Token);
+                var answered = result.Error == BluetoothError.Success;
+                Emit(new
+                {
+                    type = "sdp",
+                    mac,
+                    answered,
+                    error = result.Error.ToString(),
+                    services = result.Services.Count,
+                    connectionStatus = device.ConnectionStatus.ToString(),
+                    elapsedMs = sw.ElapsedMilliseconds,
+                });
+                return answered ? 0 : 1;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Emit(new { type = "sdp", mac, answered = false, reason = "timeout", elapsedMs = sw.ElapsedMilliseconds });
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Emit(new { type = "sdp", mac, answered = false, reason = $"{ex.GetType().Name}: {ex.Message}", elapsedMs = sw.ElapsedMilliseconds });
+            return 1;
+        }
     }
 
     /// <summary>
