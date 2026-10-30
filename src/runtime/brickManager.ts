@@ -58,8 +58,8 @@ export interface BrickManagerOptions {
 interface SignIn {
 	/** Joins in flight, by channel. */
 	readonly pending: Set<BrickKey>;
-	/** Failed joins that wait for the brick to be seen again before another try. */
-	readonly awaitingEvidence: Set<BrickKey>;
+	/** Failed joins that wait for the brick to be seen again before another try, with when they failed. */
+	readonly awaitingEvidence: Map<BrickKey, number>;
 	/** Failed joins waiting out a backoff. */
 	readonly retryTimers: Map<BrickKey, NodeJS.Timeout>;
 	readonly backoff: Map<BrickKey, ReconnectStrategy>;
@@ -141,7 +141,10 @@ export class BrickManager implements vscode.Disposable {
 				}
 			}),
 			this.aggregator.onListChanged(() => {
-				for (const brickId of this.signedIn.keys()) { this.reconcile(brickId); }
+				for (const brickId of this.signedIn.keys()) {
+					this.takeAnswersAsEvidence(brickId);
+					this.reconcile(brickId);
+				}
 			}),
 		);
 	}
@@ -169,7 +172,7 @@ export class BrickManager implements vscode.Disposable {
 		}
 
 		this.signedIn.set(brickId, {
-			pending: new Set(), awaitingEvidence: new Set(), retryTimers: new Map(), backoff: new Map(),
+			pending: new Set(), awaitingEvidence: new Map(), retryTimers: new Map(), backoff: new Map(),
 		});
 		try {
 			await Promise.any(candidates.map((key) => this.join(brickId, key)));
@@ -399,7 +402,7 @@ export class BrickManager implements vscode.Disposable {
 
 	private scheduleRejoin(brickId: BrickId, signIn: SignIn, key: BrickKey, transport: Transport): void {
 		if (this.registry.get(transport)?.capabilities.rejoinOnEvidenceOnly) {
-			signIn.awaitingEvidence.add(key);
+			signIn.awaitingEvidence.set(key, Date.now());
 			return;
 		}
 		let backoff = signIn.backoff.get(key);
@@ -414,6 +417,21 @@ export class BrickManager implements vscode.Disposable {
 		}, delay);
 		timer.unref();
 		signIn.retryTimers.set(key, timer);
+	}
+
+	/**
+	 * A presence check answered after a join failed is the evidence that join was waiting for:
+	 * the brick is there now, whatever stopped the last attempt.
+	 */
+	private takeAnswersAsEvidence(brickId: BrickId): void {
+		const signIn = this.signedIn.get(brickId);
+		if (!signIn || signIn.awaitingEvidence.size === 0) { return; }
+		for (const channel of this.aggregator.getBrick(brickId)?.channels ?? []) {
+			const failedAt = signIn.awaitingEvidence.get(channel.brickKey);
+			if (failedAt !== undefined && (channel.heardAt ?? 0) > failedAt) {
+				signIn.awaitingEvidence.delete(channel.brickKey);
+			}
+		}
 	}
 
 	private forgetSignIn(brickId: BrickId): void {

@@ -171,10 +171,12 @@ export class PresenceAggregator implements vscode.Disposable {
 		const brickId = brickIdOf(e.brickKey);
 		const record = this.recordFor(brickId);
 		const channel = this.channelFor(record, e.brickKey, e.item.transport);
+		const heardBefore = channel.heardAt;
 		this.observe(record, channel, e.item);
 
 		const event: ChannelEvent = e.currentState === PresenceState.Available ? 'seen' : 'gone';
 		if (channel.accepts(event)) { channel.apply(event); }
+		this.applyHeard(channel, e.item, heardBefore);
 		if (e.currentState === PresenceState.Removed) {
 			channel.markExpired();
 			this.dropIfStranger(record);
@@ -191,13 +193,31 @@ export class PresenceAggregator implements vscode.Disposable {
 			if (tracked.presenceState === PresenceState.Available && channel.state === ChannelState.Absent) {
 				channel.apply('seen');
 			}
+			const heardBefore = channel.heardAt;
 			this.observe(record, channel, tracked);
+			this.applyHeard(channel, tracked, heardBefore);
 		}
 		this.emitListChanged();
 	}
 
+	/**
+	 * A paired Bluetooth brick that stopped answering its presence checks is lost — shown as
+	 * "not heard" — while Windows keeps listing it; a fresh answer makes it available again.
+	 *
+	 * Only a new answer counts as evidence for the way back: a `heard` flag carried over from
+	 * before is not news, and a channel lost to a dropped session must not turn available on it.
+	 */
+	private applyHeard(channel: BrickChannel, item: DiscoveryItem, heardBefore: number | undefined): void {
+		if (item.heard === false && channel.state === ChannelState.Available) {
+			channel.apply('gone');
+		} else if (item.heard === true && item.heardAt !== undefined && item.heardAt !== heardBefore
+			&& channel.state === ChannelState.Lost && !channel.expired) {
+			channel.apply('seen');
+		}
+	}
+
 	private observe(record: BrickRecord, channel: BrickChannel, item: DiscoveryItem): void {
-		channel.observe(item.lastSeenAt, item.signalInfo);
+		channel.observe(item.lastSeenAt, item.signalInfo, item.heardAt);
 		record.paired ||= item.paired ?? false;
 		this.noteName(record, item, item.lastSeenAt);
 	}

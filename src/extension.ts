@@ -8,8 +8,9 @@ import {
 } from './transports';
 import type { BtBackend, BtAdapterFactory } from './transports';
 import {
-	createHelperPairing, scanForBricks, BtPairingEvent, ScannedBrick,
+	createHelperPairing, createHelperPresenceCheck, scanForBricks, BtPairingEvent, ScannedBrick,
 } from './transports/btPairingHelper';
+import { BtPresenceMonitor } from './transports/btPresence';
 import { BT } from './transports/transportConstants';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 
@@ -110,7 +111,28 @@ export function activate(context: vscode.ExtensionContext): void {
 		connectionQueue: btQueue,
 		pairDevice: createHelperPairing({ helperPath: btHelperPath }),
 	});
-	const btProvider = services.add(new BtTransportProvider({
+	// Which Bluetooth bricks are actually there (plan step 2, U7): an inquiry now and then, so a
+	// brick nobody has paired yet appears without anyone opening a picker; and a check of each
+	// paired brick without a session, so one that is switched off turns "not heard" instead of
+	// looking available because Windows still lists it. Started below, once discovery runs.
+	let refreshDiscovery = (): void => { /* set once the scheduler exists */ };
+	const btPresence: BtPresenceMonitor = new BtPresenceMonitor({
+		queue: btQueue,
+		check: createHelperPresenceCheck({ helperPath: btHelperPath }),
+		inquire: () => scanForBricks({
+			helperPath: btHelperPath,
+			ouiFilter: BT.LEGO_OUI,
+			inquirySeconds: BT.PRESENCE_INQUIRY_SECONDS,
+			timeoutSeconds: BT.PRESENCE_INQUIRY_SECONDS + 20,
+		}).done,
+		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		onUnavailable: (reason) => logger.warn(
+			`Bluetooth presence unavailable, the list shows Windows' records only: ${reason}`),
+		onChange: () => refreshDiscovery(),
+	});
+	services.add({ dispose: () => btPresence.dispose() });
+	const btProvider: BtTransportProvider = services.add(new BtTransportProvider({
+		presence: btPresence,
 		discoverDevices: btDiscovery.discover,
 		unpairDevice: btDiscovery.unpair,
 		backends: new Map<BtBackend, BtAdapterFactory>([
@@ -162,6 +184,13 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Start discovery polling
 	scheduler.start();
 	logger.info('Discovery scheduler started');
+
+	refreshDiscovery = () => { void scheduler.scanOnce().catch(() => { /* reported by onScanFailed */ }); };
+	// Not in the extension test host: its suite must not page real bricks around the desk.
+	if (context.extensionMode !== vscode.ExtensionMode.Test) {
+		btPresence.start();
+		logger.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
+	}
 
 	void scheduler.scanOnce().then(() => {
 		logger.info('Initial discovery scan complete');

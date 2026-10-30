@@ -239,6 +239,45 @@ describe('PresenceAggregator — bricks that leave', () => {
 	});
 });
 
+// ── Bluetooth presence ──────────────────────────────────────────────
+
+describe('PresenceAggregator — a paired brick nobody hears', () => {
+	it('turns a paired brick that stopped answering lost, and keeps it lost across scans', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push({ ...item(CCC.bt, Transport.BT, 'CCC'), paired: true, heard: false });
+		await scheduler.scanOnce();
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Lost);
+		await scheduler.scanOnce();
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Lost);
+		assert.ok(aggregator.getBrick(CCC_ID), 'a paired brick nobody hears stays in the list');
+		done();
+	});
+
+	it('brings it back when it answers again', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		seen.bt.push({ ...item(CCC.bt, Transport.BT, 'CCC'), paired: true, heard: false });
+		await scheduler.scanOnce();
+
+		seen.bt[0] = { ...seen.bt[0], heard: true, heardAt: Date.now() };
+		await scheduler.scanOnce();
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Available);
+		done();
+	});
+
+	it('does not bring back a channel lost to a dropped session on an old answer', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		const heardAt = Date.now();
+		seen.bt.push({ ...item(CCC.bt, Transport.BT, 'CCC'), paired: true, heard: true, heardAt });
+		await scheduler.scanOnce();
+		aggregator.updateChannelSession(CCC.bt, ConnectionState.Connected);
+		aggregator.updateChannelSession(CCC.bt, ConnectionState.Reconnecting);
+
+		await scheduler.scanOnce();   // same answer as before: not news
+		assert.equal(stateOf(aggregator, Transport.BT), ChannelState.Lost);
+		done();
+	});
+});
+
 // ── Name ────────────────────────────────────────────────────────────
 
 describe('PresenceAggregator — the name shown', () => {
