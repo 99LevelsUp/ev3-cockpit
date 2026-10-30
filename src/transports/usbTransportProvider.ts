@@ -120,12 +120,20 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	private disposed = false;
 	/**
-	 * Probe links open now. Their devices count as in use, so discovery and a connect leave
-	 * them alone until they close.
+	 * Probe links open now, with where each one sits. Their devices count as in use, so
+	 * discovery and a connect leave them alone until they close.
 	 */
-	private readonly probes = new Set<UsbLibusbAdapter>();
+	private readonly probes = new Map<UsbLibusbAdapter, UsbDeviceLocation | undefined>();
+	/**
+	 * Devices whose link is closing. Still in use until the close resolves: it waits for libusb
+	 * to hand back transfers in flight, and opening the device meanwhile pulls the handle out
+	 * from under them.
+	 */
+	private readonly closing = new Set<UsbDeviceLocation>();
 	/** Per brick, the tail of the queue that connects and probes wait in. */
 	private readonly locks = new Map<BrickKey, Promise<void>>();
+	/** The tail of the queue every opening of a device waits in, whichever brick it is for. */
+	private busTail: Promise<void> = Promise.resolve();
 	/** Guard against concurrent discover() calls overlapping on the same device. */
 	private discovering = false;
 
@@ -163,9 +171,9 @@ export class UsbTransportProvider implements TransportProvider {
 		// A brick with a live libusb session is skipped rather than reopened: discovery runs
 		// on a 1.2 s timer and would otherwise be prying at a device its own transport holds
 		// claimed. Such a brick keeps the HID product string, which is what it had before.
-		const nodeUsbDevices = await this.listUsbDevices({
+		const nodeUsbDevices = await this.onBus(() => this.listUsbDevices({
 			skip: (location) => this.isInUse(location),
-		}).catch(() => []);
+		})).catch(() => []);
 
 		// Remember every name libusb manages to read, because a connected brick is skipped
 		// above and would otherwise fall back to the Windows cache — which is wrong on this
@@ -247,35 +255,68 @@ export class UsbTransportProvider implements TransportProvider {
 	async openProbe(brickKey: BrickKey): Promise<ProbeLink> {
 		this.assertNotDisposed();
 		const release = await this.lock(brickKey);
-		let adapter: UsbLibusbAdapter | undefined;
+		let opened: UsbLibusbAdapter;
 		try {
 			if (this.sessions.has(brickKey)) {
 				throw new ConnectionError(`USB brick ${brickKey} has a session; ask it instead.`);
 			}
 			const serial = this.extractSerial(brickKey);
-			adapter = this.makeLibusbAdapter({
+			const adapter = this.makeLibusbAdapter({
 				...(serial ? { serial } : {}),
 				inUse: (location) => this.isInUse(location),
 			});
-			await adapter.open();
+			opened = await this.onBus(async () => {
+				try {
+					await adapter.open();
+				} catch (error) {
+					await adapter.close().catch(() => { /* nothing to unwind */ });
+					throw error;
+				}
+				this.probes.set(adapter, adapter.deviceLocation);
+				return adapter;
+			});
 		} catch (error) {
-			await adapter?.close().catch(() => { /* nothing to unwind */ });
 			release();
 			throw error;
 		}
 
-		const opened = adapter;
-		this.probes.add(opened);
 		let closed = false;
 		return {
 			sendPacket: (packet, options) => opened.send(packet, options),
 			close: async () => {
 				if (closed) { return; }
 				closed = true;
+				const location = this.probes.get(opened);
 				this.probes.delete(opened);
-				try { await opened.close(); } finally { release(); }
+				try { await this.closeHeld(opened, location); } finally { release(); }
 			},
 		};
+	}
+
+	/**
+	 * Runs one opening of a device alone on the bus.
+	 *
+	 * Finding a brick by serial opens every EV3 on the bus in turn, and so does discovery. Two
+	 * of those at once, or one beside a link still opening, closed a device another probe had
+	 * just claimed with a transfer in flight, and libusb's callback for it landed in freed
+	 * memory: the extension host died 0.5 s after activation, when three name probes started
+	 * together (30.10.2026, traced). The per-brick lock cannot see that, the bricks differ.
+	 * Whatever `fn` opens must be registered as in use before it returns.
+	 */
+	private onBus<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.busTail.then(fn);
+		this.busTail = run.then(() => undefined, () => undefined);
+		return run;
+	}
+
+	/** Closes a link, keeping its device in use until libusb has let go of it. */
+	private async closeHeld(adapter: TransportAdapter, location?: UsbDeviceLocation): Promise<void> {
+		if (location) { this.closing.add(location); }
+		try {
+			await adapter.close();
+		} finally {
+			if (location) { this.closing.delete(location); }
+		}
 	}
 
 	/** Waits its turn among the connects and probes of one brick; resolves to a release. */
@@ -301,18 +342,22 @@ export class UsbTransportProvider implements TransportProvider {
 			...(serial ? { serial } : {}),
 			inUse: (location) => this.isInUse(location),
 		});
-		try {
-			await libusb.open();
-		} catch (error) {
-			await libusb.close().catch(() => { /* nothing to unwind */ });
-			return error instanceof Error ? error.message : String(error);
-		}
-		this.sessions.set(brickKey, {
-			adapter: libusb,
-			backend: 'libusb',
-			location: libusb.deviceLocation,
-			messageCounter: 0,
+		const failure = await this.onBus(async () => {
+			try {
+				await libusb.open();
+			} catch (error) {
+				await libusb.close().catch(() => { /* nothing to unwind */ });
+				return error instanceof Error ? error.message : String(error);
+			}
+			this.sessions.set(brickKey, {
+				adapter: libusb,
+				backend: 'libusb',
+				location: libusb.deviceLocation,
+				messageCounter: 0,
+			});
+			return undefined;
 		});
+		if (failure !== undefined) { return failure; }
 		this.log?.info(
 			`USB ${brickKey} connected over libusb, ${libusb.maxPacketBytes}-byte frames.`
 		);
@@ -375,7 +420,7 @@ export class UsbTransportProvider implements TransportProvider {
 		const session = this.sessions.get(brickKey);
 		if (!session) { return; }
 		this.sessions.delete(brickKey);
-		await session.adapter.close();
+		await this.closeHeld(session.adapter, session.location);
 	}
 
 	async sendPacket(
@@ -394,18 +439,19 @@ export class UsbTransportProvider implements TransportProvider {
 	dispose(): void {
 		this.disposed = true;
 		for (const [, session] of this.sessions) {
-			void session.adapter.close();
+			void this.closeHeld(session.adapter, session.location).catch(() => { /* disposing */ });
 		}
 		this.sessions.clear();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	/** Whether a session or an open probe already holds the device at this bus address. */
+	/** Whether a session, an open probe or a closing link holds the device at this bus address. */
 	private isInUse(location: { busNumber: number; deviceAddress: number }): boolean {
 		const held = [
 			...[...this.sessions.values()].map((session) => session.location),
-			...[...this.probes].map((probe) => probe.deviceLocation),
+			...this.probes.values(),
+			...this.closing,
 		];
 		return held.some((at) => at !== undefined
 			&& at.busNumber === location.busNumber
