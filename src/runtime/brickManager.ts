@@ -393,6 +393,9 @@ export class BrickManager implements vscode.Disposable {
 				await this.sessionManager.disconnect(key);
 			}
 		} catch (error) {
+			// Said, because a channel that will not join is otherwise invisible: the brick works
+			// over its other channels and nothing explains why this one stays unused.
+			this.log?.warn(`Joining ${key} failed: ${error instanceof Error ? error.message : String(error)}`);
 			if (this.signedIn.get(brickId) === signIn) { this.scheduleRejoin(brickId, signIn, key, transport); }
 			throw error;
 		} finally {

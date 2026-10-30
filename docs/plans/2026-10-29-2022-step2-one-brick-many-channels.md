@@ -475,4 +475,26 @@ U6 and U10 record their tables and verdicts here.
 - No lock-out: every connect after a query that reached the brick opened. A query to an off brick costs about 5.3 s of radio.
 - Not measured separately: connects under a background inquiry. U7 holds the connection queue for the inquiry, so a connect never overlaps one.
 
-**Verdict against the rule written before the run:** the SDP query does not separate on from off in every repetition, so it does not qualify as written. It is one-sided: an answer proves the brick is on; silence is "off, or the adapter missed it". Taken to the owner (Goal Capsule stop condition), who chose to use it with hysteresis (KD10): on an adapter that misses an on brick about half the time, three misses in a row happen about one round in eight to fifteen, so a brick that is on may briefly read "not heard" and recover at its next answer.
+**Verdict against the rule written before the run (U6):** the SDP query does not separate on from off in every repetition, so it does not qualify as written. It is one-sided: an answer proves the brick is on; silence is "off, or the adapter missed it". Taken to the owner (Goal Capsule stop condition), who chose to use it with hysteresis (KD10): on an adapter that misses an on brick about half the time, three misses in a row happen about one round in eight to fifteen, so a brick that is on may briefly read "not heard" and recover at its next answer.
+
+### U10 — success criteria on the bench, 30.10.2026 (psk1, Realtek adapter)
+
+`scripts/arena-scenario.js`, which builds the runtime through `createRuntime` exactly as the extension does, with background Bluetooth presence on. The owner pulled and replugged cables and switched Bluetooth on the brick on cue.
+
+| brick | cable out: failed commands / first Bluetooth answer after the failure | cable in: failed commands / traffic on USB after USB was seen again | commands in the run |
+|---|---|---|---|
+| CCC | 1 / 308 ms (`LIBUSB_ERROR_IO`) | 0 / 112 ms | 78 |
+| AAA | 1 / 311 ms (`LIBUSB_TRANSFER_CANCELLED`) | 0 / 0 ms | 160 |
+| BBB | 1 / 310 ms (`LIBUSB_ERROR_IO`) | 0 / 102 ms | 127 |
+
+| CCC | result |
+|---|---|
+| 64 KB written and read back over USB with Bluetooth also up, telemetry loop running | 495 ms, identical, 4 frames, 0 frame errors, brick answering afterwards |
+| rename to ArenaTest and back, through the brick layer | list showed each name 121 / 122 ms after the rename, confirmed by the brick |
+| Bluetooth switched off on the brick (signed out, presence on) | "not heard" 126 s after the cue |
+| Bluetooth switched back on | available again 114 s after the cue |
+
+- All three success criteria hold on all three bricks.
+- A Bluetooth join that failed at sign-in (WSA 10060, this adapter) rejoined by itself after the next presence answer, 40–60 s later, as designed (D3, KD10).
+- Harness lesson: phases run in separate processes reconnected Bluetooth seconds after the previous process had closed it, the too-soon reconnect that locks a brick out for minutes (D3); the provider's gap lives in the process. Phases now share one process. In the extension, one process, this does not arise; a window reload right after a disconnect could hit it.
+- Fixed on the way: a channel that will not join is now logged with its error; the USB provider no longer warns of a fallback to HID on every reconnect attempt while the cable is out, only when a HID link actually opens.

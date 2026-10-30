@@ -147,10 +147,12 @@ describe('USB backend selection', () => {
 		provider.dispose();
 	});
 
-	it('names both failures when neither backend opens', async () => {
+	it('names both failures when neither backend opens, and warns of no fallback that never happened', async () => {
+		const log = { info: [] as string[], warn: [] as string[] };
 		const provider = providerWith({
 			libusb: { failWith: 'LIBUSB_ERROR_ACCESS' },
 			hid: { failWith: 'no HID device' },
+			log,
 		});
 		// "USB connect failed" against a brick that is plainly attached is a dead end
 		// unless the message says the libusb claim was refused first.
@@ -158,6 +160,9 @@ describe('USB backend selection', () => {
 			() => provider.connect(KEY),
 			/libusb: LIBUSB_ERROR_ACCESS\. HID: no HID device/
 		);
+		// While a cable is out every reconnect fails both ways; measured 30.10.2026, a warning
+		// per attempt about falling back to HID filled the log during a cable pull.
+		assert.deepEqual(log.warn, []);
 		provider.dispose();
 	});
 
