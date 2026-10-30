@@ -3,6 +3,7 @@ import { DisposableStore } from './events';
 import { BtPairingEvent } from './transports/btPairingHelper';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { createRuntime } from './runtime/createRuntime';
+import { brickLabel, transportLabel } from './runtime/brickLabels';
 import { BrickEntry, BrickId, ChannelState, Transport, brickKeyId } from './contracts';
 import { compareBricks } from './ui/brickOrder';
 
@@ -23,6 +24,17 @@ function describeChannels(brick: BrickEntry): string {
 	}).join(' · ');
 }
 
+/**
+ * Whether to show the simulated bricks. The `ev3-cockpit.mockBricks` setting decides when
+ * someone has set it; otherwise they appear only while the extension runs from source (F5),
+ * so an installed build never shows six robots that are not there.
+ */
+function mockBricksWanted(context: vscode.ExtensionContext): boolean {
+	const setting = vscode.workspace.getConfiguration('ev3-cockpit').inspect<boolean>('mockBricks');
+	const chosen = setting?.workspaceFolderValue ?? setting?.workspaceValue ?? setting?.globalValue;
+	return chosen ?? context.extensionMode === vscode.ExtensionMode.Development;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
 	const logger = vscode.window.createOutputChannel('EVƎ Cockpit', { log: true });
 	context.subscriptions.push(logger);
@@ -37,8 +49,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		log: logger,
 		// Not in the extension test host: its suite must not page real bricks around the desk.
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
+		mockBricks: mockBricksWanted(context),
 	}));
 	const { bricks, aggregator, scheduler, btDiscovery, btPresence } = runtime;
+	/** What a user calls a brick: its name, or its id until it has one. */
+	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
 
 	// ── Filesystem ──────────────────────────────────────────────
 	// Palette commands are diagnostics, not the primary UX (DESIGN §14). They exist here
@@ -46,7 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// can be exercised by hand against a real brick.
 	const withActiveFilesystem = async (
 		what: string,
-		body: (fs: BrickFilesystem, brickId: string) => Promise<void>,
+		body: (fs: BrickFilesystem, brickId: BrickId) => Promise<void>,
 	): Promise<void> => {
 		const brickId = bricks.getActiveBrickId();
 		if (!brickId) {
@@ -58,15 +73,15 @@ export function activate(context: vscode.ExtensionContext): void {
 			await body(createBrickFilesystem(bricks, brickId), brickId);
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
-			logger.error(`${what} failed on ${brickId}`, err);
-			void vscode.window.showErrorMessage(`EVƎ Cockpit: ${what} failed — ${err.message}`);
+			logger.error(`${what} failed on ${brickLabel(aggregator, brickId)}`, err);
+			void vscode.window.showErrorMessage(`EVƎ Cockpit: ${what} on ${nameOf(brickId)} failed — ${err.message}`);
 		}
 	};
 
 	services.add(vscode.commands.registerCommand('ev3-cockpit.listProjects', () =>
 		withActiveFilesystem('listing projects', async (fs, brickId) => {
 			const entries = await fs.files.list(PROJECTS_PATH);
-			logger.info(`Files on ${brickId} at ${PROJECTS_PATH} (${entries.length}):`);
+			logger.info(`Files on ${brickLabel(aggregator, brickId)} at ${PROJECTS_PATH} (${entries.length}):`);
 			for (const e of entries) {
 				const size = e.bytes === undefined ? '' : ` ${e.bytes} B`;
 				logger.info(`  ${e.kind === 'directory' ? '[dir] ' : '      '}${e.name}${size}`);
@@ -79,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const usage = await fs.files.storage();
 			const used = usage.totalKb - usage.freeKb;
 			void vscode.window.showInformationMessage(
-				`EVƎ ${brickId}: ${usage.freeKb} KB free of ${usage.totalKb} KB `
+				`EVƎ Cockpit: ${nameOf(brickId)} — ${usage.freeKb} KB free of ${usage.totalKb} KB `
 				+ `(${used} KB used).`);
 		})));
 
@@ -154,7 +169,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: pairing ${label}`, cancellable: false },
 				async (progress) => {
 					const result = await btDiscovery.pair(mac, (event: BtPairingEvent) => {
-						logger.debug(`Pairing ${mac}: ${JSON.stringify(event)}`);
+						logger.debug(`Pairing ${brickLabel(aggregator, picked)}: ${JSON.stringify(event)}`);
 						// Prompt on `found`, not on `pairingRequested`: by the time the brick is
 						// asking, whoever is meant to press it has seconds. On `found` they have
 						// the whole ceremony.
@@ -163,7 +178,7 @@ export function activate(context: vscode.ExtensionContext): void {
 						}
 					});
 					if (!result.ok) {
-						logger.warn(`Pairing ${mac} failed: ${result.reason ?? 'no reason given'}`);
+						logger.warn(`Pairing ${brickLabel(aggregator, picked)} failed: ${result.reason ?? 'no reason given'}`);
 						void vscode.window.showErrorMessage(
 							`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
 					}
@@ -180,7 +195,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
 				try {
 					await bricks.signIn(picked);
-					logger.info(`Connected to ${label} over ${bricks.routeOf(picked) ?? 'no channel'}`);
+					const route = bricks.routeOf(picked);
+					logger.info(`Connected to ${brickLabel(aggregator, picked)} over ${route ? transportLabel(route) : 'no channel'}`);
 					void vscode.window.showInformationMessage(`EVƎ Cockpit: connected to ${label}.`);
 				} catch (error) {
 					const err = error instanceof Error ? error : new Error(String(error));
@@ -212,7 +228,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		if (!picked) { return; }
 		await bricks.signOut(picked.brickId);
-		logger.info(`Disconnected ${picked.label}`);
+		logger.info(`Disconnected ${brickLabel(aggregator, picked.brickId)}`);
 	}));
 
 	logger.info('Connect and disconnect commands registered');
