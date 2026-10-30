@@ -200,13 +200,15 @@ Cockpit always has at most one active brick:
 
 ### 7.4 Brick Identification and Favorites
 
-- `brickKey` is a stable internal identifier within a given transport:
+- A brick is one brick however many channels reach it (owner's decision D2, 29.10.2026). Its
+  identity is the twelve hex digits that are its USB serial, its Bluetooth address and the
+  serial in its TCP beacon.
+- `brickKey` identifies one channel to a brick:
     - **USB**: Serial number (or VID:PID:Serial).
     - **BT**: MAC address.
     - **TCP**: Serial number reported by the brick, falling back to the IP address when the
-      brick reports no serial.
-- `favorite` status and `auto-connect` are bound to the `(brickKey, transport)` pair.
-- Marking a brick as a favorite on one transport (e.g., BT) does not trigger auto-connect on another (e.g., USB).
+      brick reports no serial; a brick known only by IP is its own brick.
+- `favorite` status and `auto-connect` are bound to the brick, not to one channel of it.
 
 ## 8. Telemetry
 

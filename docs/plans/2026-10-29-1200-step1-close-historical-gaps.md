@@ -486,7 +486,9 @@ bricks with similar names apart before connecting.
   - discovery row `[U][B][T] Name`; a channel icon is hidden when that channel is not
     available at all, **blue** when available, **green** when connected, **grey** when lost;
   - clicking a channel icon connects that channel only; clicking the name connects every
-    available channel;
+    available channel — **superseded 29.10.2026 in planning step 2: there is no per-channel
+    connect; connecting a brick opens every available channel and later ones join by themselves
+    (`docs/plans/2026-10-29-2022-step2-one-brick-many-channels.md`, KD1, KD2);**
   - a lost channel goes grey and reconnects by itself when it is found again;
   - user scenario: brick on USB + BT at the desk (traffic over USB) → cable pulled, robot
     leaves for the arena (cockpit moves to BT on its own) → back at the desk, cable in
