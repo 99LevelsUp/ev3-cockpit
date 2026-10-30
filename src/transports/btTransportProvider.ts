@@ -23,6 +23,7 @@ import { TransportError, ConnectionError, BackendUnavailableError } from '../err
 import { TransportAdapter } from './transportAdapter';
 import { BtConnectionQueue } from './btConnectionQueue';
 import { BT } from './transportConstants';
+import type { PairedPresence, UnpairedSighting } from './btPresence';
 
 // ── BT backend types ────────────────────────────────────────────────
 
@@ -43,6 +44,12 @@ export interface BtDiscoveryDevice {
 /** Function that discovers BT devices (e.g. via koffi bthprops worker). */
 export type BtDiscoveryFunction = () => Promise<BtDiscoveryDevice[]>;
 
+/** What background presence knows, as discovery reads it (`BtPresenceMonitor`). */
+export interface BtPresenceSource {
+	presenceOf(mac: string): PairedPresence | undefined;
+	unpairedBricks(): readonly UnpairedSighting[];
+}
+
 // ── Session tracking ────────────────────────────────────────────────
 
 interface BtSession {
@@ -54,6 +61,10 @@ interface BtSession {
 // ── LEGO OUI filter ─────────────────────────────────────────────────
 
 const LEGO_OUI = BT.LEGO_OUI.toLowerCase();
+
+function normaliseMac(mac: string): string {
+	return mac.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+}
 
 function isLegoMac(mac: string): boolean {
 	return mac.replace(/[:-]/g, '').toLowerCase().startsWith(LEGO_OUI);
@@ -80,6 +91,11 @@ export interface BtTransportProviderOptions {
 	 * (default {@link BT.RECONNECT_GAP_AFTER_CLOSE_MS}). Per brick: other bricks are not held.
 	 */
 	reconnectGapAfterCloseMs?: number;
+	/**
+	 * Background presence: whether each paired brick answered its last checks, and the
+	 * unpaired bricks recent inquiries heard. Without it discovery lists Windows' records only.
+	 */
+	presence?: BtPresenceSource;
 }
 
 /**
@@ -106,6 +122,9 @@ export class BtTransportProvider implements TransportProvider {
 	/** When each brick's last connection was closed, by MAC. */
 	private readonly closedAt = new Map<string, number>();
 	private readonly reconnectGapAfterCloseMs: number;
+	private readonly presence?: BtPresenceSource;
+	/** Paired bricks the last discovery listed, by MAC as Windows spells it. */
+	private lastPaired: string[] = [];
 	private disposed = false;
 
 	constructor(options?: BtTransportProviderOptions) {
@@ -114,6 +133,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.connectionQueue = options?.connectionQueue;
 		this.unpairDevice = options?.unpairDevice;
 		this.reconnectGapAfterCloseMs = options?.reconnectGapAfterCloseMs ?? BT.RECONNECT_GAP_AFTER_CLOSE_MS;
+		this.presence = options?.presence;
 		this.capabilities = {
 			supportsSignalInfo: false,
 			supportsForget: Boolean(this.unpairDevice),
@@ -132,10 +152,14 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		try {
-			const devices = await this.discoverDevices();
+			const devices = (await this.discoverDevices()).filter((dev) => isLegoMac(dev.mac));
+			this.lastPaired = devices.filter((dev) => dev.remembered).map((dev) => dev.mac);
 			for (const dev of devices) {
-				if (!isLegoMac(dev.mac)) { continue; }
 				const brickKey = makeBrickKey(Transport.BT, dev.mac);
+				// Every paired brick stays listed; whether it answered is a flag on it, not its
+				// absence. Dropping an unheard brick would hide one the user may still want to
+				// try (KD6), and Windows lists it again on the next scan anyway.
+				const presence = dev.remembered ? this.presence?.presenceOf(dev.mac) : undefined;
 				items.push({
 					brickKey,
 					displayName: dev.name || `EV3 [${dev.mac}]`,
@@ -148,6 +172,26 @@ export class BtTransportProvider implements TransportProvider {
 					connected: this.sessions.has(brickKey),
 					favorite: false,
 					lastSeenAt: now,
+					...(presence ? { heard: presence.heard } : {}),
+					...(presence?.heardAt ? { heardAt: presence.heardAt } : {}),
+				});
+			}
+			const listed = new Set(devices.map((dev) => normaliseMac(dev.mac)));
+			for (const brick of this.presence?.unpairedBricks() ?? []) {
+				if (!isLegoMac(brick.mac) || listed.has(normaliseMac(brick.mac))) { continue; }
+				items.push({
+					brickKey: makeBrickKey(Transport.BT, brick.mac),
+					displayName: brick.name || `EV3 [${brick.mac}]`,
+					// The name an inquiry hears is the brick's own, but nothing has confirmed it.
+					nameSource: brick.name ? 'bt-cache' : 'fallback',
+					transport: Transport.BT,
+					presenceState: PresenceState.Available,
+					remembered: false,
+					paired: false,
+					connected: false,
+					favorite: false,
+					...(brick.signal !== null ? { signalInfo: { rssi: brick.signal } } : {}),
+					lastSeenAt: brick.seenAt,
 				});
 			}
 		} catch (error) {
@@ -162,6 +206,12 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		return { transport: Transport.BT, items };
+	}
+
+	/** The paired bricks the last discovery listed that have no session: what presence checks. */
+	pairedWithoutSession(): string[] {
+		const inSession = new Set([...this.sessions.keys()].map((key) => normaliseMac(brickKeyId(key) ?? '')));
+		return this.lastPaired.filter((mac) => !inSession.has(normaliseMac(mac)));
 	}
 
 	async connect(brickKey: BrickKey): Promise<SessionHandle> {

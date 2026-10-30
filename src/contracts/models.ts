@@ -36,6 +36,13 @@ export interface DiscoveryItem {
     favorite: boolean;
     /** Paired with this computer. Bluetooth only. */
     paired?: boolean;
+    /**
+     * Whether a paired brick answered its recent presence checks. Bluetooth only; absent
+     * before the first check, when Windows' record is all there is to go on.
+     */
+    heard?: boolean;
+    /** When a paired brick last answered a presence check. */
+    heardAt?: number;
     signalInfo?: SignalInfo;
     btVisible?: boolean;
     lastSeenAt: number;
@@ -59,6 +66,8 @@ export interface BrickChannelSnapshot {
     readonly signalInfo?: SignalInfo;
     /** When discovery last saw this channel, or 0 if it never has. */
     readonly lastSeenAt: number;
+    /** When the brick last answered a presence check over this channel, if it ever has. */
+    readonly heardAt?: number;
 }
 
 /**

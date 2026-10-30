@@ -187,6 +187,28 @@ export const BT = {
 	RECONNECT_GAP_AFTER_CLOSE_MS: 5000,
 	/** Default EV3 pairing PIN. */
 	PAIRING_PIN: '1234',
+	/**
+	 * How often each paired brick without a session is checked for presence (ms).
+	 *
+	 * A check of a brick that is off holds the radio about 5.3 s (measured 30.10.2026), so a
+	 * round over three switched-off bricks is ~16 s in every minute; a switched-off brick turns
+	 * "not heard" after {@link PRESENCE_MISSES_BEFORE_NOT_HEARD} rounds, about three minutes.
+	 */
+	PRESENCE_CHECK_INTERVAL_MS: 60000,
+	/**
+	 * Misses in a row before a paired brick counts as not heard. One answer makes it heard.
+	 *
+	 * More than one because a brick that is on went unanswered 2 times in 4 on this host's
+	 * adapter (step-2 plan, U6); three in a row on such a brick is about one round in fifteen.
+	 */
+	PRESENCE_MISSES_BEFORE_NOT_HEARD: 3,
+	/** How often an inquiry looks for bricks nobody has paired yet (ms). */
+	PRESENCE_INQUIRY_INTERVAL_MS: 60000,
+	/**
+	 * Length of one background inquiry window (s). Well below the queue's 45 s acquire timeout,
+	 * so a connect queued behind an inquiry is never refused for waiting it out.
+	 */
+	PRESENCE_INQUIRY_SECONDS: 10,
 } as const;
 
 // ── Firmware safety ─────────────────────────────────────────────────
