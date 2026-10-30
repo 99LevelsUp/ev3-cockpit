@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId } from '../contracts/index';
+import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId, brickIdOf } from '../contracts/index';
 import {
 	CockpitError, ErrorCode,
 	TransportError, ConnectionError, TimeoutError,
@@ -132,6 +132,32 @@ describe('brickKey', () => {
 		assert.equal(brickKeyTransport('nosuchtransport:abc'), undefined);
 		assert.equal(brickKeyId('nonsense'), undefined);
 		assert.equal(brickKeyId('usb:'), undefined);
+	});
+});
+
+describe('brickIdOf', () => {
+	it('maps one brick to one id whichever channel names it', () => {
+		// CCC on the bench: USB serial and BT address are the same twelve digits.
+		const ccc = '001653F00C0C';
+		assert.equal(brickIdOf(makeBrickKey(Transport.USB, '001653F00C0C')), ccc);
+		assert.equal(brickIdOf(makeBrickKey(Transport.BT, '00:16:53:F0:0C:0C')), ccc);
+		assert.equal(brickIdOf(makeBrickKey(Transport.TCP, '001653f00c0c')), ccc);
+	});
+
+	it('keeps different bricks apart', () => {
+		const ids = ['00:16:53:F0:0D:0D', '00:16:53:F0:0B:0B', '00:16:53:F0:0C:0C']
+			.map((mac) => brickIdOf(makeBrickKey(Transport.BT, mac)));
+		assert.equal(new Set(ids).size, 3);
+	});
+
+	it('leaves a key with no hardware identity as itself', () => {
+		assert.equal(brickIdOf(makeBrickKey(Transport.TCP, '192.168.1.20')), 'tcp:192.168.1.20');
+		assert.equal(brickIdOf(makeBrickKey(Transport.Mock, 'brick-a')), 'mock:brick-a');
+	});
+
+	it('never truncates a malformed address into someone else\'s id', () => {
+		assert.equal(brickIdOf(makeBrickKey(Transport.BT, '00:16:53')), 'bt:00:16:53');
+		assert.equal(brickIdOf(makeBrickKey(Transport.USB, '001653F00C0CFF')), 'usb:001653F00C0CFF');
 	});
 });
 
