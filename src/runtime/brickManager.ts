@@ -14,7 +14,10 @@ import {
 	BrickCommand, BrickId, BrickKey, BrickResponse, ChannelState, ConnectionState,
 	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyTransport,
 } from '../contracts';
-import { ConnectionError, NotConnectedError, TimeoutError, TransportError } from '../errors/CockpitError';
+import {
+	ChannelChangedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
+} from '../errors/CockpitError';
+import { PinnedLink } from '../fs/fileTransferService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { PresenceAggregator } from './presenceAggregator';
@@ -214,6 +217,37 @@ export class BrickManager implements vscode.Disposable {
 			if (isLinkFailure(error, options)) { this.dropFromRouting(route); }
 			throw error;
 		}
+	}
+
+	/**
+	 * Hold the brick's current channel for a multi-step operation (step-2 plan, KD9).
+	 *
+	 * Every step goes over that channel even if traffic moves meanwhile, so a transfer that
+	 * started over Bluetooth finishes there when a cable is plugged in; a step fails with
+	 * {@link ChannelChangedError} only once that channel is lost. A link fault on a step
+	 * fails over for everyone else as an ordinary send would.
+	 */
+	pin(brickId: BrickId): PinnedLink {
+		const key = this.routes.get(brickId);
+		if (!key) {
+			throw new NotConnectedError(`Brick ${brickId} has no connected channel.`);
+		}
+		return {
+			maxPacketBytes: this.sessionManager.maxPacketBytes(key),
+			send: async (command) => {
+				if (this.sessionManager.getSession(key)?.connectionState !== ConnectionState.Connected
+					|| this.dropped.has(key)) {
+					throw new ChannelChangedError(
+						`The channel ${key} this operation started on was lost; start it again.`);
+				}
+				try {
+					return await this.sessionManager.send(key, command);
+				} catch (error) {
+					if (isLinkFailure(error, undefined)) { this.dropFromRouting(key); }
+					throw error;
+				}
+			},
+		};
 	}
 
 	/** Largest packet the brick's current channel carries, or undefined for the firmware's own. */

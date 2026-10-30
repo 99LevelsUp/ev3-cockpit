@@ -13,6 +13,7 @@ export const ErrorCode = {
 	NotConnected: 'not_connected',
 	NoProvider: 'no_provider',
 	InvalidTransition: 'invalid_transition',
+	ChannelChanged: 'channel_changed',
 	QueueUnavailable: 'queue_unavailable',
 	// API
 	ConsumerFailed: 'consumer_failed',
@@ -105,6 +106,21 @@ export class AlreadyConnectedError extends SessionError {
 	constructor(message: string, cause?: unknown) {
 		super(message, cause, ErrorCode.AlreadyConnected);
 		this.name = 'AlreadyConnectedError';
+	}
+}
+
+/**
+ * The channel an operation was pinned to is gone, though the brick may still be reachable.
+ *
+ * A file transfer keeps the channel it started on (step-2 plan, KD9). When that channel is
+ * lost mid-transfer the transfer fails with this, rather than hopping to another channel with
+ * chunks sized for the old one; the caller may start it again, and it will take whichever
+ * channel carries traffic then.
+ */
+export class ChannelChangedError extends SessionError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, ErrorCode.ChannelChanged);
+		this.name = 'ChannelChangedError';
 	}
 }
 
