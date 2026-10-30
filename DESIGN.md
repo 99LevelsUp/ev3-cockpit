@@ -265,23 +265,28 @@ live bricks and selected `AF_BTH`/`BTHPROTO_RFCOMM` sockets as the BT runtime; t
 port was its *discovery* mechanism, promoted to a transport here by an oversight rather
 than by a measurement. Porting the lab's choice is what this section records.
 
-**The single-channel limit survives the change.** Windows carries one RFCOMM connection at
-a time whichever API opens it — the lab hit error 121 on sockets exactly as this code hit
-it on serial ports. So `BtConnectionQueue` is not a workaround for the fallback backend,
-it is a property of the host, and it paces both. What the backend choice can improve is
-what happens *inside* a connection; it cannot make the host carry two.
+**Opening is serialised; holding is not.** This section used to say Windows carries one
+RFCOMM connection at a time whichever API opens it. Measured 29.10.2026, the host held two
+sessions to two bricks at once (§4.1.1). What does need serialising is the *opening* of
+connections, pairing and the background presence jobs, which all page the one radio:
+`BtConnectionQueue` paces those, on both backends.
 
 **Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
-brick), firmware freeze protection (one active transport at a time, 2-second switch
-cooldown), degradation tracking. It is deliberately **not** a meter on normal traffic:
+brick, counted across all of its channels) and degradation tracking per channel, so a pulled
+cable degrades its USB channel and not the Bluetooth link standing by. The former "one active
+transport at a time" and its 2-second switch cooldown are gone: two links open to one brick
+with commands in flight on both froze nothing on three bricks (§4.1.1). It is deliberately
+**not** a meter on normal traffic:
 commands are strictly serial, so each transport is already self-limiting at its own round
 trip — measured at 176, 62 and 11 commands per second for USB, TCP and BT, with no error
 and no latency drift at any of them. The guard exists for a retry storm or a runaway
 loop, not for the rates a working caller can reach.
 
-**BT connection queue**: Windows RFCOMM allows only one active connection at a time, on any
-backend. A serialized queue enforces it — a 15-second gap after a connection is released
-cleanly, 30 seconds after one that failed, and exponential backoff on repeated errors.
+**BT connection queue**: serialises the opening of Bluetooth connections, pairing attempts and
+the presence jobs — a 15-second gap after a connect is released cleanly, 30 seconds after one
+that failed, and exponential backoff on repeated errors (kept for the release, step-1 plan D3).
+The presence jobs hold it for mutual exclusion only and start none of those gaps. Each brick
+also gets 5 seconds after its own connection closes before it is connected again.
 
 #### What the communication lab confirmed, and what is still assumed (29.10.2026)
 
@@ -315,13 +320,16 @@ Three things in this section were **assumptions, not measurements**. Measured on
   three bricks and both firmware versions: USB and Bluetooth open to the same brick at once,
   even with commands in flight on both, answered every request with no freeze; a USB cable
   pulled with Bluetooth standing by lost nothing on Bluetooth, and the next USB call failed at
-  once with `LIBUSB_ERROR_IO`. The rule as written has no evidence behind it. Not measured:
-  file transfer or full-rate telemetry on two links at once. The design this points to (plan
-  D2) keeps several links open and sends traffic over one.
+  once with `LIBUSB_ERROR_IO`. The rule is removed. Built in step 2: several links open, traffic
+  over one (§4.3, "Brick layer"); 30.10.2026 a 64 KB transfer with the telemetry loop running
+  and both links up froze nothing either (step-2 plan, U10).
 
 ### 4.2 Presence Aggregator
 
-The Presence Aggregator unifies discovery output from all providers into a single discovery model.
+The Presence Aggregator unifies discovery output from all providers into a single discovery
+model: **one entry per brick**, whichever channels reach it. Providers report channels
+(`usb:00165342D9F2`, `bt:00:16:53:42:D9:F2`); the aggregator groups them by the brick's
+identity (§5.1) and keeps each channel's state in a state machine (§6.1a).
 
 Responsibilities:
 
@@ -338,7 +346,19 @@ sorts it for itself.
 
 ### 4.3 Session Manager
 
-The Session Manager manages physically connected bricks. It is the exclusive owner of the connection state.
+The Session Manager manages physically connected channels — one session per channel to a
+brick. It is the exclusive owner of the connection state.
+
+**Brick layer** (`BrickManager`, above it). Signs a brick in over every channel it is available
+on, and over every channel that appears while it stays signed in; sends each command over the
+connected channel with the highest priority its provider declares (USB, then Bluetooth, then
+TCP). A link fault on that channel takes it out of routing at once, so the next command goes
+over the next channel, and probes it: back in routing if it answers, reconnecting if not. A
+file transfer keeps the channel it started on and fails only if that channel is lost. Sign-out
+is per brick and closes every channel. A failed join is retried on a backoff, except where the
+provider opts out (`rejoinOnEvidenceOnly`, Bluetooth): there only when the brick is seen again
+or answers a presence check. The extension and the hardware harness build this whole runtime
+through one function, `createRuntime`.
 
 Responsibilities:
 
@@ -570,7 +590,8 @@ Rules:
 
 ### 5.1 Discovery Item
 
-One row in the discovery list represents one `brickKey`.
+One row in the discovery list represents one **brick** (`BrickEntry`), however many channels
+reach it; each channel (`DiscoveryItem` from its provider) keeps its own `brickKey`.
 
 Minimum fields:
 
@@ -586,7 +607,14 @@ Minimum fields:
 - `btVisible?`,
 - `lastSeenAt`.
 
-`brickKey` is a stable internal identifier within a given transport. It must not depend on `displayName` (which is user-editable). Its primary purpose is stable ordering within a transport group — without a stable key, the brick order in the list would change on every discovery scan.
+`brickKey` identifies one channel to a brick. `BrickId` identifies the brick: the twelve hex
+digits that are its USB serial, its Bluetooth address and the serial in its TCP beacon alike
+(`brickIdOf`). A key with no hardware identity (a mock brick, a TCP brick known only by its IP)
+is its own brick with one channel. Neither depends on `displayName`, which is user-editable.
+
+A brick entry carries its name with where it came from and whether the brick itself confirmed
+it (its `info` reply or its TCP beacon); a USB descriptor or a Windows Bluetooth record is shown
+as unconfirmed, because both go stale after a rename.
 
 Transport-specific `brickKey` definitions:
 
@@ -677,6 +705,31 @@ A brick marked as `favorite` is automatically connected on transition from "non-
 
 After an explicit disconnect, auto-connect for that brick is suppressed for the rest of the current session — it will not re-trigger even if the brick disappears and reappears.
 
+### 6.1a Channel
+
+Each channel of a brick has its own state, kept by a state machine with a fixed transition
+table (`ChannelStateMachine`; every current transport uses `BaseChannelStateMachine`, and a
+transport that ever needs other states can bring its own behind the same interface):
+
+- `absent` — never seen this session,
+- `available` — seen and not connected,
+- `connected` — a live session over it,
+- `lost` — seen or connected this session and not now: a pulled cable, a brick out of range, a
+  paired Bluetooth brick whose presence check went unanswered three times in a row ("not heard").
+
+Discovery (`seen`, `gone`), the channel's session (`linkUp`, `linkDown`, `closed`) and presence
+answers drive it. A connected channel stays connected while a scan misses it — the session is
+the stronger evidence. A channel discovery has given up on stays `lost`, so a brick that was
+connected keeps a grey icon for it; a stranger's brick whose every channel has expired is
+dropped from the list.
+
+Bluetooth presence (`BtPresenceMonitor`) runs in the background: an inquiry about once a
+minute adds bricks nobody has paired yet, and an uncached service query about once a minute
+checks each paired brick without a session. An answer proves the brick is on; silence may be
+the adapter missing it (measured 30.10.2026), so one answer makes it heard and three misses in
+a row make it not heard (owner's decision, step-2 plan KD10). Both hold the Bluetooth queue
+only for mutual exclusion and start none of its cooldowns.
+
 ### 6.2 Connection
 
 **Two independent states, and confusing them is what made recovery unpredictable.**
@@ -723,6 +776,9 @@ Rules:
 The cockpit never signs a brick in by itself. At startup every brick is *available* and none
 is signed in, so a brick in range that the user has not asked for is never connected to — and
 a brick the user signed out of stays signed out when its cable goes back in.
+
+Sign-in is **per brick**: signing a brick in joins every channel it is available on, and a
+channel that appears later joins by itself; signing it out closes every channel.
 
 Sign-in has **no persistence**: it lives in the extension host's memory and nowhere else.
 Closing the cockpit signs every brick out, which is what makes the startup rule above true
@@ -801,18 +857,15 @@ Each item stays in the list according to its current state. The UI works with a 
 
 ### 7.2 Ordering
 
-Primary groups:
+The owner's order (step-1 plan, D5), in `ui/brickOrder`:
 
-1. `mock`
-2. `usb`
-3. `tcp`
-4. `bt`
+1. bricks on USB, whatever else reaches them — a cable means the brick is on this desk;
+2. bricks without USB that are paired with this computer;
+3. everything else — at a competition, the bricks that belong to other people.
 
-Within a group:
-
-- by `signalInfo` where it exists and is meaningful,
-- otherwise by stable `brickKey`,
-- never by user-editable `displayName`.
+Within a group by name, ignoring case, with the brick id breaking ties so two bricks with the
+same name never swap. Ordering group 3 by smoothed signal strength waits for its measurement
+(step-1 plan, §8).
 
 ### 7.3 Forget Action
 
@@ -1407,12 +1460,16 @@ The primary users include children from approximately age 10 (see `REQUIREMENTS.
 
 The discovery tab is the main entry point into Cockpit.
 
-Each row contains:
+Each row is one brick and contains:
 
-- a transport icon,
-- a color-coded status,
-- a name,
+- one icon per channel (`[U][B][T]`): hidden when the channel is absent, blue when available,
+  green when connected, grey when lost — for a paired Bluetooth brick that stopped answering
+  its presence checks, "not heard",
+- a name, marked when the brick has not confirmed it,
 - supplementary icons on the right according to state.
+
+Connecting a brick opens every available channel (step-2 plan, KD1); there is no per-channel
+connect.
 
 Quick actions:
 

@@ -45,8 +45,7 @@ Open, by phase:
   brick" leaves in the Windows registry; 1.11.11 Linux Bluetooth (blocked: no Linux host);
   1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows, carried as a limitation).
 - **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
-  hardware scenarios; 2.8.13 one brick across transports — decided 29.10.2026 (step-1 plan,
-  D2: one brick, channels preferred USB → BT → TCP), not built; 2.8.18 the already-paired
+  hardware scenarios; 2.8.13 one brick across transports — built in step 2 (30.10.2026); 2.8.18 the already-paired
   check before pairing and a bounded retry around the inquiry.
 - **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
   object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
@@ -913,7 +912,9 @@ Build the source of truth for connected bricks.
     underneath an open handle. Then: a brick reachable over two transports losing one; Wi-Fi
     switched off mid-session on TCP. Use **CCC** for USB scenarios — its cable is the
     accessible one
-  - [ ] 2.8.13 **A brick has no name over Bluetooth.** Discovery reports `EV3
+  - [x] 2.8.13 **A brick has no name over Bluetooth.** Done 30.10.2026 (step-2 plan): one
+    list entry per brick keyed by `BrickId`, named from the brick itself (`info`, also read over
+    USB without connecting, and the TCP beacon). Original entry: Discovery reports `EV3
     [00:16:53:42:D9:F2]` on BT and `CCC` on USB — the same brick, and nothing tells the user
     so. The identifiers are the same bytes spelled differently: the USB serial is
     `00165342D9F2` and the BT address is `00:16:53:42:D9:F2`, so a name learned on one
@@ -1574,7 +1575,8 @@ Export a stable API for other extensions without giving them direct access to th
   - [ ] 4.9.2 Expose the safe/full mode policy, so a consumer can honour `ev3-explorer`'s
     “no side channel around the guardrails” rule instead of reimplementing the policy.
     Required because the enforcement point (`ev3://`) ships in a consumer
-  - [ ] 4.9.3 Decide the brick-identity shape in the API. `ev3-native`'s design assumes an
+  - [ ] 4.9.3 Decide the brick-identity shape in the API. Step 2 points the way: the API should
+    expose `BrickId`, with the active brick as state on the brick layer. `ev3-native`'s design assumes an
     `'active'` sentinel (`api.uploadFile('active', …)`) alongside explicit ids; the cockpit
     models the active brick as state, so a sentinel and a key are not interchangeable
   - [ ] 4.9.4 Reconcile `ev3-native/design.md` §3 against this cockpit. It describes
@@ -1647,11 +1649,11 @@ Build the main product UX on top of the finished runtime.
   - [ ] 5.2.5 Webview recovery after reload — request fresh snapshot
 - [ ] **5.3 Discovery tab**
   - [ ] 5.3.1 Unified brick list rendering (available + connected + remembered)
-  - [ ] 5.3.2 Transport icons per provider type
-  - [ ] 5.3.3 Color-coded status indicators (available, connected, unavailable, remembered)
+  - [ ] 5.3.2 One icon per channel, `[U][B][T]`, from `BrickEntry.channels` (hidden when absent)
+  - [ ] 5.3.3 Channel colours: blue available, green connected, grey lost / not heard (DESIGN §12.1)
   - [ ] 5.3.4 Supplementary icons — signal strength, favorite star (display only), trash
   - [ ] 5.3.5 Quick actions: connect (available brick), focus/open (connected brick), forget (remembered offline)
-  - [ ] 5.3.6 Stable ordering (by transport group, then by signal or brickKey)
+  - [ ] 5.3.6 Ordering by `ui/brickOrder` (D5: USB, paired, rest; by name), built in step 2
   - [ ] 5.3.7 Efficient rendering for dozens of items
 - [ ] **5.4 Brick tab**
   - [ ] 5.4.1 Tab creation on connect, removal on disconnect
@@ -1725,7 +1727,7 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.1.3 Schema versioning and migration strategy
   - [ ] 6.1.4 Initialization at activation
 - [ ] **6.2 Per-brick metadata storage**
-  - [ ] 6.2.1 `favorite` flag per (brickKey, transport) pair
+  - [ ] 6.2.1 `favorite` flag per brick (`BrickId`)
   - [ ] 6.2.2 Preferred visual style (`numeric` / `visual`) per brick
   - [ ] 6.2.3 Status bar configuration per brick
   - [ ] 6.2.4 Remembered display metadata (name, transport, last seen)
@@ -1733,7 +1735,7 @@ Complete long-term Cockpit behavior across restarts.
   - [ ] 6.3.1 Toggle from brick tab status bar (star click)
   - [ ] 6.3.2 Persist immediately to globalState
   - [ ] 6.3.3 Update discovery list star indicator
-  - [ ] 6.3.4 Favorite is bound to (brickKey, transport) — not cross-transport
+  - [ ] 6.3.4 Favorite is bound to the brick, across its channels (D2)
 - [ ] **6.4 Auto-connect on favorite discovery**
   - [ ] 6.4.0 Retain `removed` entries for the session. DESIGN §6.1 requires it so that rediscovery stays distinguishable from first discovery, but `discoveryScheduler.incrementMiss` and `presenceAggregator.handlePresenceChange` both delete the entry — 6.4.1 and 6.4.3 are indistinguishable until this lands
   - [ ] 6.4.1 Trigger on `removed` → `available` (rediscovery within session)
