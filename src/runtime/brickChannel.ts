@@ -13,6 +13,7 @@ import { BaseChannelStateMachine, ChannelEvent, ChannelStateMachine } from './ch
 export class BrickChannel {
 	private signalInfo?: SignalInfo;
 	private lastSeenAt = 0;
+	private _heardAt?: number;
 	private _everConnected = false;
 	private _expired = false;
 
@@ -28,6 +29,9 @@ export class BrickChannel {
 
 	/** Whether a session over this channel has ever been connected this session. */
 	get everConnected(): boolean { return this._everConnected; }
+
+	/** When the brick last answered a presence check over this channel, if it ever has. */
+	get heardAt(): number | undefined { return this._heardAt; }
 
 	/** Whether discovery has given the channel up for good (`removed`) and nothing has seen it since. */
 	get expired(): boolean { return this._expired; }
@@ -50,9 +54,10 @@ export class BrickChannel {
 	}
 
 	/** Record what discovery last saw on this channel. */
-	observe(lastSeenAt: number, signalInfo?: SignalInfo): void {
+	observe(lastSeenAt: number, signalInfo?: SignalInfo, heardAt?: number): void {
 		this.lastSeenAt = lastSeenAt;
 		this.signalInfo = signalInfo;
+		if (heardAt !== undefined) { this._heardAt = heardAt; }
 	}
 
 	snapshot(): BrickChannelSnapshot {
@@ -63,6 +68,7 @@ export class BrickChannel {
 			state: this.machine.state,
 			...(this.signalInfo ? { signalInfo: this.signalInfo } : {}),
 			lastSeenAt: this.lastSeenAt,
+			...(this._heardAt !== undefined ? { heardAt: this._heardAt } : {}),
 		};
 	}
 }

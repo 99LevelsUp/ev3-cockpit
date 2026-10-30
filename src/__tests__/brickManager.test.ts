@@ -479,6 +479,24 @@ describe('BrickManager — the name the brick reports', () => {
 	});
 });
 
+describe('BrickManager — a presence answer is evidence', () => {
+	it('retries a failed Bluetooth join once the brick answers a presence check', async () => {
+		const w = world();
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		w.bt.connectFailures = 1;
+		await w.bricks.signIn(CCC);   // USB connects; BT fails and waits for evidence
+		await waitFor(() => w.bt.connects === 1, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+
+		w.bt.seen[0] = { ...w.bt.seen[0], paired: true, heard: true, heardAt: Date.now() };
+		await w.scheduler.scanOnce();
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		assert.equal(w.bt.connects, 2);
+		w.done();
+	});
+});
+
 describe('BrickManager — signing out', () => {
 	it('closes every channel and does not join one that appears afterwards', async () => {
 		const w = world();

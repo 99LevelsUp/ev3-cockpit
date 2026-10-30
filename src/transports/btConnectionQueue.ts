@@ -18,6 +18,8 @@ interface QueueEntry {
 	reject: (error: unknown) => void;
 	/** Fails the wait if it is not granted a slot before this fires. */
 	timeoutTimer?: NodeJS.Timeout;
+	/** Its release starts no cooldown and counts no error. */
+	readonly holdOnly?: boolean;
 }
 
 /**
@@ -64,9 +66,24 @@ export class BtConnectionQueue {
 	 *   a person at the brick. Per DESIGN §3.3: fail with a stated reason rather than queue
 	 *   indefinitely.
 	 */
-	async acquire(brickId: string): Promise<(error?: unknown) => void> {
+	async acquire(
+		brickId: string,
+		options?: {
+			/**
+			 * Hold the slot for mutual exclusion only: its release starts no cooldown and counts
+			 * no error.
+			 *
+			 * For the background presence check and inquiry. They must not run beside a
+			 * connect, but the cooldowns were set for RFCOMM opens: armed by a background check,
+			 * one round over three paired bricks would hold every user connect behind it for
+			 * about a minute (step-2 plan, KTD8). A check that goes unanswered is a result, not
+			 * a failure.
+			 */
+			holdOnly?: boolean;
+		},
+	): Promise<(error?: unknown) => void> {
 		return new Promise<() => void>((resolve, reject) => {
-			const entry: QueueEntry = { brickId, resolve, reject };
+			const entry: QueueEntry = { brickId, resolve, reject, holdOnly: options?.holdOnly };
 			entry.timeoutTimer = setTimeout(() => {
 				const idx = this.queue.indexOf(entry);
 				if (idx < 0) { return; }
@@ -160,6 +177,10 @@ export class BtConnectionQueue {
 
 			const release = (error?: unknown) => {
 				this.activeCount = Math.max(0, this.activeCount - 1);
+				if (entry.holdOnly) {
+					this.scheduleDrain();
+					return;
+				}
 				this.lastReleaseTs = Date.now();
 				// A slot released after a failure has to start the longer recovery, not the
 				// ordinary gap. Windows carries one RFCOMM channel; a failed attempt leaves it
