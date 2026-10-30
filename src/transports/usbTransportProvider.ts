@@ -330,12 +330,6 @@ export class UsbTransportProvider implements TransportProvider {
 		serial: string | undefined,
 		libusbFailure: string,
 	): Promise<SessionHandle> {
-		this.log?.warn(
-			`USB ${brickKey}: libusb unavailable (${libusbFailure}). Falling back to HID, `
-			+ `which delivers ${USB.MAX_WRITE_PACKET_BYTES} bytes per packet — transfers run `
-			+ 'about forty times slower and copy/move cannot be sent at all.'
-		);
-
 		const hid = this.makeHidAdapter(
 			serial ? { path: `serial:${serial.toLowerCase()}` } : {}
 		);
@@ -351,6 +345,14 @@ export class UsbTransportProvider implements TransportProvider {
 			);
 		}
 		this.sessions.set(brickKey, { adapter: hid, backend: 'hid', messageCounter: 0 });
+		// Said only once the fallback has actually happened: while a cable is out, every
+		// reconnect attempt fails both ways, and warning about a fallback that never came
+		// filled the log with a cost nobody was paying.
+		this.log?.warn(
+			`USB ${brickKey}: libusb unavailable (${libusbFailure}). Fell back to HID, `
+			+ `which delivers ${USB.MAX_WRITE_PACKET_BYTES} bytes per packet — transfers run `
+			+ 'about forty times slower and copy/move cannot be sent at all.'
+		);
 		return { brickKey, transport: Transport.USB };
 	}
 
