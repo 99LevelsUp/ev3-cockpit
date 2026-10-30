@@ -22,6 +22,7 @@ import { PacketCommandChannel } from '../commands/commandChannel';
 import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { channelLabel } from './brickLabels';
 import { PresenceAggregator } from './presenceAggregator';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { SessionManager } from './sessionManager';
@@ -395,7 +396,8 @@ export class BrickManager implements vscode.Disposable {
 		} catch (error) {
 			// Said, because a channel that will not join is otherwise invisible: the brick works
 			// over its other channels and nothing explains why this one stays unused.
-			this.log?.warn(`Joining ${key} failed: ${error instanceof Error ? error.message : String(error)}`);
+			this.log?.warn(`Joining ${channelLabel(this.aggregator, key)} failed: `
+				+ `${error instanceof Error ? error.message : String(error)}`);
 			if (this.signedIn.get(brickId) === signIn) { this.scheduleRejoin(brickId, signIn, key, transport); }
 			throw error;
 		} finally {
@@ -483,7 +485,7 @@ export class BrickManager implements vscode.Disposable {
 			} catch (error) {
 				if (!this.probeFailuresReported.has(key)) {
 					this.probeFailuresReported.add(key);
-					this.log?.warn(`Could not read the name of ${key} without connecting; showing `
+					this.log?.warn(`Could not read the name of ${channelLabel(this.aggregator, key)} without connecting; showing `
 						+ `the USB descriptor's until it connects: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			} finally {
