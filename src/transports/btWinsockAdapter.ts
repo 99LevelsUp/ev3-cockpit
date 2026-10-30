@@ -11,7 +11,7 @@
 
 import { describeAddress } from '../contracts';
 import { TransportAdapter, SendOptions } from './transportAdapter';
-import { TransportError, TimeoutError, BackendUnavailableError } from '../errors/CockpitError';
+import { TransportError, TimeoutError, BackendUnavailableError, BrickUnreachableError } from '../errors/CockpitError';
 import {
 	PendingReply,
 	createPendingReply,
@@ -36,6 +36,9 @@ import {
 
 /** How often a connect in progress is checked (ms). Each check is two zero-timeout `select`s. */
 const CONNECT_POLL_MS = 50;
+
+/** WSAETIMEDOUT, WSAEHOSTDOWN, WSAEHOSTUNREACH: a connect the brick never answered. */
+const WSA_UNANSWERED = new Set([10060, 10064, 10065]);
 
 /**
  * Receive poll interval while an exchange is outstanding (ms).
@@ -144,7 +147,9 @@ export class BtWinsockAdapter implements TransportAdapter {
 		// blocks, so a deadline is a plain `closesocket` on a socket nobody is waiting in.
 		const failed = (code: number): TransportError => {
 			api.closesocket(socket);
-			return new TransportError(`BT connect to ${describeAddress(this.mac)} failed (WSA error ${code}).`);
+			const message = `BT connect to ${describeAddress(this.mac)} failed (WSA error ${code}).`;
+			// Timed out, host down, host unreachable: the brick did not answer.
+			return WSA_UNANSWERED.has(code) ? new BrickUnreachableError(message) : new TransportError(message);
 		};
 		if (api.setNonBlocking(socket, true) !== 0) {
 			throw failed(api.lastError());

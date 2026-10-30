@@ -59,6 +59,20 @@ export class BackendUnavailableError extends TransportError {
 	}
 }
 
+/**
+ * The brick did not answer the connect: off, out of range, or busy elsewhere.
+ *
+ * Still an ordinary transport failure to everything below the extension. It exists so that
+ * what a user reads is "it did not answer, check it is on and in range" rather than the
+ * Winsock code behind it, which stays in the message for the log.
+ */
+export class BrickUnreachableError extends TransportError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause);
+		this.name = 'BrickUnreachableError';
+	}
+}
+
 export class ConnectionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.ConnectionFailed, message, cause);

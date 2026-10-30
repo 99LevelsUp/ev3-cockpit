@@ -20,7 +20,7 @@ import {
 	SOCKET_ERROR,
 	WSAEWOULDBLOCK,
 } from '../transports/windowsWinsock';
-import { BackendUnavailableError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../errors/CockpitError';
 
 const MAC = '00:16:53:aa:bb:cc';
 
@@ -194,6 +194,8 @@ describe('BtWinsockAdapter — opening', () => {
 		await assert.rejects(adapter.open(), (error: unknown) => {
 			assert.ok(error instanceof TransportError);
 			assert.ok(!(error instanceof BackendUnavailableError));
+			// WSAETIMEDOUT: the brick did not answer, which is what the user is told.
+			assert.ok(error instanceof BrickUnreachableError);
 			assert.match((error as Error).message, /10060/);
 			return true;
 		});
