@@ -16,3 +16,5 @@ export type { BrickManagerOptions, RouteChangeEvent, ActiveBrickIdChangeEvent } 
 export { BrickChannel } from './brickChannel';
 export { BaseChannelStateMachine } from './channelStateMachine';
 export type { ChannelEvent, ChannelStateMachine } from './channelStateMachine';
+export { createRuntime } from './createRuntime';
+export type { Runtime, RuntimeLog, RuntimeOptions } from './createRuntime';
