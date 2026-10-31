@@ -152,10 +152,12 @@ function fakeChannel(
 	return channel;
 }
 
+/** A sighting; a Bluetooth one is paired, as Windows lists every brick it remembers. */
 function item(brickKey: BrickKey, transport: Transport): DiscoveryItem {
 	return {
 		brickKey, displayName: 'CCC', nameSource: 'usb-descriptor', transport, presenceState: PresenceState.Available,
 		remembered: false, connected: false, favorite: false, lastSeenAt: Date.now(),
+		...(transport === Transport.BT ? { paired: true } : {}),
 	};
 }
 
