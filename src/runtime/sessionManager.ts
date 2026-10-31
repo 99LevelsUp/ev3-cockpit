@@ -127,11 +127,13 @@ export class SessionManager implements vscode.Disposable {
 				() => this.sessions.get(brickKey) === resources && !entry.explicitlyDisconnected,
 				() => provider.connect(brickKey),
 				(handle) => {
+					// What can fail goes first, so a session never says connected over a link
+					// it could not put in place.
+					this.wireExecutor(resources, provider);
 					entry.setHandle(handle);
 					entry.transition(ConnectionState.Connected);
 					this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Connected);
 
-					this.wireExecutor(resources, provider);
 					heartbeat.start();
 					reconnect.reset();
 				});
@@ -464,6 +466,9 @@ export class SessionManager implements vscode.Disposable {
 			return;
 		}
 
+		// Two attempts can fail one after the other -- a backoff's and one discovery started --
+		// and each asks for the next; the session keeps one timer, not one per failure.
+		if (resources.reconnectTimer) { clearTimeout(resources.reconnectTimer); }
 		resources.reconnectTimer = setTimeout(() => {
 			void this.attemptReconnect(brickKey);
 		}, delay);
@@ -512,6 +517,7 @@ export class SessionManager implements vscode.Disposable {
 					return provider.recover ? provider.recover(brickKey) : provider.connect(brickKey);
 				},
 				(handle) => {
+					this.wireExecutor(resources, provider);
 					resources.entry.setHandle(handle);
 					resources.entry.transition(ConnectionState.Connected);
 					resources.reconnect.reset();
@@ -520,7 +526,6 @@ export class SessionManager implements vscode.Disposable {
 					this.transportGuard.resetHealth(brickKey);
 					this.fireStateChange(brickKey, ConnectionState.Reconnecting, ConnectionState.Connected);
 
-					this.wireExecutor(resources, provider);
 					resources.heartbeat.start();
 				});
 		} catch (error) {
@@ -567,8 +572,14 @@ export class SessionManager implements vscode.Disposable {
 		const opened = (async () => {
 			const handle = await open();
 			if (wanted()) {
-				install(handle);
-				return true;
+				try {
+					install(handle);
+					return true;
+				} catch (error) {
+					// A link the session could not take is nobody's; the next attempt opens anew.
+					try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+					throw error;
+				}
 			}
 			try { await provider.disconnect(brickKey); } catch { /* best effort */ }
 			return false;
