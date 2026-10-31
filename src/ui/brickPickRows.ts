@@ -3,7 +3,8 @@
  * reaches it, in the owner's order (D5), with the brick's name, whether that name is
  * confirmed, and every channel with its state.
  *
- * Free of `vscode`, so the rows can be tested; the command in `extension.ts` only shows them.
+ * Free of `vscode`, so the rows can be tested; `connectBrick.ts` keeps them current while the
+ * picker is open.
  */
 
 import { BrickEntry, BrickId, ChannelState, Transport } from '../contracts';
