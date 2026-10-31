@@ -26,7 +26,8 @@ import { ProviderRegistry } from '../transports/providerRegistry';
 import { channelLabel } from './brickLabels';
 import type { DiscoveryScheduler } from './discoveryScheduler';
 import type {
-	BrickSideOutcome, ForgetReport, MemoryOutcome, PairingOutcome, PeerRemoval,
+	BrickSideOutcome, ClearListReport, ClearPairingSkip, ClearSkip, ClearedEntry, ForgetReport, MemoryOutcome,
+	PairingOutcome, PeerRemoval,
 } from './forgetReport';
 import { PresenceAggregator } from './presenceAggregator';
 import { ReconnectStrategy } from './reconnectStrategy';
@@ -71,6 +72,22 @@ export interface BrickManagerOptions {
 	 */
 	readonly radioName?: () => string | undefined;
 }
+
+/**
+ * Asked once the brick's list is read and before anything is removed from it (R16).
+ *
+ * @param names Every entry it will remove, in the list's order; a name held twice is here twice.
+ * @param includesThisComputer Whether one of them carries this computer's exact Bluetooth name.
+ * @param thisComputer This computer's Bluetooth name; undefined when it is unknown, and then
+ *   nothing tells whether this computer is among `names`.
+ * @returns True to go ahead.
+ */
+export type ClearListConfirm = (
+	names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined,
+) => PromiseLike<boolean>;
+
+/** A name a removal cannot address: the firmware reads an empty one as a wildcard (KTD2). */
+const isBlank = (name: string): boolean => name.trim() === '';
 
 // ── Per-brick sign-in state ─────────────────────────────────────────
 
@@ -119,10 +136,16 @@ export class BrickManager implements vscode.Disposable {
 	private readonly probing = new Set<BrickKey>();
 	/** Channels whose name probe has failed and been reported, so it is reported once. */
 	private readonly probeFailuresReported = new Set<BrickKey>();
-	/** Bricks being forgotten: nothing opens, reopens or probes a link to them (KTD4). */
-	private readonly forgetting = new Set<BrickId>();
+	/**
+	 * Bricks being forgotten or having their list cleared, with how many such operations run:
+	 * nothing opens, reopens or probes a link to them (KTD4, KTD10). Counted, so the one that
+	 * ends first does not lift the guards from under the other.
+	 */
+	private readonly forgetting = new Map<BrickId, number>();
 	/** The forget running for each brick, so a second call joins it. */
 	private readonly forgets = new Map<BrickId, Promise<ForgetReport>>();
+	/** Bricks whose list is being cleared, so a second clear is refused rather than interleaved. */
+	private readonly clearing = new Set<BrickId>();
 	private readonly discovery?: Pick<DiscoveryScheduler, 'scansSettled' | 'forget' | 'scanOnce'>;
 	private readonly btPresence?: { forget(mac: string): void };
 	private readonly radioName?: () => string | undefined;
@@ -198,7 +221,8 @@ export class BrickManager implements vscode.Disposable {
 		// The forget is closing every channel of this brick; a sign-in would reopen one under it
 		// (step-3 plan, KTD4). The forget opens its own channel without coming through here.
 		if (this.forgetting.has(brickId)) {
-			throw new NotConnectedError(`Brick ${brickId} is being forgotten; sign it in once that has finished.`);
+			throw new NotConnectedError(
+				`Brick ${brickId} is being forgotten or its Bluetooth list cleared; sign it in once that has finished.`);
 		}
 		if (this.signedIn.has(brickId)) {
 			this.setActiveBrick(brickId);
@@ -270,6 +294,40 @@ export class BrickManager implements vscode.Disposable {
 			this.forgets.set(brickId, running);
 		}
 		return running;
+	}
+
+	/**
+	 * Remove every entry from a brick's own Bluetooth list, whatever its name (step-3 plan, KD7,
+	 * KTD9, KTD10, R15–R18).
+	 *
+	 * One operation, so the list the user is asked about is the list that gets cleared:
+	 * 1. take the channel forget would (KTD5), opening one when none is connected;
+	 * 2. read the list and ask `confirm` with every name it will remove (R16); declined, nothing
+	 *    is sent, a channel this opened is closed, and it resolves undefined;
+	 * 3. remove each named entry until the list is empty or a pass removes nothing (KTD9). Over
+	 *    USB or TCP the brick's Bluetooth sessions are closed first; over Bluetooth alone this
+	 *    computer's entry goes last, because its removal cuts the link, and the brick is then
+	 *    signed out, as nothing else reaches it;
+	 * 4. when this computer's entry went and the brick was paired, forget its Bluetooth channel
+	 *    only: the pairing and the cockpit's memory of that channel (KTD10). Its other channels
+	 *    stay as they are, a USB session too (R18).
+	 *
+	 * From step 3 on, the guards of a forget hold for the brick (KTD4). Shows nothing; the caller
+	 * builds the message from the report.
+	 *
+	 * @throws {NotConnectedError} While the brick is being forgotten, or its list is being
+	 *   cleared already.
+	 */
+	async clearBluetoothList(brickId: BrickId, confirm: ClearListConfirm): Promise<ClearListReport | undefined> {
+		if (this.forgets.has(brickId) || this.clearing.has(brickId)) {
+			throw new NotConnectedError(`Brick ${brickId} is being forgotten or its Bluetooth list cleared already.`);
+		}
+		this.clearing.add(brickId);
+		try {
+			return await this.runClear(brickId, confirm);
+		} finally {
+			this.clearing.delete(brickId);
+		}
 	}
 
 	isSignedIn(brickId: BrickId): boolean {
@@ -447,10 +505,15 @@ export class BrickManager implements vscode.Disposable {
 		// A brick being forgotten loses its channels on purpose; none joins again (KTD4). A
 		// rejoin that `scheduleRejoin` set up runs through here too, so it needs no check of its own.
 		if (!signIn || this.disposed || this.forgetting.has(brickId)) { return; }
+		// A Bluetooth channel of a brick nobody has paired is a sighting — an inquiry, or Windows'
+		// cache after an unpair — not a link: a brick still signed in over USB after its list was
+		// cleared would otherwise connect to a brick that no longer knows this computer (KTD10).
+		const paired = this.aggregator.getBrick(brickId)?.paired ?? false;
 		for (const key of this.joinCandidates(brickId)) {
 			if (signIn.pending.has(key) || signIn.awaitingEvidence.has(key) || signIn.retryTimers.has(key)) {
 				continue;
 			}
+			if (!paired && this.transportOf(key) === Transport.BT) { continue; }
 			this.join(brickId, key).catch(() => { /* recorded by join; retried per transport */ });
 		}
 	}
@@ -530,8 +593,18 @@ export class BrickManager implements vscode.Disposable {
 
 	// ── Internal: forgetting ────────────────────────────────────────
 
+	/** Hold the guards of a forget for a brick (KTD4); each hold needs its own {@link releaseGuards}. */
+	private holdGuards(brickId: BrickId): void {
+		this.forgetting.set(brickId, (this.forgetting.get(brickId) ?? 0) + 1);
+	}
+
+	private releaseGuards(brickId: BrickId): void {
+		const left = (this.forgetting.get(brickId) ?? 1) - 1;
+		if (left > 0) { this.forgetting.set(brickId, left); } else { this.forgetting.delete(brickId); }
+	}
+
 	private async runForget(brickId: BrickId): Promise<ForgetReport> {
-		this.forgetting.add(brickId);
+		this.holdGuards(brickId);
 		let report: ForgetReport;
 		try {
 			// Read before anything is forgotten: the list is where the channels and the Bluetooth
@@ -554,7 +627,7 @@ export class BrickManager implements vscode.Disposable {
 			const memory = this.forgetMemory(brickId, keys);
 			report = { brickId, brickSide, ...(peers ? { peers } : {}), pairing, memory, residue };
 		} finally {
-			this.forgetting.delete(brickId);
+			this.releaseGuards(brickId);
 		}
 		try {
 			await this.discovery?.scanOnce();
@@ -612,8 +685,10 @@ export class BrickManager implements vscode.Disposable {
 	 * 10): only a channel the removal does not cut can read the list back and confirm it. The
 	 * same order holds among connected channels, so a brick connected over TCP and Bluetooth
 	 * is changed over TCP although its traffic goes over Bluetooth.
+	 *
+	 * `opened` says the channel was opened here, so whoever asked closes it when done.
 	 */
-	private async peerListChannel(brickId: BrickId): Promise<{ key?: BrickKey; failure?: string }> {
+	private async peerListChannel(brickId: BrickId): Promise<{ key?: BrickKey; failure?: string; opened?: boolean }> {
 		const best = (keys: BrickKey[]): BrickKey | undefined =>
 			keys.sort((a, b) => this.peerListRank(b) - this.peerListRank(a))[0];
 		const connected = best(this.sessionManager.getAllSessions()
@@ -628,7 +703,7 @@ export class BrickManager implements vscode.Disposable {
 		try {
 			await this.sessionManager.connect(available, this.transportOf(available),
 				this.aggregator.getBrick(brickId)?.name.value);
-			return { key: available };
+			return { key: available, opened: true };
 		} catch (error) {
 			return { failure: messageOf(error) };
 		}
@@ -728,6 +803,18 @@ export class BrickManager implements vscode.Disposable {
 	 * cleared. Discovery goes before the list, which a scan rebuilds from it.
 	 */
 	private forgetMemory(brickId: BrickId, keys: readonly BrickKey[]): MemoryOutcome {
+		const outcome = this.forgetLayers(keys, () => this.aggregator.forget(brickId));
+		// Sign-out already did these; a sign-out that failed part-way may not have.
+		this.forgetSignIn(brickId);
+		this.recomputeRoute(brickId);
+		return outcome;
+	}
+
+	/**
+	 * Every layer forgets these channels, and `forgetInList` drops them from the list (KTD7);
+	 * synchronous, for the reason {@link forgetMemory} gives.
+	 */
+	private forgetLayers(keys: readonly BrickKey[], forgetInList: () => void): MemoryOutcome {
 		const failures: string[] = [];
 		const attempt = (step: () => void): void => {
 			try { step(); } catch (error) { failures.push(messageOf(error)); }
@@ -739,7 +826,7 @@ export class BrickManager implements vscode.Disposable {
 			// brings the brick back as it was.
 			failures.push('Discovery was not reachable, so it still tracks the brick\'s channels.');
 		}
-		attempt(() => this.aggregator.forget(brickId));
+		attempt(forgetInList);
 		for (const key of keys) {
 			const mac = brickKeyTransport(key) === Transport.BT ? brickKeyId(key) : undefined;
 			if (mac) { attempt(() => this.btPresence?.forget(mac)); }
@@ -747,10 +834,195 @@ export class BrickManager implements vscode.Disposable {
 			this.probing.delete(key);
 			this.probeFailuresReported.delete(key);
 		}
-		// Sign-out already did these; a sign-out that failed part-way may not have.
-		this.forgetSignIn(brickId);
-		this.recomputeRoute(brickId);
 		return failures.length > 0 ? { status: 'failed', detail: failures.join('; ') } : { status: 'cleared' };
+	}
+
+	// ── Internal: clearing a brick's list ───────────────────────────
+
+	private async runClear(brickId: BrickId, confirm: ClearListConfirm): Promise<ClearListReport | undefined> {
+		let thisComputer: string | undefined;
+		try {
+			thisComputer = this.radioName?.() || undefined;
+		} catch {
+			thisComputer = undefined;   // the same as a name that cannot be read
+		}
+		// Read before anything changes: whether Windows has the brick paired decides KTD10.
+		const wasPaired = this.aggregator.getBrick(brickId)?.paired ?? false;
+		const btKey = this.channelKeysOf(brickId).find((key) => this.transportOf(key) === Transport.BT);
+		const base = { brickId, ...(thisComputer ? { thisComputer } : {}), paired: wasPaired, pairing: [], residue: [] };
+		const skipped = (reason: ClearSkip, detail?: string): ClearListReport => ({
+			...base, skipped: { reason, ...(detail ? { detail } : {}) }, entries: [],
+			pairingLeft: reason === 'radio-name-unknown' ? 'radio-name-unknown' : 'not-removed',
+		});
+
+		const channel = await this.peerListChannel(brickId);
+		if (!channel.key) { return skipped('not-reachable', channel.failure); }
+		const key = channel.key;
+		const overBt = this.transportOf(key) === Transport.BT;
+		// A brick signed in meanwhile keeps it: it is a channel the sign-in would have joined.
+		const closeOpened = async (): Promise<void> => {
+			if (channel.opened && !this.signedIn.has(brickId)) { await this.sessionManager.disconnect(key); }
+		};
+
+		let peers: string[];
+		try {
+			peers = await this.readPeers(key);
+		} catch (error) {
+			await closeOpened();
+			return { ...skipped('list-unreadable', messageOf(error)), over: key };
+		}
+		const read = { over: key, peers };
+		const names = peers.filter((name) => !isBlank(name));
+		const unnamed = peers.filter(isBlank).map((name): ClearedEntry => ({ status: 'not-removable', name, reason: 'blank-name' }));
+		if (names.length === 0) {
+			await closeOpened();
+			return { ...skipped('nothing-to-remove'), ...read, entries: unnamed };
+		}
+		// Over Bluetooth alone no order is safe without the name: any removal may be the one that
+		// cuts the link, leaving the entries after it and a pairing nothing can tell is one-sided.
+		if (overBt && !thisComputer) {
+			await closeOpened();
+			return { ...skipped('radio-name-unknown'), ...read };
+		}
+		const includesThisComputer = thisComputer !== undefined && names.includes(thisComputer);
+		if (!await confirm(names, includesThisComputer, thisComputer)) {
+			await closeOpened();
+			return undefined;
+		}
+
+		this.holdGuards(brickId);
+		try {
+			// The removal of this computer's entry cuts its Bluetooth link (KTD5); closed first, so
+			// nothing reconnects it to a brick that has just dropped this computer.
+			if (!overBt) { await this.closeBluetoothSessions(brickId); }
+			const { entries, linkCut } = await this.removeEntries(key, peers, overBt ? thisComputer : undefined);
+			if (overBt && linkCut) {
+				// The link the list went over is gone, and nothing else reached the brick.
+				if (this.signedIn.has(brickId)) { await this.signOut(brickId); } else { await this.sessionManager.disconnect(key); }
+			}
+
+			const thisComputerWent = entries.some((entry) => entry.name === thisComputer
+				&& (entry.status === 'confirmed' || entry.status === 'sent'));
+			let pairingLeft: ClearPairingSkip | undefined;
+			if (!thisComputer) { pairingLeft = 'radio-name-unknown'; }
+			else if (!includesThisComputer) { pairingLeft = 'not-on-brick'; }
+			else if (!thisComputerWent) { pairingLeft = 'not-removed'; }
+			else if (!btKey || !wasPaired) { pairingLeft = 'not-paired'; }
+
+			const bluetooth = btKey && !pairingLeft ? await this.forgetBluetoothChannel(brickId, btKey) : undefined;
+			await closeOpened();
+			return {
+				...base, ...read, entries,
+				...(bluetooth ?? {}),
+				...(pairingLeft ? { pairingLeft } : {}),
+			};
+		} finally {
+			this.releaseGuards(brickId);
+		}
+	}
+
+	/**
+	 * Remove every named entry of `peers` from the brick's list over `key`, each confirmed by
+	 * reading the list back (KTD9, R17).
+	 *
+	 * What it removes is the names the user was shown, so an entry that appears meanwhile is not
+	 * removed unseen (R16). A pass sends each name still to go once and reads the list back after
+	 * each; a name held twice goes once per pass. It stops when every name has gone, when a pass
+	 * removes nothing, so an entry the brick keeps cannot loop, or after as many passes as the
+	 * list had entries. `last`, over Bluetooth alone, is this computer's name: its entries go
+	 * only after every other, because their removal cuts the link (KTD5).
+	 *
+	 * A link lost on a removal, or a list that cannot be read back after one, ends it: that
+	 * removal counts as sent, and the entries not yet removed as not sent.
+	 */
+	private async removeEntries(key: BrickKey, peers: readonly string[], last: string | undefined): Promise<{
+		entries: ClearedEntry[]; linkCut: boolean;
+	}> {
+		const toGo = new Map<string, number>();
+		for (const name of peers) { if (!isBlank(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
+		const removed = new Map<string, number>();
+		const lastFailure = new Map<string, string>();
+		const held = (list: readonly string[], name: string): number => list.filter((n) => n === name).length;
+		let current: readonly string[] = peers;
+		let sent: { name: string; detail: string } | undefined;
+
+		const phases: ((name: string) => boolean)[] = last === undefined
+			? [() => true]
+			: [(name) => name !== last, (name) => name === last];
+		for (const inPhase of phases) {
+			for (let pass = 0; pass < peers.length && !sent; pass++) {
+				const names = [...toGo].filter(([name, left]) => left > 0 && inPhase(name)).map(([name]) => name);
+				if (names.length === 0) { break; }
+				let progress = false;
+				for (const name of names) {
+					const before = held(current, name);
+					try {
+						await this.sessionManager.send(key, { kind: 'brick:removeBluetoothPeer', name });
+					} catch (error) {
+						if (isLinkFailure(error, undefined)) { sent = { name, detail: messageOf(error) }; break; }
+						lastFailure.set(name, messageOf(error));
+						continue;
+					}
+					try {
+						current = await this.readPeers(key);
+					} catch (error) {
+						sent = { name, detail: messageOf(error) };
+						break;
+					}
+					if (held(current, name) < before) {
+						removed.set(name, (removed.get(name) ?? 0) + 1);
+						toGo.set(name, (toGo.get(name) ?? 1) - 1);
+						progress = true;
+					} else {
+						lastFailure.set(name, 'The list read back still holds it.');
+					}
+				}
+				if (!progress) { break; }
+			}
+		}
+
+		let sentShown = false;
+		const entries = peers.map((name): ClearedEntry => {
+			if (isBlank(name)) { return { status: 'not-removable', name, reason: 'blank-name' }; }
+			const confirmed = removed.get(name) ?? 0;
+			if (confirmed > 0) {
+				removed.set(name, confirmed - 1);
+				return { status: 'confirmed', name };
+			}
+			if (sent && !sentShown && sent.name === name) {
+				sentShown = true;
+				return { status: 'sent', name, detail: sent.detail };
+			}
+			return {
+				status: 'failed', name,
+				detail: lastFailure.get(name) ?? (sent ? `Not sent: ${sent.detail}` : 'Not sent.'),
+			};
+		});
+		return { entries, linkCut: sent !== undefined };
+	}
+
+	/**
+	 * Forget the brick's Bluetooth channel and keep the brick (KTD10): the pairing through the
+	 * provider (KTD6), then, once the scans in flight have settled, the cockpit's memory of that
+	 * channel alone (KTD7). Every Bluetooth session of the brick is closed by now.
+	 */
+	private async forgetBluetoothChannel(brickId: BrickId, btKey: BrickKey): Promise<{
+		pairing: PairingOutcome[]; residue: ForgetResidue[]; memory: MemoryOutcome;
+	}> {
+		await this.closeBluetoothSessions(brickId);
+		const { pairing, residue } = await this.forgetPairings([btKey]);
+		// A scan that read Windows' list before the unpair would track the channel as paired again.
+		await this.discovery?.scansSettled();
+		const memory = this.forgetLayers([btKey], () => this.aggregator.forgetChannel(btKey));
+		const signIn = this.signedIn.get(brickId);
+		if (signIn) {
+			clearTimeout(signIn.retryTimers.get(btKey));
+			signIn.retryTimers.delete(btKey);
+			signIn.awaitingEvidence.delete(btKey);
+			signIn.backoff.delete(btKey);
+		}
+		this.recomputeRoute(brickId);
+		return { pairing, residue, memory };
 	}
 
 	// ── Internal: names ─────────────────────────────────────────────

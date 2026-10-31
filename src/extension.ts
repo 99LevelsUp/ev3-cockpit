@@ -6,6 +6,7 @@ import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { connectPickedBrick, pickBrick } from './ui/connectBrick';
+import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { forgetBrick } from './ui/forgetBrick';
 
 /** Where the brick keeps user projects. The one path worth a default. */
@@ -166,7 +167,30 @@ export function activate(context: vscode.ExtensionContext): void {
 		});
 	}));
 
-	logger.info('Connect, disconnect and forget commands registered');
+	// ── Clear a brick's Bluetooth list ──────────────────────────
+	// Every entry on a reachable brick, whatever its name (step-3 KD7), so stale computers stop
+	// blocking new pairings. The USB session stays open; this computer's Bluetooth pairing goes
+	// only when its own entry did (KTD10).
+	services.add(vscode.commands.registerCommand('ev3-cockpit.clearBrickBluetoothList', async () => {
+		await clearBrickBluetoothList({
+			aggregator, bricks, log: logger,
+			pick: (rows) => vscode.window.showQuickPick(rows,
+				{ title: 'EVƎ Cockpit: clear a brick\'s Bluetooth list', placeHolder: 'Pick a brick to clear' }),
+			confirm: async (message, detail, action) =>
+				(await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
+			progress: (title, task) => vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title, cancellable: false }, task),
+			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
+			showResult: (message) => {
+				void vscode.window.showInformationMessage(message, 'Show details').then((choice) => {
+					if (choice) { logger.show(true); }
+				});
+			},
+			showError: (message) => { void vscode.window.showErrorMessage(message); },
+		});
+	}));
+
+	logger.info('Connect, disconnect, forget and clear-list commands registered');
 
 	// Phase 3+: telemetry runtime, public API, UI panel wired here.
 }
