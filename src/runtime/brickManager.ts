@@ -89,8 +89,6 @@ export class BrickManager implements vscode.Disposable {
 	private readonly rejoinMaxMs: number;
 
 	private readonly signedIn = new Map<BrickId, SignIn>();
-	/** Connects inside the session manager, by channel, whichever sign-in started them; never reject. */
-	private readonly connecting = new Map<BrickKey, Promise<void>>();
 	/** Channels taken out of routing by a link failure, until they answer again. */
 	private readonly dropped = new Set<BrickKey>();
 	private readonly routes = new Map<BrickId, BrickKey>();
@@ -394,23 +392,11 @@ export class BrickManager implements vscode.Disposable {
 		const transport = this.transportOf(key);
 		signIn.pending.add(key);
 		try {
-			// A connect from an earlier sign-in can still be inside the provider: a Bluetooth one
-			// waits seconds in the connection queue. Providers hold one link per channel, so two
-			// at once would each close or overwrite the other's; this one waits its turn.
-			const earlier = this.connecting.get(key);
-			if (earlier) { await earlier; }
-			if (this.signedIn.get(brickId) !== signIn) {
-				throw new ConnectionAbandonedError(`${describeChannel(key)} was disconnected while it was connecting.`);
-			}
+			// A connect from an earlier sign-in can still be inside the provider, a Bluetooth one
+			// for seconds in the connection queue; the session manager makes this one wait its
+			// turn, and rejects it if the brick is signed out meanwhile.
 			const name = this.aggregator.getBrick(brickId)?.name.value;
-			const connecting = this.sessionManager.connect(key, transport, name);
-			const settled = connecting.then(() => undefined, () => undefined);
-			this.connecting.set(key, settled);
-			try {
-				await connecting;
-			} finally {
-				if (this.connecting.get(key) === settled) { this.connecting.delete(key); }
-			}
+			await this.sessionManager.connect(key, transport, name);
 			signIn.backoff.delete(key);
 			void this.readNameOverSession(key);
 			// Signed out once the connect was through: the user asked for nothing to stay open.
