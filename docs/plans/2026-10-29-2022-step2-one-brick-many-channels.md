@@ -534,5 +534,9 @@ The owner ran the palette commands in the Extension Development Host, the shippe
 | Connect a Brick → CCC with the cable out (paired, BT only) | failed with WSA 10060 and said so; CCC stayed in the list. The message now reads "did not answer" (b2a9a16) |
 | Disconnect a Brick → BBB | both channels closed, no route, no active brick |
 
-- R18: the rows (every brick once, D5 order, name, unconfirmed mark, each channel's state, new, signed-in tick) are tested in `brickPickRows.test.ts` and the order in `brickOrder.test.ts`; the picker around them is the run above. Not exercised by hand: pairing a new brick from the picker (the step-1 flow, unchanged) and a live-scan row appearing while the list is open.
+- R18: the rows (every brick once, D5 order, name, unconfirmed mark, each channel's state, new, signed-in tick) are tested in `brickPickRows.test.ts` and the order in `brickOrder.test.ts`; the picker around them is the run above. The two parts this run did not reach are tested in `connectBrick.test.ts` over the real scheduler, aggregator, brick layer, Bluetooth discovery and presence monitor, with the picker, the notifications and the radio faked:
+  - a live-scan row: a brick the picker's inquiry hears appears in the open list, marked new, through the monitor's change hook and a scan, and the highlight stays on the brick it was on;
+  - pairing from the picker: a brick only an inquiry has heard is paired (its address, the prompt on `found`) and then connected, the list knowing it as paired by then; a failed pairing connects nothing and says why; a paired brick is not paired again.
+
+  Mutations of each of those steps fail a test. By hand, both are still unexercised; the owner moved that check to the joint testing with the GUI (31.10.2026).
 - R19: signing out is tested in `brickManager.test.ts` ("signing out"); the command is the run above.
