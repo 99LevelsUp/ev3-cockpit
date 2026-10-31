@@ -155,6 +155,19 @@ export class PresenceAggregator implements vscode.Disposable {
 		if (channel.apply(event)) { this.emitListChanged(); }
 	}
 
+	/**
+	 * Forget a brick: drop its record, so the list holds nothing about it (step-3 plan, KTD7).
+	 *
+	 * Deleting the record is the only way to clear `paired`, which every sighting sets with
+	 * `||=`. A scan that lists one of its channels again builds a fresh record, unpaired and not
+	 * remembered unless that sighting says so, so a brick still in reach returns as a stranger
+	 * (R4). The scheduler forgets the channel keys separately; until it has, the next scan
+	 * rebuilds the record from what it still tracks.
+	 */
+	forget(brickId: BrickId): void {
+		if (this.bricks.delete(brickId)) { this.emitListChanged(); }
+	}
+
 	// ── Lifecycle ───────────────────────────────────────────────────
 
 	dispose(): void {

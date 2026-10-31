@@ -73,6 +73,12 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	 * enough to walk a brick that is sitting right there to `Unavailable`.
 	 */
 	private readonly scansInFlight = new Set<Transport>();
+	/**
+	 * Every scan running now, each until its results are applied, for {@link scansSettled}.
+	 * Kept apart from `scansInFlight`, which a scan leaves before it applies its results, so a
+	 * listener that rescans from `onScanCompleted` is not skipped.
+	 */
+	private readonly runningScans = new Set<Promise<void>>();
 	private polling = false;
 	/** Set by dispose(). A scan still in flight must not fire on disposed emitters. */
 	private disposed = false;
@@ -129,7 +135,11 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	}
 
 	/** Run one discovery cycle for all providers (useful for testing). */
-	async scanOnce(): Promise<void> {
+	scanOnce(): Promise<void> {
+		return this.trackScan(this.scanAll());
+	}
+
+	private async scanAll(): Promise<void> {
 		const providers = this.registry.all().filter(p => !this.scansInFlight.has(p.transport));
 		for (const p of providers) { this.scansInFlight.add(p.transport); }
 
@@ -173,6 +183,31 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		return result;
 	}
 
+	/**
+	 * Stop tracking these channel keys (step-3 plan, KTD7), so the aggregator cannot rebuild a
+	 * forgotten brick from a tracked sighting that still says paired.
+	 *
+	 * Fires no presence change: the brick layer is forgetting the whole brick and clears the
+	 * list itself. A later scan that lists a key again reports it as a first discovery.
+	 */
+	forget(brickKeys: Iterable<BrickKey>): void {
+		for (const key of brickKeys) { this.tracked.delete(key); }
+	}
+
+	/**
+	 * Resolves once every scan running now has finished, its results applied and
+	 * `onScanCompleted` fired; at once when none is running.
+	 *
+	 * A forget waits here before it clears memory (step-3 plan, KTD1 step 5): a scan that read
+	 * Windows' cache before the unpair would otherwise re-track the brick as paired afterwards.
+	 * It waits for every transport, not just the brick's: one `scanOnce` covers them all, and
+	 * the cost is a forget that waits out an unrelated slow scan. Scans started later are not
+	 * waited for; they read the state after the unpair.
+	 */
+	async scansSettled(): Promise<void> {
+		await Promise.allSettled([...this.runningScans]);
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.stop();
@@ -194,7 +229,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			?? this.options.defaultIntervalMs;
 
 		const timer = setInterval(() => {
-			void this.scanProvider(provider);
+			void this.trackScan(this.scanProvider(provider));
 		}, interval);
 
 		this.timers.set(provider.transport, timer);
@@ -206,6 +241,14 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			clearInterval(timer);
 			this.timers.delete(transport);
 		}
+	}
+
+	/** Hold a scan in `runningScans` until it settles, either way. */
+	private trackScan(scan: Promise<void>): Promise<void> {
+		this.runningScans.add(scan);
+		const settle = (): void => { this.runningScans.delete(scan); };
+		scan.then(settle, settle);
+		return scan;
 	}
 
 	private async scanProvider(provider: TransportProvider): Promise<void> {

@@ -115,6 +115,18 @@ export class BtPresenceMonitor {
 	}
 
 	/**
+	 * Forget a brick: drop its check results and its inquiry sighting (step-3 plan, KTD7).
+	 *
+	 * Both go, because a forgotten brick is neither paired nor a known stranger any more; an
+	 * inquiry that hears it afterwards lists it as a new unpaired brick (R4).
+	 */
+	forget(mac: string): void {
+		const key = normalise(mac);
+		this.paired.delete(key);
+		this.unpaired.delete(key);
+	}
+
+	/**
 	 * One round of presence checks, one brick at a time. Skipped while the previous round runs.
 	 *
 	 * The queue is released between bricks, so a user's connect waits for at most one check.

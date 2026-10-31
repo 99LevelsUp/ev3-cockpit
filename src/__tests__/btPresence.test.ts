@@ -149,6 +149,30 @@ describe('BtPresenceMonitor — inquiry', () => {
 	});
 });
 
+describe('BtPresenceMonitor — forgetting a brick (step-3 plan, U3)', () => {
+	const sighting = (mac: string): ScannedBrick => ({ mac, name: 'CCC', paired: false, signal: -40, atMs: 0 });
+
+	it('drops both what the checks said and what the inquiry heard, however the address is written', async () => {
+		// AAA was checked while paired, then heard unpaired by an inquiry: both maps hold it.
+		const { presence } = monitor({
+			targets: [AAA, BBB],
+			answers: new Map([[AAA, [true]], [BBB, [true]]]),
+			inquiry: [sighting(AAA), sighting(STRANGER)],
+		});
+		await presence.runChecks();
+		await presence.runInquiry();
+		assert.equal(presence.presenceOf(AAA)?.heard, true);
+		assert.deepEqual(presence.unpairedBricks().map((b) => b.mac), [AAA, STRANGER]);
+
+		presence.forget(AAA.replace(/:/g, '').toLowerCase());
+
+		assert.equal(presence.presenceOf(AAA), undefined);
+		assert.deepEqual(presence.unpairedBricks().map((b) => b.mac), [STRANGER]);
+		assert.equal(presence.presenceOf(BBB)?.heard, true, 'other bricks stay');
+		presence.dispose();
+	});
+});
+
 describe('BtTransportProvider — discovery with presence', () => {
 	function provider(presence: BtPresenceMonitor) {
 		return new BtTransportProvider({
