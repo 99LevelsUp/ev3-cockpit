@@ -1224,6 +1224,89 @@ describe('SessionManager -- one link opening per channel at a time', () => {
 		manager.dispose();
 	});
 
+	it('closes a reopened link it could not put into the session, and tries again', async () => {
+		let open = 0;
+		let connectCalls = 0;
+		let channelsMade = 0;
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+			connect: (brickKey) => {
+				connectCalls += 1;
+				open += 1;
+				return Promise.resolve({ brickKey, transport: Transport.Mock });
+			},
+			disconnect: () => { if (open > 0) { open -= 1; } return Promise.resolve(); },
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
+			createCommandChannel: () => {
+				channelsMade += 1;
+				if (channelsMade === 1 || channelsMade === 3) { throw new Error('no command channel this time'); }
+				return { execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const) };
+			},
+			dispose: () => { /* nothing to release */ },
+		};
+		const reg = new ProviderRegistry();
+		reg.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: reg, heartbeatIntervalMs: 60_000, reconnectBaseMs: 10, reconnectMaxMs: 20,
+		});
+		const key = makeBrickKey(Transport.Mock, 'half-installed');
+		await assert.rejects(manager.connect(key, Transport.Mock), /no command channel/);
+		assert.equal(open, 0, 'a connect left open the link it could not put in place');
+		await manager.connect(key, Transport.Mock);
+		const states: ConnectionState[] = [];
+		manager.onSessionStateChange((e) => { states.push(e.newState); });
+
+		manager['handleHeartbeatFailure'](key, new Error('link went away'));
+		await waitFor(() => connectCalls === 4, 2000);
+		await waitFor(() => manager.getSession(key)?.connectionState === ConnectionState.Connected, 2000);
+
+		assert.deepEqual(states, [ConnectionState.Reconnecting, ConnectionState.Connected],
+			'the session said connected over a link it had not put in place');
+		assert.equal(open, 1, 'the link that could not be put in place was left open');
+		manager.dispose();
+	});
+
+	it('keeps one reconnect timer however many attempts fail', async () => {
+		let attempts = 0;
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+			// The first connect opens; every later one hangs, so nothing schedules further.
+			connect: (brickKey) => attempts++ === 0
+				? Promise.resolve({ brickKey, transport: Transport.Mock })
+				: new Promise(() => { /* never answers */ }),
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
+			createCommandChannel: () => ({ execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const) }),
+			dispose: () => { /* nothing to release */ },
+		};
+		const reg = new ProviderRegistry();
+		reg.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: reg, heartbeatIntervalMs: 60_000, reconnectBaseMs: 20, reconnectMaxMs: 20,
+		});
+		const key = makeBrickKey(Transport.Mock, 'two-failures');
+		await manager.connect(key, Transport.Mock);
+		const session = manager['sessions'].get(key)!;
+		session.entry.transition(ConnectionState.Reconnecting);
+		let started = 0;
+		const attempt = manager['attemptReconnect'].bind(manager);
+		manager['attemptReconnect'] = (brickKey: BrickKey) => { started += 1; return attempt(brickKey); };
+
+		// Two attempts that failed one after the other each ask for the next one.
+		manager['scheduleReconnect'](key);
+		manager['scheduleReconnect'](key);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		assert.equal(started, 1, 'an earlier timer was left running beside the one the session tracks');
+		manager.dispose();
+	});
+
 	it('does not open a link for a connect disconnected while it waited its turn', async () => {
 		let connectCalls = 0;
 		let releaseFirst: (() => void) | undefined;
