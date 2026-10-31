@@ -14,8 +14,8 @@ export interface TransportCapabilities {
 	/** Provider can report signal strength info. */
 	readonly supportsSignalInfo: boolean;
 	/**
-	 * Provider can remove OS-level evidence of a brick (unpair, drop a registry
-	 * entry). Declared rather than inferred from `forget` being present, so the UI
+	 * Provider can remove OS-level evidence of a brick (unpair), and reports what it
+	 * could not remove. Declared rather than inferred from `forget` being present, so the UI
 	 * can decide whether to offer the action without probing for a method.
 	 */
 	readonly supportsForget: boolean;
@@ -472,6 +472,23 @@ export interface TransportProvider extends vscode.Disposable {
 	/**
 	 * Remove OS-level evidence for a brick (e.g. BT unpairing).
 	 * Present only on providers that support the forget operation.
+	 *
+	 * @returns The records the provider knows it left behind and could not remove, so the
+	 *   user can be told where they are (step-3 plan, KD3). Empty when nothing is left.
 	 */
-	forget?(brickKey: BrickKey): Promise<void>;
+	forget?(brickKey: BrickKey): Promise<readonly ForgetResidue[]>;
+}
+
+/**
+ * A record of a forgotten brick that outlives `forget`.
+ *
+ * Each provider names its own, so the brick layer and the message that reports them never
+ * need to know which operating system they run on: Windows returns its registry key and its
+ * in-memory device record, a BlueZ provider will return its own paths (step-3 plan, KTD6, R12).
+ */
+export interface ForgetResidue {
+	/** Where the record is, exactly enough for a user to find it: a registry path, a file. */
+	readonly location: string;
+	/** One line on why it stays: who owns it, or what ends it. */
+	readonly reason: string;
 }

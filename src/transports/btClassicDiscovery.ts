@@ -21,7 +21,7 @@
 import { BtDiscoveryDevice } from './btTransportProvider';
 import {
 	BluetoothDeviceInfo, listBluetoothDevices, isLikelyEv3,
-	pairBluetoothDevice, removeBluetoothDevice,
+	pairBluetoothDevice, removeBluetoothDevice, readBluetoothRadioName,
 } from './windowsBluetooth';
 import { BT } from './transportConstants';
 import { formatMac } from './btSppDiscovery';
@@ -52,6 +52,11 @@ export interface BtClassicDiscoveryOptions {
 	pairDevice?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<{ ok: boolean; reason?: string }>;
 	/** Removes a pairing. */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	/**
+	 * Reads this computer's Bluetooth radio name, or undefined when there is no radio.
+	 * Injectable for the same reason as {@link listDevices}.
+	 */
+	radioName?: () => string | undefined;
 	/**
 	 * The shared RFCOMM queue, so pairing takes the radio slot rather than racing a connect
 	 * for it.
@@ -84,6 +89,7 @@ export class BtClassicDiscovery {
 	private readonly onCacheUnavailable?: (reason: string) => void;
 	private readonly pairDevice: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
 	private readonly unpairDevice: (mac: string) => PairingResult;
+	private readonly readRadioName: () => string | undefined;
 	private readonly connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
 
 	constructor(options: BtClassicDiscoveryOptions = {}) {
@@ -91,7 +97,10 @@ export class BtClassicDiscovery {
 		this.portScan = options.portScan;
 		this.onCacheUnavailable = options.onCacheUnavailable;
 		this.pairDevice = options.pairDevice ?? pairBluetoothDevice;
-		this.unpairDevice = options.unpairDevice ?? removeBluetoothDevice;
+		// Wrapped, not passed: the default binding's optional second parameter is a test seam,
+		// and handing the function over bare would let a caller fill it by accident.
+		this.unpairDevice = options.unpairDevice ?? ((mac) => removeBluetoothDevice(mac));
+		this.readRadioName = options.radioName ?? readBluetoothRadioName;
 		this.connectionQueue = options.connectionQueue;
 	}
 
@@ -147,6 +156,25 @@ export class BtClassicDiscovery {
 			return this.unpairDevice(mac);
 		} catch (error) {
 			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	};
+
+	/**
+	 * This computer's Bluetooth name, as its radio reports it.
+	 *
+	 * The brick lists each peer under the name that peer's radio reported, and removes an
+	 * entry only on an exact, case-sensitive match (`c_bt.c` 3148–3314), so the radio is the
+	 * only source that can find this computer's entry (step-3 plan, KTD3).
+	 */
+	radioName = (): string | undefined => {
+		try {
+			// An empty name is no name: the firmware treats an empty name as a wildcard and
+			// would remove whichever entry comes first (`c_bt.c` 2205–2211).
+			return this.readRadioName() || undefined;
+		} catch {
+			// No guess in its place, the host name least of all: a wrong name misses this
+			// computer's entry on the brick and reads as though there was none.
+			return undefined;
 		}
 	};
 

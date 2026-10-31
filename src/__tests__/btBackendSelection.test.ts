@@ -149,6 +149,74 @@ describe('BtTransportProvider — forgetting', () => {
 
 		await assert.rejects(provider.forget(KEY), /device is in use/);
 	});
+
+	it('names the registry key Windows keeps, with this brick\'s address', async () => {
+		const provider = new BtTransportProvider({ unpairDevice: () => ({ ok: true }) });
+
+		const residue = await provider.forget(KEY);
+
+		// The user is told where the record is so they can deal with it themselves; the cockpit
+		// does not touch a key owned by SYSTEM (plan step 3, KD3).
+		assert.equal(
+			residue[0]?.location,
+			'HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\001653aabbcc'
+		);
+		assert.match(residue[0]?.reason ?? '', /SYSTEM/);
+	});
+
+	it('names Windows\' in-memory record, which outlives the unpair until Windows restarts', async () => {
+		const provider = new BtTransportProvider({ unpairDevice: () => ({ ok: true }) });
+
+		const residue = await provider.forget(KEY);
+
+		assert.equal(residue.length, 2);
+		assert.match(residue[1].location, /001653AABBCC/);
+		assert.match(residue[1].reason, /restart/);
+	});
+
+	it('reports no residue when it had no way to unpair', async () => {
+		// Without an unpair hook nothing reached Windows, so there is nothing to account for.
+		assert.deepEqual(await new BtTransportProvider({}).forget(KEY), []);
+	});
+
+	it('stops presence checking a forgotten brick', async () => {
+		const provider = new BtTransportProvider({
+			unpairDevice: () => ({ ok: true }),
+			// Spelled the way discovery spells it, which is not how the brick key spells it.
+			discoverDevices: () => Promise.resolve([{
+				mac: '00:16:53:AA:BB:CC', name: '', connected: false, remembered: true, authenticated: true,
+			}]),
+		});
+		await provider.discover();
+		assert.deepEqual(provider.pairedWithoutSession(), ['00:16:53:AA:BB:CC']);
+
+		await provider.forget(KEY);
+
+		// Until the next scan the provider's list still said "paired", and presence would page a
+		// brick Windows no longer knows.
+		assert.deepEqual(provider.pairedWithoutSession(), []);
+	});
+
+	it('does not hold back the next connect to a forgotten brick', async () => {
+		const at: number[] = [];
+		const started = Date.now();
+		const provider = new BtTransportProvider({
+			unpairDevice: () => ({ ok: true }),
+			reconnectGapAfterCloseMs: 500,
+			backends: new Map<BtBackend, BtAdapterFactory>([['winsock', () => adapterThat(() => {
+				at.push(Date.now() - started);
+				return Promise.resolve();
+			})]]),
+		});
+
+		await provider.connect(KEY);
+		await provider.forget(KEY);
+		await provider.connect(KEY);
+
+		// Forget leaves no memory of the brick, its close time included (plan step 3, KTD7).
+		assert.ok(at[1] - at[0] < 100, `reopened after ${at[1] - at[0]} ms`);
+		provider.dispose();
+	});
 });
 
 describe('BtTransportProvider — the connection queue', () => {

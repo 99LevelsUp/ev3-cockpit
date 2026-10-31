@@ -17,7 +17,7 @@ import {
 	Transport, BrickKey, makeBrickKey, brickKeyId, brickIdOf,
 	TransportProvider, TransportCapabilities, SessionHandle,
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
-	PresenceState, describeAddress, describeChannel,
+	PresenceState, describeAddress, describeChannel, ForgetResidue,
 } from '../contracts';
 import { TransportError, ConnectionError, BackendUnavailableError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
@@ -70,6 +70,29 @@ function isLegoMac(mac: string): boolean {
 	return mac.replace(/[:-]/g, '').toLowerCase().startsWith(LEGO_OUI);
 }
 
+/**
+ * What Windows keeps of a brick after `BluetoothRemoveDevice`. Reported, never removed: the
+ * key is owned by SYSTEM, and the cockpit does not work around that (step-3 plan, KD3, R6).
+ */
+function windowsResidue(mac: string): ForgetResidue[] {
+	// Twelve hex digits, lower case, no separators: how this host's subkeys under
+	// `Parameters\Devices` were spelled when listed 31.10.2026. The hardware session (U7)
+	// confirms the casing against the key of a brick it forgets.
+	const subkey = mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+	return [
+		{
+			location: `HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\${subkey}`,
+			// Measured: the key survives BluetoothRemoveDevice and Settings' own Remove
+			// (IMPLEMENTATION_PLAN 1.11.14, DESIGN §7.3).
+			reason: 'Windows keeps this key after unpairing; it is owned by SYSTEM and the cockpit does not change it.',
+		},
+		{
+			location: `Windows' in-memory Bluetooth device record for ${describeAddress(mac)}`,
+			reason: 'Windows keeps it until it next restarts; until then a scan may still list the brick, unpaired.',
+		},
+	];
+}
+
 /** Configuration for {@link BtTransportProvider}. */
 export interface BtTransportProviderOptions {
 	/** BT adapter factories keyed by backend name, in priority order. */
@@ -81,9 +104,9 @@ export interface BtTransportProviderOptions {
 	/**
 	 * Removes the OS-level pairing.
 	 *
-	 * When present, `forget()` actually forgets and `capabilities.supportsForget` is true.
-	 * Without it forget only drops this provider's own bookkeeping, and the brick returns
-	 * on the next scan as though nothing happened.
+	 * When present, `forget()` actually forgets, reports what Windows keeps, and
+	 * `capabilities.supportsForget` is true. Without it forget only drops the backend
+	 * preference, and the brick returns on the next scan as though nothing happened.
 	 */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 	/**
@@ -292,19 +315,23 @@ export class BtTransportProvider implements TransportProvider {
 	}
 
 	/**
-	 * Disconnects and removes the pairing, when this provider was given a way to.
+	 * Disconnects and removes the pairing, when this provider was given a way to, and drops
+	 * everything this provider remembers about the brick (step-3 plan, KTD7).
 	 *
+	 * @returns What Windows keeps after the unpair: the brick's `BTHPORT` registry key and
+	 *   Windows' in-memory device record. Empty when there was no unpair hook, because then
+	 *   nothing reached Windows.
 	 * @throws {TransportError} When the OS refused to remove the pairing. Reported rather
 	 *   than swallowed: a forget that silently left the pairing in place is what made this
 	 *   capability false in the first place.
 	 */
-	async forget(brickKey: BrickKey): Promise<void> {
+	async forget(brickKey: BrickKey): Promise<readonly ForgetResidue[]> {
 		await this.disconnect(brickKey);
 		const mac = this.extractMac(brickKey);
-		if (!mac) { return; }
+		if (!mac) { return []; }
 
 		this.preferredBackend.delete(mac);
-		if (!this.unpairDevice) { return; }
+		if (!this.unpairDevice) { return []; }
 
 		const result = this.unpairDevice(mac);
 		if (!result.ok) {
@@ -312,6 +339,14 @@ export class BtTransportProvider implements TransportProvider {
 				`Could not forget ${describeAddress(mac)}: ${result.reason ?? 'the operating system refused.'}`
 			);
 		}
+
+		// After the disconnect above, which is what set the close time. Until the next scan the
+		// paired list would still feed this brick to the presence checks.
+		this.closedAt.delete(mac);
+		const forgotten = normaliseMac(mac);
+		this.lastPaired = this.lastPaired.filter((paired) => normaliseMac(paired) !== forgotten);
+
+		return windowsResidue(mac);
 	}
 
 	dispose(): void {
