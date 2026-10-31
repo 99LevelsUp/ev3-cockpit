@@ -307,6 +307,8 @@ Mock must provide:
 
 Mock brick definitions are configured via a JSON file in the workspace. No GUI editor is required in this version.
 
+Mock bricks are a development aid. Whether they appear is the `ev3-cockpit.mockBricks` setting; when nobody has set it, they appear only while the extension runs from source, never in an installed build.
+
 ## 14. Persistence and Remembered Data
 
 Cockpit requires internal persistence for brick metadata.
