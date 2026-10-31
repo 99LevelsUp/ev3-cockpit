@@ -67,6 +67,17 @@ interface BthpropsApi {
 	sendAuthResponse(radio: unknown, response: unknown): number;
 	/** Releases a handle from {@link registerAuth}. */
 	unregisterAuth(regHandle: unknown): number;
+	/**
+	 * Finds the first local radio. Returns the find handle, or null when there is none;
+	 * writes the radio's own handle into the 1-box array.
+	 */
+	findFirstRadio(params: unknown, radioOut: unknown[]): unknown;
+	/** Closes the find handle from {@link findFirstRadio}. */
+	findRadioClose(handle: unknown): number;
+	/** Fills a `BLUETOOTH_RADIO_INFO`; `0` is `ERROR_SUCCESS`. */
+	getRadioInfo(radio: unknown, info: unknown): number;
+	/** kernel32 `CloseHandle`, for the radio handle {@link findFirstRadio} wrote. */
+	closeHandle(handle: unknown): number;
 }
 
 let cached: BthpropsApi | undefined;
@@ -87,6 +98,19 @@ const SEARCH_PARAMS_BYTES = 40;
 
 /** Length of `szName` in `BLUETOOTH_DEVICE_INFO`, in UTF-16 code units. */
 const NAME_LENGTH = 248;
+
+/**
+ * `sizeof(BLUETOOTH_RADIO_INFO)` and `sizeof(BLUETOOTH_FIND_RADIO_PARAMS)` on LLP64.
+ *
+ * The radio record, per Microsoft Learn (`ns-bluetoothapis-bluetooth_radio_info`): `dwSize`
+ * at 0, four bytes of padding because the address union aligns to 8, `address` at 8,
+ * `szName[BLUETOOTH_MAX_NAME_SIZE]` (248 UTF-16 units) at 16, `ulClassofDevice` at 512,
+ * `lmpSubversion` at 516, `manufacturer` at 518, 520 in all. The find parameters are a lone
+ * DWORD. Unlike the device enumeration, a wrong size here is refused with
+ * `ERROR_REVISION_MISMATCH` rather than interpreted.
+ */
+const RADIO_INFO_BYTES = 520;
+const FIND_RADIO_PARAMS_BYTES = 4;
 
 function loadBthprops(): BthpropsApi {
 	if (cached) { return cached; }
@@ -135,6 +159,15 @@ function loadBthprops(): BthpropsApi {
 			stLastUsed: 'COCKPIT_BT_SYSTEMTIME',
 			szName: koffi.array('char16_t', NAME_LENGTH),
 		});
+		koffi.struct('COCKPIT_BT_RADIO_INFO', {
+			dwSize: 'uint32',
+			address: 'COCKPIT_BT_ADDRESS',
+			szName: koffi.array('char16_t', NAME_LENGTH),
+			ulClassofDevice: 'uint32',
+			lmpSubversion: 'uint16',
+			manufacturer: 'uint16',
+		});
+		koffi.struct('COCKPIT_BT_FIND_RADIO_PARAMS', { dwSize: 'uint32' });
 		koffi.struct('COCKPIT_BT_SEARCH_PARAMS', {
 			dwSize: 'uint32',
 			fReturnAuthenticated: 'int32',
@@ -204,6 +237,17 @@ function loadBthprops(): BthpropsApi {
 		const unregisterAuth = lib.func(
 			'int __stdcall BluetoothUnregisterAuthentication(void*)'
 		) as KoffiFunc;
+		// Signatures per Microsoft Learn: BluetoothFindFirstRadio returns an
+		// HBLUETOOTH_RADIO_FIND and writes the radio HANDLE through its second parameter;
+		// the find handle closes with BluetoothFindRadioClose, the radio handle with CloseHandle.
+		const findFirstRadio = lib.func(
+			'void* __stdcall BluetoothFindFirstRadio(COCKPIT_BT_FIND_RADIO_PARAMS*, _Out_ void**)'
+		) as KoffiFunc;
+		const findRadioClose = lib.func('int __stdcall BluetoothFindRadioClose(void*)') as KoffiFunc;
+		const getRadioInfo = lib.func(
+			'uint32 __stdcall BluetoothGetRadioInfo(void*, _Inout_ COCKPIT_BT_RADIO_INFO*)'
+		) as KoffiFunc;
+		const closeHandle = koffi.load('kernel32.dll').func('int __stdcall CloseHandle(void*)') as KoffiFunc;
 
 		koffiRef = koffi;
 		cached = {
@@ -228,6 +272,10 @@ function loadBthprops(): BthpropsApi {
 			),
 			sendAuthResponse: (radio, response) => sendAuthResponse(radio, response),
 			unregisterAuth: (regHandle) => unregisterAuth(regHandle),
+			findFirstRadio: (params, radioOut) => findFirstRadio(params, radioOut),
+			findRadioClose: (handle) => findRadioClose(handle),
+			getRadioInfo: (radio, info) => getRadioInfo(radio, info),
+			closeHandle: (handle) => closeHandle(handle),
 		};
 		return cached;
 	} catch (error) {
@@ -276,6 +324,24 @@ function readName(raw: unknown): string {
 	const units = Array.from(raw);
 	const end = units.indexOf(0);
 	return String.fromCharCode(...units.slice(0, end >= 0 ? end : units.length)).trim();
+}
+
+/**
+ * Reads the radio's `szName` up to its terminator, untrimmed.
+ *
+ * koffi hands a `char16_t` array back as a JS string, not a `Uint16Array`: checked on this
+ * host 31.10.2026, for this struct and for `BLUETOOTH_DEVICE_INFO` alike. Both shapes are
+ * accepted so a koffi upgrade that changes it does not silently turn the name into nothing.
+ */
+function readRadioName(raw: unknown): string {
+	if (typeof raw === 'string') {
+		const end = raw.indexOf('\0');
+		return end >= 0 ? raw.slice(0, end) : raw;
+	}
+	if (!(raw instanceof Uint16Array)) { return ''; }
+	const units = Array.from(raw);
+	const end = units.indexOf(0);
+	return String.fromCharCode(...units.slice(0, end >= 0 ? end : units.length));
 }
 
 function toDeviceInfo(raw: Record<string, unknown>): BluetoothDeviceInfo {
@@ -346,6 +412,50 @@ export function listBluetoothDevices(
 		api.findClose(handle);
 	}
 	return devices;
+}
+
+/**
+ * This computer's Bluetooth name: the `szName` of the first local radio's
+ * `BLUETOOTH_RADIO_INFO`.
+ *
+ * Not trimmed or folded: a brick stores each peer under the name the peer's radio reported
+ * and matches it byte for byte (step-3 plan, KTD3). Reads the radio's own record, so it costs
+ * no air time.
+ *
+ * @returns The name, or undefined when this host has no radio, is not 64-bit Windows, or the
+ *   call fails. Never a stand-in such as the host name: a wrong name would miss this
+ *   computer's entry on the brick and look like there was none.
+ */
+export function readBluetoothRadioName(): string | undefined {
+	try {
+		return readFirstRadioName(loadBthprops());
+	} catch {
+		return undefined;
+	}
+}
+
+function readFirstRadioName(api: BthpropsApi): string | undefined {
+	const radioOut: unknown[] = [null];
+	// Null with ERROR_NO_MORE_ITEMS is the ordinary answer of a host without a radio.
+	const find = api.findFirstRadio({ dwSize: FIND_RADIO_PARAMS_BYTES }, radioOut);
+	if (!find) { return undefined; }
+	const radio = radioOut[0];
+	try {
+		if (!radio) { return undefined; }
+		const info: Record<string, unknown> = {
+			dwSize: RADIO_INFO_BYTES,
+			address: { ullLong: 0n },
+			szName: new Uint16Array(NAME_LENGTH),
+			ulClassofDevice: 0,
+			lmpSubversion: 0,
+			manufacturer: 0,
+		};
+		if (api.getRadioInfo(radio, info) !== 0) { return undefined; }
+		return readRadioName(info.szName) || undefined;
+	} finally {
+		if (radio) { api.closeHandle(radio); }
+		api.findRadioClose(find);
+	}
 }
 
 /**
@@ -519,21 +629,35 @@ export async function pairBluetoothDevice(mac: string): Promise<{ ok: boolean; r
 }
 
 /**
+ * `ERROR_NOT_FOUND`, 1168 (0x490). Microsoft Learn, `BluetoothRemoveDevice`: "Returns
+ * ERROR_NOT_FOUND if the device was not found"; the value is from System Error Codes
+ * (1000-1299).
+ */
+const ERROR_NOT_FOUND = 1168;
+
+/**
  * Removes a pairing, so the machine forgets the device entirely.
  *
- * @returns Nothing on success; a `reason` when Windows refused.
+ * A device Windows does not have is reported as removed: it is already unpaired.
+ *
+ * @param removeDevice Calls `BluetoothRemoveDevice`. Test seam; the default loads `bthprops`.
+ * @returns Nothing on success; a `reason` carrying Windows' code when it refused.
  * @throws {BackendUnavailableError} When the bindings cannot load on this host.
  */
-export function removeBluetoothDevice(mac: string): { ok: boolean; reason?: string } {
-	const api = loadBthprops();
+export function removeBluetoothDevice(
+	mac: string,
+	removeDevice: (address: [bigint]) => number = (address) => loadBthprops().removeDevice(address),
+): { ok: boolean; reason?: string } {
 	const address = macToAddress(mac);
 	if (address === undefined) {
 		return { ok: false, reason: `Not a MAC address: ${mac}` };
 	}
 
 	// The signature takes a pointer to the address; koffi marshals a one-element array.
-	const result = api.removeDevice([address]);
-	return result === 0
+	const result = removeDevice([address]);
+	// A device Windows does not know is already unpaired, which is what the caller asked for
+	// (step-3 plan, R5).
+	return result === 0 || result === ERROR_NOT_FOUND
 		? { ok: true }
 		: { ok: false, reason: `Windows refused to remove the pairing (error ${result}).` };
 }
