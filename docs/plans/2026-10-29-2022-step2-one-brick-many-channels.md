@@ -402,7 +402,7 @@ U1 → U2 → U3 → U4 → U5 lands the runtime model, unit-tested with fake pr
   4. Add `disconnectBrick`, listing signed-in bricks.
   5. `listProjects`/`showStorage` use the active brick.
 - **Patterns to follow:** the current picker's focus-preserving re-sort and its scan error handling in `extension.ts`.
-- **Test expectation:** the composition function gets a smoke test that builds the runtime with stub providers and signs in a mock brick. The QuickPick itself is verified by hand in U10.
+- **Test expectation:** the composition function gets a smoke test that builds the runtime with stub providers and signs in a mock brick. The QuickPick itself is verified by hand in U10. (31.10.2026: the flow behind it moved to `src/ui/connectBrick.ts` and is tested in `connectBrick.test.ts`; see the U9 appendix.)
 - **Verification:** the extension host starts, and the palette shows both commands. Connecting the mock brick makes `showStorage` answer from it.
 
 ### U10. Hardware verification with the owner

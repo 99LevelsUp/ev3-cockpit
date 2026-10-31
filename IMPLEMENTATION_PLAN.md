@@ -38,6 +38,10 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   foreground brick (3.1.5, 3.3) ✅ — **not wired into `extension.ts`** until the read model (3.5)
 - filesystem service and file transfer — chunked, with progress, cancellation and stall
   detection (4.6.1–4.6.3, 4.6.5–4.6.12, 4.6.14–4.6.15) ✅
+- one brick across its channels (2.8.13, step 2, closed 31.10.2026): one list entry per brick,
+  sign-in over every channel, failover, and "Connect a Brick" with pairing and a live scan ✅ —
+  pairing from the picker and the live-scan row are tested, not yet tried by hand (deferred to
+  the testing with the panel)
 
 Open, by phase:
 
@@ -45,7 +49,7 @@ Open, by phase:
   brick" leaves in the Windows registry; 1.11.11 Linux Bluetooth (blocked: no Linux host);
   1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows, carried as a limitation).
 - **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
-  hardware scenarios; 2.8.13 one brick across transports — built in step 2 (30.10.2026); 2.8.18 the already-paired
+  hardware scenarios; 2.8.18 the already-paired
   check before pairing and a bounded retry around the inquiry.
 - **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
   object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
