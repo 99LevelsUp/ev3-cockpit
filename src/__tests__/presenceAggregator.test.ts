@@ -377,3 +377,59 @@ describe('PresenceAggregator — what the list owns', () => {
 		done();
 	});
 });
+
+// ── Forgetting (step-3 plan, U3) ────────────────────────────────────
+
+describe('PresenceAggregator — forgetting a brick', () => {
+	/** CCC remembered as paired, from persistence, and plugged in over USB. */
+	async function rememberedPairedCcc() {
+		const w = setup();
+		w.aggregator.mergeRemembered([{
+			...item(CCC.bt, Transport.BT, 'CCC', 'bt-cache'),
+			presenceState: PresenceState.Remembered, remembered: true, paired: true,
+		}]);
+		w.seen.usb.push(item(CCC.usb, Transport.USB, 'CCC', 'usb-descriptor'));
+		await w.scheduler.scanOnce();
+		w.aggregator.updateBrick(CCC_ID, { favorite: true });
+		const before = w.aggregator.getBrick(CCC_ID);
+		assert.equal(before?.paired, true);
+		assert.equal(before?.remembered, true);
+		return w;
+	}
+
+	it('drops a remembered, paired brick and tells the list once', async () => {
+		const { aggregator, done } = await rememberedPairedCcc();
+		const changes: number[] = [];
+		aggregator.onListChanged((e) => changes.push(e.items.length));
+
+		aggregator.forget(CCC_ID);
+
+		assert.equal(aggregator.getBrick(CCC_ID), undefined);
+		assert.deepEqual(changes, [0], 'one list change, with the brick gone from it');
+		done();
+	});
+
+	it('brings the brick back unpaired and not remembered when a scan lists its USB key again', async () => {
+		const { scheduler, aggregator, done } = await rememberedPairedCcc();
+		aggregator.forget(CCC_ID);
+
+		await scheduler.scanOnce();
+
+		const back = aggregator.getBrick(CCC_ID);
+		assert.ok(back, 'the brick is still in reach, so it returns');
+		assert.equal(back.paired, false);
+		assert.equal(back.remembered, false);
+		assert.equal(back.favorite, false);
+		assert.deepEqual(back.channels.map((c) => c.transport), [Transport.USB]);
+		done();
+	});
+
+	it('does not tell the list anything when the brick is not known', () => {
+		const { aggregator, done } = setup();
+		const changes: number[] = [];
+		aggregator.onListChanged((e) => changes.push(e.items.length));
+		aggregator.forget(CCC_ID);
+		assert.deepEqual(changes, []);
+		done();
+	});
+});

@@ -396,3 +396,117 @@ describe('DiscoveryScheduler — a failed scan is not a scan', () => {
 		registry.dispose();
 	});
 });
+
+// ── Forgetting (step-3 plan, U3) ────────────────────────────────────
+
+describe('DiscoveryScheduler — forgetting a brick', () => {
+	it('stops tracking a forgotten key silently, and reports it as new when a scan lists it again', async () => {
+		const bt = makeItem('00:16:53:42:D9:F2', Transport.BT);
+		const usb = makeItem('00165342D9F2', Transport.USB);
+		const registry = new ProviderRegistry();
+		registry.register(makeFakeProvider(Transport.BT, [bt]));
+		registry.register(makeFakeProvider(Transport.USB, [usb]));
+		const scheduler = new DiscoveryScheduler(registry);
+		await scheduler.scanOnce();
+
+		const events: PresenceChangeEvent[] = [];
+		scheduler.onPresenceChanged((e) => events.push(e));
+		scheduler.forget([bt.brickKey]);
+
+		assert.equal(events.length, 0, 'the brick layer is forgetting the brick; nothing to announce');
+		assert.equal(scheduler.getTrackedBricks().has(bt.brickKey), false);
+		assert.equal(scheduler.getTrackedBricks().has(usb.brickKey), true, 'only the given keys go');
+
+		await scheduler.scanOnce();
+
+		assert.deepEqual(events.map((e) => [e.brickKey, e.previousState, e.currentState]), [
+			[bt.brickKey, undefined, PresenceState.Available],
+		]);
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+});
+
+describe('DiscoveryScheduler — waiting for the scans in flight', () => {
+	/** A provider whose every scan waits until the test lets it finish. */
+	function heldProvider(transport: Transport, items: DiscoveryItem[]) {
+		const pending: (() => void)[] = [];
+		const provider: TransportProvider = Object.assign(makeFakeProvider(transport, items), {
+			discover: () => new Promise<DiscoveryScanResult>((resolve) => {
+				pending.push(() => resolve({ transport, items }));
+			}),
+		});
+		return { provider, pending, releaseAll: () => { for (const r of pending.splice(0)) { r(); } } };
+	}
+
+	/** Records whether `scansSettled` resolved, and whether the scan's result had landed by then. */
+	function watch(scheduler: DiscoveryScheduler, key: BrickKey) {
+		const seen = { settled: false, trackedWhenSettled: false };
+		const settled = scheduler.scansSettled().then(() => {
+			seen.settled = true;
+			seen.trackedWhenSettled = scheduler.getTrackedBricks().has(key);
+		});
+		return { seen, settled };
+	}
+
+	it('resolves only after a slow scanOnce has applied its result', async () => {
+		const item = makeItem('slow', Transport.BT);
+		const held = heldProvider(Transport.BT, [item]);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry);
+
+		const scan = scheduler.scanOnce();
+		await waitFor(() => held.pending.length === 1, 2000);
+		const { seen, settled } = watch(scheduler, item.brickKey);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(seen.settled, false, 'the scan is still running');
+
+		held.releaseAll();
+		await settled;
+		assert.equal(seen.trackedWhenSettled, true, 'the stale result lands before the waiter resumes');
+		await scan;
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('resolves only after a slow scan on a provider timer has applied its result', async () => {
+		const item = makeItem('slow', Transport.BT);
+		const held = heldProvider(Transport.BT, [item]);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry, { defaultIntervalMs: 5 });
+
+		scheduler.start();
+		await waitFor(() => held.pending.length === 1, 2000);
+		scheduler.stop();
+		const { seen, settled } = watch(scheduler, item.brickKey);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(seen.settled, false, 'the timer\'s scan is still running');
+
+		held.releaseAll();
+		await settled;
+		assert.equal(seen.trackedWhenSettled, true);
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('resolves at once when no scan is running', async () => {
+		const registry = new ProviderRegistry();
+		registry.register(makeFakeProvider(Transport.USB, [makeItem('a', Transport.USB)]));
+		const scheduler = new DiscoveryScheduler(registry);
+		await scheduler.scanOnce();
+
+		const winner = await Promise.race([
+			scheduler.scansSettled().then(() => 'settled'),
+			new Promise((resolve) => setTimeout(() => resolve('timeout'), 200)),
+		]);
+		assert.equal(winner, 'settled');
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+});
