@@ -42,16 +42,50 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   sign-in over every channel, failover, and "Connect a Brick" with pairing and a live scan ✅ —
   pairing from the picker and the live-scan row are tested, not yet tried by hand (deferred to
   the testing with the panel)
+- forgetting a brick (step 3, `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`): "Forget a
+  Brick" signs it out, removes this computer from the brick's own list when the brick is
+  reachable, unpairs it, clears the cockpit's memory and names what Windows keeps; "Clear a
+  Brick's Bluetooth List" unpairs a brick from every peer it remembers ✅ — hardware session
+  (U7) pending
 
 Open, by phase:
 
-- **Phase 1:** 1.6.10 mock configuration from a workspace file; 1.11.14 what "remove this
-  brick" leaves in the Windows registry; 1.11.11 Linux Bluetooth (blocked: no Linux host);
-  1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows, carried as a limitation).
+- **Phase 1:** 1.6.10 mock configuration from a workspace file; 1.11.11 Linux Bluetooth
+  (blocked: no Linux host); 1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows,
+  carried as a limitation).
 - **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
   hardware scenarios, among them 2.8.18's one unverified path: an inquiry chained into pairing
-  a brick this machine has never met (every bench brick is known to it, and registry state is
-  not deleted to fake that).
+  a brick this machine has never met. Every bench brick is known to it. Forget plus the
+  owner's own removal of the registry key and a Windows restart now make the test possible
+  (step 3, R14); the cockpit itself never deletes that key.
+
+### What Linux needs
+
+REQUIREMENTS §12 makes Linux a required platform. Nothing below blocks the Windows release;
+each item waits for a Linux host, because none of it can be built or verified without one.
+
+- **Bluetooth transport** — 1.11.11 `BtBluezBackend`, RFCOMM over BlueZ D-Bus. The Winsock
+  backend (`windowsWinsock.ts`, `ws2_32` through `koffi`) is Windows-only.
+- **Bluetooth discovery** — the device cache and the COM-port scan go through `bthprops`
+  (`windowsBluetooth.ts`, `koffi`) and `serialport` port names; BlueZ lists paired devices
+  through `org.bluez.Device1` objects instead.
+- **Pairing** — the net48 WinRT helper (`native/bin/bt-pairing-helper.exe`) is Windows-only.
+  BlueZ needs an agent (`org.bluez.AgentManager1`) and `Device1.Pair`.
+- **Bluetooth presence and inquiry** — the background inquiry and the paired-brick check run
+  through the same WinRT helper; BlueZ has `Adapter1.StartDiscovery` and device properties.
+- **Forget** — `org.bluez.Adapter1.RemoveDevice` for the unpair, and a `ForgetResidue` list
+  of what BlueZ keeps: verify on a host what stays under `/var/lib/bluetooth/<adapter>/<mac>`
+  and `/var/lib/bluetooth/<adapter>/cache/<mac>` after `RemoveDevice`.
+- **This computer's Bluetooth name** — the brick matches its entry for this computer by the
+  name the radio reports; on Linux that is the adapter's `Alias` (`org.bluez.Adapter1`),
+  replacing `BluetoothGetRadioInfo`.
+- **USB** — 4.6.16 libusb on Linux: udev rules so a normal user can open the brick, and the
+  permissions story for an installed extension.
+- **USB read padding** — DESIGN line 240: the Linux libusb path is unverified;
+  `READ_OVERRUN_SLACK` in `usbLibusbAdapter.ts` is set for Windows only and needs checking
+  there.
+- **Registry** — the optional `regkey` dependency is Windows-only; nothing on Linux should
+  load it.
 - **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
   object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
   state in a read model; open — 3.1.4 peripheral-type enum, 3.2 data models, 3.3.2/3.3.5
@@ -299,8 +333,12 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     questions and only looked alike while the runtime went through a serial port: a paired
     brick whose outgoing port Windows never created is invisible to a scan and perfectly
     reachable over a socket. No inquiry is issued, so it costs no air time
-  - [ ] 1.11.14 **"Remove this brick" should leave nothing behind — including the registry
-    record.** `BluetoothRemoveDevice` drops the pairing and the `BTHENUM\DEV_<mac>` PnP node,
+  - [x] 1.11.14 **"Remove this brick" should leave nothing behind — including the registry
+    record.** **Answered 31.10.2026 (step 3, KD3):** the cockpit never takes ownership of,
+    changes or deletes the key, never elevates and never restarts `bthserv`. "Forget a Brick"
+    unpairs through the supported API and names the key, with the brick's address, and
+    Windows' in-memory record as what remains, so the user can remove them themselves.
+    Original entry: `BluetoothRemoveDevice` drops the pairing and the `BTHENUM\DEV_<mac>` PnP node,
     but the brick's entry under
     `HKLM:\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\<mac>` survives it.
     That record is not cosmetic: it is what lets the watcher's cache pass answer for a brick
@@ -461,7 +499,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     cache or completes fast enough to call synchronously, the same way `tcpSocketAdapter`
     already does for TCP. A second execution context would have nothing to do that koffi
     is not already doing — the same shape as 1.11.1 and 1.11.2, dropped for the same reason
-  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available
+  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available. Everything else Linux needs is listed in §2, "What Linux needs"
 - [x] **1.12 Transport unit tests**
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
@@ -797,7 +835,10 @@ Build the source of truth for connected bricks.
     prompt on `found`, and the two missing pieces — the already-paired fast path in pairing mode
     (verified on CCC: answered in 362 ms instead of NotFound after a full window) and a second
     inquiry window. Still unverified on this bench: a fresh inquiry chained into a pairing of a
-    brick this machine has never met. Original entry: Needs: the
+    brick this machine has never met. Since step 3 it can run after a forget, once the owner has
+    removed the brick's registry key by hand and restarted Windows; for that owner-run setup
+    this replaces "registry state is not deleted to fake that". A `found` under about 100 ms is
+    still a cache pass and does not count. Original entry: Needs: the
     helper serialized against the same `BtConnectionQueue` the rest of BT already shares, so a
     pairing attempt and a connect attempt never contend for the one radio slot; a bounded retry
     around the live-inquiry step (a single 15 s window missed CCC more than once, and a
@@ -1294,7 +1335,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     must be connected to directly.
 
   - [ ] 3.1.4k **The brick keeps its own pairing list, and forgetting on Windows does not
-    touch it.** After every trace of the bricks was removed from Windows — PnP nodes, the
+    touch it.** **Step 3:** "Forget a Brick" now removes this computer's entry when the brick
+    is reachable (`opCOM_REMOVE`, matched on this computer's radio name), and "Clear a Brick's
+    Bluetooth List" removes every entry, whatever its name. The list is read with
+    `FAVOUR_ITEMS`/`FAVOUR_ITEM`; wiring it into the `system` telemetry category stays open. After every trace of the bricks was removed from Windows — PnP nodes, the
     `BTHPORT` pairing keys, the COM reservations — the master still listed the PC in its own
     paired devices. Whatever 6.6.x implements as "forget" has to clear **both sides**, or a
     brick keeps offering a stale peer that the host no longer knows.
@@ -1309,7 +1353,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     `connected` flag anyway.
 
   - [ ] 3.1.4l **A one-sided pairing record blocks re-pairing, and renaming a brick strands
-    it.** A brick that could not join the others turned out to hold a pairing entry for the
+    it.** **Step 3:** an entry under a former name is what "Clear a Brick's Bluetooth List" is
+    for; "Forget a Brick" lists the names the brick holds when none matches this computer. A brick that could not join the others turned out to hold a pairing entry for the
     intended master under the master's **previous** name, while the master held no record of
     it at all. Every transaction between the two then failed: the remote name request came
     back as the firmware's `"????"` marker (`c_bt.c` writes that literal when the request
@@ -1563,7 +1608,8 @@ Export a stable API for other extensions without giving them direct access to th
     - USB is now the **fastest** transport for bulk work by a factor of five, inverting the
       ranking a second time and in the opposite direction (DESIGN §4.1)
   - [ ] 4.6.16 Unverified on the libusb path: the Linux backend (padding should be
-    harmless, but has not been run) and recovery from unplugging mid-transfer
+    harmless, but has not been run) and recovery from unplugging mid-transfer. Linux items
+    are collected in §2, "What Linux needs"
   - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
     listed full paths, a shape no brick produces. It now returns bare names with kinds
     and sizes, tracks directories explicitly so an empty one is representable, and
@@ -1756,10 +1802,10 @@ Complete long-term Cockpit behavior across restarts.
 - [ ] **6.6 Forget flow**
   - [ ] 6.6.1 Trash action in discovery list for remembered offline bricks
   - [ ] 6.6.2 Delete all local persisted metadata (including `favorite`)
-  - [ ] 6.6.3 OS-level unpair where the provider supports it
-  - [ ] 6.6.4 BT provider (Windows): delete the `BTHPORT\Parameters\Devices\{mac}` registry entry alongside unpairing — its `Name` value goes stale and survives a rename (DESIGN §7.3). The USB path is unaffected: libusb string descriptors return the current name. Consider whether 6.6.6 absorbs this entirely rather than leaving two units on the same registry key
-  - [ ] 6.6.5 Provider capability check before offering forget action (`capabilities.supportsForget`)
-  - [ ] 6.6.6 BT `forget()` must unpair at the OS level. It currently disconnects and drops the preferred-backend cache entry, leaving the pairing intact, which is why `supportsForget` is declared `false` for BT
+  - [x] 6.6.3 OS-level unpair where the provider supports it — `BrickManager.forget` (step 3, U4)
+  - [x] 6.6.4 **Not done, by decision (step 3, KD3, 31.10.2026).** The `BTHPORT\Parameters\Devices\{mac}` key is owned by SYSTEM; the cockpit does not take ownership of, change or delete it, and never elevates to. Forget reports its exact path, with the brick's address, as a record left behind, so the user can remove it themselves. Its `Name` value still goes stale after a rename (DESIGN §7.3); the USB path is unaffected
+  - [x] 6.6.5 Provider capability check before offering forget action (`capabilities.supportsForget`) — forget unpairs only through providers that declare it (step 3, U4)
+  - [x] 6.6.6 BT `forget()` must unpair at the OS level. Done in 1.11.13: it unpairs through `BluetoothRemoveDevice` and reports a refusal; since step 3 it also counts an already-unpaired brick as removed and returns what Windows keeps
 - [ ] **6.7 Unit tests**
   - [ ] 6.7.1 globalState adapter read/write/migration tests
   - [ ] 6.7.2 Favorite toggle persistence tests

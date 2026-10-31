@@ -878,10 +878,26 @@ Implementation model:
 - forgetting is only permitted where the provider can safely perform it.
 
 "OS-level evidence" on Windows includes the BT registry entry at
-`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\{mac}`. Forget must
-delete it in addition to BT unpairing, because the `Name` value there goes stale and
-survives a rename — measured on two paired bricks whose real names were AAA and BBB while
-the registry still held `"EV3"` and `"B"`.
+`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices\{mac}`. Its `Name` value
+goes stale and survives a rename — measured on two paired bricks whose real names were AAA
+and BBB while the registry still held `"EV3"` and `"B"` — and the key survives
+`BluetoothRemoveDevice` and Settings' own Remove (1.11.14).
+
+**Forget does not delete it (step 3, KD3, 31.10.2026).** The key is owned by SYSTEM. The
+cockpit never takes ownership of it, changes its permissions or deletes it, never elevates
+and never restarts `bthserv`. Forget unpairs through the supported API, and its result names
+the key with the brick's address and Windows' in-memory device record (which lasts until
+Windows restarts) as records left behind, so the user can remove them. The subkeys on this
+host are twelve lower-case hex digits; the forget report spells the key that way, and the
+step-3 hardware session confirms it against a forgotten brick.
+
+Forget also clears the brick's side: the brick keeps its own list of paired devices and a
+one-sided record blocks the next pairing (IMPLEMENTATION_PLAN 3.1.4k, 3.1.4l). When the brick
+is reachable, forget removes this computer's entry with `opCOM_REMOVE`, matched exactly on
+this computer's Bluetooth radio name, and confirms it by reading the list back over a channel
+the removal does not cut. The brick saves its list only on an orderly shutdown, so the
+report tells the user to switch it off from its menu. "Clear a Brick's Bluetooth List"
+removes every entry, whatever its name.
 
 That entry is **not** the source of a USB brick's display name, despite an earlier note here
 saying so. USB name resolution reads libusb string descriptors straight off the device and
@@ -891,7 +907,8 @@ returned AAA, BBB and CCC correctly. So the stale-name problem is real, and it b
 the Bluetooth path once BT discovery is wired (1.11.7a).
 
 A related measurement worth recording: an EV3's USB serial number **is** its Bluetooth MAC
-with the separators removed — the BTHPORT subkey names matched the USB serials exactly. Any
+with the separators removed — the BTHPORT subkey names matched the USB serials, compared
+without regard to case (the subkeys are lower case, the serials upper case). Any
 future cross-transport identity work can relate `usb:001653AABBCC` to `bt:00:16:53:AA:BB:CC`
 by normalising the string, with no on-brick probe involved. (Identifiers here are
 placeholders on the real LEGO OUI; actual device serials stay out of the repository.)
