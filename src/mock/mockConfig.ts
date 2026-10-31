@@ -97,6 +97,8 @@ export interface MockBrickConfig {
 	readonly error?: MockErrorConfig;
 	readonly loss?: MockLossConfig;
 	readonly filesystem?: MockFileEntry[];
+	/** Names of the computers and bricks this brick remembers as Bluetooth peers, in list order. */
+	readonly bluetoothPeers?: string[];
 }
 
 // ── Top-level mock configuration ────────────────────────────────────

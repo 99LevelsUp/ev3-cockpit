@@ -8,6 +8,7 @@
 import {
 	BrickCommand, BrickResponse,
 	BatteryResponse, PortsResponse, ButtonsResponse, InfoResponse,
+	BluetoothPeerCountResponse, BluetoothPeerResponse,
 	FsListResponse, FsReadResponse, FsWriteResponse, FsExistsResponse, FsDeleteResponse,
 	FsSizeResponse, FsFreeSpaceResponse, FsMakeDirectoryResponse, FsEntry,
 	FsListContinueResponse,
@@ -19,7 +20,7 @@ import { readFloat32le, readInt32le, readUint32le, readFixedCString } from './ev
 import {
 	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS,
 } from './ev3Packet';
-import { INFO_LAYOUT } from './ev3Commands';
+import { INFO_LAYOUT, BT_PEER_LAYOUT } from './ev3Commands';
 import { ProtocolError } from '../errors/CockpitError';
 
 // ── Sensor/motor type names ─────────────────────────────────────────
@@ -131,10 +132,16 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 	case 'brick:setName':
 	case 'brick:setBluetooth':
 	case 'brick:setBluetoothVisible':
+	case 'brick:removeBluetoothPeer':
 		// Nothing to parse: validateReply above has already rejected an error status, and a
 		// successful settings write carries no payload. Whether the setting actually took is
-		// only observable on the brick afterwards.
+		// only observable on the brick afterwards. opCOM_REMOVE never even sets a dispatch
+		// status (c_com.c 5567-5606), so its reply says only that the brick answered.
 		return { kind: command.kind };
+	case 'brick:bluetoothPeerCount':
+		return parseBluetoothPeerCount(reply.payload);
+	case 'brick:bluetoothPeer':
+		return parseBluetoothPeer(reply.payload);
 	case 'fs:list':
 		return parseFsList(reply.payload);
 	case 'fs:read':
@@ -266,6 +273,38 @@ function parseInfo(payload: Uint8Array): InfoResponse {
 		displayName: brickName || 'EV3',
 		firmwareVersion: fwVersion || undefined,
 		osVersion: osVersion || undefined,
+	};
+}
+
+function parseBluetoothPeerCount(payload: Uint8Array): BluetoothPeerCountResponse {
+	if (payload.length < 1) {
+		throw new ProtocolError('Malformed brick:bluetoothPeerCount reply: no count byte.');
+	}
+	return { kind: 'brick:bluetoothPeerCount', count: payload[0] };
+}
+
+/**
+ * Layout from `buildBluetoothPeerCommand`: [0..126] name, [127] paired, [128] connected,
+ * [129] type.
+ *
+ * The name is cut at its terminator and not trimmed, unlike `readFixedCString`: a peer is
+ * removed by an exact match on these bytes, and a trimmed name would no longer match.
+ */
+function parseBluetoothPeer(payload: Uint8Array): BluetoothPeerResponse {
+	if (payload.length < BT_PEER_LAYOUT.TOTAL_BYTES) {
+		throw new ProtocolError(
+			`Malformed brick:bluetoothPeer reply: expected ${BT_PEER_LAYOUT.TOTAL_BYTES} bytes, `
+			+ `got ${payload.length}.`
+		);
+	}
+	const slot = payload.subarray(BT_PEER_LAYOUT.OFF_NAME, BT_PEER_LAYOUT.OFF_NAME + BT_PEER_LAYOUT.NAME_BYTES);
+	const end = slot.indexOf(0);
+	return {
+		kind: 'brick:bluetoothPeer',
+		name: Buffer.from(end === -1 ? slot : slot.subarray(0, end)).toString('utf8'),
+		paired: payload[BT_PEER_LAYOUT.OFF_PAIRED] !== 0,
+		connected: payload[BT_PEER_LAYOUT.OFF_CONNECTED] !== 0,
+		type: payload[BT_PEER_LAYOUT.OFF_TYPE],
 	};
 }
 

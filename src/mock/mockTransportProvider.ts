@@ -24,7 +24,12 @@ interface MockBrickState {
 	 * config lie about where its name came from.
 	 */
 	renamedTo?: string;
+	/** The brick's Bluetooth peer list, which `brick:removeBluetoothPeer` changes at run time. */
+	readonly bluetoothPeers: string[];
 }
+
+/** `ICON_UNKNOWN` (`bytecodes.h` 1304): the mock keeps names only, not device classes. */
+const MOCK_PEER_TYPE = 6;
 
 /**
  * Mock transport provider.
@@ -62,6 +67,7 @@ export class MockTransportProvider implements TransportProvider {
 				config: brickCfg,
 				filesystem: new MockFilesystem(brickCfg.filesystem),
 				connected: false,
+				bluetoothPeers: [...(brickCfg.bluetoothPeers ?? [])],
 			});
 		}
 	}
@@ -206,6 +212,31 @@ export class MockTransportProvider implements TransportProvider {
 			// nothing here can act on would be the kind of divergence that made mocked
 			// recovery pass while the real transports had none.
 			return { kind: command.kind };
+
+		case 'brick:bluetoothPeerCount':
+			return { kind: 'brick:bluetoothPeerCount', count: state.bluetoothPeers.length };
+
+		case 'brick:bluetoothPeer': {
+			const name = state.bluetoothPeers[command.index];
+			if (name === undefined) {
+				// The firmware would read past its list (c_bt.c 3561-3567); a caller that gets
+				// here skipped the count, and should hear about it.
+				throw new TransportError(
+					`Mock brick ${brickKey} has no Bluetooth peer at index ${command.index}.`
+				);
+			}
+			return { kind: 'brick:bluetoothPeer', name, paired: true, connected: false, type: MOCK_PEER_TYPE };
+		}
+
+		case 'brick:removeBluetoothPeer': {
+			// strcmp on the stored name, first match only, and the same bare reply whether or not
+			// anything matched (c_bt.c 2215, c_com.c 5567-5606).
+			const at = state.bluetoothPeers.indexOf(command.name);
+			if (at !== -1) {
+				state.bluetoothPeers.splice(at, 1);
+			}
+			return { kind: 'brick:removeBluetoothPeer' };
+		}
 
 		case 'fs:list':
 			// The mock has no packet ceiling, so a listing is always complete.

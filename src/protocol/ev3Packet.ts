@@ -85,6 +85,14 @@ export const EV3_OPCODE = {
 	UI_BUTTON: 0x83,
 	COM_GET: 0xd3,
 	COM_SET: 0xd4,
+	/**
+	 * `opCOM_REMOVE` (`bytecodes.h` 463) — drop a remembered peer from the brick's list.
+	 *
+	 * Takes the hardware selector and the peer's name, and has no subcode (`c_com.c`
+	 * 5554–5575). The handler never calls `SetDispatchStatus`, so a reply means only that the
+	 * brick answered; whether the entry went has to be read back.
+	 */
+	COM_REMOVE: 0xd6,
 	INPUT_DEVICE: 0x99,
 	/**
 	 * `opINPUT_READSI` — one sensor reading in SI units.
@@ -136,6 +144,18 @@ export const UI_READ_SUB = {
  * verified against three bricks, each returning its own name.
  */
 export const COM_GET_SUB = {
+	/**
+	 * How many peers the brick remembers on one radio (`bytecodes.h` 642). Takes the hardware
+	 * selector, answers one DATA8 (`c_com.c` 4585–4612).
+	 */
+	FAVOUR_ITEMS: 0x0a,
+	/**
+	 * One remembered peer by index (`bytecodes.h` 643). Takes hardware, index and a name
+	 * length; answers the name, then paired, connected and type, one DATA8 each (`c_com.c`
+	 * 4615–4689). The index is not bounds-checked (`c_bt.c` 3561–3567), so never ask past the
+	 * count {@link COM_GET_SUB.FAVOUR_ITEMS} gave.
+	 */
+	FAVOUR_ITEM: 0x0b,
 	/** Bluetooth MAC of this brick. */
 	GET_ID: 0x0c,
 	/** The brick's user-visible name. */

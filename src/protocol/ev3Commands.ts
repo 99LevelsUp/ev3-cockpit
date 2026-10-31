@@ -8,7 +8,7 @@
 
 import { BrickCommand } from '../contracts';
 import { ProtocolError } from '../errors/CockpitError';
-import { concatBytes, uint16le, uint32le, lc0, lcs, cString, gv0, gv1 } from './ev3Bytecode';
+import { concatBytes, uint16le, uint32le, lc0, lc1, lcs, cString, gv0, gv1 } from './ev3Bytecode';
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
 	COM_SET_SUB, COM_HARDWARE, MAX_BRICK_NAME_LENGTH, BRICK_NAME_PATTERN,
@@ -78,6 +78,21 @@ export const INFO_LAYOUT = {
 	TOTAL_INFO_BYTES,
 } as const;
 
+// ── Bluetooth peer entry ────────────────────────────────────────────
+
+/** Name slot of a `FAVOUR_ITEM` read: the largest DATA8 length, see `buildBluetoothPeerCommand`. */
+const BT_PEER_NAME_BYTES = 127;
+
+/** Offsets for a `FAVOUR_ITEM` reply (exported for ev3Responses). */
+export const BT_PEER_LAYOUT = {
+	NAME_BYTES: BT_PEER_NAME_BYTES,
+	OFF_NAME: 0,
+	OFF_PAIRED: BT_PEER_NAME_BYTES,
+	OFF_CONNECTED: BT_PEER_NAME_BYTES + 1,
+	OFF_TYPE: BT_PEER_NAME_BYTES + 2,
+	TOTAL_BYTES: BT_PEER_NAME_BYTES + 3,
+} as const;
+
 // ── Port layout ─────────────────────────────────────────────────────
 
 /** Sensor port indices (1-4 mapped to 0-3 in EV3 protocol). */
@@ -118,6 +133,12 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 		return buildComSetFlagCommand(COM_SET_SUB.SET_ON_OFF, command.on);
 	case 'brick:setBluetoothVisible':
 		return buildComSetFlagCommand(COM_SET_SUB.SET_VISIBLE, command.visible);
+	case 'brick:bluetoothPeerCount':
+		return buildBluetoothPeerCountCommand();
+	case 'brick:bluetoothPeer':
+		return buildBluetoothPeerCommand(command.index);
+	case 'brick:removeBluetoothPeer':
+		return buildRemoveBluetoothPeerCommand(command.name);
 	case 'fs:list':
 		return buildFsListCommand(command.path);
 	case 'fs:read':
@@ -328,6 +349,77 @@ function buildComSetFlagCommand(subcode: number, value: boolean): EncodedCommand
 			new Uint8Array([EV3_OPCODE.COM_SET, subcode]),
 			lc0(COM_HARDWARE.BT),
 			lc0(value ? 1 : 0),
+		),
+	};
+}
+
+/** `FAVOUR_ITEMS` on Bluetooth: one global byte, the number of remembered peers. */
+function buildBluetoothPeerCountCommand(): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(1),
+			new Uint8Array([EV3_OPCODE.COM_GET, COM_GET_SUB.FAVOUR_ITEMS]),
+			lc0(COM_HARDWARE.BT),
+			gv0(0),
+		),
+	};
+}
+
+/**
+ * `FAVOUR_ITEM` on Bluetooth: one peer's name, then paired, connected and type.
+ *
+ * Global layout: [0..126] name, [127] paired, [128] connected, [129] type.
+ *
+ * The name length is 127 because nothing larger can be asked for. The firmware passes it
+ * straight to `snprintf` (`c_bt.c` 3565). It swaps -1 for `vmBRICKNAMESIZE` only when the
+ * name goes to a handle (`c_com.c` 4624–4629), which a global variable is not:
+ * `PrimParPointer` sets the handle only for `PRIMPAR_HANDLE` (`lms2012.c` 698, 813–817). The
+ * length is a DATA8 read with sign extension (`lms2012.c` 776–786), so -1 or anything above
+ * 127 would become a huge size and let a long name run past the reply buffer.
+ */
+function buildBluetoothPeerCommand(index: number): EncodedCommand {
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(BT_PEER_LAYOUT.TOTAL_BYTES),
+			new Uint8Array([EV3_OPCODE.COM_GET, COM_GET_SUB.FAVOUR_ITEM]),
+			lc0(COM_HARDWARE.BT),
+			lc0(index),
+			lc1(BT_PEER_LAYOUT.NAME_BYTES),
+			gv0(BT_PEER_LAYOUT.OFF_NAME),
+			gv1(BT_PEER_LAYOUT.OFF_PAIRED),
+			gv1(BT_PEER_LAYOUT.OFF_CONNECTED),
+			gv1(BT_PEER_LAYOUT.OFF_TYPE),
+		),
+	};
+}
+
+/**
+ * `opCOM_REMOVE` on Bluetooth, by the peer's name.
+ *
+ * Refuses an empty or blank name and checks nothing else. Empty is the firmware's wildcard
+ * for the first named entry (`c_bt.c` 2205–2211), so it would forget some other computer;
+ * blank is refused with it because no computer is called that. {@link BRICK_NAME_PATTERN}
+ * does not apply: this is another device's Bluetooth name, which may hold spaces, dots or
+ * accented letters, and the firmware compares the bytes as stored.
+ */
+function buildRemoveBluetoothPeerCommand(name: string): EncodedCommand {
+	if (name.trim().length === 0) {
+		throw new ProtocolError(
+			'Refusing to remove a Bluetooth peer with an empty name: the brick would remove '
+				+ 'the first entry in its list instead.'
+		);
+	}
+	// Asks for a reply for the same reason a rename does: the channel matches replies by
+	// message counter.
+	return {
+		type: EV3_COMMAND.DIRECT_COMMAND_REPLY,
+		payload: concatBytes(
+			uint16le(0),
+			new Uint8Array([EV3_OPCODE.COM_REMOVE]),
+			lc0(COM_HARDWARE.BT),
+			lcs(name),
 		),
 	};
 }
