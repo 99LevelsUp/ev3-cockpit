@@ -5,25 +5,11 @@ import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel, transportLabel } from './runtime/brickLabels';
 import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from './errors/CockpitError';
-import { BrickEntry, BrickId, ChannelState, Transport, brickKeyId } from './contracts';
-import { compareBricks } from './ui/brickOrder';
+import { BrickId, Transport, brickKeyId } from './contracts';
+import { brickPickRows, describeChannels } from './ui/brickPickRows';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
-
-/** How a channel reads in a list row. The panel (Phase 5) shows the same as coloured icons. */
-function describeChannels(brick: BrickEntry): string {
-	return brick.channels.map((channel) => {
-		const transport = channel.transport.toUpperCase();
-		switch (channel.state) {
-		case ChannelState.Connected: return `${transport} connected`;
-		case ChannelState.Available: return `${transport} available`;
-		// A paired Bluetooth brick that stopped answering is "not heard": it may be off, or
-		// out of range; Windows lists it either way.
-		default: return channel.transport === Transport.BT ? `${transport} not heard` : `${transport} lost`;
-		}
-	}).join(' · ');
-}
 
 /**
  * Whether to show the simulated bricks. The `ev3-cockpit.mockBricks` setting decides when
@@ -121,15 +107,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 		const render = (): void => {
 			const focused = picker.activeItems[0]?.brickId;
-			picker.items = [...aggregator.getDiscoveryList()]
-				.sort(compareBricks)
-				.map((brick) => ({
-					label: `${bricks.isSignedIn(brick.brickId) ? '$(check) ' : ''}${brick.name.value}`,
-					description: `${brick.name.confirmed ? '' : '(name unconfirmed) '}${describeChannels(brick)}`
-						+ `${brick.channels.some((c) => c.transport === Transport.BT) && !brick.paired ? ' · new' : ''}`,
-					detail: brick.brickId,
-					brickId: brick.brickId,
-				}));
+			picker.items = brickPickRows(aggregator.getDiscoveryList(), (brickId) => bricks.isSignedIn(brickId));
 			const keep = picker.items.find((item) => item.brickId === focused);
 			if (keep) { picker.activeItems = [keep]; }
 		};
