@@ -524,7 +524,7 @@ The owner ran the palette commands in the Extension Development Host, the shippe
 
 | action | result |
 |---|---|
-| Connect a Brick → CCC (USB and BT) | connected; the host stayed up |
+| Connect a Brick → CCC | connected; the host stayed up |
 | Show Storage on Active Brick | `4640 KB free of 6000 KB (1360 KB used)` from CCC |
 | List Projects on Active Brick | CCC's four projects |
 | Disconnect a Brick → CCC | signed out without an error |

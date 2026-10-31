@@ -177,18 +177,20 @@ export class BrickManager implements vscode.Disposable {
 		const signIn: SignIn = {
 			pending: new Set(), awaitingEvidence: new Map(), retryTimers: new Map(), backoff: new Map(),
 		};
+		const abandoned = (): ConnectionAbandonedError =>
+			new ConnectionAbandonedError(`Brick ${brickId} was disconnected while it was connecting.`);
 		this.signedIn.set(brickId, signIn);
 		try {
 			await Promise.any(candidates.map((key) => this.join(brickId, key)));
 		} catch (error) {
-			// Signed out and in again meanwhile: the newer sign-in is not this one's to end.
-			if (this.signedIn.get(brickId) === signIn) { this.forgetSignIn(brickId); }
+			// Signed out meanwhile, whatever the other channels failed with before that; a newer
+			// sign-in is not this one's to end.
+			if (this.signedIn.get(brickId) !== signIn) { throw abandoned(); }
+			this.forgetSignIn(brickId);
 			const first: unknown = error instanceof AggregateError ? error.errors[0] : error;
 			throw first instanceof Error ? first : new Error(String(first));
 		}
-		if (this.signedIn.get(brickId) !== signIn) {
-			throw new ConnectionAbandonedError(`Brick ${brickId} was disconnected while it was connecting.`);
-		}
+		if (this.signedIn.get(brickId) !== signIn) { throw abandoned(); }
 		this.setActiveBrick(brickId);
 	}
 
