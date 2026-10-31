@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.159",
+  "version": "0.2.160",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -40,6 +40,11 @@
       {
         "command": "ev3-cockpit.disconnectBrick",
         "title": "Disconnect a Brick",
+        "category": "EV3 Cockpit"
+      },
+      {
+        "command": "ev3-cockpit.forgetBrick",
+        "title": "Forget a Brick",
         "category": "EV3 Cockpit"
       }
     ],
