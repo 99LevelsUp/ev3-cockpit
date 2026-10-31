@@ -516,3 +516,22 @@ Rule written before the fix: the cause is accepted only if it shows on every rea
 - A second, separate bug found on the way: `getDeviceList()` hands out one shared `Device` per device, so any opener's `close()` closed the handle for every holder; discovery and three name probes opened bricks over each other. Every device opening now runs alone on the bus, and a device stays in use until its link has closed.
 - The earlier fix (f9eb636, close waits for transfers in flight) was argued from the first crash and was not its cause; it stays, because node-usb refuses to close a device with a request pending.
 - Lesson: a harness on another runtime does not verify the shipped one. Hardware checks of the extension run in the Extension Development Host from now on.
+
+### U9 — the commands by hand in the Extension Development Host, 30.10.2026 (psk1, after fb0ca8c)
+
+The owner ran the palette commands in the Extension Development Host, the shipped runtime, after the crash fix. Times are from the extension's log.
+
+| action | result |
+|---|---|
+| Connect a Brick → CCC (USB and BT) | connected; the host stayed up |
+| Show Storage on Active Brick | `4640 KB free of 6000 KB (1360 KB used)` from CCC |
+| List Projects on Active Brick | CCC's four projects |
+| Disconnect a Brick → CCC | signed out without an error |
+| CCC connected again, cable out, List Projects | route USB → BT 2.8 s after USB went unavailable; the listing answered over Bluetooth |
+| cable back in | route BT → USB 26 ms after USB was seen again |
+| second run: Connect a Brick → BBB | connected over USB and active at once; BT joined 13 s later in the background |
+| Connect a Brick → CCC with the cable out (paired, BT only) | failed with WSA 10060 and said so; CCC stayed in the list. The message now reads "did not answer" (b2a9a16) |
+| Disconnect a Brick → BBB | both channels closed, no route, no active brick |
+
+- R18: the rows (every brick once, D5 order, name, unconfirmed mark, each channel's state, new, signed-in tick) are tested in `brickPickRows.test.ts` and the order in `brickOrder.test.ts`; the picker around them is the run above. Not exercised by hand: pairing a new brick from the picker (the step-1 flow, unchanged) and a live-scan row appearing while the list is open.
+- R19: signing out is tested in `brickManager.test.ts` ("signing out"); the command is the run above.
