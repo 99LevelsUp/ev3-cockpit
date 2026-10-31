@@ -117,21 +117,21 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
   2. clear the brick side over a live channel when there is one (KTD2, KTD5);
   3. sign out;
   4. call `forget` on the provider of every channel whose provider supports it (KTD6);
-  5. clear the cockpit's memory (KTD7);
-  6. run one discovery scan, so a brick still in reach returns as a stranger (R4).
+  5. wait for any discovery scan already in flight on the brick's transports to settle, then clear the cockpit's memory (KTD7); a scan that read Windows' cache before the unpair would otherwise re-track the brick as paired after the memory was cleared;
+  6. clear the forgetting mark and run one discovery scan, so a brick still in reach returns as a stranger (R4).
   The call resolves with a report value; it does not show anything itself.
 - KTD2. **Two new brick commands: list the Bluetooth peers, and remove one by name.** Listing is `opCOM_GET` `FAVOUR_ITEMS` (10) for the count, then `FAVOUR_ITEM` (11) for each index from 0 to count − 1, each returning name, paired, connected and type (`c_com.c` 4585–4688). The firmware does not bounds-check the index, so the code never asks past the count. Removing is `opCOM_REMOVE` (0xD6) with hardware `BT` (2) and the peer's name (`c_com.c` 5554–5606, `c_bt.c` 3594–3656). The command builder refuses an empty or whitespace-only name: the firmware treats an empty name as a wildcard and removes the first named entry instead (`c_bt.c` 2205–2211). The mock provider answers both commands from a per-brick peer list.
 - KTD3. **This computer's Bluetooth name comes from the radio, through `bthprops` (`BluetoothFindFirstRadio` + `BluetoothGetRadioInfo`).** The brick stores a peer under the name the peer's radio reports (`c_bt.c` 3148–3314), and the firmware matches it exactly and case-sensitively. No opcode reads a peer's address, so the name is the only key. The hook lives beside `unpair` in `BtClassicDiscovery`; BlueZ's adapter `Alias` is the Linux source (U6 lists it). U7 checks on hardware that the radio name equals the name `FAVOUR_ITEM` returns.
 - KTD4. **While a brick is being forgotten, nothing may open, re-open or probe a link to it.** Every path that opens a link checks the forgetting mark, and a failure on the brick's route is not treated as a link failure:
-  - `signIn` refuses;
+  - `signIn` refuses (the forget's own opening of the removal channel, KTD5, does not go through `signIn`);
   - `reconcile` and `scheduleRejoin` add nothing;
   - `notifyBrickAvailable` is not forwarded and `probeName` does not run;
   - `send`'s failover does not drop the channel from routing, because the drop is expected.
   The Bluetooth presence check skips the brick, because it reads its targets from sessions and the provider's paired list, which change in the same forget. Step 2 found its races in exactly these paths (connect, `attemptReconnect`, `recover`, `notifyBrickAvailable`), so the unit tests drive each one during a forget.
 - KTD5. **The brick-side removal goes over the best live channel, and only USB or TCP can confirm it.** `opCOM_REMOVE` closes the RFCOMM socket of the peer it removes before any reply (`c_bt.c` 3609–3612), and its handler never sets a dispatch status (`c_com.c` 5567–5606). So:
-  - over USB or TCP, send the removal, then read the list back; confirmed if the entry is gone, failed if it is still there;
-  - over Bluetooth only, the removal is the last command on that link; a drop or timeout is the expected outcome, and the result is "sent, not confirmed".
-  A brick that is not signed in but has an available channel is signed in for the forget. Signing in is the existing path, and a failed sign-in means the brick is not reachable (R8). The removal blocks the brick's VM until BlueZ answers, so it gets the normal command timeout, and a timeout is reported, not retried.
+  - over USB or TCP, first close the brick's Bluetooth sessions explicitly, because the removal cuts that link and `SessionManager` would otherwise reconnect it to a brick that has just dropped this computer; then send the removal and read the list back; confirmed if the entry is gone, failed if it is still there;
+  - over Bluetooth only, the removal is the last command on that link; a drop or timeout is "sent, not confirmed". A normal reply with the link still up means the firmware did not run the removal (Bluetooth off or HCI busy), so read the list back over that link and report confirmed or failed as over USB.
+  A brick with no connected channel but an available one gets that one channel opened for the forget: the best available, USB before TCP before Bluetooth, opened directly through the session manager and not through `signIn`, which would join every available channel. A failed open means the brick is not reachable (R8); the channel is closed at step 3. The removal blocks the brick's VM until BlueZ answers, so it gets the normal command timeout, and a timeout is reported, not retried.
 - KTD6. **The OS unpair stays `BluetoothRemoveDevice`, and `forget` reports what it leaves behind.** `BluetoothRemoveDevice`'s "not found" result counts as already unpaired (R5); check the exact code against the Win32 documentation when implementing. `TransportProvider.forget` returns the records it could not remove (location and a one-line reason). The Windows Bluetooth provider returns the `BTHPORT` key with the brick's address and Windows' in-memory record. A BlueZ provider will return its own paths, so the brick layer and the message never know which OS they run on (R12). This changes `forget`'s return type from `void`, which has no consumers outside the provider tests yet.
 - KTD7. **Each layer that holds memory of a brick gets its own `forget`.**
   - `PresenceAggregator` deletes the brick's record. A paired flag set with `||=` can only be cleared by dropping the record.
@@ -194,7 +194,7 @@ sequenceDiagram
 - **Approach:**
   1. Add the subcodes `FAVOUR_ITEMS` and `FAVOUR_ITEM` to `COM_GET_SUB` and the opcode `COM_REMOVE` (0xD6), each cited to `bytecodes.h`.
   2. Add the two command kinds and their reply shapes to `BrickCommand` (KTD2).
-  3. Build and parse them beside `brick:setBluetooth`; the remove builder throws on an empty or whitespace name.
+  3. Build and parse them beside `brick:setBluetooth`. The remove builder throws on an empty or whitespace name and applies no other check: not `BRICK_NAME_PATTERN`, because a computer's Bluetooth name may hold spaces, dots or diacritics, and the firmware compares the bytes as stored.
   4. Give mock bricks a peer list and answer both commands, so the mock behaves like the brick for these commands, as step 2 required for `recover()`.
 - **Patterns to follow:** `buildComSetFlagCommand` and the `GET_BRICKNAME` read in `src/protocol/ev3Commands.ts`.
 - **Test scenarios:**
@@ -202,7 +202,7 @@ sequenceDiagram
   - The item command for index 1 encodes the index and the name length, and parses name, paired, connected and type.
   - The remove command encodes `opCOM_REMOVE`, hardware 2 and the name as an LCS string.
   - The remove builder throws on `''` and on `'   '`, and sends nothing.
-  - A name with characters outside ASCII round-trips the way `brick:setName` handles it.
+  - A name with a space and a diacritic (`Petrův PC`) encodes to its UTF-8 bytes and is not rejected.
   - The mock lists its peers, removes one by exact name, and leaves the list unchanged for a name that differs only in case.
 - **Verification:** the protocol tests fail without the new builders, and removing the empty-name guard makes its test fail.
 
@@ -245,12 +245,13 @@ sequenceDiagram
   - `src/__tests__/presenceAggregator.test.ts`
   - `src/__tests__/discoveryScheduler.test.ts`
   - `src/__tests__/btPresence.test.ts`
-- **Approach:** add a `forget` to each layer (KTD7). The aggregator deletes the record and fires a list change. The scheduler deletes the tracked keys without firing presence events, because the brick layer is already forgetting the brick. Presence drops the address from both maps.
+- **Approach:** add a `forget` to each layer (KTD7). The aggregator deletes the record and fires a list change. The scheduler deletes the tracked keys without firing presence events, because the brick layer is already forgetting the brick, and gains a way to await the scans in flight (KTD1 step 5). Presence drops the address from both maps.
 - **Test scenarios:**
   - The aggregator forgets a remembered, paired brick: `getBrick` returns undefined and the list change fires once.
   - The next scan that lists the same USB key brings the brick back unpaired and not remembered.
   - The scheduler, after forgetting a BT key, does not return it from `getTrackedBricks`, and a later scan that lists it fires a first-discovery event.
   - Presence, after forgetting an address, returns undefined from `presenceOf` and omits it from `unpairedBricks`.
+  - Awaiting in-flight scans resolves only after a slow provider's `discover` finishes, and at once when none is running.
 - **Verification:** each test fails when its layer's `forget` is a no-op.
 
 ### U4. `BrickManager.forget`
@@ -266,9 +267,10 @@ sequenceDiagram
 - **Approach:**
   1. Add the forgetting mark and the guards KTD4 lists.
   2. Run the brick side as KTD5 describes, using the radio-name hook from U2. No name, no list, or no exact match skips the removal and records why.
-  3. Sign out, call each provider's `forget`, then call U3's layer `forget`s and drop the brick layer's own sets (KTD7).
-  4. Run one `scanOnce` and clear the mark.
-  5. Return a report with one outcome per part plus the providers' residue lists (KTD6).
+  3. Sign out and call each provider's `forget`.
+  4. Await the scans in flight (U3), then call U3's layer `forget`s and drop the brick layer's own sets (KTD7).
+  5. Clear the mark and run one `scanOnce`.
+  6. Return a report with one outcome per part plus the providers' residue lists (KTD6).
   An error in one part is recorded in the report and the remaining parts still run. A brick that is half-forgotten and says so is better than one whose Windows pairing survives because the brick side timed out.
 - **Execution note:** write the integration test first, on the real aggregator, scheduler and brick layer with a fake Bluetooth provider and a mock brick, the way `connectBrick.test.ts` builds its world.
 - **Patterns to follow:** `signOut` and `forgetSignIn` in `src/runtime/brickManager.ts`. The test world comes from `src/__tests__/connectBrick.test.ts`.
@@ -278,7 +280,11 @@ sequenceDiagram
   - Covers R8. A brick whose list holds only other names: no removal is sent, and the report lists the names it holds.
   - Covers R8. A brick with no available channel: nothing is sent to it, and the Windows unpair and memory clearing still run.
   - The radio name is unknown: no removal is sent, and the report says why.
-  - Covers R3. During a forget, a presence event for the brick's channel does not reach `notifyBrickAvailable` and does not start a name probe, and a `signIn` call is refused.
+  - Covers R3. During a forget, a presence event for the brick's channel does not reach `notifyBrickAvailable` and does not start a name probe, and a `signIn` call from outside the forget is refused.
+  - Covers R7. A brick with no session but available over USB and Bluetooth: the forget opens only the USB channel, removes and confirms over it, and no Bluetooth connect reaches the provider.
+  - Covers R3. A brick signed in over USB and Bluetooth: the Bluetooth session is closed before the removal, and when the mock's removal drops the Bluetooth link no reconnect attempt reaches the provider.
+  - Covers R9. A brick reachable only over Bluetooth whose removal gets a normal reply and keeps the entry: the list is read back over that link and the report says failed.
+  - Covers R4. A Bluetooth `discover` that started before the unpair resolves after `forget` was called, still listing the brick as remembered: the brick does not come back as paired.
   - Covers R3. A session state change to disconnected during the forget does not start a rejoin.
   - Covers R4. After forget, a real `scanOnce` whose BT provider no longer lists the brick leaves it out of the list. One whose USB provider still lists it shows it as unpaired and not remembered.
   - Covers R5. The provider refuses the unpair: the report carries Windows' reason, and the memory is still cleared.
@@ -296,7 +302,7 @@ sequenceDiagram
   - `package.json`
   - `src/__tests__/forgetBrick.test.ts`
 - **Approach:**
-  1. Choose the candidates: bricks in the list that are paired or remembered, in D5 order, as rows like `brickPickRows`.
+  1. Choose the candidates: bricks in the list whose entry has `paired` or `remembered` set (today both come from Windows' paired-device list; persisted memory joins in Phase 6), in D5 order, as rows like `brickPickRows`.
   2. Confirm with a modal warning that names the brick and has one "Forget" action (R2).
   3. Call `BrickManager.forget` under a progress notification.
   4. Build the message and the details text from the report in pure functions (KTD8).
