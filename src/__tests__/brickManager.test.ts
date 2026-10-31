@@ -54,6 +54,9 @@ interface FakeChannel {
 	mostConnecting: number;
 	/** Whether the provider holds an open link. */
 	open: boolean;
+	/** Links opened and not closed. Like a real provider it holds one per channel, so a connect
+	 * over an open link leaves the old one open with nobody to close it. */
+	openLinks: number;
 }
 
 /** An `info` reply packet, as the brick sends it: the name in the first 16 bytes of 72. */
@@ -78,7 +81,7 @@ function fakeChannel(
 ): FakeChannel {
 	const channel: FakeChannel = {
 		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [], name: 'CCC', probes: 0,
-		connectHolds: [], connecting: 0, mostConnecting: 0, open: false,
+		connectHolds: [], connecting: 0, mostConnecting: 0, open: false, openLinks: 0,
 		provider: undefined as unknown as TransportProvider,
 	};
 	const execute = async (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
@@ -125,9 +128,13 @@ function fakeChannel(
 				channel.connecting -= 1;
 			}
 			channel.open = true;
+			channel.openLinks += 1;
 			return { brickKey, transport };
 		},
-		async disconnect(): Promise<void> { channel.open = false; },
+		async disconnect(): Promise<void> {
+			if (channel.open) { channel.openLinks -= 1; }
+			channel.open = false;
+		},
 		async sendPacket(): Promise<Uint8Array> { throw new Error('not used: commands go through the channel below'); },
 		createCommandChannel: () => ({ execute }),
 		...(probes ? {
@@ -582,6 +589,34 @@ describe('BrickManager — signing out', () => {
 		assert.equal(w.bt.connects, 1, 'a connect nobody wanted any more reached the brick');
 		assert.equal(w.sessionManager.getSession(btKey), undefined);
 		assert.equal(w.bricks.isSignedIn(CCC), false);
+		w.done();
+	});
+
+	it('signs in again while an automatic Bluetooth reconnect still waits, and leaves one link open', async () => {
+		// The reconnect after a lost link is the session manager's own, not a join; it too can
+		// wait in the connection queue when the user signs out and in again.
+		const w = world();
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		const held = gate();
+		w.bt.connectHolds.push(held.promise);
+		(w.sessionManager as unknown as { handleHeartbeatFailure(key: BrickKey, error: Error): void })
+			.handleHeartbeatFailure(btKey, new Error('link went away'));
+		await waitFor(() => w.bt.connecting === 1, 1000);
+
+		await w.bricks.signOut(CCC);
+		w.bt.seen[0] = { ...w.bt.seen[0], paired: true, heard: true, heardAt: Date.now() };
+		await w.scheduler.scanOnce();   // the brick answers a presence check: available again
+		const second = w.bricks.signIn(CCC);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		held.open();
+		await second;
+
+		assert.equal(w.bt.mostConnecting, 1, 'two connects were inside the provider at once on one channel');
+		assert.equal(w.bt.openLinks, 1, 'a link was left open with nobody to close it');
+		assert.equal(w.sessionManager.getSession(btKey)?.connectionState, ConnectionState.Connected);
+		assert.equal(w.bricks.routeOf(CCC), btKey);
 		w.done();
 	});
 

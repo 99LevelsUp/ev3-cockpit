@@ -1095,16 +1095,15 @@ describe('SessionManager -- reconnect and disconnect precedence', () => {
 	});
 });
 
-describe('SessionManager -- abandoned connect must not touch a newer session', () => {
-	// The abandoned first connect either opens its link late or fails late; neither may end
-	// the newer session that holds the key by then.
+describe('SessionManager -- one link opening per channel at a time', () => {
+	// The abandoned first connect either opens its link late or fails late. Providers key links
+	// by brickKey alone, so the newer connect must not reach the provider until the first is
+	// done: overlapping, one closed or overwrote the other's link, and a link was left open
+	// with nobody to close it.
 	for (const firstConnect of ['opens', 'fails'] as const) {
-		it(`leaves a newer connection for the same brick alone when the first ${firstConnect}`, async () => {
-			// Regression on the round-3 fix. Abandoning a slow connect closed the provider
-			// connection by brickKey alone. Providers key sessions by brickKey and nothing
-			// else, so once a second connect for the same brick had succeeded, that cleanup
-			// closed the live socket while SessionManager still reported the brick connected.
-			let open = false;
+		it(`starts a newer connect for the same brick only once the abandoned first ${firstConnect}`, async () => {
+			const events: string[] = [];
+			let open = 0;
 			let connectCalls = 0;
 			let releaseFirst: (() => void) | undefined;
 
@@ -1115,22 +1114,30 @@ describe('SessionManager -- abandoned connect must not touch a newer session', (
 				discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
 				connect: (brickKey) => {
 					connectCalls += 1;
-					if (connectCalls === 1) {
+					const call = connectCalls;
+					events.push(`connect ${call}`);
+					if (call === 1) {
 						return new Promise((resolve, reject) => {
 							releaseFirst = () => {
 								if (firstConnect === 'fails') {
+									events.push('link 1 failed');
 									reject(new Error('the first link never came up'));
 									return;
 								}
-								open = true;
+								open += 1;
+								events.push('link 1 open');
 								resolve({ brickKey, transport: Transport.Mock });
 							};
 						});
 					}
-					open = true;
+					open += 1;
+					events.push(`link ${call} open`);
 					return Promise.resolve({ brickKey, transport: Transport.Mock });
 				},
-				disconnect: () => { open = false; return Promise.resolve(); },
+				disconnect: () => {
+					if (open > 0) { open -= 1; events.push('link closed'); }
+					return Promise.resolve();
+				},
 				sendPacket: () => Promise.resolve(new Uint8Array(0)),
 				createCommandChannel: () => ({
 					execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
@@ -1148,19 +1155,61 @@ describe('SessionManager -- abandoned connect must not touch a newer session', (
 			await waitFor(() => releaseFirst !== undefined, 2000);
 
 			await manager.disconnect(key);
-			await manager.connect(key, Transport.Mock);
-			assert.equal(open, true, 'second connect should be open');
+			const second = manager.connect(key, Transport.Mock);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.equal(connectCalls, 1, 'the newer connect reached the provider beside the first');
 
 			// The abandoned first connect now completes, and says it did not connect: a caller
 			// that saw it return would take the brick as connected over a session not its own.
 			releaseFirst!();
 			await assert.rejects(first, firstConnect === 'opens' ? ConnectionAbandonedError : /never came up/);
+			await second;
 
-			assert.equal(open, true, 'the newer connection was closed by the abandoned one');
+			assert.deepEqual(events, firstConnect === 'opens'
+				? ['connect 1', 'link 1 open', 'link closed', 'connect 2', 'link 2 open']
+				: ['connect 1', 'link 1 failed', 'connect 2', 'link 2 open']);
+			assert.equal(open, 1, 'a link was left open with nobody to close it');
 			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected,
 				'the abandoned connect ended the newer session');
 
 			manager.dispose();
 		});
 	}
+
+	it('does not open a link for a connect disconnected while it waited its turn', async () => {
+		let connectCalls = 0;
+		let releaseFirst: (() => void) | undefined;
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+			connect: (brickKey) => {
+				connectCalls += 1;
+				return connectCalls === 1
+					? new Promise((resolve) => { releaseFirst = () => resolve({ brickKey, transport: Transport.Mock }); })
+					: Promise.resolve({ brickKey, transport: Transport.Mock });
+			},
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
+			dispose: () => { /* nothing to release */ },
+		};
+		const reg = new ProviderRegistry();
+		reg.register(provider);
+		const manager = new SessionManager({ providerRegistry: reg });
+		const key = makeBrickKey(Transport.Mock, 'contested');
+
+		const first = manager.connect(key, Transport.Mock);
+		await waitFor(() => releaseFirst !== undefined, 2000);
+		await manager.disconnect(key);
+		const second = manager.connect(key, Transport.Mock);
+		await manager.disconnect(key);
+		releaseFirst!();
+		await assert.rejects(first, ConnectionAbandonedError);
+		await assert.rejects(second, ConnectionAbandonedError);
+
+		assert.equal(connectCalls, 1, 'a connect nobody wanted any more reached the brick');
+		assert.equal(manager.getSession(key), undefined);
+		manager.dispose();
+	});
 });
