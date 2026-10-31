@@ -14,6 +14,7 @@ export const ErrorCode = {
 	NoProvider: 'no_provider',
 	InvalidTransition: 'invalid_transition',
 	ChannelChanged: 'channel_changed',
+	ConnectionAbandoned: 'connection_abandoned',
 	QueueUnavailable: 'queue_unavailable',
 	// API
 	ConsumerFailed: 'consumer_failed',
@@ -135,6 +136,19 @@ export class ChannelChangedError extends SessionError {
 	constructor(message: string, cause?: unknown) {
 		super(message, cause, ErrorCode.ChannelChanged);
 		this.name = 'ChannelChangedError';
+	}
+}
+
+/**
+ * A connect gave up because the brick was disconnected while it was still opening.
+ *
+ * Not a fault of the link: the user asked for the brick to be closed. It is an error rather
+ * than a quiet return so that nobody waiting on the connect takes it for one that succeeded.
+ */
+export class ConnectionAbandonedError extends SessionError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, ErrorCode.ConnectionAbandoned);
+		this.name = 'ConnectionAbandonedError';
 	}
 }
 

@@ -15,7 +15,7 @@ import {
 	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyTransport, describeChannel,
 } from '../contracts';
 import {
-	ChannelChangedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
+	ChannelChangedError, ConnectionAbandonedError, ConnectionError, NotConnectedError, TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { PinnedLink } from '../fs/fileTransferService';
 import { PacketCommandChannel } from '../commands/commandChannel';
@@ -89,6 +89,8 @@ export class BrickManager implements vscode.Disposable {
 	private readonly rejoinMaxMs: number;
 
 	private readonly signedIn = new Map<BrickId, SignIn>();
+	/** Connects inside the session manager, by channel, whichever sign-in started them; never reject. */
+	private readonly connecting = new Map<BrickKey, Promise<void>>();
 	/** Channels taken out of routing by a link failure, until they answer again. */
 	private readonly dropped = new Set<BrickKey>();
 	private readonly routes = new Map<BrickId, BrickKey>();
@@ -172,15 +174,20 @@ export class BrickManager implements vscode.Disposable {
 			throw new NotConnectedError(`Brick ${brickId} is not available on any channel.`);
 		}
 
-		this.signedIn.set(brickId, {
+		const signIn: SignIn = {
 			pending: new Set(), awaitingEvidence: new Map(), retryTimers: new Map(), backoff: new Map(),
-		});
+		};
+		this.signedIn.set(brickId, signIn);
 		try {
 			await Promise.any(candidates.map((key) => this.join(brickId, key)));
 		} catch (error) {
-			this.forgetSignIn(brickId);
+			// Signed out and in again meanwhile: the newer sign-in is not this one's to end.
+			if (this.signedIn.get(brickId) === signIn) { this.forgetSignIn(brickId); }
 			const first: unknown = error instanceof AggregateError ? error.errors[0] : error;
 			throw first instanceof Error ? first : new Error(String(first));
+		}
+		if (this.signedIn.get(brickId) !== signIn) {
+			throw new ConnectionAbandonedError(`Brick ${brickId} was disconnected while it was connecting.`);
 		}
 		this.setActiveBrick(brickId);
 	}
@@ -385,20 +392,38 @@ export class BrickManager implements vscode.Disposable {
 		const transport = this.transportOf(key);
 		signIn.pending.add(key);
 		try {
+			// A connect from an earlier sign-in can still be inside the provider: a Bluetooth one
+			// waits seconds in the connection queue. Providers hold one link per channel, so two
+			// at once would each close or overwrite the other's; this one waits its turn.
+			const earlier = this.connecting.get(key);
+			if (earlier) { await earlier; }
+			if (this.signedIn.get(brickId) !== signIn) {
+				throw new ConnectionAbandonedError(`${describeChannel(key)} was disconnected while it was connecting.`);
+			}
 			const name = this.aggregator.getBrick(brickId)?.name.value;
-			await this.sessionManager.connect(key, transport, name);
+			const connecting = this.sessionManager.connect(key, transport, name);
+			const settled = connecting.then(() => undefined, () => undefined);
+			this.connecting.set(key, settled);
+			try {
+				await connecting;
+			} finally {
+				if (this.connecting.get(key) === settled) { this.connecting.delete(key); }
+			}
 			signIn.backoff.delete(key);
 			void this.readNameOverSession(key);
-			// Signed out while this join was in flight: the user asked for nothing to stay open.
-			if (this.signedIn.get(brickId) !== signIn) {
+			// Signed out once the connect was through: the user asked for nothing to stay open.
+			// A newer sign-in keeps the channel; it is the one it would have opened.
+			if (!this.signedIn.has(brickId)) {
 				await this.sessionManager.disconnect(key);
 			}
 		} catch (error) {
+			// Nothing to say or retry for a join its sign-in no longer wants.
+			if (error instanceof ConnectionAbandonedError || this.signedIn.get(brickId) !== signIn) { throw error; }
 			// Said, because a channel that will not join is otherwise invisible: the brick works
 			// over its other channels and nothing explains why this one stays unused.
 			this.log?.warn(`Joining ${channelLabel(this.aggregator, key)} failed: `
 				+ `${error instanceof Error ? error.message : String(error)}`);
-			if (this.signedIn.get(brickId) === signIn) { this.scheduleRejoin(brickId, signIn, key, transport); }
+			this.scheduleRejoin(brickId, signIn, key, transport);
 			throw error;
 		} finally {
 			signIn.pending.delete(key);

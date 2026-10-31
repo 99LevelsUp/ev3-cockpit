@@ -18,7 +18,7 @@ import { HeartbeatMonitor } from './heartbeatMonitor';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import {
-	AlreadyConnectedError, NotConnectedError, NoProviderError, ProtocolError,
+	AlreadyConnectedError, ConnectionAbandonedError, NotConnectedError, NoProviderError, ProtocolError,
 } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { TransportGuard } from '../transports/transportGuard';
@@ -128,10 +128,12 @@ export class SessionManager implements vscode.Disposable {
 			// the disconnect it forwarded was a no-op. Proceeding here would leave the
 			// connection the provider just opened with nobody tracking it -- and the
 			// Disconnected -> Connected transition below would throw anyway. The user
-			// asked to disconnect, so abandoning the connect attempt is the answer.
+			// asked to disconnect, so abandoning the connect attempt is the answer -- and
+			// saying so, because a caller that saw it return would take the brick as connected.
 			if (this.sessions.get(brickKey) !== resources || entry.explicitlyDisconnected) {
 				await this.releaseUnownedConnection(brickKey, provider);
-				return;
+				throw new ConnectionAbandonedError(
+					`${describeChannel(brickKey)} was disconnected while it was connecting.`);
 			}
 
 			entry.setHandle(handle);
@@ -142,10 +144,16 @@ export class SessionManager implements vscode.Disposable {
 			heartbeat.start();
 			reconnect.reset();
 		} catch (error) {
-			entry.setError(error instanceof Error ? error.message : String(error));
-			entry.transition(ConnectionState.Disconnected);
-			this.sessions.delete(brickKey);
-			this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Disconnected);
+			// The disconnect that abandoned this attempt ends the session itself.
+			if (error instanceof ConnectionAbandonedError) { throw error; }
+			// So does one that ran while the provider failed, and the key may belong to a
+			// newer connect by now.
+			if (this.sessions.get(brickKey) === resources) {
+				entry.setError(error instanceof Error ? error.message : String(error));
+				entry.transition(ConnectionState.Disconnected);
+				this.sessions.delete(brickKey);
+				this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Disconnected);
+			}
 			throw error;
 		}
 	}
