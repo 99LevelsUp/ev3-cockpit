@@ -521,6 +521,40 @@ describe('BrickManager — a presence answer is evidence', () => {
 	});
 });
 
+describe('BrickManager — forgetting (step-3 plan, KTD5)', () => {
+	it('reads and changes the brick\'s list over Wi-Fi rather than Bluetooth, although Bluetooth carries its traffic', async () => {
+		// Provider priorities put Bluetooth (20) above TCP (10); only TCP can read the list
+		// back after the removal, because the removal cuts the Bluetooth link.
+		const tcpKey = makeBrickKey(Transport.TCP, '001653f00c0c');
+		const tcp = fakeChannel(Transport.TCP, 10);
+		const bt = fakeChannel(Transport.BT, 20, { rejoinOnEvidenceOnly: true });
+		tcp.seen.push(item(tcpKey, Transport.TCP));
+		bt.seen.push(item(btKey, Transport.BT));
+		const registry = new ProviderRegistry();
+		registry.register(tcp.provider);
+		registry.register(bt.provider);
+		const scheduler = new DiscoveryScheduler(registry);
+		const aggregator = new PresenceAggregator(scheduler, registry);
+		const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
+		const bricks = new BrickManager({
+			sessionManager, aggregator, providerRegistry: registry, radioName: () => 'Petrův PC',
+		});
+		await scheduler.scanOnce();
+		await bricks.signIn(CCC);
+		await waitFor(() => sessionManager.getSession(tcpKey)?.connectionState === ConnectionState.Connected
+			&& sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		assert.equal(bricks.routeOf(CCC), btKey);
+
+		const report = await bricks.forget(CCC);
+
+		assert.ok(tcp.sent.includes('brick:bluetoothPeerCount'), 'the list was not read over TCP');
+		assert.ok(!bt.sent.includes('brick:bluetoothPeerCount'), 'the list was read over Bluetooth');
+		// Built without discovery, which still tracks the channels the list is rebuilt from.
+		assert.equal(report.memory.status, 'failed');
+		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
+	});
+});
+
 describe('BrickManager — signing out', () => {
 	it('closes every channel and does not join one that appears afterwards', async () => {
 		const w = world();
