@@ -123,25 +123,26 @@ export class SessionManager implements vscode.Disposable {
 		this.sessions.set(brickKey, resources);
 
 		try {
-			const handle = await this.openLink(brickKey, provider,
+			const opened = await this.openLink(brickKey, provider,
 				() => this.sessions.get(brickKey) === resources && !entry.explicitlyDisconnected,
-				() => provider.connect(brickKey));
+				() => provider.connect(brickKey),
+				(handle) => {
+					entry.setHandle(handle);
+					entry.transition(ConnectionState.Connected);
+					this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Connected);
+
+					this.wireExecutor(resources, provider);
+					heartbeat.start();
+					reconnect.reset();
+				});
 
 			// disconnect() ran while this attempt waited or connected. The user asked to
 			// disconnect, so abandoning the attempt is the answer -- and saying so, because a
 			// caller that saw it return would take the brick as connected.
-			if (!handle) {
+			if (!opened) {
 				throw new ConnectionAbandonedError(
 					`${describeChannel(brickKey)} was disconnected while it was connecting.`);
 			}
-
-			entry.setHandle(handle);
-			entry.transition(ConnectionState.Connected);
-			this.fireStateChange(brickKey, ConnectionState.Connecting, ConnectionState.Connected);
-
-			this.wireExecutor(resources, provider);
-			heartbeat.start();
-			reconnect.reset();
 		} catch (error) {
 			// The disconnect that abandoned this attempt ends the session itself.
 			if (error instanceof ConnectionAbandonedError) { throw error; }
@@ -489,8 +490,10 @@ export class SessionManager implements vscode.Disposable {
 
 		try {
 			// disconnect() may run while this attempt waits or reopens: it deletes the session,
-			// but `resources` is a captured reference that stays alive.
-			const handle = await this.openLink(brickKey, provider,
+			// but `resources` is a captured reference that stays alive. So may another attempt,
+			// started when discovery saw the brick again: it waits for this one, then finds the
+			// session connected and leaves it be.
+			await this.openLink(brickKey, provider,
 				() => this.sessions.get(brickKey) === resources && !resources.entry.explicitlyDisconnected
 					&& resources.entry.connectionState === ConnectionState.Reconnecting,
 				async () => {
@@ -507,19 +510,19 @@ export class SessionManager implements vscode.Disposable {
 						await provider.disconnect(brickKey).catch(() => { /* may already be gone */ });
 					}
 					return provider.recover ? provider.recover(brickKey) : provider.connect(brickKey);
+				},
+				(handle) => {
+					resources.entry.setHandle(handle);
+					resources.entry.transition(ConnectionState.Connected);
+					resources.reconnect.reset();
+					// The failures that degraded this channel belonged to the link that died. Without
+					// this a cable that comes back after three failed sends stays refused for good.
+					this.transportGuard.resetHealth(brickKey);
+					this.fireStateChange(brickKey, ConnectionState.Reconnecting, ConnectionState.Connected);
+
+					this.wireExecutor(resources, provider);
+					resources.heartbeat.start();
 				});
-			if (!handle) { return; }
-
-			resources.entry.setHandle(handle);
-			resources.entry.transition(ConnectionState.Connected);
-			resources.reconnect.reset();
-			// The failures that degraded this channel belonged to the link that died. Without
-			// this a cable that comes back after three failed sends stays refused for good.
-			this.transportGuard.resetHealth(brickKey);
-			this.fireStateChange(brickKey, ConnectionState.Reconnecting, ConnectionState.Connected);
-
-			this.wireExecutor(resources, provider);
-			resources.heartbeat.start();
 		} catch (error) {
 			// Record why. A bare catch here hid the defect above for as long as it existed:
 			// every attempt failed with the same message and left no trace anywhere, so a
@@ -543,23 +546,32 @@ export class SessionManager implements vscode.Disposable {
 	 * longer wanted once its link is open closes it before the next opening starts, so that
 	 * one finds the channel free and the brick's close recorded.
 	 *
-	 * @returns The new link's handle, or undefined when the session was ended meanwhile.
+	 * `install` puts the link into the session before the next opening may look: a second
+	 * reconnect that woke between the two took the session for still reconnecting, and closed
+	 * the link the first had just opened.
+	 *
+	 * @returns Whether the link was opened and installed; false when the session was ended
+	 *   meanwhile, or no longer needed one.
 	 */
 	private async openLink(
 		brickKey: BrickKey,
 		provider: TransportProvider,
 		wanted: () => boolean,
 		open: () => Promise<SessionHandle>,
-	): Promise<SessionHandle | undefined> {
+		install: (handle: SessionHandle) => void,
+	): Promise<boolean> {
 		for (let earlier = this.opening.get(brickKey); earlier; earlier = this.opening.get(brickKey)) {
 			await earlier;
 		}
-		if (!wanted()) { return undefined; }
+		if (!wanted()) { return false; }
 		const opened = (async () => {
 			const handle = await open();
-			if (wanted()) { return handle; }
+			if (wanted()) {
+				install(handle);
+				return true;
+			}
 			try { await provider.disconnect(brickKey); } catch { /* best effort */ }
-			return undefined;
+			return false;
 		})();
 		const settled = opened.then(() => undefined, () => undefined);
 		this.opening.set(brickKey, settled);

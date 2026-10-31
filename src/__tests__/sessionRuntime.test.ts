@@ -22,7 +22,7 @@ import { ConnectionAbandonedError, ProtocolError } from '../errors/CockpitError'
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { TransportGuard } from '../transports/transportGuard';
-import { TransportProvider } from '../contracts/transport';
+import { SessionHandle, TransportProvider } from '../contracts/transport';
 import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
@@ -1175,6 +1175,54 @@ describe('SessionManager -- one link opening per channel at a time', () => {
 			manager.dispose();
 		});
 	}
+
+	it('lets a reconnect the brick\'s return asked for find the one already in flight done', async () => {
+		// Discovery seeing the brick again starts an attempt at once, even while the backoff's
+		// own attempt is still inside the provider. The second waited its turn, but woke before
+		// the first had recorded its link, took the session for still reconnecting, and closed
+		// that link to open its own -- which it then closed as unwanted.
+		let open = 0;
+		let connectCalls = 0;
+		let releaseReconnect: (() => void) | undefined;
+		const provider: TransportProvider = {
+			transport: Transport.Mock,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+			connect: (brickKey) => {
+				connectCalls += 1;
+				const opened = (): SessionHandle => { open += 1; return { brickKey, transport: Transport.Mock }; };
+				return connectCalls === 2
+					? new Promise((resolve) => { releaseReconnect = () => resolve(opened()); })
+					: Promise.resolve(opened());
+			},
+			disconnect: () => { if (open > 0) { open -= 1; } return Promise.resolve(); },
+			sendPacket: () => Promise.resolve(new Uint8Array(0)),
+			createCommandChannel: () => ({
+				execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+			}),
+			dispose: () => { /* nothing to release */ },
+		};
+		const reg = new ProviderRegistry();
+		reg.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: reg, heartbeatIntervalMs: 60_000, reconnectBaseMs: 10, reconnectMaxMs: 20,
+		});
+		const key = makeBrickKey(Transport.Mock, 'returning');
+		await manager.connect(key, Transport.Mock);
+
+		manager['handleHeartbeatFailure'](key, new Error('link went away'));
+		await waitFor(() => releaseReconnect !== undefined, 2000);
+		manager.notifyBrickAvailable(key);
+		releaseReconnect!();
+		await waitFor(() => manager.getSession(key)?.connectionState === ConnectionState.Connected, 2000);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		assert.equal(connectCalls, 2, 'the brick was asked for a link the session already had');
+		assert.equal(open, 1, 'the session reports connected over a link that was closed');
+		assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected);
+		manager.dispose();
+	});
 
 	it('does not open a link for a connect disconnected while it waited its turn', async () => {
 		let connectCalls = 0;
