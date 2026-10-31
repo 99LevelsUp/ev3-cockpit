@@ -4,7 +4,7 @@ import { BtPairingEvent } from './transports/btPairingHelper';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel, transportLabel } from './runtime/brickLabels';
-import { BrickUnreachableError, TimeoutError } from './errors/CockpitError';
+import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from './errors/CockpitError';
 import { BrickEntry, BrickId, ChannelState, Transport, brickKeyId } from './contracts';
 import { compareBricks } from './ui/brickOrder';
 
@@ -201,6 +201,11 @@ export function activate(context: vscode.ExtensionContext): void {
 					void vscode.window.showInformationMessage(`EVƎ Cockpit: connected to ${label}.`);
 				} catch (error) {
 					const err = error instanceof Error ? error : new Error(String(error));
+					// The user disconnected it before it was through; nothing failed.
+					if (err instanceof ConnectionAbandonedError) {
+						logger.info(`Connecting to ${brickLabel(aggregator, picked)} stopped: it was disconnected meanwhile`);
+						return;
+					}
 					logger.error(`Connecting to ${brickLabel(aggregator, picked)} failed:`, err);
 					// The cause of a brick that did not answer is the Winsock code, which says
 					// nothing to the person holding the brick; it stays in the log.

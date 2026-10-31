@@ -47,6 +47,13 @@ interface FakeChannel {
 	probes: number;
 	/** When set, opening a probe fails with this. */
 	probeFailure?: string;
+	/** Each connect takes the next of these and waits for it: a connect held in the provider. */
+	readonly connectHolds: Promise<void>[];
+	/** Connects inside the provider now, and the most there have been at once. */
+	connecting: number;
+	mostConnecting: number;
+	/** Whether the provider holds an open link. */
+	open: boolean;
 }
 
 /** An `info` reply packet, as the brick sends it: the name in the first 16 bytes of 72. */
@@ -71,6 +78,7 @@ function fakeChannel(
 ): FakeChannel {
 	const channel: FakeChannel = {
 		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [], name: 'CCC', probes: 0,
+		connectHolds: [], connecting: 0, mostConnecting: 0, open: false,
 		provider: undefined as unknown as TransportProvider,
 	};
 	const execute = async (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
@@ -104,13 +112,22 @@ function fakeChannel(
 		async discover(): Promise<DiscoveryScanResult> { return { transport, items: [...channel.seen] }; },
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			channel.connects += 1;
-			if (channel.connectFailures > 0) {
-				channel.connectFailures -= 1;
-				throw new TransportError(`${transport} connect failed`);
+			channel.connecting += 1;
+			channel.mostConnecting = Math.max(channel.mostConnecting, channel.connecting);
+			try {
+				const hold = channel.connectHolds.shift();
+				if (hold) { await hold; }
+				if (channel.connectFailures > 0) {
+					channel.connectFailures -= 1;
+					throw new TransportError(`${transport} connect failed`);
+				}
+			} finally {
+				channel.connecting -= 1;
 			}
+			channel.open = true;
 			return { brickKey, transport };
 		},
-		async disconnect(): Promise<void> { /* nothing to close */ },
+		async disconnect(): Promise<void> { channel.open = false; },
 		async sendPacket(): Promise<Uint8Array> { throw new Error('not used: commands go through the channel below'); },
 		createCommandChannel: () => ({ execute }),
 		...(probes ? {
@@ -512,6 +529,59 @@ describe('BrickManager — signing out', () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		assert.equal(w.usb.connects, 0);
 		assert.equal(w.bricks.routeOf(CCC), undefined);
+		w.done();
+	});
+
+	// A Bluetooth join waits seconds in the connection queue, which is long enough to sign the
+	// brick out and in again. The first join used to come back as if it had connected, find
+	// its sign-in gone and close the channel — the one the second sign-in had just opened.
+	for (const firstJoin of ['connects', 'fails'] as const) {
+		it(`signs in again while the first Bluetooth join still waits, and it ${firstJoin}`, async () => {
+			const w = world();
+			w.show.bt();
+			await w.scheduler.scanOnce();
+			const held = gate();
+			w.bt.connectHolds.push(held.promise);
+
+			const first = w.bricks.signIn(CCC);
+			await waitFor(() => w.bt.connecting === 1, 1000);
+			await w.bricks.signOut(CCC);
+			const second = w.bricks.signIn(CCC);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			if (firstJoin === 'fails') { w.bt.connectFailures = 1; }
+			held.open();
+			await assert.rejects(first);
+			await second;
+
+			assert.equal(w.bt.mostConnecting, 1, 'two connects were inside the provider at once on one channel');
+			assert.equal(w.sessionManager.getSession(btKey)?.connectionState, ConnectionState.Connected);
+			assert.equal(w.bt.open, true, 'the provider closed the link the second sign-in opened');
+			assert.equal(w.bricks.routeOf(CCC), btKey);
+			assert.equal(w.bricks.getActiveBrickId(), CCC);
+			w.done();
+		});
+	}
+
+	it('does not page the brick for a sign-in that was signed out while it waited its turn', async () => {
+		const w = world();
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		const held = gate();
+		w.bt.connectHolds.push(held.promise);
+
+		const first = w.bricks.signIn(CCC);
+		await waitFor(() => w.bt.connecting === 1, 1000);
+		await w.bricks.signOut(CCC);
+		const second = w.bricks.signIn(CCC);
+		await w.bricks.signOut(CCC);
+		held.open();
+		await assert.rejects(first);
+		await assert.rejects(second);
+
+		assert.equal(w.bt.connects, 1, 'a connect nobody wanted any more reached the brick');
+		assert.equal(w.sessionManager.getSession(btKey), undefined);
+		assert.equal(w.bricks.isSignedIn(CCC), false);
 		w.done();
 	});
 });
