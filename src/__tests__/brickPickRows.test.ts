@@ -1,6 +1,6 @@
 /**
  * The "Connect a Brick" picker's rows (step-2 plan, R18): every brick once, in D5 order, with
- * its name and each channel's state. The QuickPick around them is checked by hand (U10).
+ * its name and each channel's state. The picker around them is in `connectBrick.test.ts`.
  */
 
 import assert from 'assert/strict';

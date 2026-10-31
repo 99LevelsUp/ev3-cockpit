@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
 import { DisposableStore } from './events';
-import { BtPairingEvent } from './transports/btPairingHelper';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { createRuntime } from './runtime/createRuntime';
-import { brickLabel, transportLabel } from './runtime/brickLabels';
-import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from './errors/CockpitError';
-import { BrickId, Transport, brickKeyId } from './contracts';
-import { brickPickRows, describeChannels } from './ui/brickPickRows';
+import { brickLabel } from './runtime/brickLabels';
+import { BrickId } from './contracts';
+import { BrickPickRow, describeChannels } from './ui/brickPickRows';
+import { connectPickedBrick, pickBrick } from './ui/connectBrick';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -96,103 +95,26 @@ export function activate(context: vscode.ExtensionContext): void {
 	// on (KD1). Pairing is not something a user should have to think about, let alone do first
 	// in Windows: a brick only an inquiry has heard is paired first, then connected.
 	services.add(vscode.commands.registerCommand('ev3-cockpit.connectBrick', async () => {
-		interface BrickItem extends vscode.QuickPickItem { brickId: BrickId }
-
-		const picker = vscode.window.createQuickPick<BrickItem>();
+		const picker = vscode.window.createQuickPick<BrickPickRow>();
 		picker.title = 'EVƎ Cockpit: connect a brick';
 		picker.placeholder = 'Pick a brick';
 		// The list changes while someone is choosing from it; the highlight has to stay on the
 		// brick they arrowed to, not on whatever row it used to be.
 		picker.keepScrollPosition = true;
 
-		const render = (): void => {
-			const focused = picker.activeItems[0]?.brickId;
-			picker.items = brickPickRows(aggregator.getDiscoveryList(), (brickId) => bricks.isSignedIn(brickId));
-			const keep = picker.items.find((item) => item.brickId === focused);
-			if (keep) { picker.activeItems = [keep]; }
-		};
-		const listening = aggregator.onListChanged(render);
-		render();
-
-		// Look for new Bluetooth bricks now rather than at the next background round, so one
-		// switched on a moment ago shows up while the list is open.
-		if (btPresence) {
-			picker.busy = true;
-			void btPresence.runInquiry().finally(() => { picker.busy = false; });
-		}
-
-		const picked = await new Promise<BrickId | undefined>((resolve) => {
-			picker.onDidAccept(() => resolve(picker.selectedItems[0]?.brickId));
-			picker.onDidHide(() => resolve(undefined));
-			picker.show();
-		});
-		listening.dispose();
-		picker.hide();
-		picker.dispose();
+		const picked = await pickBrick(picker, aggregator, (brickId) => bricks.isSignedIn(brickId),
+			btPresence && (() => btPresence.runInquiry()));
 		if (!picked) { return; }
 
-		const brick = aggregator.getBrick(picked);
-		const label = brick?.name.value ?? picked;
-		if (bricks.isSignedIn(picked)) {
-			bricks.setActiveBrick(picked);
-			void vscode.window.showInformationMessage(`EVƎ Cockpit: ${label} is the active brick.`);
-			return;
-		}
-
-		// A brick only an inquiry has heard has nothing to connect over until it is paired.
-		const bt = brick?.channels.find((c) => c.transport === Transport.BT);
-		const onlyNewBluetooth = brick && !brick.paired && bt && brick.channels.length === 1;
-		if (onlyNewBluetooth && btDiscovery) {
-			const mac = brickKeyId(bt.brickKey) ?? '';
-			const paired = await vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: pairing ${label}`, cancellable: false },
-				async (progress) => {
-					const result = await btDiscovery.pair(mac, (event: BtPairingEvent) => {
-						logger.debug(`Pairing ${brickLabel(aggregator, picked)}: ${JSON.stringify(event)}`);
-						// Prompt on `found`, not on `pairingRequested`: by the time the brick is
-						// asking, whoever is meant to press it has seconds. On `found` they have
-						// the whole ceremony.
-						if (event.type === 'found' && event.alreadyPaired === false) {
-							progress.report({ message: 'Confirm on the brick\'s display, then accept PIN 1234.' });
-						}
-					});
-					if (!result.ok) {
-						logger.warn(`Pairing ${brickLabel(aggregator, picked)} failed: ${result.reason ?? 'no reason given'}`);
-						void vscode.window.showErrorMessage(
-							`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
-					}
-					return result.ok;
-				});
-			if (!paired) { return; }
-		}
-
-		await vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: `EVƎ Cockpit: connecting to ${label}`, cancellable: false },
-			async () => {
-				// A freshly paired brick is not in the discovery list as paired yet — the OS knows
-				// the pairing immediately, the next scheduled scan is up to a poll interval away.
-				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
-				try {
-					await bricks.signIn(picked);
-					const route = bricks.routeOf(picked);
-					logger.info(`Connected to ${brickLabel(aggregator, picked)} over ${route ? transportLabel(route) : 'no channel'}`);
-					void vscode.window.showInformationMessage(`EVƎ Cockpit: connected to ${label}.`);
-				} catch (error) {
-					const err = error instanceof Error ? error : new Error(String(error));
-					// The user disconnected it before it was through; nothing failed.
-					if (err instanceof ConnectionAbandonedError) {
-						logger.info(`Connecting to ${brickLabel(aggregator, picked)} stopped: it was disconnected meanwhile`);
-						return;
-					}
-					logger.error(`Connecting to ${brickLabel(aggregator, picked)} failed:`, err);
-					// The cause of a brick that did not answer is the Winsock code, which says
-					// nothing to the person holding the brick; it stays in the log.
-					const unanswered = err instanceof BrickUnreachableError || err instanceof TimeoutError;
-					void vscode.window.showErrorMessage(unanswered
-						? `EVƎ Cockpit: ${label} did not answer. Check that it is switched on and in range, then try again.`
-						: `EVƎ Cockpit: could not connect to ${label} — ${err.message}`);
-				}
-			});
+		await connectPickedBrick(picked, {
+			aggregator, bricks, scheduler, log: logger,
+			pair: btDiscovery?.pair,
+			progress: (title, task) => vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
+				(progress) => task((message) => progress.report({ message }))),
+			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
+			showError: (message) => { void vscode.window.showErrorMessage(message); },
+		});
 	}));
 
 	// ── Disconnect a brick ──────────────────────────────────────
