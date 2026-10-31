@@ -27,7 +27,7 @@ execution: code
 
 ### Summary
 
-A new palette command, "Forget a Brick", lists the bricks this computer has paired with or remembers and forgets the chosen one after a confirmation. Forgetting signs the brick out and clears everything the cockpit holds about it. It removes the Windows pairing, and when the brick is reachable at that moment it removes this computer from the brick's own pairing list. The result message says what was removed. It names the records that remain: the Windows registry key with its exact path, Windows' in-memory device record, and the brick-side change if it still needs the brick switched off from its menu to persist. The Linux backend is not built. Its forget hook is shaped so BlueZ can fill it in, and one section of `IMPLEMENTATION_PLAN.md` lists everything Linux still needs.
+A new palette command, "Forget a Brick", lists the bricks this computer has paired with or remembers and forgets the chosen one after a confirmation. Forgetting signs the brick out and clears everything the cockpit holds about it. It removes the Windows pairing, and when the brick is reachable at that moment it removes this computer from the brick's own pairing list. The result message says what was removed. It names the records that remain: the Windows registry key with its exact path, Windows' in-memory device record, and the brick-side change if it still needs the brick switched off from its menu to persist. A second command, "Clear a Brick's Bluetooth List", unpairs a reachable brick from every computer and brick it remembers, whatever their names, so stale entries left by old or renamed computers stop poisoning new pairings. The Linux backend is not built. Its forget hook is shaped so BlueZ can fill it in, and one section of `IMPLEMENTATION_PLAN.md` lists everything Linux still needs.
 
 ### Problem Frame
 
@@ -66,6 +66,14 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
   - when the brick's list changed, that the brick saves it only when switched off from its own menu, and that pulling the battery brings the entry back.
   The guidance gives the path and the reason. It does not include a procedure for taking ownership of a system key.
 
+**Clearing a brick's list**
+
+- R15. "Clear a Brick's Bluetooth List" lists every brick reachable now over any channel, paired with this computer or not.
+- R16. Before acting it reads the brick's list and asks for confirmation, showing every name it will remove.
+- R17. It removes every entry from the brick's list, whatever its name, including repeated names. An entry it cannot remove is reported with the reason.
+- R18. When this computer is paired with the brick in Windows, that pairing is removed too, so neither side keeps a one-sided record. A USB session to the brick stays open.
+- R19. The result follows R9 and R10 for what was confirmed and what was only sent, and carries the menu power-off note from R11.
+
 **Platforms and follow-on**
 
 - R12. The forget path is shaped so a Linux provider can supply its own unpair and its own list of residue, with no change to the brick layer or the command.
@@ -80,12 +88,14 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
 - KD4. **Linux is wanted and not blocking: build the seam now, BlueZ when a Linux host exists, and keep one list of what Linux needs.** Governs R12, R13. (session-settled: user-directed — chosen over writing unverifiable BlueZ code now: „zapiš, že to chceme a jakmile budeme mít linux k dispozici, tak to doprogramujeme … chci mít někde zapsaný výčet věcí")
 - KD5. **A palette command with a confirmation; the panel's trash action (Phase 5/6) reuses the same brick-level call.** Governs R1, R2. (session-settled: user-approved — proposed in the scoping summary with the panel deferred; the owner confirmed: „souhlasím. potvrzuji rozsah")
 - KD6. **Only bricks this computer knows are offered; a brick only an inquiry heard has nothing to forget.** Governs R1. (session-settled: user-approved — proposed in the scoping summary against offering every listed brick; the owner confirmed the scope)
+- KD7. **A brick can be unpaired from all computers at once: every Bluetooth entry on it is removed, whatever the name.** Governs R15, R16, R17. (session-settled: user-directed — chosen over removing only this computer's entry by exact name: „doplň na kostku i možnost "odpárovat od všech počítačů" - která vymaže všechny bt záznamy z kostky bez ohledu na jméno. může se stát, že jsou na kostce nějaké staré hnijící počítače")
 
 ### Success Criteria
 
 - On CCC over USB: after forgetting, the brick's list read back no longer holds this computer, Windows no longer lists the brick as paired, and the cockpit lists CCC only as an unpaired USB brick. The brick then needs a menu power-off; after it boots again, the list still lacks this computer.
 - On a brick reachable only over Bluetooth, forgetting completes, reports the brick-side removal as sent and not confirmed, and leaves no session reconnecting.
 - The result message for each run names the registry key with that brick's address, and the owner can find the key at that exact path.
+- On a bench brick that holds stale entries, clearing its list over USB leaves it empty, and it stays empty after a menu power-off and power-on.
 
 ### Scope Boundaries
 
@@ -95,16 +105,12 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
 - Considered and not built: deleting the `BTHPORT` key in any way, elevated or not. KD3 and the owner's security policy forbid it, and no evidence would change that.
 - Considered and not built: WinRT `DeviceInformationPairing.UnpairAsync` in place of `BluetoothRemoveDevice`. The latter is measured working (1.11.13) and is a supported API. Evidence that would change this: a case where `BluetoothRemoveDevice` leaves a pairing that WinRT removes.
 - Considered and not built: switching the brick's Bluetooth on when it is off so the removal can run. The removal silently does nothing then; verification catches it and the report says so. Evidence that would change this: users who forget bricks with Bluetooth off often enough to matter.
-- Considered and not built: removing brick-side entries other than this computer's current name, such as one stored under a former computer name (3.1.4l). See Open Questions.
+- "Forget a Brick" removes only this computer's entry on the brick. Entries under a former computer name (3.1.4l) and a brick that still lists this computer after Windows dropped it (3.1.4k) are what "Clear a Brick's Bluetooth List" is for (KD7).
+- Considered and not built: removing a single entry the user picks from the brick's list. KD7 clears the whole list; evidence that would change this: a user who needs to keep some peers, such as a daisy-chain master, while clearing others.
 
 #### Deferred to Follow-Up Work
 
 - Wiring forget into the panel (6.6.1) and into persistence (6.6.2), Phase 5/6.
-
-### Open Questions
-
-- Deferred, for the owner: a brick on USB that this computer has already unpaired but that still lists it (3.1.4k) is not offered, because KD6 offers only known bricks. Should the command also offer a brick on USB to clear its list alone?
-- Deferred, for the owner: when the brick holds an entry under a former name of this computer (3.1.4l), the report lists that name and leaves it. Should the cockpit offer to remove a named entry the user picks?
 
 ---
 
@@ -140,6 +146,12 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
   - `BtTransportProvider` drops `lastPaired`, `closedAt` and the preferred backend for the address.
   - `BrickManager` drops `dropped`, `probing` and `probeFailuresReported` for the brick's channels.
   The integration test runs a real `scanOnce` after forget and checks the brick does not come back as paired.
+- KTD9. **Clearing the list removes each entry by the name the list gives it, until the list is empty or stops shrinking.** The firmware has no "remove all" and removes the first entry matching a name, so:
+  1. read the list (KTD2) and remove each distinct non-empty name, repeating a name while the read-back still holds it;
+  2. stop when the list is empty, or when a pass removes nothing, so a stuck entry cannot loop; the number of passes is bounded by the starting count;
+  3. never send an empty name (KTD2); an entry with an empty name is reported as not removable.
+  The channel follows KTD5: over USB or TCP, close the brick's Bluetooth sessions first, then remove and read back. Over Bluetooth only, remove every other entry first and this computer's own entry last, because that removal cuts the link; everything before it is confirmed by read-back, the last one is "sent, not confirmed". The brick-layer call is `BrickManager.clearBluetoothList(brickId)`, beside `forget`, and returns a report of the same shape.
+- KTD10. **When clearing the list removes this computer's entry and Windows has the brick paired, the brick's Bluetooth channel is forgotten too; its other channels stay.** Leaving Windows paired would recreate the one-sided record 3.1.4l measured, from the host's side. The Bluetooth channel goes through the same provider `forget` and memory clearing as KTD6 and KTD7, limited to the Bluetooth key, and the USB session stays open, because the user asked to clean the brick, not to disconnect it. The guards of KTD4 apply to the Bluetooth channel for the duration.
 - KTD8. **The message is built from the report by a pure function and shown as a notification with a "Show details" action.** The notification states the outcome in two or three lines. The details go to the output channel: every part's outcome, the exact registry path, the brick's peer names when read, and the menu power-off note. The registry path is written the way Windows stores it; U7 checks the casing of the address on this host.
 
 ### High-Level Technical Design
@@ -319,6 +331,37 @@ sequenceDiagram
   - The details contain no ACL, ownership or `takeown`/`icacls` instruction.
 - **Verification:** the tests fail without the command flow. The command appears in the palette in the Extension Development Host.
 
+### U8. Clearing a brick's Bluetooth list
+
+- **Goal:** a user unpairs a reachable brick from every computer and brick it remembers, in one action.
+- **Requirements:** R15, R16, R17, R18, R19
+- **Dependencies:** U1, U4, U5
+- **Files:**
+  - `src/runtime/brickManager.ts`
+  - `src/ui/forgetBrick.ts`
+  - `src/extension.ts`
+  - `package.json`
+  - `src/__tests__/brickManager.test.ts`
+  - `src/__tests__/forgetBrick.test.ts`
+- **Approach:**
+  1. Add `BrickManager.clearBluetoothList(brickId)` (KTD9), reusing U4's channel choice, Bluetooth-session closing and report shape.
+  2. When this computer's entry was among those removed and the Bluetooth provider lists the brick as paired, forget the Bluetooth channel only (KTD10).
+  3. Register `ev3-cockpit.clearBrickBluetoothList`, title "Clear a Brick's Bluetooth List", in the "EV3 Cockpit" category. Candidates are bricks with a connected or available channel (R15).
+  4. Read the list first, and confirm with a modal that names every entry it will remove and says this computer is among them when it is (R16).
+  5. Build the message from the report with U5's pure functions (R19).
+- **Patterns to follow:** U4's `forget` and U5's command flow.
+- **Test scenarios:**
+  - Covers R17. A mock brick listing `OLD-PC`, `PETR-PC` and another brick: all three are removed over USB, and the read-back is empty.
+  - Covers R17. A list holding the same name twice: the name is sent twice and both entries are gone.
+  - Covers R17. An entry the mock refuses to remove: the loop stops after a pass that removes nothing, and the report names the entry.
+  - Covers R17. An entry with an empty name: no removal is sent for it, and the report says it cannot be removed.
+  - Covers R17, R19. A brick reachable only over Bluetooth: every other entry is removed and confirmed first, this computer's entry is sent last and reported as sent, not confirmed.
+  - Covers R18. This computer's entry is removed and Windows has the brick paired: the Bluetooth provider's `forget` runs and the USB session stays connected.
+  - Covers R18. This computer's entry was not on the brick: the Windows pairing is left alone.
+  - Covers R16. Declining the confirmation sends no removal.
+  - Covers R15. An unpaired brick on USB is offered; a paired brick that is switched off is not.
+- **Verification:** the tests fail without `clearBluetoothList`. Mutations that drop the no-progress stop, the this-computer-last order, or the Windows-side forget each fail a named test.
+
 ### U6. Plan and design documents
 
 - **Goal:** the documents say what forget does and does not do, and what Linux needs.
@@ -331,7 +374,7 @@ sequenceDiagram
   1. Check 6.6.6 (done in 1.11.13).
   2. Rewrite 6.6.4: the `BTHPORT` key is not deleted, by design; its path is reported to the user (KD3).
   3. Answer 1.11.14 with KD3, and mark 6.6.3 and 6.6.5 built by this step.
-  4. Note on 3.1.4k and 3.1.4l that the brick side is cleared when reachable.
+  4. Note on 3.1.4k and 3.1.4l that forget clears this computer's entry when the brick is reachable, and that "Clear a Brick's Bluetooth List" removes stale entries of any name (KD7).
   5. Add the section "What Linux needs" with: 1.11.11 `BtBluezBackend` (RFCOMM over D-Bus); pairing (the `bt-pairing-helper.exe` WinRT helper is Windows-only; BlueZ needs an agent); Bluetooth presence and inquiry; the device cache and the COM-port scan (`bthprops` through `koffi`); the Winsock RFCOMM backend (`ws2_32`); forget through `org.bluez.Adapter1.RemoveDevice`, with its residue under `/var/lib/bluetooth/<adapter>/<mac>` and `cache/<mac>` verified on a host; this computer's radio name from the adapter `Alias`; 4.6.16 libusb on Linux (udev rules, permissions); the unverified Linux padding path (DESIGN line 240); the libusb read-overrun slack set for Windows only. Grep once more for Windows-only pieces when writing it.
   6. Update DESIGN §7.3 with what forget leaves and how it is reported.
   7. Keep 2.8.12's open path, and add that it can now run after a forget plus the owner's hand removal of the key (R14).
@@ -341,8 +384,8 @@ sequenceDiagram
 ### U7. Hardware session
 
 - **Goal:** the assumptions behind KTD3 and KTD5 hold on real bricks, and the never-met discovery path is checked when its precondition is met.
-- **Requirements:** R7, R9, R11, R14
-- **Dependencies:** U4, U5
+- **Requirements:** R7, R9, R11, R14, R17
+- **Dependencies:** U4, U5, U8
 - **Files:**
   - `docs/plans/2026-10-31-2133-step3-forget-a-brick.md` (appendix with the results)
 - **Approach:**
@@ -350,6 +393,7 @@ sequenceDiagram
   2. On CCC over USB: read the peer list and compare this computer's entry with the radio name (KTD3). Forget, read back, and record the registry path the message gives against the key on this host, including its casing.
   3. Ask the owner to switch CCC off from its menu and back on. Read the list again; the entry must stay gone.
   4. On a brick reachable only over Bluetooth: forget, and record the report and that no session is reconnecting.
+     - Clearing: on a brick on USB whose list holds stale entries (the bench bricks' lists from 3.1.4k and 3.1.4l, read first): clear the list, read it back empty, switch the brick off from its menu and on, and read it again.
   5. Never-met discovery (R14), only when a brick this computer has never met is at hand, or after the owner has removed the registry key by hand. Run an inquiry, pair from the picker, and connect. A `found` under about 100 ms is a cache pass and does not count. Claude neither removes the key nor scripts its removal.
   6. Record the verdicts in this plan's appendix, against the success criteria.
   7. Find the brick's own menu path for removing a paired device and add it to the message only once seen on a brick.
@@ -372,7 +416,7 @@ sequenceDiagram
 
 ## Definition of Done
 
-- R1–R13 hold in the shipped extension, and each has a test that fails without it (U1–U5), except R13, which is documentation (U6).
+- R1–R13 and R15–R19 hold in the shipped extension, and each has a test that fails without it (U1–U5, U8), except R13, which is documentation (U6).
 - The U7 appendix has a verdict for each success criterion. R14 is either run or recorded as waiting for its precondition.
 - No code path changes the `BTHPORT` key, asks for elevation, restarts `bthserv` or tells the user to reboot; a grep for `takeown`, `icacls`, `RegDeleteKey` and `runas` in `src/` finds nothing.
 - `npm run test:ci` is green, and code from abandoned attempts is removed from the diff.
