@@ -2,7 +2,10 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
 import { Transport, makeBrickKey } from '../contracts';
-import type { BatteryResponse, PortsResponse, ButtonsResponse, FsListResponse, FsReadResponse, FsExistsResponse } from '../contracts';
+import type {
+	BatteryResponse, PortsResponse, ButtonsResponse, FsListResponse, FsReadResponse, FsExistsResponse,
+	BluetoothPeerCountResponse, BluetoothPeerResponse,
+} from '../contracts';
 import {
 	MockTransportProvider,
 	validateMockConfig,
@@ -283,6 +286,46 @@ describe('MockTransportProvider — filesystem', () => {
 
 		assert.ok(fs);
 		assert.equal(fs.read('/x'), 'y');
+	});
+});
+
+// ── Bluetooth peer list ─────────────────────────────────────────────
+
+describe('MockTransportProvider — Bluetooth peer list', () => {
+	async function peerNames(provider: MockTransportProvider, key: ReturnType<typeof makeBrickKey>): Promise<string[]> {
+		const { count } = await provider.executeCommand(key, { kind: 'brick:bluetoothPeerCount' }) as BluetoothPeerCountResponse;
+		const names: string[] = [];
+		for (let index = 0; index < count; index++) {
+			const peer = await provider.executeCommand(key, { kind: 'brick:bluetoothPeer', index }) as BluetoothPeerResponse;
+			names.push(peer.name);
+		}
+		return names;
+	}
+
+	it('lists its peers and removes one by exact name', async () => {
+		const provider = new MockTransportProvider(makeConfig([{
+			id: 'a', bluetoothPeers: ['Office PC', 'Petrův PC', 'EV3'],
+		}]));
+		const key = makeBrickKey(Transport.Mock, 'a');
+		await provider.connect(key);
+
+		assert.deepEqual(await peerNames(provider, key), ['Office PC', 'Petrův PC', 'EV3']);
+
+		const reply = await provider.executeCommand(key, { kind: 'brick:removeBluetoothPeer', name: 'Petrův PC' });
+		assert.deepEqual(reply, { kind: 'brick:removeBluetoothPeer' });
+		assert.deepEqual(await peerNames(provider, key), ['Office PC', 'EV3']);
+	});
+
+	it('keeps the list when the name differs only in case', async () => {
+		// The firmware finds the entry with strcmp (c_bt.c 2215).
+		const provider = new MockTransportProvider(makeConfig([{
+			id: 'a', bluetoothPeers: ['Office PC', 'Petrův PC'],
+		}]));
+		const key = makeBrickKey(Transport.Mock, 'a');
+		await provider.connect(key);
+
+		await provider.executeCommand(key, { kind: 'brick:removeBluetoothPeer', name: 'petrův pc' });
+		assert.deepEqual(await peerNames(provider, key), ['Office PC', 'Petrův PC']);
 	});
 });
 

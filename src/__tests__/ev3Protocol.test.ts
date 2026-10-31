@@ -315,6 +315,64 @@ describe('ev3Commands — buildCommand', () => {
 		assert.doesNotThrow(() => buildCommand({ kind: 'brick:setName', name: 'Robot_2-B' }));
 	});
 
+	it('counts the Bluetooth peers with FAVOUR_ITEMS on the Bluetooth hardware', () => {
+		// c_com.c 4585-4612: HARDWARE in, one DATA8 count out.
+		const result = buildCommand({ kind: 'brick:bluetoothPeerCount' });
+		assert.equal(result.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
+		assert.deepEqual([...result.payload], [
+			0x01, 0x00,       // one global byte
+			0xd3, 0x0a,       // opCOM_GET, FAVOUR_ITEMS
+			0x02,             // HW_BT
+			0x60,             // GV0(0): the count
+		]);
+	});
+
+	it('reads one Bluetooth peer by index, asking for the longest name a direct command can hold', () => {
+		// c_com.c 4615-4689: HARDWARE, ITEM, LENGTH in; NAME, PARRED, CONNECTED, TYPE out.
+		// LENGTH is DATA8, so 127 is the most a direct command can ask for.
+		const result = buildCommand({ kind: 'brick:bluetoothPeer', index: 1 });
+		assert.equal(result.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
+		assert.deepEqual([...result.payload], [
+			130, 0x00,        // 127 name bytes + paired + connected + type
+			0xd3, 0x0b,       // opCOM_GET, FAVOUR_ITEM
+			0x02,             // HW_BT
+			0x01,             // the index
+			0x81, 127,        // LC1(127): the name length
+			0x60,             // GV0(0): the name
+			0xe1, 127,        // GV1(127): paired
+			0xe1, 128,        // GV1(128): connected
+			0xe1, 129,        // GV1(129): type
+		]);
+	});
+
+	it('removes a Bluetooth peer with opCOM_REMOVE, the Bluetooth hardware and the name as a string', () => {
+		const result = buildCommand({ kind: 'brick:removeBluetoothPeer', name: 'PC1' });
+		assert.equal(result.type, EV3_COMMAND.DIRECT_COMMAND_REPLY);
+		assert.deepEqual([...result.payload], [
+			0x00, 0x00,       // no globals
+			0xd6,             // opCOM_REMOVE
+			0x02,             // HW_BT
+			0x84, 0x50, 0x43, 0x31, 0x00,  // LCS "PC1"
+		]);
+	});
+
+	it('refuses to remove a peer by an empty or blank name', () => {
+		// The firmware takes an empty name as a wildcard and removes the first named entry
+		// (c_bt.c 2205-2211), which would forget some other computer.
+		for (const name of ['', '   ']) {
+			assert.throws(
+				() => buildCommand({ kind: 'brick:removeBluetoothPeer', name }), ProtocolError,
+				`expected "${name}" refused`);
+		}
+	});
+
+	it('removes a peer whose name has a space and a diacritic, sent as UTF-8', () => {
+		// A computer's Bluetooth name is not a brick name: BRICK_NAME_PATTERN does not apply.
+		const result = buildCommand({ kind: 'brick:removeBluetoothPeer', name: 'Petrův PC' });
+		const utf8 = [...Buffer.from('Petrův PC', 'utf8')];
+		assert.deepEqual([...result.payload.slice(3)], [0x02, 0x84, ...utf8, 0x00]);
+	});
+
 	it('reads buttons through opUI_BUTTON, not opUI_READ', () => {
 		// A real brick rejects the whole command when button state is requested as
 		// opUI_READ subcode 0x0d (which is GET_ADDRESS), so this asserts the opcode.
@@ -493,5 +551,53 @@ describe('ev3Responses — parseResponse', () => {
 		);
 		assert.equal(result.kind, 'fs:delete');
 		assert.equal((result as { deleted: boolean }).deleted, true);
+	});
+
+	it('parses the Bluetooth peer count', () => {
+		const result = parseResponse(
+			{ kind: 'brick:bluetoothPeerCount' },
+			makeReply(EV3_REPLY.DIRECT_REPLY, new Uint8Array([3])),
+		);
+		assert.deepEqual(result, { kind: 'brick:bluetoothPeerCount', count: 3 });
+	});
+
+	it('parses a Bluetooth peer: name, paired, connected and type', () => {
+		const payload = new Uint8Array(130).fill(0xaa);
+		const name = Buffer.from('Petrův PC ', 'utf8');
+		payload.set(name, 0);
+		payload[name.length] = 0;
+		payload[127] = 1;   // paired
+		payload[128] = 0;   // connected
+		payload[129] = 3;   // ICON_PC
+		const result = parseResponse(
+			{ kind: 'brick:bluetoothPeer', index: 1 },
+			makeReply(EV3_REPLY.DIRECT_REPLY, payload),
+		);
+		// The trailing space stays: the name is matched and removed byte for byte.
+		assert.deepEqual(result, {
+			kind: 'brick:bluetoothPeer', name: 'Petrův PC ', paired: true, connected: false, type: 3,
+		});
+	});
+
+	it('parses a connected Bluetooth peer', () => {
+		const payload = new Uint8Array(130);
+		payload.set(Buffer.from('EV3', 'ascii'), 0);
+		payload[127] = 1;
+		payload[128] = 1;
+		payload[129] = 5;   // ICON_BRICK
+		const result = parseResponse(
+			{ kind: 'brick:bluetoothPeer', index: 0 },
+			makeReply(EV3_REPLY.DIRECT_REPLY, payload),
+		) as { connected: boolean; type: number };
+		assert.equal(result.connected, true);
+		assert.equal(result.type, 5);
+	});
+
+	it('acknowledges a peer removal with a bare reply', () => {
+		const result = parseResponse(
+			{ kind: 'brick:removeBluetoothPeer', name: 'PC1' },
+			makeReply(EV3_REPLY.DIRECT_REPLY, new Uint8Array()),
+		);
+		assert.deepEqual(result, { kind: 'brick:removeBluetoothPeer' });
 	});
 });

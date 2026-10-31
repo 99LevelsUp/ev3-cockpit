@@ -125,6 +125,24 @@ export type BrickCommand =
 	| { readonly kind: 'brick:setBluetooth'; readonly on: boolean }
 	/** Make the brick discoverable, or stop it answering inquiries. Same two-parameter shape. */
 	| { readonly kind: 'brick:setBluetoothVisible'; readonly visible: boolean }
+	/**
+	 * How many computers and bricks the brick remembers as Bluetooth peers.
+	 *
+	 * Read this first and ask `brick:bluetoothPeer` only for indexes below it: the firmware
+	 * does not bounds-check the index (`c_bt.c` 3561–3567).
+	 */
+	| { readonly kind: 'brick:bluetoothPeerCount' }
+	/** One remembered Bluetooth peer, by its index in the brick's list. */
+	| { readonly kind: 'brick:bluetoothPeer'; readonly index: number }
+	/**
+	 * Remove one remembered Bluetooth peer, found by an exact, case-sensitive match on its
+	 * name (`strcmp`, `c_bt.c` 2215).
+	 *
+	 * An empty or blank name is refused before it is sent: the firmware treats an empty name as
+	 * a wildcard and removes the first named entry instead (`c_bt.c` 2205–2211). A reply proves
+	 * only that the brick answered — read the list back to know the entry went.
+	 */
+	| { readonly kind: 'brick:removeBluetoothPeer'; readonly name: string }
 	| { readonly kind: 'fs:list'; readonly path: string }
 	| { readonly kind: 'fs:read'; readonly path: string }
 	| { readonly kind: 'fs:write'; readonly path: string; readonly content: string }
@@ -217,9 +235,32 @@ export interface FsWriteResponse { readonly kind: 'fs:write' }
  * Carries nothing back. The firmware answers a bare status and rejects a bad value in
  * silence, so the only proof a rename or a radio toggle took effect is to observe the brick
  * afterwards — read the name back with `info`, or watch whether it still answers an inquiry.
+ * A peer removal is the same: only the peer list read back shows the entry went.
  */
 export interface BrickSettingResponse {
-	readonly kind: 'brick:setName' | 'brick:setBluetooth' | 'brick:setBluetoothVisible';
+	readonly kind: 'brick:setName' | 'brick:setBluetooth' | 'brick:setBluetoothVisible'
+		| 'brick:removeBluetoothPeer';
+}
+
+export interface BluetoothPeerCountResponse {
+	readonly kind: 'brick:bluetoothPeerCount';
+	readonly count: number;
+}
+
+/** One entry of the brick's Bluetooth peer list (`FAVOUR_ITEM`, `c_com.c` 4615–4689). */
+export interface BluetoothPeerResponse {
+	readonly kind: 'brick:bluetoothPeer';
+	/**
+	 * The name exactly as the brick stores it, untrimmed, so it can be matched and removed
+	 * byte for byte. At most 126 bytes come back: the request's length is a DATA8, and the
+	 * brick stores up to 247 (`MAX_BT_NAME_SIZE`, `c_bt.h` 39), so a longer name arrives cut.
+	 */
+	readonly name: string;
+	/** Always true on Bluetooth: an entry is only in the list once paired (`c_com.c` 4641). */
+	readonly paired: boolean;
+	readonly connected: boolean;
+	/** `ICON_*` from `bytecodes.h` 1301–1304: 3 PC, 4 phone, 5 brick, 6 unknown. */
+	readonly type: number;
 }
 export interface FsExistsResponse { readonly kind: 'fs:exists'; readonly exists: boolean }
 export interface FsDeleteResponse { readonly kind: 'fs:delete'; readonly deleted: boolean }
@@ -304,6 +345,8 @@ export type BrickResponse =
 	| FsReadResponse
 	| FsWriteResponse
 	| BrickSettingResponse
+	| BluetoothPeerCountResponse
+	| BluetoothPeerResponse
 	| FsExistsResponse
 	| FsDeleteResponse
 	| TelemetryFrameResponse;
