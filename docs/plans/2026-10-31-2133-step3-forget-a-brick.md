@@ -63,7 +63,8 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
 - R11. The result names every record the cockpit could not remove, with its exact location, so the user can remove it themselves:
   - the registry key, with this brick's address filled in, and that Windows protects it;
   - Windows' in-memory device record, which ends with the next Windows restart;
-  - when the brick's list changed, that the brick saves it only when switched off from its own menu, and that pulling the battery brings the entry back.
+  - when the brick's list changed, that the brick saves it only when switched off from its own menu, and that pulling the battery brings the entry back, which then blocks re-pairing with this computer;
+  - when the brick-side removal was skipped, failed or is not yet saved, this computer's entry on the brick, with the note that it will block re-pairing with this computer until it is removed, and that "Clear a Brick's Bluetooth List" removes it once the brick is reachable.
   The guidance gives the path and the reason. It does not include a procedure for taking ownership of a system key.
 
 **Clearing a brick's list**
@@ -78,7 +79,7 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
 
 - R12. The forget path is shaped so a Linux provider can supply its own unpair and its own list of residue, with no change to the brick layer or the command.
 - R13. `IMPLEMENTATION_PLAN.md` carries one section, "What Linux needs", listing every item that a working Linux cockpit still lacks.
-- R14. Once forget ships, the never-met discovery check (2.8.18's open path) runs on hardware. It runs either with a brick this computer has never met, or after the owner removes the registry record by hand.
+- R14. Once forget ships, the never-met discovery check (2.8.18's open path) runs on hardware. It runs either with a brick this computer has never met, or after the owner removes the registry record by hand and then restarts Windows, so its in-memory device record is gone too. This is a bench setup the owner chooses, not a step the cockpit offers, and for this owner-run case it replaces 2.8.18's rule of not deleting registry state to force the test.
 
 ### Key Decisions
 
@@ -92,9 +93,9 @@ Because of that, discovery of a brick this computer has never met (2.8.18's one 
 
 ### Success Criteria
 
-- On CCC over USB: after forgetting, the brick's list read back no longer holds this computer, Windows no longer lists the brick as paired, and the cockpit lists CCC only as an unpaired USB brick. The brick then needs a menu power-off; after it boots again, the list still lacks this computer.
+- On CCC over USB: after forgetting, the brick's list read back no longer holds this computer, Windows no longer lists the brick as paired, and the cockpit lists CCC as an unpaired brick with no paired channel; an unpaired Bluetooth row from Windows' cache may remain until Windows restarts. The brick then needs a menu power-off; after it boots again, the list still lacks this computer.
 - On a brick reachable only over Bluetooth, forgetting completes, reports the brick-side removal as sent and not confirmed, and leaves no session reconnecting.
-- The result message for each run names the registry key with that brick's address, and the owner can find the key at that exact path.
+- The result message for each run that forgets a brick with a Bluetooth pairing names the registry key with that brick's address, and the owner can find the key at that exact path. A brick known only over USB names no key.
 - On a bench brick that holds stale entries, clearing its list over USB leaves it empty, and it stays empty after a menu power-off and power-on.
 
 ### Scope Boundaries
@@ -326,7 +327,7 @@ sequenceDiagram
   - An empty candidate list shows an information message and opens no picker.
   - Declining the confirmation calls nothing.
   - Covers R10, R11. A report with a confirmed removal, a removed pairing and the registry residue produces details naming the exact key path with the brick's address and the menu power-off note.
-  - A report with the brick unreachable says nothing was changed on the brick.
+  - Covers R11. A report with the brick unreachable says nothing was changed on the brick, lists this computer's entry on the brick as left behind, and says it will block re-pairing until cleared.
   - A report with no exact match lists the names the brick holds.
   - The details contain no ACL, ownership or `takeown`/`icacls` instruction.
 - **Verification:** the tests fail without the command flow. The command appears in the palette in the Extension Development Host.
@@ -377,7 +378,7 @@ sequenceDiagram
   4. Note on 3.1.4k and 3.1.4l that forget clears this computer's entry when the brick is reachable, and that "Clear a Brick's Bluetooth List" removes stale entries of any name (KD7).
   5. Add the section "What Linux needs" with: 1.11.11 `BtBluezBackend` (RFCOMM over D-Bus); pairing (the `bt-pairing-helper.exe` WinRT helper is Windows-only; BlueZ needs an agent); Bluetooth presence and inquiry; the device cache and the COM-port scan (`bthprops` through `koffi`); the Winsock RFCOMM backend (`ws2_32`); forget through `org.bluez.Adapter1.RemoveDevice`, with its residue under `/var/lib/bluetooth/<adapter>/<mac>` and `cache/<mac>` verified on a host; this computer's radio name from the adapter `Alias`; 4.6.16 libusb on Linux (udev rules, permissions); the unverified Linux padding path (DESIGN line 240); the libusb read-overrun slack set for Windows only. Grep once more for Windows-only pieces when writing it.
   6. Update DESIGN §7.3 with what forget leaves and how it is reported.
-  7. Keep 2.8.12's open path, and add that it can now run after a forget plus the owner's hand removal of the key (R14).
+  7. Keep 2.8.18's open path (listed under 2.8.12), and add that it can now run after a forget plus the owner's hand removal of the key and a Windows restart; for that owner-run case this replaces 2.8.18's "registry state is not deleted to fake that" (R14).
 - **Test expectation:** none — documentation only.
 - **Verification:** the section exists, every item names its blocker, and no plan line still says the cockpit deletes the registry key.
 
@@ -394,7 +395,7 @@ sequenceDiagram
   3. Ask the owner to switch CCC off from its menu and back on. Read the list again; the entry must stay gone.
   4. On a brick reachable only over Bluetooth: forget, and record the report and that no session is reconnecting.
      - Clearing: on a brick on USB whose list holds stale entries (the bench bricks' lists from 3.1.4k and 3.1.4l, read first): clear the list, read it back empty, switch the brick off from its menu and on, and read it again.
-  5. Never-met discovery (R14), only when a brick this computer has never met is at hand, or after the owner has removed the registry key by hand. Run an inquiry, pair from the picker, and connect. A `found` under about 100 ms is a cache pass and does not count. Claude neither removes the key nor scripts its removal.
+  5. Never-met discovery (R14), only when a brick this computer has never met is at hand, or after the owner has removed the registry key by hand and restarted Windows. Run an inquiry, pair from the picker, and connect. A `found` under about 100 ms is a cache pass and does not count. Claude neither removes the key nor scripts its removal.
   6. Record the verdicts in this plan's appendix, against the success criteria.
   7. Find the brick's own menu path for removing a paired device and add it to the message only once seen on a brick.
 - **Test expectation:** none — hardware verification; the results are recorded in the appendix.
