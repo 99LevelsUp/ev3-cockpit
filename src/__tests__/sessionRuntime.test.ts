@@ -18,7 +18,7 @@ import { SessionEntry } from '../runtime/sessionEntry';
 import { SessionManager } from '../runtime/sessionManager';
 import { CommandQueue } from '../runtime/commandQueue';
 import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
-import { ProtocolError } from '../errors/CockpitError';
+import { ConnectionAbandonedError, ProtocolError } from '../errors/CockpitError';
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { TransportGuard } from '../transports/transportGuard';
@@ -1096,61 +1096,71 @@ describe('SessionManager -- reconnect and disconnect precedence', () => {
 });
 
 describe('SessionManager -- abandoned connect must not touch a newer session', () => {
-	it('leaves a newer connection for the same brick alone', async () => {
-		// Regression on the round-3 fix. Abandoning a slow connect closed the provider
-		// connection by brickKey alone. Providers key sessions by brickKey and nothing
-		// else, so once a second connect for the same brick had succeeded, that cleanup
-		// closed the live socket while SessionManager still reported the brick connected.
-		let open = false;
-		let connectCalls = 0;
-		let releaseFirst: (() => void) | undefined;
+	// The abandoned first connect either opens its link late or fails late; neither may end
+	// the newer session that holds the key by then.
+	for (const firstConnect of ['opens', 'fails'] as const) {
+		it(`leaves a newer connection for the same brick alone when the first ${firstConnect}`, async () => {
+			// Regression on the round-3 fix. Abandoning a slow connect closed the provider
+			// connection by brickKey alone. Providers key sessions by brickKey and nothing
+			// else, so once a second connect for the same brick had succeeded, that cleanup
+			// closed the live socket while SessionManager still reported the brick connected.
+			let open = false;
+			let connectCalls = 0;
+			let releaseFirst: (() => void) | undefined;
 
-		const provider: TransportProvider = {
-			transport: Transport.Mock,
-			priority: 0,
-			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
-			discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
-			connect: (brickKey) => {
-				connectCalls += 1;
-				if (connectCalls === 1) {
-					return new Promise((resolve) => {
-						releaseFirst = () => {
-							open = true;
-							resolve({ brickKey, transport: Transport.Mock });
-						};
-					});
-				}
-				open = true;
-				return Promise.resolve({ brickKey, transport: Transport.Mock });
-			},
-			disconnect: () => { open = false; return Promise.resolve(); },
-			sendPacket: () => Promise.resolve(new Uint8Array(0)),
-			createCommandChannel: () => ({
-				execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
-			}),
-			dispose: () => { /* nothing to release */ },
-		};
+			const provider: TransportProvider = {
+				transport: Transport.Mock,
+				priority: 0,
+				capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+				discover: () => Promise.resolve({ transport: Transport.Mock, items: [] }),
+				connect: (brickKey) => {
+					connectCalls += 1;
+					if (connectCalls === 1) {
+						return new Promise((resolve, reject) => {
+							releaseFirst = () => {
+								if (firstConnect === 'fails') {
+									reject(new Error('the first link never came up'));
+									return;
+								}
+								open = true;
+								resolve({ brickKey, transport: Transport.Mock });
+							};
+						});
+					}
+					open = true;
+					return Promise.resolve({ brickKey, transport: Transport.Mock });
+				},
+				disconnect: () => { open = false; return Promise.resolve(); },
+				sendPacket: () => Promise.resolve(new Uint8Array(0)),
+				createCommandChannel: () => ({
+					execute: () => Promise.resolve({ kind: 'battery', level: 50 } as const),
+				}),
+				dispose: () => { /* nothing to release */ },
+			};
 
-		const reg = new ProviderRegistry();
-		reg.register(provider);
-		const manager = new SessionManager({ providerRegistry: reg });
+			const reg = new ProviderRegistry();
+			reg.register(provider);
+			const manager = new SessionManager({ providerRegistry: reg });
 
-		const key = makeBrickKey(Transport.Mock, 'contested');
+			const key = makeBrickKey(Transport.Mock, 'contested');
 
-		const first = manager.connect(key, Transport.Mock);
-		await waitFor(() => releaseFirst !== undefined, 2000);
+			const first = manager.connect(key, Transport.Mock);
+			await waitFor(() => releaseFirst !== undefined, 2000);
 
-		await manager.disconnect(key);
-		await manager.connect(key, Transport.Mock);
-		assert.equal(open, true, 'second connect should be open');
+			await manager.disconnect(key);
+			await manager.connect(key, Transport.Mock);
+			assert.equal(open, true, 'second connect should be open');
 
-		// The abandoned first connect now completes.
-		releaseFirst!();
-		await first;
+			// The abandoned first connect now completes, and says it did not connect: a caller
+			// that saw it return would take the brick as connected over a session not its own.
+			releaseFirst!();
+			await assert.rejects(first, firstConnect === 'opens' ? ConnectionAbandonedError : /never came up/);
 
-		assert.equal(open, true, 'the newer connection was closed by the abandoned one');
-		assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected);
+			assert.equal(open, true, 'the newer connection was closed by the abandoned one');
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected,
+				'the abandoned connect ended the newer session');
 
-		manager.dispose();
-	});
+			manager.dispose();
+		});
+	}
 });
