@@ -1557,6 +1557,8 @@ The format must support:
 
 A GUI editor for this configuration is deferred — see `REQUIREMENTS.md §16`.
 
+Whether the mock provider exists is decided where the runtime is composed: `createRuntime({ mockBricks })` registers it only when `mockBricks` is true. The extension passes the `ev3-cockpit.mockBricks` setting when the user has set it, and otherwise whether it runs in `ExtensionMode.Development`. Without the provider there are no mock bricks in discovery and no mock lines in the log.
+
 ## 14. Commands and VS Code Integration
 
 The primary UX is in the panel.
