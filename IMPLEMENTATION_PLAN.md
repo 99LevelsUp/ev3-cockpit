@@ -33,7 +33,7 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
 - session runtime — session entry, session manager, heartbeat, reconnect, command queue ✅
 - per-transport contract compliance tests (1.12.4) ✅
 - Bluetooth pairing and picking a brick by name from the extension, through the net48 WinRT
-  helper (2.8.18, partly — see below) ✅
+  helper, with the already-paired check before pairing and a second inquiry window (2.8.18) ✅
 - telemetry rows, frame assembler, scheduler, the per-brick loop and the service choosing the
   foreground brick (3.1.5, 3.3) ✅ — **not wired into `extension.ts`** until the read model (3.5)
 - filesystem service and file transfer — chunked, with progress, cancellation and stall
@@ -49,8 +49,9 @@ Open, by phase:
   brick" leaves in the Windows registry; 1.11.11 Linux Bluetooth (blocked: no Linux host);
   1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows, carried as a limitation).
 - **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
-  hardware scenarios; 2.8.18 the already-paired
-  check before pairing and a bounded retry around the inquiry.
+  hardware scenarios, among them 2.8.18's one unverified path: an inquiry chained into pairing
+  a brick this machine has never met (every bench brick is known to it, and registry state is
+  not deleted to fake that).
 - **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
   object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
   state in a read model; open — 3.1.4 peripheral-type enum, 3.2 data models, 3.3.2/3.3.5
