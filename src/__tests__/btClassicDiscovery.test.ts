@@ -14,7 +14,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { BtClassicDiscovery } from '../transports/btClassicDiscovery';
-import { BluetoothDeviceInfo, isLikelyEv3 } from '../transports/windowsBluetooth';
+import { BluetoothDeviceInfo, isLikelyEv3, removeBluetoothDevice } from '../transports/windowsBluetooth';
 import { BtDiscoveryDevice } from '../transports/btTransportProvider';
 
 const LEGO_OUI = '001653';
@@ -258,5 +258,66 @@ describe('BtClassicDiscovery — pairing', () => {
 
 		assert.deepEqual(discovery.unpair('00:16:53:00:00:0C'), { ok: true });
 		assert.deepEqual(asked, ['00:16:53:00:00:0C']);
+	});
+});
+
+// ════════════════════════════════════════════════════════════════════
+// Unpairing a brick Windows may have dropped already
+// ════════════════════════════════════════════════════════════════════
+
+describe('removeBluetoothDevice', () => {
+	it('counts a pairing that is already gone as removed', () => {
+		// ERROR_NOT_FOUND (1168): Windows has no record to remove. The brick is unpaired, which
+		// is what forget asked for, so reporting a failure here would be a false alarm.
+		assert.deepEqual(removeBluetoothDevice('00:16:53:00:00:0C', () => 1168), { ok: true });
+	});
+
+	it('reports any other refusal with Windows\' code', () => {
+		const result = removeBluetoothDevice('00:16:53:00:00:0C', () => 5);
+
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /error 5\b/);
+	});
+
+	it('hands Windows the address as one 64-bit value', () => {
+		const asked: unknown[] = [];
+		removeBluetoothDevice('00:16:53:00:00:0C', (address) => { asked.push(address); return 0; });
+
+		assert.deepEqual(asked, [[0x00165300000cn]]);
+	});
+});
+
+// ════════════════════════════════════════════════════════════════════
+// This computer's Bluetooth name
+// ════════════════════════════════════════════════════════════════════
+
+describe('BtClassicDiscovery — this computer\'s radio name', () => {
+	it('returns the name the radio reports, exactly', () => {
+		// The brick matches the name byte for byte, so nothing here may trim or fold it.
+		const discovery = new BtClassicDiscovery({ radioName: () => 'Petrův PC' });
+
+		assert.equal(discovery.radioName(), 'Petrův PC');
+	});
+
+	it('returns undefined when there is no radio, never a guessed name', () => {
+		const discovery = new BtClassicDiscovery({ radioName: () => undefined });
+
+		// os.hostname() is the tempting stand-in, and it is wrong whenever the radio was named
+		// separately; a wrong name would leave this computer on the brick and report success.
+		assert.strictEqual(discovery.radioName(), undefined);
+	});
+
+	it('returns undefined when the binding throws', () => {
+		const discovery = new BtClassicDiscovery({
+			radioName: () => { throw new Error('koffi is not installed'); },
+		});
+
+		assert.strictEqual(discovery.radioName(), undefined);
+	});
+
+	it('returns undefined for an empty name, which the brick would treat as a wildcard', () => {
+		const discovery = new BtClassicDiscovery({ radioName: () => '' });
+
+		assert.strictEqual(discovery.radioName(), undefined);
 	});
 });

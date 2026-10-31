@@ -63,7 +63,11 @@ export interface Runtime extends vscode.Disposable {
 	readonly scheduler: DiscoveryScheduler;
 	readonly aggregator: PresenceAggregator;
 	readonly bricks: BrickManager;
-	/** Pairs bricks over Bluetooth. Absent when providers were injected. */
+	/**
+	 * Pairs bricks over Bluetooth, and reads this computer's Bluetooth name (`radioName`) for
+	 * finding this computer's entry on a brick. Absent when providers were injected, and then
+	 * that name is unknown.
+	 */
 	readonly btDiscovery?: BtClassicDiscovery;
 	/** Background Bluetooth presence. Absent when providers were injected. */
 	readonly btPresence?: BtPresenceMonitor;
