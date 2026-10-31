@@ -168,6 +168,25 @@ export class PresenceAggregator implements vscode.Disposable {
 		if (this.bricks.delete(brickId)) { this.emitListChanged(); }
 	}
 
+	/**
+	 * Forget one channel of a brick and keep the brick (step-3 plan, KTD10): its other channels
+	 * and their sessions stay as they are.
+	 *
+	 * Forgetting the Bluetooth channel also clears `paired`, which only Bluetooth discovery sets
+	 * and only a deleted record could clear otherwise; a later scan that lists the brick as paired
+	 * sets it again. A record left with no channel goes too, unless it is remembered: it would be a
+	 * row nothing can reach.
+	 */
+	forgetChannel(brickKey: BrickKey): void {
+		const record = this.bricks.get(brickIdOf(brickKey));
+		const transport = brickKeyTransport(brickKey);
+		if (!record || !transport) { return; }
+		record.channels.delete(transport);
+		if (transport === Transport.BT) { record.paired = false; }
+		if (record.channels.size === 0 && !record.remembered) { this.bricks.delete(record.brickId); }
+		this.emitListChanged();
+	}
+
 	// ── Lifecycle ───────────────────────────────────────────────────
 
 	dispose(): void {

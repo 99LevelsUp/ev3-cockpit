@@ -1,6 +1,7 @@
 /**
  * Forgetting a brick (step-3 plan, U4): `BrickManager.forget` across the brick's own list, the
- * operating-system pairing and the cockpit's memory.
+ * operating-system pairing and the cockpit's memory. And clearing a brick's list (U8):
+ * `BrickManager.clearBluetoothList`, in the same world.
  *
  * Runs the real registry, scheduler, aggregator, session manager and brick layer. The brick
  * is the shipped mock brick, so its peer list matches and removes names as the mock does; the
@@ -75,6 +76,8 @@ interface Received {
 	readonly over: Transport;
 	readonly kind: BrickCommand['kind'];
 	readonly btLinkOpen: boolean;
+	/** The name a removal named. */
+	readonly name?: string;
 }
 
 function world(options: WorldOptions = {}) {
@@ -93,6 +96,8 @@ function world(options: WorldOptions = {}) {
 		received: [] as Received[],
 		/** The firmware acks a removal it does not run: its Bluetooth is off or busy. */
 		ignoresRemoval: false,
+		/** Names whose removal the firmware acks and does not run. */
+		refuses: new Set<string>(),
 		/** After a removal, the list cannot be read back. */
 		readBackFails: false,
 		removalSeen: false,
@@ -117,10 +122,15 @@ function world(options: WorldOptions = {}) {
 		refuse: undefined as string | undefined,
 		discoverGate: undefined as Promise<void> | undefined,
 		forgetGate: undefined as Promise<void> | undefined,
+		/** Once unpaired, Windows' in-memory record still lists the brick, unpaired. */
+		cachedAfterUnpair: false,
 	};
 
 	const answer = async (over: Transport, command: BrickCommand): Promise<BrickResponse> => {
-		brick.received.push({ over, kind: command.kind, btLinkOpen: bt.open });
+		brick.received.push({
+			over, kind: command.kind, btLinkOpen: bt.open,
+			...(command.kind === 'brick:removeBluetoothPeer' ? { name: command.name } : {}),
+		});
 		const hold = brick.holds.get(command.kind);
 		if (hold) { brick.holds.delete(command.kind); await hold; }
 		if (command.kind === 'brick:bluetoothPeerCount' && brick.removalSeen && brick.readBackFails) {
@@ -128,7 +138,7 @@ function world(options: WorldOptions = {}) {
 		}
 		if (command.kind === 'brick:removeBluetoothPeer') {
 			brick.removalSeen = true;
-			if (brick.ignoresRemoval) { return { kind: 'brick:removeBluetoothPeer' }; }
+			if (brick.ignoresRemoval || brick.refuses.has(command.name)) { return { kind: 'brick:removeBluetoothPeer' }; }
 			const reply = await mock.executeCommand(mockKey, command);
 			// The brick closes the removed peer's RFCOMM channel before it answers anything.
 			if (command.name === THIS_PC && bt.open) {
@@ -185,13 +195,14 @@ function world(options: WorldOptions = {}) {
 		async discover(): Promise<DiscoveryScanResult> {
 			// Read before any hold: a scan that started before the unpair lists what it saw then.
 			const listed = bt.paired;
+			const cached = !bt.paired && bt.cachedAfterUnpair;
 			const unheard = bt.unheard;
 			const held = bt.discoverGate;
 			bt.discoverGate = undefined;
 			if (held) { await held; }
-			const items: DiscoveryItem[] = listed ? [{
+			const items: DiscoveryItem[] = listed || cached ? [{
 				brickKey: btKey, displayName: 'CCC', nameSource: 'bt-cache', transport: Transport.BT,
-				presenceState: PresenceState.Available, remembered: true, paired: true, connected: false, favorite: false,
+				presenceState: PresenceState.Available, remembered: listed, paired: listed, connected: false, favorite: false,
 				lastSeenAt: Date.now(), ...(unheard ? { heard: false } : {}),
 			}] : [];
 			return { transport: Transport.BT, items };
@@ -212,7 +223,9 @@ function world(options: WorldOptions = {}) {
 		}),
 		async forget(brickKey: BrickKey): Promise<readonly ForgetResidue[]> {
 			bt.unpairs.push(brickKey);
-			if (bt.forgetGate) { await bt.forgetGate; }
+			const held = bt.forgetGate;
+			bt.forgetGate = undefined;   // holds one unpair, not a second one that comes meanwhile
+			if (held) { await held; }
 			bt.open = false;
 			if (bt.refuse) { throw new TransportError(`Could not forget 00165342D9F2: ${bt.refuse}`); }
 			bt.paired = false;
@@ -245,7 +258,12 @@ function world(options: WorldOptions = {}) {
 	const peerTraffic = (over?: Transport): string[] => brick.received
 		.filter((r) => (over === undefined || r.over === over) && r.kind.includes('luetooth'))
 		.map((r) => r.kind.replace('brick:', ''));
-	return { mock, brick, usb, bt, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic, done };
+	/** The names of the removals that reached the brick, in order. */
+	const removals = (): (string | undefined)[] => brick.received
+		.filter((r) => r.kind === 'brick:removeBluetoothPeer').map((r) => r.name);
+	return {
+		mock, brick, usb, bt, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic, removals, done,
+	};
 }
 
 type World = ReturnType<typeof world>;
@@ -588,6 +606,252 @@ describe('Forget a brick — what the cockpit remembers afterwards (R4, R5)', ()
 		await w.scheduler.scansSettled();
 
 		assert.equal(w.aggregator.getBrick(CCC), undefined, 'the stale scan brought the forgotten brick back');
+		w.done();
+	});
+});
+
+// ── Clearing a brick's list (U8) ────────────────────────────────────
+
+/** A confirmation that records what it was shown and answers `answer`. */
+function asked(answer = true) {
+	const calls: { names: readonly string[]; includesThisComputer: boolean; thisComputer: string | undefined }[] = [];
+	const confirm = async (names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined) => {
+		calls.push({ names: [...names], includesThisComputer, thisComputer });
+		return answer;
+	};
+	return { calls, confirm };
+}
+
+describe('Clear a brick\'s Bluetooth list — removing every entry (R16, R17)', () => {
+	it('removes three entries over USB, each confirmed, and reads the list back empty', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC, 'Zed'], paired: false });
+		await signedInOver(w, Transport.USB);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(ask.calls, [{ names: ['OLD-PC', THIS_PC, 'Zed'], includesThisComputer: true, thisComputer: THIS_PC }]);
+		assert.deepEqual(w.removals(), ['OLD-PC', THIS_PC, 'Zed']);
+		assert.deepEqual(w.brick.peers(), []);
+		assert.equal(report?.over, usbKey);
+		assert.deepEqual(report?.peers, ['OLD-PC', THIS_PC, 'Zed']);
+		assert.deepEqual(report?.entries, [
+			{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: THIS_PC }, { status: 'confirmed', name: 'Zed' },
+		]);
+		assert.equal(report?.skipped, undefined);
+		assert.deepEqual(report?.pairing, [], 'a brick Windows has not paired has no pairing to remove');
+		assert.equal(report?.pairingLeft, 'not-paired');
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		assert.equal(w.bricks.isSignedIn(CCC), true);
+		w.done();
+	});
+
+	it('sends a name held twice twice, and both entries go', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC, 'OLD-PC'], paired: false });
+		await signedInOver(w, Transport.USB);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.equal(w.removals().filter((name) => name === 'OLD-PC').length, 2);
+		assert.deepEqual(w.brick.peers(), []);
+		assert.ok(report?.entries.every((entry) => entry.status === 'confirmed'), JSON.stringify(report?.entries));
+		w.done();
+	});
+
+	it('stops after a pass that removes nothing, and names the entry the brick keeps', async () => {
+		const w = world({ peers: ['OLD-PC', 'STUCK', 'Zed'], paired: false });
+		await signedInOver(w, Transport.USB);
+		w.brick.refuses.add('STUCK');
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		// Once in the pass that removed the others, once in the pass that removed nothing.
+		assert.equal(w.removals().filter((name) => name === 'STUCK').length, 2, `removals: ${w.removals().join(', ')}`);
+		assert.deepEqual(w.brick.peers(), ['STUCK']);
+		assert.deepEqual(report?.entries, [
+			{ status: 'confirmed', name: 'OLD-PC' },
+			{ status: 'failed', name: 'STUCK', detail: 'The list read back still holds it.' },
+			{ status: 'confirmed', name: 'Zed' },
+		]);
+		w.done();
+	});
+
+	it('sends no removal for an entry without a name, reports it as not removable, and closes the channel it opened', async () => {
+		const w = world({ peers: ['', 'OLD-PC', '  '], paired: false });
+		await w.scheduler.scanOnce();   // available on USB, not signed in
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(ask.calls[0].names, ['OLD-PC'], 'the confirmation offered to remove a blank name');
+		assert.deepEqual(w.removals(), ['OLD-PC']);
+		assert.deepEqual(w.brick.peers(), ['', '  ']);
+		assert.deepEqual(report?.entries, [
+			{ status: 'not-removable', name: '', reason: 'blank-name' },
+			{ status: 'confirmed', name: 'OLD-PC' },
+			{ status: 'not-removable', name: '  ', reason: 'blank-name' },
+		]);
+		assert.equal(w.usb.connects, 1);
+		assert.equal(w.sessionManager.getSession(usbKey), undefined, 'the channel the clear opened is still open');
+		w.done();
+	});
+
+	it('sends nothing and closes the channel it opened when the user declines', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC], paired: false });
+		await w.scheduler.scanOnce();
+		const ask = asked(false);
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.equal(report, undefined);
+		assert.equal(ask.calls.length, 1);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.brick.peers(), ['OLD-PC', THIS_PC]);
+		assert.equal(w.usb.connects, 1);
+		assert.equal(w.sessionManager.getSession(usbKey), undefined, 'the channel the clear opened is still open');
+		w.done();
+	});
+
+	it('over Bluetooth alone, removes every other entry first, each confirmed, and this computer\'s last, sent and not confirmed', async () => {
+		const w = world({ cabled: false, peers: [THIS_PC, 'OLD-PC', 'Zed'] });
+		await signedInOver(w, Transport.BT);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.deepEqual(w.removals(), ['OLD-PC', 'Zed', THIS_PC]);
+		assert.deepEqual(w.peerTraffic(Transport.BT).slice(4), [
+			'removeBluetoothPeer', 'bluetoothPeerCount', 'bluetoothPeer', 'bluetoothPeer',
+			'removeBluetoothPeer', 'bluetoothPeerCount', 'bluetoothPeer',
+			'removeBluetoothPeer',
+		], 'each other entry was not read back over the same link before this computer\'s went');
+		assert.deepEqual(report?.entries, [
+			{ status: 'sent', name: THIS_PC, detail: 'BT reply timed out' },
+			{ status: 'confirmed', name: 'OLD-PC' },
+			{ status: 'confirmed', name: 'Zed' },
+		]);
+		assert.equal(report?.over, btKey);
+		assert.deepEqual(report?.pairing, [{ status: 'removed', channel: btKey }]);
+		assert.equal(w.bt.connects, 1, 'a connect reached the Bluetooth provider after the removal cut the link');
+		assert.equal(w.sessionManager.getSession(btKey), undefined);
+		assert.equal(w.bricks.isSignedIn(CCC), false);
+		assert.equal(w.aggregator.getBrick(CCC), undefined, 'a brick reachable on nothing is still listed');
+		w.done();
+	});
+
+	it('over Bluetooth alone with this computer\'s name unknown, removes nothing and asks nothing', async () => {
+		const w = world({ cabled: false, radio: undefined });
+		await signedInOver(w, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(report?.skipped, { reason: 'radio-name-unknown' });
+		assert.deepEqual(report?.peers, ['Office PC', THIS_PC]);
+		assert.equal(ask.calls.length, 0);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.bt.unpairs, []);
+		w.done();
+	});
+
+	it('is refused while the brick is being forgotten', async () => {
+		const w = world({ paired: false });
+		await signedInOver(w, Transport.USB);
+		const held = gate();
+		w.brick.holds.set('brick:bluetoothPeerCount', held.promise);
+
+		const forgetting = w.bricks.forget(CCC);
+		// Raced: a clear that is not refused queues behind the forget's held read and never answers.
+		const outcome = await Promise.race([
+			w.bricks.clearBluetoothList(CCC, asked().confirm).then(() => 'it ran', (error: Error) => error.message),
+			settle(300).then(() => 'it is still running behind the forget'),
+		]);
+		assert.match(outcome, /being forgotten/);
+		held.open();
+		await forgetting;
+		w.done();
+	});
+
+	it('keeps the guards up for a clear still running when a forget that started during it ends', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		const held = gate();
+		w.bt.forgetGate = held.promise;   // the clear waits in its unpair of the Bluetooth channel
+
+		const clearing = w.bricks.clearBluetoothList(CCC, asked().confirm);
+		await waitFor(() => w.bt.unpairs.length === 1, 1000);
+		await w.bricks.forget(CCC);
+		const guarded = w.bricks['forgetting'].has(CCC);
+		held.open();
+		await clearing;
+
+		assert.equal(guarded, true, 'the forget lifted the guards while the clear was still removing entries');
+		assert.equal(w.bricks['forgetting'].has(CCC), false, 'the guards stayed up after both had finished');
+		w.done();
+	});
+});
+
+describe('Clear a brick\'s Bluetooth list — this computer\'s pairing (R18, KTD10)', () => {
+	it('with this computer\'s entry gone and the brick paired, forgets the Bluetooth channel only; USB stays signed in', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC, 'Zed'] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.deepEqual(w.brick.peers(), []);
+		assert.equal(w.brick.received.find((r) => r.kind === 'brick:removeBluetoothPeer')?.btLinkOpen, false,
+			'the Bluetooth link was still open when the removals ran');
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		assert.deepEqual(report?.pairing, [{ status: 'removed', channel: btKey }]);
+		assert.equal(report?.pairingLeft, undefined);
+		assert.deepEqual(report?.residue, RESIDUE);
+		assert.deepEqual(report?.memory, { status: 'cleared' });
+		assert.deepEqual(w.presence.forgotten, [MAC]);
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected, 'the USB session closed');
+		assert.equal(w.bricks.isSignedIn(CCC), true);
+		assert.equal(w.bricks.routeOf(CCC), usbKey);
+		const entry = w.aggregator.getBrick(CCC);
+		assert.equal(entry?.paired, false, 'the list still says the brick is paired');
+		assert.deepEqual(entry?.channels.map((c) => c.transport), [Transport.USB]);
+		assert.equal(w.bt.connects, 1);
+		w.done();
+	});
+
+	it('does not rejoin the Bluetooth channel when Windows\' cache lists the brick again, unpaired', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		w.bt.cachedAfterUnpair = true;
+
+		await w.bricks.clearBluetoothList(CCC, asked().confirm);
+		await w.scheduler.scanOnce();
+		await settle();
+
+		const entry = w.aggregator.getBrick(CCC);
+		assert.deepEqual(entry?.channels.map((c) => c.transport), [Transport.USB, Transport.BT],
+			'the cached sighting did not come back, so this test shows nothing');
+		assert.equal(entry?.paired, false);
+		assert.equal(w.bt.connects, 1, 'the signed-in brick joined a Bluetooth channel nobody has paired');
+		assert.equal(w.bricks.isSignedIn(CCC), true);
+		w.done();
+	});
+
+	it('leaves the Windows pairing alone when this computer\'s entry was not on the brick', async () => {
+		const w = world({ peers: ['OLD-PC', 'Zed'] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.equal(ask.calls[0].includesThisComputer, false);
+		assert.deepEqual(w.brick.peers(), []);
+		assert.deepEqual(w.bt.unpairs, []);
+		assert.deepEqual(report?.pairing, []);
+		assert.equal(report?.pairingLeft, 'not-on-brick');
+		assert.equal(report?.paired, true, 'the report does not say the pairing it left was there');
+		assert.equal(report?.memory, undefined);
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
 		w.done();
 	});
 });

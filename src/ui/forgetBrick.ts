@@ -28,7 +28,8 @@ export const FORGET_ACTION = 'Forget';
  * Said whenever the brick's list changed, or may have: the firmware writes it to storage only
  * at an orderly shutdown (`c_bt.c` 422–426, 483–486).
  */
-export const MENU_POWER_OFF_NOTE = 'The brick saves its list only when it is switched off from its own menu. '
+export const MENU_SAVE_NOTE = 'The brick saves its list only when it is switched off from its own menu.';
+export const MENU_POWER_OFF_NOTE = `${MENU_SAVE_NOTE} `
 	+ 'If its battery is pulled instead, the entry comes back, and it then blocks re-pairing with this computer.';
 
 /** Why this computer's entry left on a brick matters, and what removes it (R11, KD7). */
@@ -48,36 +49,43 @@ export function forgetCandidates(list: readonly BrickEntry[]): BrickEntry[] {
  * brick pairs it first and every brick here is known already.
  */
 export function forgetPickRows(list: readonly BrickEntry[], isSignedIn: (brickId: BrickId) => boolean): BrickPickRow[] {
-	return forgetCandidates(list).map((brick) => ({
+	return forgetCandidates(list).map((brick) => plainPickRow(brick, isSignedIn));
+}
+
+/** A picker row like the connect picker's, without its "new" mark: picking a brick here pairs nothing. */
+export function plainPickRow(brick: BrickEntry, isSignedIn: (brickId: BrickId) => boolean): BrickPickRow {
+	return {
 		label: `${isSignedIn(brick.brickId) ? '$(check) ' : ''}${brick.name.value}`,
 		description: `${brick.name.confirmed ? '' : '(name unconfirmed) '}${describeChannels(brick)}`,
 		detail: brick.brickId,
 		brickId: brick.brickId,
-	}));
+	};
 }
 
 /** Ends `text` with a full stop unless it already ends a sentence. */
-function sentence(text: string): string {
+export function sentence(text: string): string {
 	const trimmed = text.trim();
 	return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 /** Peer names as they are stored: quoted, so a trailing space shows (the match is exact). */
-function quoteNames(names: readonly string[]): string {
+export function quoteNames(names: readonly string[]): string {
 	return names.map((name) => `"${name}"`).join(', ');
 }
 
-const over = (key: BrickKey): string => `over ${transportLabel(key)}`;
+/** "over USB", "over BT": the channel something went over. */
+export const over = (key: BrickKey): string => `over ${transportLabel(key)}`;
 
-/** The cockpit's own memory of the brick (R10). */
-export function memoryLines(report: ForgetReport): string[] {
+/** The cockpit's own memory of the brick (R10); `of` names the part of it, when not all of it. */
+export function memoryLines(report: Pick<ForgetReport, 'memory'>, of = ''): string[] {
+	const memory = `The cockpit's memory${of ? ` of ${of}` : ''}`;
 	return report.memory.status === 'cleared'
-		? ['The cockpit\'s memory: cleared.']
-		: [`The cockpit's memory: not fully cleared — ${sentence(report.memory.detail)}`];
+		? [`${memory}: cleared.`]
+		: [`${memory}: not fully cleared — ${sentence(report.memory.detail)}`];
 }
 
 /** This computer's pairing, one line per channel that had one (R5, R10). */
-export function pairingLines(report: ForgetReport): string[] {
+export function pairingLines(report: Pick<ForgetReport, 'pairing'>): string[] {
 	if (report.pairing.length === 0) {
 		return ['Pairing on this computer: nothing to unpair; the brick has no Bluetooth pairing.'];
 	}
@@ -163,10 +171,13 @@ export function leftBehindLines(report: ForgetReport): string[] {
 	if (onBrick) {
 		lines.push(`  ${onBrick}`, `    ${LEFT_BEHIND_NOTE}`);
 	}
-	for (const residue of report.residue) {
-		lines.push(`  ${residue.location}`, `    ${residue.reason}`);
-	}
+	lines.push(...residueLines(report.residue));
 	return lines.length > 0 ? ['Left behind:', ...lines] : ['Left behind: nothing.'];
+}
+
+/** The records a provider said it left, each with where it is and why it stays, as the provider gave them (R11, R12). */
+export function residueLines(residue: ForgetReport['residue']): string[] {
+	return residue.flatMap((record) => [`  ${record.location}`, `    ${record.reason}`]);
 }
 
 /** The output channel's account of a forget, part by part (KTD8). */
