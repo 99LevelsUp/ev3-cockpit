@@ -13,7 +13,7 @@ import {
 	BrickKey, DiscoveryItem, BrickCommand, SendCommandOptions,
 } from '../contracts';
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
-import { ChannelChangedError, TransportError } from '../errors/CockpitError';
+import { ChannelChangedError, ConnectionAbandonedError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { TelemetryService } from '../telemetry/telemetryService';
 import { cadenceFor } from '../telemetry/telemetryConstants';
@@ -551,7 +551,7 @@ describe('BrickManager — signing out', () => {
 
 			if (firstJoin === 'fails') { w.bt.connectFailures = 1; }
 			held.open();
-			await assert.rejects(first);
+			await assert.rejects(first, ConnectionAbandonedError);
 			await second;
 
 			assert.equal(w.bt.mostConnecting, 1, 'two connects were inside the provider at once on one channel');
@@ -576,12 +576,30 @@ describe('BrickManager — signing out', () => {
 		const second = w.bricks.signIn(CCC);
 		await w.bricks.signOut(CCC);
 		held.open();
-		await assert.rejects(first);
-		await assert.rejects(second);
+		await assert.rejects(first, ConnectionAbandonedError);
+		await assert.rejects(second, ConnectionAbandonedError);
 
 		assert.equal(w.bt.connects, 1, 'a connect nobody wanted any more reached the brick');
 		assert.equal(w.sessionManager.getSession(btKey), undefined);
 		assert.equal(w.bricks.isSignedIn(CCC), false);
+		w.done();
+	});
+
+	it('says a sign-in was signed out, not that the cable failed before that', async () => {
+		// The extension stays quiet about a connect the user cancelled; it can only tell that
+		// one apart if the sign-in says so, whatever its other channels failed with first.
+		const w = world();
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		w.usb.connectFailures = 1;
+		const held = gate();
+		w.bt.connectHolds.push(held.promise);
+
+		const signingIn = w.bricks.signIn(CCC);
+		await waitFor(() => w.usb.connects === 1 && w.bt.connecting === 1, 1000);
+		await w.bricks.signOut(CCC);
+		held.open();
+		await assert.rejects(signingIn, ConnectionAbandonedError);
 		w.done();
 	});
 });
