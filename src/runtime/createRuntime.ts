@@ -115,8 +115,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	// Bricks rather than channels: signs a brick in over every channel it is available on and
 	// sends each command over the best connected one. It also keeps the list's channel states
 	// in step with the sessions, and hands a reconnecting session the sighting it waits for.
+	// Forgetting a brick also reaches discovery, Bluetooth presence and this computer's
+	// Bluetooth name (step-3 plan, KTD1); with injected providers the last two are absent, and
+	// a forget then has no presence to clear and leaves the brick's own list alone.
 	const bricks = services.add(new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, log,
+		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName,
 	}));
 	services.add(bricks.onRouteChange(e => {
 		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');
