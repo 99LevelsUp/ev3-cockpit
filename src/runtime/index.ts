@@ -13,6 +13,9 @@ export { ReconnectStrategy } from './reconnectStrategy';
 export type { ReconnectStrategyOptions } from './reconnectStrategy';
 export { BrickManager } from './brickManager';
 export type { BrickManagerOptions, RouteChangeEvent, ActiveBrickIdChangeEvent } from './brickManager';
+export type {
+	BrickSideOutcome, BrickSideSkip, ForgetReport, MemoryOutcome, PairingOutcome, PeerRemoval,
+} from './forgetReport';
 export { BrickChannel } from './brickChannel';
 export { BaseChannelStateMachine } from './channelStateMachine';
 export type { ChannelEvent, ChannelStateMachine } from './channelStateMachine';
