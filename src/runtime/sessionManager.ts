@@ -10,7 +10,7 @@ import * as vscode from 'vscode';
 import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
 import { BrickKey, brickIdOf, describeChannel } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
-import { BrickCommand, BrickResponse, SendCommandOptions, TransportProvider } from '../contracts/transport';
+import { BrickCommand, BrickResponse, SendCommandOptions, SessionHandle, TransportProvider } from '../contracts/transport';
 import { SessionEntry } from './sessionEntry';
 import { CommandQueue } from './commandQueue';
 import { PacketCommandChannel } from '../commands/commandChannel';
@@ -66,6 +66,8 @@ export class SessionManager implements vscode.Disposable {
 	private readonly providerRegistry: ProviderRegistry;
 	private readonly sessions = new Map<BrickKey, SessionResources>();
 	private readonly suppressedBricks = new Set<BrickKey>();
+	/** The link opening on each channel now, settled either way; see {@link openLink}. */
+	private readonly opening = new Map<BrickKey, Promise<void>>();
 
 	private activeBrickKey?: BrickKey;
 
@@ -121,17 +123,14 @@ export class SessionManager implements vscode.Disposable {
 		this.sessions.set(brickKey, resources);
 
 		try {
-			const handle = await provider.connect(brickKey);
+			const handle = await this.openLink(brickKey, provider,
+				() => this.sessions.get(brickKey) === resources && !entry.explicitlyDisconnected,
+				() => provider.connect(brickKey));
 
-			// disconnect() may have run while the provider was still connecting. It
-			// removed this session, and the provider had not registered its own yet, so
-			// the disconnect it forwarded was a no-op. Proceeding here would leave the
-			// connection the provider just opened with nobody tracking it -- and the
-			// Disconnected -> Connected transition below would throw anyway. The user
-			// asked to disconnect, so abandoning the connect attempt is the answer -- and
-			// saying so, because a caller that saw it return would take the brick as connected.
-			if (this.sessions.get(brickKey) !== resources || entry.explicitlyDisconnected) {
-				await this.releaseUnownedConnection(brickKey, provider);
+			// disconnect() ran while this attempt waited or connected. The user asked to
+			// disconnect, so abandoning the attempt is the answer -- and saying so, because a
+			// caller that saw it return would take the brick as connected.
+			if (!handle) {
 				throw new ConnectionAbandonedError(
 					`${describeChannel(brickKey)} was disconnected while it was connecting.`);
 			}
@@ -489,30 +488,27 @@ export class SessionManager implements vscode.Disposable {
 		}
 
 		try {
-			// Release whatever the provider still thinks it holds, before asking for a new
-			// link. A provider drops its own session record only in `disconnect()`, so after
-			// a link dies on its own the record survives and `connect()` answers "already
-			// connected" — every attempt, instantly, forever. Measured on a brick: a USB
-			// session could never recover from a power cycle, an unplugged cable, or a brick
-			// going out of range, which are the only kinds of loss that matter. An explicit
-			// disconnect is not a failure and never reached this path.
-			//
-			// Providers that implement `recover` own this themselves, so leave those alone.
-			if (!provider.recover) {
-				await provider.disconnect(brickKey).catch(() => { /* may already be gone */ });
-			}
-
-			const handle = provider.recover
-				? await provider.recover(brickKey)
-				: await provider.connect(brickKey);
-
-			// disconnect() may have run while recover() was in flight: it deletes the
-			// session, but `resources` is a captured reference that stays alive. Without
-			// this check the just-reopened physical connection would belong to nobody.
-			if (this.sessions.get(brickKey) !== resources || resources.entry.explicitlyDisconnected) {
-				await this.releaseUnownedConnection(brickKey, provider);
-				return;
-			}
+			// disconnect() may run while this attempt waits or reopens: it deletes the session,
+			// but `resources` is a captured reference that stays alive.
+			const handle = await this.openLink(brickKey, provider,
+				() => this.sessions.get(brickKey) === resources && !resources.entry.explicitlyDisconnected
+					&& resources.entry.connectionState === ConnectionState.Reconnecting,
+				async () => {
+					// Release whatever the provider still thinks it holds, before asking for a new
+					// link. A provider drops its own session record only in `disconnect()`, so after
+					// a link dies on its own the record survives and `connect()` answers "already
+					// connected" — every attempt, instantly, forever. Measured on a brick: a USB
+					// session could never recover from a power cycle, an unplugged cable, or a brick
+					// going out of range, which are the only kinds of loss that matter. An explicit
+					// disconnect is not a failure and never reached this path.
+					//
+					// Providers that implement `recover` own this themselves, so leave those alone.
+					if (!provider.recover) {
+						await provider.disconnect(brickKey).catch(() => { /* may already be gone */ });
+					}
+					return provider.recover ? provider.recover(brickKey) : provider.connect(brickKey);
+				});
+			if (!handle) { return; }
 
 			resources.entry.setHandle(handle);
 			resources.entry.transition(ConnectionState.Connected);
@@ -537,20 +533,40 @@ export class SessionManager implements vscode.Disposable {
 	// ── Internal: Cleanup ───────────────────────────────────────────
 
 	/**
-	 * Close a connection whose session no longer exists.
+	 * Open a channel's link, one opening per channel at a time.
 	 *
-	 * Providers key their sessions by `brickKey` and nothing else, so a blind
-	 * `provider.disconnect(brickKey)` would close whatever currently holds that key.
-	 * When a slow connect is abandoned and a second connect for the same brick has
-	 * since succeeded, that is the live connection -- disconnecting it would leave
-	 * SessionManager reporting a brick as connected over a socket it just closed. So
-	 * release only while the key is genuinely unowned.
+	 * Providers key their links by `brickKey` and nothing else, so two openings that overlap
+	 * on one channel close or overwrite each other's: a reconnect still waiting in the
+	 * Bluetooth queue when the user signed the brick out and in again opened its link beside
+	 * the new connect's, and one of the two was left open with nobody to close it. Each
+	 * opening waits for the one before it and then checks it is still wanted. One that is no
+	 * longer wanted once its link is open closes it before the next opening starts, so that
+	 * one finds the channel free and the brick's close recorded.
+	 *
+	 * @returns The new link's handle, or undefined when the session was ended meanwhile.
 	 */
-	private async releaseUnownedConnection(brickKey: BrickKey, provider: TransportProvider): Promise<void> {
-		if (this.sessions.has(brickKey)) {
-			return;
+	private async openLink(
+		brickKey: BrickKey,
+		provider: TransportProvider,
+		wanted: () => boolean,
+		open: () => Promise<SessionHandle>,
+	): Promise<SessionHandle | undefined> {
+		for (let earlier = this.opening.get(brickKey); earlier; earlier = this.opening.get(brickKey)) {
+			await earlier;
 		}
-		try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+		if (!wanted()) { return undefined; }
+		const opened = (async () => {
+			const handle = await open();
+			if (wanted()) { return handle; }
+			try { await provider.disconnect(brickKey); } catch { /* best effort */ }
+			return undefined;
+		})();
+		const settled = opened.then(() => undefined, () => undefined);
+		this.opening.set(brickKey, settled);
+		void settled.then(() => {
+			if (this.opening.get(brickKey) === settled) { this.opening.delete(brickKey); }
+		});
+		return opened;
 	}
 
 	/**
