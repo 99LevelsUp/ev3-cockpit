@@ -218,6 +218,10 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			connected: false, favorite: false, lastSeenAt: Date.now(),
 		};
 		const item: DiscoveryItem = { ...earlier, presenceState: PresenceState.Available, paired: true, remembered: true };
+		// A presence check that missed the brick while its owner was confirming on it is older than
+		// the pairing; kept, it would take the channel away when the list is next rebuilt.
+		delete item.heard;
+		delete item.heardAt;
 		this.tracked.set(brickKey, { item, missCount: 0 });
 		this.fences.set(brickKey, { at: this.scansStarted, change: 'paired' });
 	}
