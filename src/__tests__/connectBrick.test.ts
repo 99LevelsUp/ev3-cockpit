@@ -9,7 +9,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickId, BrickKey, PresenceState, Transport, brickIdOf, makeBrickKey } from '../contracts';
+import { BrickId, BrickKey, ChannelState, ConnectionState, PresenceState, Transport, brickIdOf, makeBrickKey } from '../contracts';
 import type { DiscoveryItem, DiscoveryScanResult, SessionHandle, TransportProvider } from '../contracts';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { BtConnectionQueue } from '../transports/btConnectionQueue';
@@ -463,6 +463,37 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		assert.deepEqual(w.shown.titles, ['EVƎ Cockpit: pairing Bob']);
 		assert.equal(w.radio.connects, 0);
 		assert.equal(w.bricks.isSignedIn(w.bob), false);
+		w.done();
+	});
+
+	it('pairs a brick an inquiry has heard whose only other channel is lost, then connects it', async () => {
+		// U7, 01.11.2026: AAA, unplugged after a cable session, showed "USB lost · BT available · new";
+		// the connect skipped the pairing and failed with "not available on any channel".
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const usbKey = makeBrickKey(Transport.USB, w.bob);
+		w.aggregator.updateChannelSession(usbKey, ConnectionState.Connected);
+		w.aggregator.updateChannelSession(usbKey, ConnectionState.Reconnecting);
+		assert.equal(w.aggregator.getBrick(w.bob)?.channels.find((c) => c.transport === Transport.USB)?.state,
+			ChannelState.Lost, 'the USB channel is not lost, so this test shows nothing');
+
+		await connectPickedBrick(w.bob, w.deps);
+
+		assert.deepEqual(w.radio.pairedMacs, [BOB_MAC], 'the brick was not paired');
+		assert.deepEqual(w.shown.errors, []);
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
+		w.done();
+	});
+
+	it('does not pair a brick another channel still reaches', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		w.aggregator.updateChannelSession(makeBrickKey(Transport.USB, w.bob), ConnectionState.Connected);
+
+		await connectPickedBrick(w.bob, w.deps);
+
+		assert.deepEqual(w.radio.pairedMacs, [], 'a brick on a cable was paired over Bluetooth');
 		w.done();
 	});
 
