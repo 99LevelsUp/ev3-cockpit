@@ -428,18 +428,18 @@ describe('DiscoveryScheduler — forgetting a brick', () => {
 	});
 });
 
-describe('DiscoveryScheduler — a scan older than a forget', () => {
-	/** A provider whose every scan waits until the test lets it finish. */
-	function heldProvider(transport: Transport, items: DiscoveryItem[]) {
-		const pending: (() => void)[] = [];
-		const provider: TransportProvider = Object.assign(makeFakeProvider(transport, items), {
-			discover: () => new Promise<DiscoveryScanResult>((resolve) => {
-				pending.push(() => resolve({ transport, items }));
-			}),
-		});
-		return { provider, pending, releaseAll: () => { for (const r of pending.splice(0)) { r(); } } };
-	}
+/** A provider whose every scan answers `items` as they are when the test lets it finish. */
+function heldProvider(transport: Transport, items: DiscoveryItem[]) {
+	const pending: (() => void)[] = [];
+	const provider: TransportProvider = Object.assign(makeFakeProvider(transport, items), {
+		discover: () => new Promise<DiscoveryScanResult>((resolve) => {
+			pending.push(() => resolve({ transport, items: [...items] }));
+		}),
+	});
+	return { provider, pending, releaseAll: () => { for (const r of pending.splice(0)) { r(); } } };
+}
 
+describe('DiscoveryScheduler — a scan older than a forget', () => {
 	it('drops what a scanOnce that began before the forget lists for a forgotten key, and keeps the rest', async () => {
 		const forgotten = makeItem('00:16:53:42:D9:F2', Transport.BT);
 		const other = makeItem('00:16:53:11:22:33', Transport.BT);
@@ -505,6 +505,122 @@ describe('DiscoveryScheduler — a scan older than a forget', () => {
 
 		assert.equal(scheduler.getTrackedBricks().has(forgotten.brickKey), true,
 			'a scan that read the list after the forget says what is there now');
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+});
+
+describe('DiscoveryScheduler — a pairing the cockpit made', () => {
+	/** A brick an inquiry heard: listed, not paired. */
+	function sighting(): DiscoveryItem {
+		return { ...makeItem('00:16:53:42:D9:F2', Transport.BT), paired: false, remembered: false };
+	}
+
+	it('tracks the brick as available and paired at once, and announces nothing', async () => {
+		const brick = sighting();
+		const listed = [brick];
+		const held = heldProvider(Transport.BT, listed);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry);
+		const first = scheduler.scanOnce();
+		await waitFor(() => held.pending.length === 1, 2000);
+		held.releaseAll();
+		await first;
+		const events: PresenceChangeEvent[] = [];
+		scheduler.onPresenceChanged((e) => events.push(e));
+
+		scheduler.notePaired(brick.brickKey);
+
+		const tracked = scheduler.getTrackedBricks().get(brick.brickKey);
+		assert.equal(tracked?.paired, true);
+		assert.equal(tracked?.presenceState, PresenceState.Available);
+		assert.deepEqual(events, [], 'the caller updates the list; an announcement would start a name probe');
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('tracks a brick whose sighting expired during the pairing', () => {
+		const registry = new ProviderRegistry();
+		const scheduler = new DiscoveryScheduler(registry);
+		const key = makeBrickKey(Transport.BT, '00:16:53:42:D9:F2');
+
+		scheduler.notePaired(key);
+
+		const tracked = scheduler.getTrackedBricks().get(key);
+		assert.equal(tracked?.transport, Transport.BT);
+		assert.equal(tracked?.paired, true);
+		assert.equal(tracked?.presenceState, PresenceState.Available);
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('counts no miss from a scan that began before the pairing and does not list the brick', async () => {
+		const brick = sighting();
+		const listed = [brick];
+		const held = heldProvider(Transport.BT, listed);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry, { unavailableAfterMisses: 1 });
+		const first = scheduler.scanOnce();
+		await waitFor(() => held.pending.length === 1, 2000);
+		held.releaseAll();
+		await first;
+
+		listed.length = 0;   // the inquiry's sighting aged out before this scan read the list
+		const stale = scheduler.scanOnce();
+		await waitFor(() => held.pending.length === 1, 2000);
+		scheduler.notePaired(brick.brickKey);
+		held.releaseAll();
+		await stale;
+
+		assert.equal(scheduler.getTrackedBricks().get(brick.brickKey)?.presenceState, PresenceState.Available,
+			'an older reading took the freshly paired brick away');
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('keeps the pairing when a scan that began before it lists the brick unpaired', async () => {
+		const brick = sighting();
+		const held = heldProvider(Transport.BT, [brick]);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry);
+
+		const stale = scheduler.scanOnce();
+		await waitFor(() => held.pending.length === 1, 2000);
+		scheduler.notePaired(brick.brickKey);
+		held.releaseAll();
+		await stale;
+
+		assert.equal(scheduler.getTrackedBricks().get(brick.brickKey)?.paired, true, 'an older reading undid the pairing');
+
+		scheduler.dispose();
+		registry.dispose();
+	});
+
+	it('lets a scan that began after the pairing count misses, so a brick that is gone expires', async () => {
+		const brick = sighting();
+		const listed: DiscoveryItem[] = [];
+		const held = heldProvider(Transport.BT, listed);
+		const registry = new ProviderRegistry();
+		registry.register(held.provider);
+		const scheduler = new DiscoveryScheduler(registry, { unavailableAfterMisses: 1, removedAfterMisses: 1 });
+
+		scheduler.notePaired(brick.brickKey);
+		for (let scan = 0; scan < 2; scan++) {
+			const fresh = scheduler.scanOnce();
+			await waitFor(() => held.pending.length === 1, 2000);
+			held.releaseAll();
+			await fresh;
+		}
+
+		assert.equal(scheduler.getTrackedBricks().has(brick.brickKey), false,
+			'a pairing nothing lists any more is tracked for ever');
 
 		scheduler.dispose();
 		registry.dispose();
