@@ -72,7 +72,7 @@ export async function pickBrick(
 export interface ConnectBrickDeps {
 	readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
 	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf'>;
-	readonly scheduler: Pick<DiscoveryScheduler, 'scanOnce'>;
+	readonly scheduler: Pick<DiscoveryScheduler, 'scanOnce' | 'scansSettled'>;
 	/** Pairs a brick over Bluetooth; absent without Bluetooth. */
 	readonly pair?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
 	readonly log: RuntimeLog;
@@ -99,6 +99,7 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 	// A brick only an inquiry has heard has nothing to connect over until it is paired.
 	const bt = brick?.channels.find((c) => c.transport === Transport.BT);
 	const onlyNewBluetooth = brick && !brick.paired && bt && brick.channels.length === 1;
+	let justPaired = false;
 	if (onlyNewBluetooth && deps.pair) {
 		const pair = deps.pair;
 		const mac = brickKeyId(bt.brickKey) ?? '';
@@ -119,11 +120,17 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 			return result.ok;
 		});
 		if (!paired) { return; }
+		justPaired = true;
 	}
 
 	await deps.progress(`EVƎ Cockpit: connecting to ${label}`, async () => {
 		// A freshly paired brick is not in the discovery list as paired yet — the OS knows
-		// the pairing immediately, the next scheduled scan is up to a poll interval away.
+		// the pairing immediately, the next scheduled scan is up to a poll interval away. A
+		// sign-in joins no Bluetooth channel the list holds unpaired, so the list has to learn
+		// of the pairing first. A scan already in flight may have read Windows' list before the
+		// pairing, and `scanOnce` skips a transport that is scanning; so the scan that reads it
+		// starts only once those have settled.
+		if (justPaired) { await scheduler.scansSettled(); }
 		await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
 		try {
 			await bricks.signIn(picked);

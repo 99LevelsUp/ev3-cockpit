@@ -186,12 +186,23 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		};
 		const registry = new ProviderRegistry();
 		const l = layers(registry);
-		const radio = { connects: 0, listedPairedAtConnect: [] as boolean[], pairedMacs: [] as string[] };
+		const radio = {
+			connects: 0, discovers: 0, listedPairedAtConnect: [] as boolean[], pairedMacs: [] as string[],
+			/** Holds the next discover's answer, which is read from Windows' list before the hold. */
+			discoverGate: undefined as Promise<void> | undefined,
+		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
 			priority: 20,
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
-			async discover(): Promise<DiscoveryScanResult> { return { transport: Transport.BT, items: [{ ...bob }] }; },
+			async discover(): Promise<DiscoveryScanResult> {
+				radio.discovers += 1;
+				const item = { ...bob };
+				const held = radio.discoverGate;
+				radio.discoverGate = undefined;
+				if (held) { await held; }
+				return { transport: Transport.BT, items: [item] };
+			},
 			async connect(brickKey: BrickKey): Promise<SessionHandle> {
 				radio.connects += 1;
 				radio.listedPairedAtConnect.push(l.aggregator.getBrick(idOf(BOB_MAC))?.paired ?? false);
@@ -242,6 +253,31 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
 		const row = brickPickRows(w.aggregator.getDiscoveryList(), (id) => w.bricks.isSignedIn(id))[0];
 		assert.equal(row.description, 'BT connected');
+		w.done();
+	});
+
+	it('connects a freshly paired brick though a background scan read Windows\' list before the pairing', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		// A scheduled Bluetooth scan reads Windows' list now, before the pairing, and answers late.
+		const held = gate();
+		w.radio.discoverGate = held.promise;
+		const background = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+
+		const connecting = connectPickedBrick(w.bob, w.deps);
+		await waitFor(() => w.radio.pairedMacs.length === 1, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		assert.equal(w.aggregator.getBrick(w.bob)?.paired, false, 'the list already says paired, so this test shows nothing');
+		assert.equal(w.bricks.isSignedIn(w.bob), false);
+		held.open();
+		await connecting;
+		await background;
+
+		assert.deepEqual(w.shown.errors, [], 'the freshly paired brick did not connect');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
+		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
+		assert.equal(w.radio.discovers, 3, 'no scan read Windows\' list after the pairing');
 		w.done();
 	});
 

@@ -914,18 +914,24 @@ export class BrickManager implements vscode.Disposable {
 		}
 		// Over Bluetooth alone, the entry the brick holds this link under reads connected
 		// (`c_bt.c` 3566) — under whatever name this computer had when it paired, an earlier one
-		// too. Its removal is the one that cuts the link (`c_bt.c` 3609–3612), so it goes last with
-		// any entry carrying the radio name; with none marked, the radio name alone decides.
-		const linked = overBt ? list.filter((peer) => peer.connected && !isBlankPeerName(peer.name)) : [];
+		// too. Its removal is the one that cuts the link (`c_bt.c` 3609–3612), so the entries
+		// marked connected go last, after any carrying the radio name. Over USB or Wi-Fi the mark
+		// may be another computer's link, so it says nothing about this computer there.
+		const linked = overBt ? namesOf(list.filter((peer) => peer.connected && !isBlankPeerName(peer.name))) : [];
+		// This computer's entry is what decides the Windows pairing (KTD10), so it is the one
+		// entry that must not be mistaken: the entries carrying the radio name; without any, the
+		// one entry marked connected; with two marked, neither — either may be another computer's
+		// link, and its removal would unpair Windows while this computer's entry stays.
+		const named = thisComputer && names.includes(thisComputer) ? [thisComputer] : [];
+		const ours: ReadonlySet<string> = new Set(named.length > 0 ? named : linked.length === 1 ? linked : []);
 		// Over Bluetooth alone no order is safe when nothing tells which entry is this link's: any
 		// removal may be the one that cuts it, leaving the entries after it and a pairing nothing
-		// can tell is one-sided. One entry marked connected tells it without the name; two do not.
-		if (overBt && !thisComputer && linked.length !== 1) {
+		// can tell is one-sided.
+		if (overBt && ours.size === 0) {
 			await closeOpened();
-			return { ...skipped('radio-name-unknown'), ...read };
+			return { ...skipped(thisComputer ? 'link-entry-unknown' : 'radio-name-unknown'), ...read };
 		}
-		const thisComputersNames = new Set([...(thisComputer ? [thisComputer] : []), ...namesOf(linked)]);
-		const includesThisComputer = names.some((name) => thisComputersNames.has(name));
+		const includesThisComputer = ours.size > 0;
 		if (!await confirm(names, includesThisComputer, thisComputer)) {
 			await closeOpened();
 			return undefined;
@@ -936,17 +942,17 @@ export class BrickManager implements vscode.Disposable {
 			// The removal of this computer's entry cuts its Bluetooth link (KTD5); closed first, so
 			// nothing reconnects it to a brick that has just dropped this computer.
 			if (!overBt) { await this.closeBluetoothSessions(brickId); }
-			const { entries, linkCut } = await this.removeEntries(key, peers, overBt ? thisComputersNames : undefined);
+			const last = overBt ? { named: new Set(thisComputer ? [thisComputer] : []), linked: new Set(linked) } : undefined;
+			const { entries, linkCut } = await this.removeEntries(key, peers, last);
 			if (overBt && linkCut) {
 				// The link the list went over is gone, and nothing else reached the brick.
 				if (this.signedIn.has(brickId)) { await this.signOut(brickId); } else { await this.sessionManager.disconnect(key); }
 			}
 
-			const thisComputerWent = entries.some((entry) => thisComputersNames.has(entry.name)
+			const thisComputerWent = entries.some((entry) => ours.has(entry.name)
 				&& (entry.status === 'confirmed' || entry.status === 'sent'));
 			let pairingLeft: ClearPairingSkip | undefined;
-			if (thisComputersNames.size === 0) { pairingLeft = 'radio-name-unknown'; }
-			else if (!includesThisComputer) { pairingLeft = 'not-on-brick'; }
+			if (!includesThisComputer) { pairingLeft = thisComputer ? 'not-on-brick' : 'radio-name-unknown'; }
 			else if (!thisComputerWent) { pairingLeft = 'not-removed'; }
 			else if (!btKey || !wasPaired) { pairingLeft = 'not-paired'; }
 
@@ -970,14 +976,18 @@ export class BrickManager implements vscode.Disposable {
 	 * removed unseen (R16). A pass sends each name still to go once and reads the list back after
 	 * each; a name held twice goes once per pass. It stops when every name has gone, when a pass
 	 * removes nothing, so an entry the brick keeps cannot loop, or after as many passes as the
-	 * list had entries. `last`, over Bluetooth alone, is this computer's names — its radio name
-	 * and the entry marked connected: their entries go only after every other, because the
-	 * removal of the link's entry cuts the link (KTD5).
+	 * list had entries. `last`, over Bluetooth alone, holds this computer's radio name and the
+	 * names of the entries marked connected: those go only after every other, because the
+	 * removal of the link's entry cuts the link (KTD5), and of the two the marked ones go last —
+	 * the link is held under a marked one, so one carrying only the radio name sent after it
+	 * would never be sent.
 	 *
 	 * A link lost on a removal, or a list that cannot be read back after one, ends it: that
 	 * removal counts as sent, and the entries not yet removed as not sent.
 	 */
-	private async removeEntries(key: BrickKey, peers: readonly string[], last: ReadonlySet<string> | undefined): Promise<{
+	private async removeEntries(key: BrickKey, peers: readonly string[], last: {
+		readonly named: ReadonlySet<string>; readonly linked: ReadonlySet<string>;
+	} | undefined): Promise<{
 		entries: ClearedEntry[]; linkCut: boolean;
 	}> {
 		const toGo = new Map<string, number>();
@@ -989,7 +999,11 @@ export class BrickManager implements vscode.Disposable {
 
 		const phases: ((name: string) => boolean)[] = last === undefined
 			? [() => true]
-			: [(name) => !last.has(name), (name) => last.has(name)];
+			: [
+				(name) => !last.named.has(name) && !last.linked.has(name),
+				(name) => last.named.has(name) && !last.linked.has(name),
+				(name) => last.linked.has(name),
+			];
 		for (const inPhase of phases) {
 			for (let pass = 0; pass < peers.length && !sent; pass++) {
 				const names = [...toGo].filter(([name, left]) => left > 0 && inPhase(name)).map(([name]) => name);

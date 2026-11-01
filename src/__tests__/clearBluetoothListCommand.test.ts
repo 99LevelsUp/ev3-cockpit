@@ -272,6 +272,19 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 		assert.match(clearNotification(r, LABEL), /nothing changed/);
 	});
 
+	it('a Bluetooth-only brick whose list does not show this computer\'s entry: nothing changed, and why', () => {
+		const r: ClearListReport = {
+			brickId: CCC, thisComputer: THIS_PC, paired: true, skipped: { reason: 'link-entry-unknown' },
+			peers: ['OTHER-PC', 'OLD-PC'], entries: [], pairing: [], residue: [],
+		};
+		const text = details(r);
+		assert.match(text, /Nothing changed on the brick/);
+		assert.match(text, new RegExp(`no entry carries this computer's Bluetooth name \\("${THIS_PC}"\\)`));
+		assert.doesNotMatch(text, /name is unknown/);
+		assert.match(clearNotification(r, LABEL), /nothing changed on .*which entry is this computer's/);
+		assert.doesNotMatch(clearNotification(r, LABEL), /removed/);
+	});
+
 	it('never tells the user to take ownership, change permissions, elevate, edit the registry or reboot', () => {
 		const reports: ClearListReport[] = [
 			report(),
@@ -279,6 +292,7 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 			report({ pairing: [], pairingLeft: 'radio-name-unknown', thisComputer: undefined, memory: undefined, residue: [] }),
 			report({ entries: [{ status: 'failed', name: 'X', detail: 'still listed' }], pairing: [], pairingLeft: 'not-removed' }),
 			{ brickId: CCC, paired: false, skipped: { reason: 'radio-name-unknown' }, peers: ['A'], entries: [], pairing: [], residue: [] },
+			{ brickId: CCC, paired: true, skipped: { reason: 'link-entry-unknown' }, peers: ['A'], entries: [], pairing: [], residue: [] },
 			{ brickId: CCC, paired: false, skipped: { reason: 'list-unreadable', detail: 'timeout' }, entries: [], pairing: [], residue: [] },
 			{ brickId: CCC, paired: false, skipped: { reason: 'nothing-to-remove' }, peers: [], entries: [], pairing: [], residue: [] },
 		];
