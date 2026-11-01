@@ -60,11 +60,11 @@ export interface BrickManagerOptions {
 	/** Where a name that could not be read is reported, once per channel. */
 	readonly log?: { warn(message: string): void };
 	/**
-	 * Discovery, for {@link BrickManager.forget}: it waits out the scans in flight, stops
-	 * tracking the brick's channels, and scans once afterwards (step-3 plan, KTD1, KTD7).
-	 * Absent, a forget does none of that.
+	 * Discovery, for {@link BrickManager.forget}: it stops tracking the brick's channels, drops
+	 * what a scan older than that lists for them, and scans once afterwards (step-3 plan, KTD1,
+	 * KTD7). Absent, a forget does none of that.
 	 */
-	readonly discovery?: Pick<DiscoveryScheduler, 'scansSettled' | 'forget' | 'scanOnce'>;
+	readonly discovery?: Pick<DiscoveryScheduler, 'forget' | 'scanOnce'>;
 	/** Bluetooth presence, which a forget tells to drop the brick's address (KTD7). Absent: nothing to drop. */
 	readonly btPresence?: { forget(mac: string): void };
 	/**
@@ -299,8 +299,10 @@ export class BrickManager implements vscode.Disposable {
 	 * 3. sign the brick out, which closes every channel, the one opened for step 2 too;
 	 * 4. have each channel's provider forget it where the provider can: the operating-system
 	 *    pairing (KTD6);
-	 * 5. wait out the discovery scans in flight, then clear the cockpit's memory of it (KTD7);
-	 * 6. lift the mark and scan once, so a brick still in reach comes back as a stranger (R4).
+	 * 5. clear the cockpit's memory of it (KTD7); a discovery scan in flight read Windows' list
+	 *    before the unpair, and what it lists for the brick is dropped when it lands;
+	 * 6. lift the mark and start a scan, so a brick still in reach comes back as a stranger (R4).
+	 *    The report does not wait for it: a scan can hang in the operating system.
 	 *
 	 * Shows nothing; the caller builds the message from the report (KTD8). A second call while
 	 * one runs gets the same report rather than a second run, whose end would lift the guards
@@ -646,19 +648,13 @@ export class BrickManager implements vscode.Disposable {
 				this.log?.warn(`Signing ${brickId} out to forget it failed: ${messageOf(error)}`);
 			}
 			const { pairing, residue } = await this.forgetPairings(keys);
-			// A scan that read Windows' list before the unpair would re-track the brick as paired
-			// once its memory is gone; one that starts later reads the list after it.
-			await this.discovery?.scansSettled();
 			const memory = this.forgetMemory(brickId, keys);
 			report = { brickId, brickSide, ...(peers ? { peers } : {}), pairing, memory, residue };
 		} finally {
 			this.releaseGuards(brickId);
 		}
-		try {
-			await this.discovery?.scanOnce();
-		} catch {
-			// The scan's own failure is reported by the scheduler; the forget is done.
-		}
+		// Not awaited: the report does not depend on it, and a scan can hang in the operating system.
+		this.discovery?.scanOnce().catch(() => { /* a failed scan is the scheduler's to report */ });
 		return report;
 	}
 
@@ -968,7 +964,7 @@ export class BrickManager implements vscode.Disposable {
 			const bluetooth = btKey && !pairingLeft ? await this.forgetBluetoothChannel(brickId, btKey) : undefined;
 			await closeOpened();
 			return {
-				...base, ...read, entries,
+				...base, ...read, entries, left,
 				...(bluetooth ?? {}),
 				...(pairingLeft ? { pairingLeft } : {}),
 			};
@@ -1071,16 +1067,15 @@ export class BrickManager implements vscode.Disposable {
 
 	/**
 	 * Forget the brick's Bluetooth channel and keep the brick (KTD10): the pairing through the
-	 * provider (KTD6), then, once the scans in flight have settled, the cockpit's memory of that
-	 * channel alone (KTD7). Every Bluetooth session of the brick is closed by now.
+	 * provider (KTD6), then the cockpit's memory of that channel alone (KTD7). Every Bluetooth
+	 * session of the brick is closed by now. A scan in flight read Windows' list before the
+	 * unpair; discovery drops what it lists for the channel.
 	 */
 	private async forgetBluetoothChannel(brickId: BrickId, btKey: BrickKey): Promise<{
 		pairing: PairingOutcome[]; residue: ForgetResidue[]; memory: MemoryOutcome;
 	}> {
 		await this.closeBluetoothSessions(brickId);
 		const { pairing, residue } = await this.forgetPairings([btKey]);
-		// A scan that read Windows' list before the unpair would track the channel as paired again.
-		await this.discovery?.scansSettled();
 		const memory = this.forgetLayers([btKey], () => this.aggregator.forgetChannel(btKey));
 		const signIn = this.signedIn.get(brickId);
 		if (signIn) {

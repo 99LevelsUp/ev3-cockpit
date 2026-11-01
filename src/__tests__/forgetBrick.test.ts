@@ -585,6 +585,7 @@ describe('Forget a brick — what the cockpit remembers afterwards (R4, R5)', ()
 		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
 
 		await w.bricks.forget(CCC);
+		await settle();   // the scan the forget starts and does not wait for
 
 		const entry = w.aggregator.getBrick(CCC);
 		assert.ok(entry, 'the cabled brick is missing from the list');
@@ -600,6 +601,7 @@ describe('Forget a brick — what the cockpit remembers afterwards (R4, R5)', ()
 		await signedInOver(w, Transport.BT);
 
 		await w.bricks.forget(CCC);
+		await settle();
 
 		assert.equal(w.aggregator.getBrick(CCC), undefined);
 		w.done();
@@ -620,25 +622,45 @@ describe('Forget a brick — what the cockpit remembers afterwards (R4, R5)', ()
 		assert.deepEqual(report.residue, []);
 		assert.deepEqual(report.memory, { status: 'cleared' });
 		// Windows still lists it, so the scan brings it back; the cockpit's own flag is gone.
+		await waitFor(() => w.aggregator.getBrick(CCC) !== undefined, 1000);
 		assert.equal(w.aggregator.getBrick(CCC)?.favorite, false);
 		w.done();
 	});
 
-	it('does not bring the brick back as paired from a scan that read Windows\' list before the unpair', async () => {
+	it('reports without waiting for a scan in flight, and that scan does not bring the brick back as paired', async () => {
 		const w = world({ cabled: false, radio: undefined });
 		await w.scheduler.scanOnce();
 		const held = gate();
 		w.bt.discoverGate = held.promise;
-		const staleScan = w.scheduler.scanOnce();   // reads the paired list now, answers later
+		const staleScan = w.scheduler.scanOnce();   // reads the paired list now, answers when let
 
-		const forgetting = w.bricks.forget(CCC);
-		await waitFor(() => w.bt.unpairs.length === 1, 1000);
+		const outcome = await Promise.race([
+			w.bricks.forget(CCC).then(() => 'reported'),
+			settle(1000).then(() => 'waiting'),
+		]);
+		assert.equal(outcome, 'reported', 'the forget waited for a scan, which can hang in the operating system');
 		held.open();
-		await forgetting;
 		await staleScan;
-		await w.scheduler.scansSettled();
+		await settle();
 
 		assert.equal(w.aggregator.getBrick(CCC), undefined, 'the stale scan brought the forgotten brick back');
+		w.done();
+	});
+
+	it('reports without waiting for the scan it starts itself', async () => {
+		const w = world({ cabled: false, radio: undefined });
+		await signedInOver(w, Transport.BT);
+		const held = gate();
+		w.bt.discoverGate = held.promise;   // the next Bluetooth scan, the forget's own, never answers
+
+		const outcome = await Promise.race([
+			w.bricks.forget(CCC).then(() => 'reported'),
+			settle(1000).then(() => 'waiting'),
+		]);
+		held.open();
+
+		assert.equal(outcome, 'reported', 'the forget waited for its own scan, which can hang in the operating system');
+		assert.equal(w.bt.discoverGate, undefined, 'the forget started no scan, so this test shows nothing');
 		w.done();
 	});
 });
@@ -671,6 +693,7 @@ describe('Clear a brick\'s Bluetooth list — removing every entry (R16, R17)', 
 		assert.deepEqual(report?.entries, [
 			{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: THIS_PC }, { status: 'confirmed', name: 'Zed' },
 		]);
+		assert.deepEqual(report?.left, [], 'the report does not carry the list as read back');
 		assert.equal(report?.skipped, undefined);
 		assert.deepEqual(report?.pairing, [], 'a brick Windows has not paired has no pairing to remove');
 		assert.equal(report?.pairingLeft, 'not-paired');
@@ -873,6 +896,7 @@ describe('Clear a brick\'s Bluetooth list — removing every entry (R16, R17)', 
 		assert.equal(report?.over, usbKey);
 		assert.equal(ask.calls[0].includesThisComputer, false);
 		assert.deepEqual(w.brick.peers(), ['OLD-PC'], 'the clear did not run, so this test shows nothing');
+		assert.deepEqual(report?.left, ['OLD-PC']);
 		assert.equal(report?.entries.find((entry) => entry.name === 'OTHER-PC')?.status, 'confirmed');
 		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that may still list this computer');
 		assert.deepEqual(report?.pairing, []);
@@ -1026,6 +1050,29 @@ describe('Clear a brick\'s Bluetooth list — this computer\'s pairing (R18, KTD
 		assert.equal(entry?.paired, false, 'the list still says the brick is paired');
 		assert.deepEqual(entry?.channels.map((c) => c.transport), [Transport.USB]);
 		assert.equal(w.bt.connects, 1);
+		w.done();
+	});
+
+	it('reports without waiting for a scan in flight, and that scan does not bring the pairing back', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		const held = gate();
+		w.bt.discoverGate = held.promise;
+		const staleScan = w.scheduler.scanOnce();   // reads the paired list now, answers when let
+
+		const outcome = await Promise.race([
+			w.bricks.clearBluetoothList(CCC, asked().confirm).then(() => 'reported'),
+			settle(1000).then(() => 'waiting'),
+		]);
+		assert.equal(outcome, 'reported', 'the clear waited for a scan, which can hang in the operating system');
+		held.open();
+		await staleScan;
+		await settle();
+
+		const entry = w.aggregator.getBrick(CCC);
+		assert.equal(entry?.paired, false, 'the stale scan listed the brick as paired again');
+		assert.deepEqual(entry?.channels.map((c) => c.transport), [Transport.USB]);
+		assert.equal(w.bt.connects, 1, 'the signed-in brick rejoined Bluetooth from the stale scan');
 		w.done();
 	});
 

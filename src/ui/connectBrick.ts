@@ -11,7 +11,6 @@ import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '.
 import type { BrickManager } from '../runtime/brickManager';
 import { brickLabel, transportLabel } from '../runtime/brickLabels';
 import type { RuntimeLog } from '../runtime/createRuntime';
-import type { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import type { PresenceAggregator } from '../runtime/presenceAggregator';
 import type { PairingResult } from '../transports/btClassicDiscovery';
 import type { BtPairingEvent } from '../transports/btPairingHelper';
@@ -68,14 +67,10 @@ export async function pickBrick(
 	return picked;
 }
 
-/** How many settle-then-scan rounds a freshly paired brick gets to show up paired in the list. */
-const PAIRED_SCAN_ROUNDS = 3;
-
 /** What connecting a picked brick needs besides the brick layer. */
 export interface ConnectBrickDeps {
-	readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
+	readonly aggregator: Pick<PresenceAggregator, 'getBrick' | 'markPaired'>;
 	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf'>;
-	readonly scheduler: Pick<DiscoveryScheduler, 'scanOnce' | 'scansSettled'>;
 	/** Pairs a brick over Bluetooth; absent without Bluetooth. */
 	readonly pair?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
 	readonly log: RuntimeLog;
@@ -90,7 +85,7 @@ export interface ConnectBrickDeps {
  * and signs the brick in over every channel it is available on (KD1).
  */
 export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps): Promise<void> {
-	const { aggregator, bricks, scheduler, log } = deps;
+	const { aggregator, bricks, log } = deps;
 	const brick = aggregator.getBrick(picked);
 	const label = brick?.name.value ?? picked;
 	if (bricks.isSignedIn(picked)) {
@@ -102,7 +97,6 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 	// A brick only an inquiry has heard has nothing to connect over until it is paired.
 	const bt = brick?.channels.find((c) => c.transport === Transport.BT);
 	const onlyNewBluetooth = brick && !brick.paired && bt && brick.channels.length === 1;
-	let justPaired = false;
 	if (onlyNewBluetooth && deps.pair) {
 		const pair = deps.pair;
 		const mac = brickKeyId(bt.brickKey) ?? '';
@@ -123,26 +117,13 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 			return result.ok;
 		});
 		if (!paired) { return; }
-		justPaired = true;
+		// A sign-in joins no Bluetooth channel the list holds unpaired. The cockpit made this
+		// pairing, so it says so itself instead of waiting for a scan to read it back from
+		// Windows: a scan can be slow, can have read the list before the pairing, or can hang.
+		aggregator.markPaired(bt.brickKey);
 	}
 
 	await deps.progress(`EVƎ Cockpit: connecting to ${label}`, async () => {
-		// A freshly paired brick is not in the discovery list as paired yet — the OS knows
-		// the pairing immediately, the next scheduled scan is up to a poll interval away. A
-		// sign-in joins no Bluetooth channel the list holds unpaired, so the list has to learn
-		// of the pairing first. A scan already in flight may have read Windows' list before the
-		// pairing, and `scanOnce` skips a transport that is scanning; so the scan that reads it
-		// starts only once those have settled. A timer can start another one in between, so this
-		// repeats until the list says paired, a few rounds at most; past those, the sign-in's own
-		// error says what is wrong.
-		if (justPaired) {
-			for (let round = 0; round < PAIRED_SCAN_ROUNDS && !aggregator.getBrick(picked)?.paired; round++) {
-				await scheduler.scansSettled();
-				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
-			}
-		} else {
-			await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
-		}
 		try {
 			await bricks.signIn(picked);
 			const route = bricks.routeOf(picked);
