@@ -110,7 +110,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 		await connectPickedBrick(picked, {
 			aggregator, bricks, log: logger,
-			pair: btDiscovery?.pair,
+			pair: btDiscovery?.pair, presence: btPresence,
 			progress: (title, task) => vscode.window.withProgress(
 				{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
 				(progress) => task((message) => progress.report({ message }))),
