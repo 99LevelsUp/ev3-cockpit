@@ -253,6 +253,17 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 		assert.match(forgetNotification(r, 'CCC'), /Nothing changed on the brick/);
 	});
 
+	it('unreachable: says whether a channel was tried, and what opening it said', () => {
+		// U7, 01.11.2026: "none could be opened" was shown when nothing had been tried.
+		const untried = details(report({ brickSide: { status: 'skipped', reason: 'not-reachable' }, peers: undefined }));
+		assert.match(untried, /no channel to it was connected or available/);
+		assert.doesNotMatch(untried, /could not be opened/);
+		const failed = details(report({
+			brickSide: { status: 'skipped', reason: 'not-reachable', detail: 'BT connect failed: no answer' }, peers: undefined,
+		}));
+		assert.match(failed, /a channel to it could not be opened\. BT connect failed: no answer/);
+	});
+
 	it('no exact match: lists the names the brick holds, quoted as they are', () => {
 		const r = report({ brickSide: { status: 'skipped', reason: 'no-match' }, peers: ['OLD-PC', 'Zed '] });
 		const text = details(r);

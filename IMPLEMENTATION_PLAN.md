@@ -775,6 +775,17 @@ Build the source of truth for connected bricks.
     came back with an empty name. The claim was written from reading the structure and not
     from running it, which is the same mistake as arguing about a wire instead of measuring
     it. 2.8.13 stands as it was: the name has to come from the brick or from the USB identity
+
+    **The empty name may have been the reader, not Windows (found 01.11.2026, step-3 audit).**
+    koffi returns the `char16_t[248]` field as a JS string, and `readName` in
+    `windowsBluetooth.ts` discards anything but an array, so a cached name was never read at all.
+    Owner decision, 01.11.2026: Windows' cached name is shown only until the brick says its own,
+    which then wins and stays. History: a brick paired, renamed out of reach and brought back
+    showed its old name for good, and the mismatch caused real trouble, so the cache must never
+    outrank the brick. If a supported API can write the brick's fresh name back into Windows'
+    record (check `BluetoothUpdateDeviceRecord`, which updates only `szName`, against Microsoft
+    Learn first), do that too. Not started: fix `readName`, measure whether the name is there,
+    then wire it as a `bt-cache` name below `brick`.
   - [x] 2.8.16 **Isolate what makes an RFCOMM connect fail.** 2.8.14 established what it is
     not: not the backend (40% against 47%), and not the wait before trying (47% at 15/30 s
     against ~50% at 2 s). Instrument fixed first: `bt-backend-comparison.js` now separates

@@ -14,7 +14,7 @@ import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-	BrickCommand, BrickKey, BrickResponse, ConnectionState, DiscoveryItem, ForgetResidue, PresenceState, Transport,
+	BrickCommand, BrickKey, BrickResponse, ChannelState, ConnectionState, DiscoveryItem, ForgetResidue, PresenceState, Transport,
 	brickIdOf, makeBrickKey,
 } from '../contracts';
 import type { DiscoveryScanResult, SessionHandle, TransportProvider } from '../contracts';
@@ -127,6 +127,8 @@ function world(options: WorldOptions = {}) {
 		paired: options.paired ?? true, connects: 0, open: false,
 		/** Not heard by the presence checks: the list shows the channel lost. */
 		unheard: false,
+		/** Switched off: a connect gets no answer. */
+		off: false,
 		attempted: [] as string[],
 		unpairs: [] as BrickKey[],
 		/** The reason Windows gives for refusing the unpair, when it does. */
@@ -228,6 +230,7 @@ function world(options: WorldOptions = {}) {
 		},
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			bt.connects += 1;
+			if (bt.off) { throw new TransportError('BT connect failed: no answer'); }
 			bt.open = true;
 			return { brickKey, transport: Transport.BT };
 		},
@@ -408,20 +411,54 @@ describe('Forget a brick — this computer\'s entry on the brick (R7–R9)', () 
 		w.done();
 	});
 
-	it('sends nothing to a brick with no available channel, and still unpairs and forgets it', async () => {
+	it('tries a paired Bluetooth channel the presence checks do not hear, and says why when it cannot open it', async () => {
 		const w = world({ cabled: false });
-		w.bt.unheard = true;   // paired, but the presence checks no longer hear it: switched off
+		w.bt.unheard = true;   // paired, but the presence checks no longer hear it
+		w.bt.off = true;       // and it is indeed switched off
 		await w.scheduler.scanOnce();
 
 		const report = await w.bricks.forget(CCC);
 
-		assert.deepEqual(report.brickSide, { status: 'skipped', reason: 'not-reachable' });
+		assert.equal(report.brickSide.status, 'skipped');
+		assert.equal(report.brickSide.status === 'skipped' ? report.brickSide.reason : undefined, 'not-reachable');
+		assert.match(report.brickSide.status === 'skipped' ? report.brickSide.detail ?? '' : '', /no answer/);
 		assert.equal(report.peers, undefined);
 		assert.deepEqual(w.brick.received, []);
-		assert.equal(w.bt.connects, 0);
+		assert.equal(w.bt.connects, 1, 'the channel was not tried');
 		assert.deepEqual(w.bt.unpairs, [btKey]);
 		assert.deepEqual(report.pairing, [{ status: 'removed', channel: btKey }]);
 		assert.equal(w.aggregator.getBrick(CCC), undefined, 'the cockpit still lists the brick');
+		w.done();
+	});
+
+	it('removes this computer\'s entry over a paired Bluetooth channel the presence checks missed', async () => {
+		// Measured 01.11.2026 (U7): the checks miss bricks right next to the computer.
+		const w = world({ cabled: false });
+		w.bt.unheard = true;
+		await w.scheduler.scanOnce();
+		assert.equal(w.aggregator.getBrick(CCC)?.channels[0]?.state, ChannelState.Lost,
+			'the channel is not lost, so this test shows nothing');
+
+		const report = await w.bricks.forget(CCC);
+
+		assert.equal(report.brickSide.status, 'sent');
+		assert.deepEqual(w.removals(), [THIS_PC]);
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		w.done();
+	});
+
+	it('does not try a lost Bluetooth channel of a brick nobody has paired', async () => {
+		const w = world({ cabled: false, paired: false });
+		w.bt.cachedAfterUnpair = true;   // Windows' cache lists it, unpaired
+		w.bt.unheard = true;
+		await w.scheduler.scanOnce();
+		assert.equal(w.aggregator.getBrick(CCC)?.channels[0]?.state, ChannelState.Lost,
+			'the channel is not lost, so this test shows nothing');
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.equal(report?.skipped?.reason, 'not-reachable');
+		assert.equal(w.bt.connects, 0, 'a Bluetooth channel nobody has paired was opened');
 		w.done();
 	});
 

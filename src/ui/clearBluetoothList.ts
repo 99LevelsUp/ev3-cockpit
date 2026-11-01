@@ -82,7 +82,9 @@ function skipLine(report: ClearListReport, skip: NonNullable<ClearListReport['sk
 	const detail = skip.detail ? ` ${sentence(skip.detail)}` : '';
 	switch (skip.reason) {
 	case 'not-reachable':
-		return `Nothing changed on the brick: no channel to it was connected, and none could be opened.${detail}`;
+		return skip.detail
+			? `Nothing changed on the brick: a channel to it could not be opened.${detail}`
+			: 'Nothing changed on the brick: no channel to it was connected or available.';
 	case 'list-unreadable':
 		return `Nothing changed on the brick: its Bluetooth list could not be read.${detail}`;
 	case 'nothing-to-remove':

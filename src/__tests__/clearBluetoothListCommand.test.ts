@@ -308,8 +308,10 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 
 	it('a brick that could not be reached: nothing changed', () => {
 		const r: ClearListReport = { brickId: CCC, paired: false, skipped: { reason: 'not-reachable' }, entries: [], pairing: [], residue: [] };
-		assert.match(details(r), /Nothing changed on the brick/);
+		assert.match(details(r), /Nothing changed on the brick: no channel to it was connected or available\./);
 		assert.match(clearNotification(r, LABEL), /nothing changed/);
+		const failed: ClearListReport = { ...r, skipped: { reason: 'not-reachable', detail: 'BT connect failed: no answer' } };
+		assert.match(details(failed), /a channel to it could not be opened\. BT connect failed: no answer/);
 	});
 
 	it('a Bluetooth-only brick whose list does not show this computer\'s entry: nothing changed, and why', () => {
