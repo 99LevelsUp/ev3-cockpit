@@ -45,8 +45,24 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
 - forgetting a brick (step 3, `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`): "Forget a
   Brick" signs it out, removes this computer from the brick's own list when the brick is
   reachable, unpairs it, clears the cockpit's memory and names what Windows keeps; "Clear a
-  Brick's Bluetooth List" unpairs a brick from every peer it remembers ✅ — hardware session
-  (U7) pending
+  Brick's Bluetooth List" unpairs a brick from every peer it remembers — built and reviewed,
+  **not closed**. Open:
+  - U7 hardware session: CCC over USB and Bluetooth, this computer's radio name against the
+    name the brick stores, the registry key's casing, menu power-off persisting the list, and
+    that this computer's entry reads `connected` while its Bluetooth link is open (clearing
+    over Bluetooth relies on that mark).
+  - Waiting on scans has no deadline. "Connect a Brick" (after a pairing) and forget both
+    await `scansSettled()`, and nothing times out a provider's `discover()`: a native callback
+    that never fires (`SerialPort.list()` in the SPP port scan, or a libusb callback on the USB
+    bus queue) would hang them. Owner decision: a deadline on the wait, or after a pairing
+    telling sign-in the channel is paired instead of waiting for a scan to report it.
+  - The clear report says the list "holds no entry now" from confirmed removals, not from the
+    final read-back.
+  - Owner decision: a Bluetooth channel of an unpaired brick is never joined (`joinCandidates`),
+    which also changes step 2's sign-in of a cabled brick; record it as a KTD if accepted.
+  - The step-3 plan's KTD9, KTD10 and R19 trail the code: the `duplicate-link-entry` refusal,
+    up to three rescans after a pairing, unpairing only when the read-back holds none of this
+    computer's entries, and the unpaired-Bluetooth join rule.
 
 Open, by phase:
 

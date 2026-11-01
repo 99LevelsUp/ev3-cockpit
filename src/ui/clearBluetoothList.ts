@@ -52,6 +52,11 @@ export function clearConfirmation(
 			+ 'and if this computer is paired with the brick, that pairing is removed too.');
 	} else if (thisComputer === undefined) {
 		detail.push('This computer\'s Bluetooth name is unknown, so nothing shows whether this computer is among them.');
+	} else if (includesThisComputer && !names.includes(thisComputer)) {
+		// Its current name is not on the list; the brick layer found its entry by the connected mark.
+		detail.push(`No entry carries this computer's current name, "${thisComputer}", but the brick marks one of them `
+			+ 'as the entry that holds its Bluetooth link to this computer: the brick will no longer know this computer, '
+			+ 'and if this computer is paired with the brick, that pairing is removed too.');
 	} else if (includesThisComputer) {
 		detail.push(`This computer, "${thisComputer}", is among them: the brick will no longer know it, `
 			+ 'and if this computer is paired with the brick, that pairing is removed too.');
