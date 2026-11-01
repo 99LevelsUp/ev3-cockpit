@@ -396,6 +396,14 @@ function buildBluetoothPeerCommand(index: number): EncodedCommand {
 }
 
 /**
+ * Whether a peer name is empty or blank, which a removal cannot address: the firmware reads an
+ * empty one as a wildcard for the first named entry (`c_bt.c` 2205–2211).
+ */
+export function isBlankPeerName(name: string): boolean {
+	return name.trim().length === 0;
+}
+
+/**
  * `opCOM_REMOVE` on Bluetooth, by the peer's name.
  *
  * Refuses an empty or blank name and checks nothing else. Empty is the firmware's wildcard
@@ -405,7 +413,7 @@ function buildBluetoothPeerCommand(index: number): EncodedCommand {
  * accented letters, and the firmware compares the bytes as stored.
  */
 function buildRemoveBluetoothPeerCommand(name: string): EncodedCommand {
-	if (name.trim().length === 0) {
+	if (isBlankPeerName(name)) {
 		throw new ProtocolError(
 			'Refusing to remove a Bluetooth peer with an empty name: the brick would remove '
 				+ 'the first entry in its list instead.'

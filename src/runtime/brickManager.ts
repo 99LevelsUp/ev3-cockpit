@@ -19,6 +19,7 @@ import {
 	TransportError,
 } from '../errors/CockpitError';
 import { PinnedLink } from '../fs/fileTransferService';
+import { isBlankPeerName } from '../protocol/ev3Commands';
 import { PacketCommandChannel } from '../commands/commandChannel';
 import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
@@ -86,9 +87,6 @@ export type ClearListConfirm = (
 	names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined,
 ) => PromiseLike<boolean>;
 
-/** A name a removal cannot address: the firmware reads an empty one as a wildcard (KTD2). */
-const isBlank = (name: string): boolean => name.trim() === '';
-
 // ── Per-brick sign-in state ─────────────────────────────────────────
 
 interface SignIn {
@@ -146,9 +144,9 @@ export class BrickManager implements vscode.Disposable {
 	private readonly forgets = new Map<BrickId, Promise<ForgetReport>>();
 	/** Bricks whose list is being cleared, so a second clear is refused rather than interleaved. */
 	private readonly clearing = new Set<BrickId>();
-	private readonly discovery?: Pick<DiscoveryScheduler, 'scansSettled' | 'forget' | 'scanOnce'>;
-	private readonly btPresence?: { forget(mac: string): void };
-	private readonly radioName?: () => string | undefined;
+	private readonly discovery?: BrickManagerOptions['discovery'];
+	private readonly btPresence?: BrickManagerOptions['btPresence'];
+	private readonly radioName?: BrickManagerOptions['radioName'];
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -189,8 +187,10 @@ export class BrickManager implements vscode.Disposable {
 				// steps and waited them out beside a brick that was ready.
 				// Not for a brick being forgotten: either would open a link the forget is closing (KTD4).
 				const forgetting = this.forgetting.has(brickIdOf(e.brickKey));
-				if (!forgetting) { this.sessionManager.notifyBrickAvailable(e.brickKey); }
-				if (!forgetting) { this.probeName(e.brickKey); }
+				if (!forgetting) {
+					this.sessionManager.notifyBrickAvailable(e.brickKey);
+					this.probeName(e.brickKey);
+				}
 				const signIn = this.signedIn.get(brickIdOf(e.brickKey));
 				if (signIn?.awaitingEvidence.delete(e.brickKey)) {
 					this.reconcile(brickIdOf(e.brickKey));
@@ -508,12 +508,14 @@ export class BrickManager implements vscode.Disposable {
 		// A Bluetooth channel of a brick nobody has paired is a sighting — an inquiry, or Windows'
 		// cache after an unpair — not a link: a brick still signed in over USB after its list was
 		// cleared would otherwise connect to a brick that no longer knows this computer (KTD10).
-		const paired = this.aggregator.getBrick(brickId)?.paired ?? false;
+		// Looked up once, and only when a Bluetooth channel gets this far.
+		let paired: boolean | undefined;
 		for (const key of this.joinCandidates(brickId)) {
 			if (signIn.pending.has(key) || signIn.awaitingEvidence.has(key) || signIn.retryTimers.has(key)) {
 				continue;
 			}
-			if (!paired && this.transportOf(key) === Transport.BT) { continue; }
+			if (this.transportOf(key) === Transport.BT
+				&& !(paired ??= this.aggregator.getBrick(brickId)?.paired ?? false)) { continue; }
 			this.join(brickId, key).catch(() => { /* recorded by join; retried per transport */ });
 		}
 	}
@@ -872,8 +874,8 @@ export class BrickManager implements vscode.Disposable {
 			return { ...skipped('list-unreadable', messageOf(error)), over: key };
 		}
 		const read = { over: key, peers };
-		const names = peers.filter((name) => !isBlank(name));
-		const unnamed = peers.filter(isBlank).map((name): ClearedEntry => ({ status: 'not-removable', name, reason: 'blank-name' }));
+		const names = peers.filter((name) => !isBlankPeerName(name));
+		const unnamed = peers.filter(isBlankPeerName).map((name): ClearedEntry => ({ status: 'not-removable', name, reason: 'blank-name' }));
 		if (names.length === 0) {
 			await closeOpened();
 			return { ...skipped('nothing-to-remove'), ...read, entries: unnamed };
@@ -939,7 +941,7 @@ export class BrickManager implements vscode.Disposable {
 		entries: ClearedEntry[]; linkCut: boolean;
 	}> {
 		const toGo = new Map<string, number>();
-		for (const name of peers) { if (!isBlank(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
+		for (const name of peers) { if (!isBlankPeerName(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
 		const removed = new Map<string, number>();
 		const lastFailure = new Map<string, string>();
 		const held = (list: readonly string[], name: string): number => list.filter((n) => n === name).length;
@@ -983,7 +985,7 @@ export class BrickManager implements vscode.Disposable {
 
 		let sentShown = false;
 		const entries = peers.map((name): ClearedEntry => {
-			if (isBlank(name)) { return { status: 'not-removable', name, reason: 'blank-name' }; }
+			if (isBlankPeerName(name)) { return { status: 'not-removable', name, reason: 'blank-name' }; }
 			const confirmed = removed.get(name) ?? 0;
 			if (confirmed > 0) {
 				removed.set(name, confirmed - 1);

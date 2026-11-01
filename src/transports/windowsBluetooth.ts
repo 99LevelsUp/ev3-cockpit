@@ -237,9 +237,6 @@ function loadBthprops(): BthpropsApi {
 		const unregisterAuth = lib.func(
 			'int __stdcall BluetoothUnregisterAuthentication(void*)'
 		) as KoffiFunc;
-		// Signatures per Microsoft Learn: BluetoothFindFirstRadio returns an
-		// HBLUETOOTH_RADIO_FIND and writes the radio HANDLE through its second parameter;
-		// the find handle closes with BluetoothFindRadioClose, the radio handle with CloseHandle.
 		const findFirstRadio = lib.func(
 			'void* __stdcall BluetoothFindFirstRadio(COCKPIT_BT_FIND_RADIO_PARAMS*, _Out_ void**)'
 		) as KoffiFunc;
@@ -318,12 +315,17 @@ function addressToMac(value: bigint | number | undefined): string {
 	return mac;
 }
 
+/** Decodes a UTF-16 `szName` buffer up to its terminator, untrimmed. */
+function decodeUtf16Name(units: Uint16Array): string {
+	const codes = Array.from(units);
+	const end = codes.indexOf(0);
+	return String.fromCharCode(...codes.slice(0, end >= 0 ? end : codes.length));
+}
+
 /** Reads `szName` up to its terminator. Windows leaves the rest of the buffer untouched. */
 function readName(raw: unknown): string {
 	if (!(raw instanceof Uint16Array)) { return ''; }
-	const units = Array.from(raw);
-	const end = units.indexOf(0);
-	return String.fromCharCode(...units.slice(0, end >= 0 ? end : units.length)).trim();
+	return decodeUtf16Name(raw).trim();
 }
 
 /**
@@ -339,9 +341,7 @@ function readRadioName(raw: unknown): string {
 		return end >= 0 ? raw.slice(0, end) : raw;
 	}
 	if (!(raw instanceof Uint16Array)) { return ''; }
-	const units = Array.from(raw);
-	const end = units.indexOf(0);
-	return String.fromCharCode(...units.slice(0, end >= 0 ? end : units.length));
+	return decodeUtf16Name(raw);
 }
 
 function toDeviceInfo(raw: Record<string, unknown>): BluetoothDeviceInfo {
