@@ -51,7 +51,10 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
     name the brick stores, the registry key's casing, menu power-off persisting the list, and
     that this computer's entry reads `connected` while its Bluetooth link is open (clearing
     over Bluetooth relies on that mark).
-  - Round-4 audit of the rebuild below. After three audit rounds each found a race between a
+  - Audit of the rebuild below: round 4 found two real majors in its pairing half (the pairing
+    was recorded in the list only, not in discovery, which rebuilds the list), fixed; one
+    finding rejected (a stale USB scan relisting a forgotten cabled brick as a stranger is R4's
+    intended end state). Round 5 audits that fix. After three audit rounds each found a race between a
     scan and the cockpit's own pairing in the previous fix, the area was rebuilt (step-3 plan,
     KTD11, 01.11.2026): the cockpit records a pairing it made itself, discovery drops what a scan
     older than a forget lists for the forgotten keys, and neither "Connect a Brick" nor forget
