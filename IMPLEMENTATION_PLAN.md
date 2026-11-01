@@ -47,10 +47,11 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   reachable, unpairs it, clears the cockpit's memory and names what Windows keeps; "Clear a
   Brick's Bluetooth List" unpairs a brick from every peer it remembers — built and reviewed,
   **not closed**. Open:
-  - U7 hardware session: CCC over USB and Bluetooth, this computer's radio name against the
-    name the brick stores, the registry key's casing, menu power-off persisting the list, and
-    that this computer's entry reads `connected` while its Bluetooth link is open (clearing
-    over Bluetooth relies on that mark).
+  - U7 hardware session done 01.11.2026; verdicts in the step-3 plan's appendix. Every success
+    criterion run holds, two after fixes made in the session (`121c393`, `450cdb2`). Not
+    verified: the `connected` mark on this computer's entry (matters only with the radio name
+    unknown), a battery pull undoing a removal, and R14 (waiting for a never-met brick). Future:
+    pairing from the picker is slow before the brick asks; heard/not-heard changes are not logged.
   - Audit of the rebuild below: round 4 found two real majors in its pairing half (the pairing
     was recorded in the list only, not in discovery, which rebuilds the list), fixed; one
     finding rejected (a stale USB scan relisting a forgotten cabled brick as a stranger is R4's

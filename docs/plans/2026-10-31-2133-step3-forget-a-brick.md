@@ -444,4 +444,43 @@ Source: `../ev3-resources/11_Firmware/ev3_firmware_109d_developer_edition`, read
 
 ### Hardware results
 
-Filled in by U7.
+U7 session, 01.11.2026, 22:54–23:45, with the owner at the bench (AAA `001653F00A0A`, BBB
+`001653F00B0B`, CCC `001653F00C0C`), in the Extension Development Host, the last part with mock
+bricks off. Beep and hung-probe check before each step at a brick; none was hung after any
+Bluetooth step (one presence check, `bt-pairing-helper --sdp`, was running and finished within
+its 10 s).
+
+| Criterion / assumption | Verdict | Evidence |
+|---|---|---|
+| KTD3: the brick stores this computer under the radio name | **holds** | CCC and AAA list `"HOSTA"`; the radio name the cockpit read is `HOSTA` (the confirmation said "This computer, "HOSTA", is among them", an exact match) |
+| CCC over USB: list read back lacks this computer, Windows unpaired, cockpit lists it unpaired | **holds** | 22:57:29, "removed this computer's entry "HOSTA" over USB; the list read back no longer holds it"; pairing removed; no PnP node for CCC left; CCC came back as a stranger over USB and, from Windows' cache, an unpaired Bluetooth row |
+| Menu power-off persists the removal | **holds** | after a menu power-off and power-on CCC's list held only `"HOSTB"` |
+| Registry key named at its exact path and casing | **holds** | the message gave `...\Devices\001653f00c0c` (and `001653f00a0a` for AAA); `reg query` found the key at that path, lower case; the cockpit did not touch it |
+| A brick known only over USB names no key | not run on hardware | covered by tests only; every bench brick has a Bluetooth pairing |
+| Bluetooth only: removal reported sent, not confirmed; nothing reconnects | **holds, after a fix** | first run (AAA, 23:03) changed nothing on the brick and tried no connect: the presence checks had lost its channel and the brick side took only available channels (fixed in `121c393`). Rerun 23:42:43: "sent the removal of this computer's entry "HOSTA" over BT, not confirmed. BT connection closed by the brick"; no session afterwards; AAA's list read over USB then held nothing |
+| Clearing stale entries over USB leaves the list empty, and it stays so after a menu power-off | **holds** | AAA 23:14:37, `"HOSTA"` and `"HOSTB"` each removed and confirmed by read-back; after a menu power-off "holds nothing to remove" |
+| This computer's entry reads `connected` over SPP | not verified | no surface shows the flag; it matters only when the radio name is unknown, which it was not here |
+| Battery pull undoes a removal | not run | the assumption rests on `c_bt.c` 483–486 |
+| R14 never-met discovery | waiting for its precondition | every bench brick has a `BTHPORT` key on this host |
+| The brick's own menu path for removing a device | not looked up | the message does not name it |
+
+Found and fixed during the session:
+
+- `121c393`: forget and clear did not try a paired Bluetooth channel the presence checks had lost
+  (BBB also showed "BT not heard" while on the bench next to the computer), and the report said
+  "none could be opened" when nothing was tried.
+- `450cdb2`: "Connect a Brick" paired only a brick with a single channel; AAA, unplugged after a
+  cable session, showed "USB lost · BT available · new", skipped the pairing and failed with "not
+  available on any channel". Pairing from the picker then worked: AAA paired and connected over
+  Bluetooth (23:37:56), which is step 2's R18 tried by hand.
+
+Observed, not acted on:
+
+- Pairing AAA took long before the brick asked for confirmation; the pairing events are logged
+  at debug level only. A future optimisation; time it with debug logging on.
+- Changes between "heard" and "not heard" are not logged at all, which left the first AAA run
+  to inference.
+- After a power-on, CCC's name read over USB timed out (`LIBUSB_TRANSFER_TIMED_OUT`, the brick
+  still booting), so the list showed "name unconfirmed" until a later connect.
+- Windows' cached unpaired Bluetooth row for a forgotten brick went away within about two
+  minutes (AAA 23:03 → 23:05:58), well before a restart.
