@@ -58,6 +58,14 @@ Open, by phase:
   a brick this machine has never met. Every bench brick is known to it. Forget plus the
   owner's own removal of the registry key and a Windows restart now make the test possible
   (step 3, R14); the cockpit itself never deletes that key.
+- **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
+  object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
+  state in a read model; open — 3.1.4 peripheral-type enum, 3.2 data models, 3.3.2/3.3.5
+  subscriptions, 3.4 adaptive throttling, 3.5 read model, 3.6 stale snapshots, 3.8 remaining
+  constants.
+- **Phase 4:** the public API (4.2–4.5, 4.7, 4.8), program control (4.7a), 4.6.4 per-transport
+  chunk size, 4.6.13 remaining file subcodes, 4.6.16 libusb on Linux, 4.9 sibling consumers.
+- **Phases 5–7:** not started.
 
 ### What Linux needs
 
@@ -86,14 +94,6 @@ each item waits for a Linux host, because none of it can be built or verified wi
   there.
 - **Registry** — the optional `regkey` dependency is Windows-only; nothing on Linux should
   load it.
-- **Phase 3:** partly built but unchecked — 3.1.6 row registry (rows exist, no registry
-  object), 3.1.8 cross-frame mode ownership, 3.1.9 handling an over-long HID reply, 3.1.11 port
-  state in a read model; open — 3.1.4 peripheral-type enum, 3.2 data models, 3.3.2/3.3.5
-  subscriptions, 3.4 adaptive throttling, 3.5 read model, 3.6 stale snapshots, 3.8 remaining
-  constants.
-- **Phase 4:** the public API (4.2–4.5, 4.7, 4.8), program control (4.7a), 4.6.4 per-transport
-  chunk size, 4.6.13 remaining file subcodes, 4.6.16 libusb on Linux, 4.9 sibling consumers.
-- **Phases 5–7:** not started.
 
 ## 3. Phase Overview
 
