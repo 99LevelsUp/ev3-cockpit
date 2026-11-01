@@ -88,6 +88,11 @@ function skipLine(report: ClearListReport, skip: NonNullable<ClearListReport['sk
 		return 'Nothing changed on the brick. Only Bluetooth reaches it, and removing this computer\'s entry cuts that link, '
 			+ 'so that entry has to go last; this computer\'s Bluetooth name is unknown, so nothing shows which entry it is. '
 			+ 'Connect the brick with a USB cable and clear its list again.';
+	case 'link-entry-unknown':
+		return 'Nothing changed on the brick. Only Bluetooth reaches it, and removing this computer\'s entry cuts that link, '
+			+ `so that entry has to go last; no entry carries this computer's Bluetooth name${report.thisComputer ? ` ("${report.thisComputer}")` : ''}, `
+			+ 'and the brick does not mark exactly one entry connected, so nothing shows which entry it is. '
+			+ 'Connect the brick with a USB cable and clear its list again.';
 	}
 }
 
@@ -183,6 +188,9 @@ export function clearNotification(report: ClearListReport, label: string): strin
 	case 'radio-name-unknown':
 		return `EVƎ Cockpit: nothing changed on ${label}. Over Bluetooth alone its list can be cleared only `
 			+ 'when this computer\'s Bluetooth name is known; connect it with a USB cable.';
+	case 'link-entry-unknown':
+		return `EVƎ Cockpit: nothing changed on ${label}. Over Bluetooth alone its list can be cleared only `
+			+ 'when the brick shows which entry is this computer\'s; connect it with a USB cable.';
 	case undefined:
 		break;
 	}
