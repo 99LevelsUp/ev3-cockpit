@@ -192,6 +192,10 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			discoverGate: undefined as Promise<void> | undefined,
 			/** The next discover lists the brick unpaired: Windows' list has not caught up yet. */
 			unpairedNext: false,
+			/** Discover lists nothing: the inquiry's sighting aged out, and Windows does not list it. */
+			hidden: false,
+			/** Connecting fails. */
+			refuseConnect: false,
 		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
@@ -201,13 +205,15 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 				radio.discovers += 1;
 				const item = radio.unpairedNext ? { ...bob, paired: false, remembered: false } : { ...bob };
 				radio.unpairedNext = false;
+				const items = radio.hidden ? [] : [item];
 				const held = radio.discoverGate;
 				radio.discoverGate = undefined;
 				if (held) { await held; }
-				return { transport: Transport.BT, items: [item] };
+				return { transport: Transport.BT, items };
 			},
 			async connect(brickKey: BrickKey): Promise<SessionHandle> {
 				radio.connects += 1;
+				if (radio.refuseConnect) { throw new Error('the brick refused the link'); }
 				radio.listedPairedAtConnect.push(l.aggregator.getBrick(idOf(BOB_MAC))?.paired ?? false);
 				return { brickKey, transport: Transport.BT };
 			},
@@ -332,6 +338,55 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		assert.deepEqual(w.shown.errors, []);
 		assert.equal(w.bricks.isSignedIn(w.bob), true);
 		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
+		w.done();
+	});
+
+	it('connects a freshly paired brick though a scan that began before the pairing lands empty just before the sign-in', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();   // the inquiry's sighting
+		w.radio.hidden = true;
+		await w.scheduler.scanOnce();   // aged out: one miss
+		// One more scan reads the empty list before the pairing; a second miss would take the channel.
+		const held = gate();
+		w.radio.discoverGate = held.promise;
+		const stale = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+		w.radio.hidden = false;
+		const deps = {
+			...w.deps,
+			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
+				if (title.startsWith('EVƎ Cockpit: connecting')) { held.open(); await stale; }
+				return w.deps.progress(title, task);
+			},
+		};
+
+		await connectPickedBrick(w.bob, deps);
+
+		assert.deepEqual(w.shown.errors, [], 'an older scan took the freshly paired brick\'s channel away');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		w.done();
+	});
+
+	it('lets a brick it paired but could not connect expire once nothing lists it', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		w.radio.refuseConnect = true;
+		const pair = w.deps.pair;
+		const deps = {
+			...w.deps,
+			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+				// The sighting expires while the owner confirms, and nothing lists the brick afterwards.
+				w.scheduler.forget([w.bobKey]);
+				w.aggregator.forget(w.bob);
+				w.radio.hidden = true;
+				return pair(mac, onEvent);
+			},
+		};
+
+		await connectPickedBrick(w.bob, deps);
+		assert.equal(w.shown.errors.length, 1, 'the connect did not fail, so this test shows nothing');
+		for (let scan = 0; scan < 8; scan++) { await w.scheduler.scanOnce(); }
+
+		assert.equal(w.aggregator.getBrick(w.bob), undefined, 'the paired row stays in the list for ever');
 		w.done();
 	});
 

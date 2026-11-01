@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import {
-	Transport, BrickKey, PresenceState,
+	Transport, BrickKey, PresenceState, brickIdOf,
 	TransportProvider, DiscoveryScanResult, DiscoveryItem,
 } from '../contracts';
 import { createTypedEvent, TypedEvent } from '../events';
@@ -76,10 +76,12 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	/** Counts scans as they start; each scan applies its results knowing which one it was. */
 	private scansStarted = 0;
 	/**
-	 * Forgotten keys, each with the count of scans started by the time it was forgotten. A scan
-	 * among those read the list before the forget, and what it lists for the key is dropped.
+	 * Keys the cockpit itself forgot or paired, each with the count of scans started by then
+	 * (step-3 plan, KTD11). A scan among those read Windows' list before the change, so it does
+	 * not speak for the key: for a forgotten key what it lists is dropped, and for a paired one it
+	 * neither overwrites the pairing nor counts a miss. The first later scan clears the fence.
 	 */
-	private readonly forgottenAt = new Map<BrickKey, number>();
+	private readonly fences = new Map<BrickKey, { readonly at: number; readonly change: 'forgotten' | 'paired' }>();
 	private polling = false;
 	/** Set by dispose(). A scan still in flight must not fire on disposed emitters. */
 	private disposed = false;
@@ -171,7 +173,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			}
 		});
 
-		this.processMisses(seenKeys, answered);
+		this.processMisses(seenKeys, answered, scan);
 
 		this.scanCompleted.fire(undefined);
 	}
@@ -197,15 +199,34 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	forget(brickKeys: Iterable<BrickKey>): void {
 		for (const key of brickKeys) {
 			this.tracked.delete(key);
-			this.forgottenAt.set(key, this.scansStarted);
+			this.fences.set(key, { at: this.scansStarted, change: 'forgotten' });
 		}
+	}
+
+	/**
+	 * Record a Bluetooth pairing the cockpit has just made (step-3 plan, KTD11): the channel is
+	 * tracked as available and paired at once, a sighting that expired during the pairing too.
+	 *
+	 * A scan running now read Windows' list before the pairing, so it neither overwrites the
+	 * pairing nor counts a miss against it; a scan that starts later is believed again, so a brick
+	 * nothing lists any more still expires. Fires no presence change: the caller updates the list,
+	 * and an announcement would start a name probe beside the sign-in that follows.
+	 */
+	notePaired(brickKey: BrickKey): void {
+		const earlier = this.tracked.get(brickKey)?.item ?? {
+			brickKey, displayName: brickIdOf(brickKey), nameSource: 'fallback' as const, transport: Transport.BT,
+			connected: false, favorite: false, lastSeenAt: Date.now(),
+		};
+		const item: DiscoveryItem = { ...earlier, presenceState: PresenceState.Available, paired: true, remembered: true };
+		this.tracked.set(brickKey, { item, missCount: 0 });
+		this.fences.set(brickKey, { at: this.scansStarted, change: 'paired' });
 	}
 
 	dispose(): void {
 		this.disposed = true;
 		this.stop();
 		this.scansInFlight.clear();
-		this.forgottenAt.clear();
+		this.fences.clear();
 		this.tracked.clear();
 		this.presenceChanged.dispose();
 		this.scanCompleted.dispose();
@@ -250,11 +271,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			this.processScanResult(result, seenKeys, scan);
 
 			// Only process misses for bricks belonging to this transport
-			for (const [brickKey, tracked] of this.tracked) {
-				if (tracked.item.transport === provider.transport && !seenKeys.has(brickKey)) {
-					this.incrementMiss(brickKey, tracked);
-				}
-			}
+			this.processMisses(seenKeys, new Set([provider.transport]), scan);
 
 			this.scanCompleted.fire(undefined);
 		} catch (error: unknown) {
@@ -264,14 +281,17 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		}
 	}
 
-	/** Apply what scan number `scan` listed; for a key forgotten since it started, nothing. */
+	/** Whether scan number `scan` began before the cockpit's own change to `brickKey`, if any. */
+	private olderThanChange(brickKey: BrickKey, scan: number): 'forgotten' | 'paired' | undefined {
+		const fence = this.fences.get(brickKey);
+		return fence && scan <= fence.at ? fence.change : undefined;
+	}
+
+	/** Apply what scan number `scan` listed; nothing for a key the cockpit changed since it started. */
 	private processScanResult(result: DiscoveryScanResult, seenKeys: Set<BrickKey>, scan: number): void {
 		for (const item of result.items) {
-			const forgottenAt = this.forgottenAt.get(item.brickKey);
-			if (forgottenAt !== undefined) {
-				if (scan <= forgottenAt) { continue; }
-				this.forgottenAt.delete(item.brickKey);
-			}
+			if (this.olderThanChange(item.brickKey, scan)) { continue; }
+			this.fences.delete(item.brickKey);
 			seenKeys.add(item.brickKey);
 
 			const existing = this.tracked.get(item.brickKey);
@@ -308,9 +328,12 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		}
 	}
 
-	private processMisses(seenKeys: Set<BrickKey>, scannedTransports: Set<Transport>): void {
+	/** Count a miss against each brick of `scannedTransports` that scan number `scan` did not list. */
+	private processMisses(seenKeys: Set<BrickKey>, scannedTransports: Set<Transport>, scan: number): void {
 		for (const [brickKey, tracked] of this.tracked) {
 			if (!scannedTransports.has(tracked.item.transport)) { continue; }
+			// It read the list before the pairing; its silence is no evidence the brick has gone.
+			if (this.olderThanChange(brickKey, scan) === 'paired') { continue; }
 			if (!seenKeys.has(brickKey)) {
 				this.incrementMiss(brickKey, tracked);
 			}
