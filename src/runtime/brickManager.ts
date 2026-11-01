@@ -931,6 +931,14 @@ export class BrickManager implements vscode.Disposable {
 			await closeOpened();
 			return { ...skipped(thisComputer ? 'link-entry-unknown' : 'radio-name-unknown'), ...read };
 		}
+		// The brick removes the first entry a name matches (`c_bt.c` 2215). Over Bluetooth alone,
+		// with a name that goes last held twice, that may be the copy holding this link: its
+		// removal cuts the link before the other copy is sent.
+		const goLast = [...(thisComputer ? [thisComputer] : []), ...linked];
+		if (overBt && goLast.some((name) => countOf(names, name) > 1)) {
+			await closeOpened();
+			return { ...skipped('duplicate-link-entry'), ...read };
+		}
 		const includesThisComputer = ours.size > 0;
 		if (!await confirm(names, includesThisComputer, thisComputer)) {
 			await closeOpened();
@@ -943,14 +951,15 @@ export class BrickManager implements vscode.Disposable {
 			// nothing reconnects it to a brick that has just dropped this computer.
 			if (!overBt) { await this.closeBluetoothSessions(brickId); }
 			const last = overBt ? { named: new Set(thisComputer ? [thisComputer] : []), linked: new Set(linked) } : undefined;
-			const { entries, linkCut } = await this.removeEntries(key, peers, last);
+			const { entries, linkCut, left } = await this.removeEntries(key, peers, last);
 			if (overBt && linkCut) {
 				// The link the list went over is gone, and nothing else reached the brick.
 				if (this.signedIn.has(brickId)) { await this.signOut(brickId); } else { await this.sessionManager.disconnect(key); }
 			}
 
-			const thisComputerWent = entries.some((entry) => ours.has(entry.name)
-				&& (entry.status === 'confirmed' || entry.status === 'sent'));
+			// Gone only when no entry under this computer's name is left: with the name held twice
+			// and one copy kept, the brick still knows this computer.
+			const thisComputerWent = includesThisComputer && [...ours].every((name) => !left.includes(name));
 			let pairingLeft: ClearPairingSkip | undefined;
 			if (!includesThisComputer) { pairingLeft = thisComputer ? 'not-on-brick' : 'radio-name-unknown'; }
 			else if (!thisComputerWent) { pairingLeft = 'not-removed'; }
@@ -983,12 +992,13 @@ export class BrickManager implements vscode.Disposable {
 	 * would never be sent.
 	 *
 	 * A link lost on a removal, or a list that cannot be read back after one, ends it: that
-	 * removal counts as sent, and the entries not yet removed as not sent.
+	 * removal counts as sent, and the entries not yet removed as not sent. `left` is the list as
+	 * last read back, less the one entry whose removal counts as sent.
 	 */
 	private async removeEntries(key: BrickKey, peers: readonly string[], last: {
 		readonly named: ReadonlySet<string>; readonly linked: ReadonlySet<string>;
 	} | undefined): Promise<{
-		entries: ClearedEntry[]; linkCut: boolean;
+		entries: ClearedEntry[]; linkCut: boolean; left: string[];
 	}> {
 		const toGo = new Map<string, number>();
 		for (const name of peers) { if (!isBlankPeerName(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
@@ -1053,7 +1063,10 @@ export class BrickManager implements vscode.Disposable {
 				detail: lastFailure.get(name) ?? (sent ? `Not sent: ${sent.detail}` : 'Not sent.'),
 			};
 		});
-		return { entries, linkCut: sent !== undefined };
+		const left = current.slice();
+		const sentAt = sent ? left.indexOf(sent.name) : -1;
+		if (sentAt !== -1) { left.splice(sentAt, 1); }
+		return { entries, linkCut: sent !== undefined, left };
 	}
 
 	/**
