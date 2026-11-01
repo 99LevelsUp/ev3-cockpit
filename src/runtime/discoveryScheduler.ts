@@ -73,12 +73,13 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	 * enough to walk a brick that is sitting right there to `Unavailable`.
 	 */
 	private readonly scansInFlight = new Set<Transport>();
+	/** Counts scans as they start; each scan applies its results knowing which one it was. */
+	private scansStarted = 0;
 	/**
-	 * Every scan running now, each until its results are applied, for {@link scansSettled}.
-	 * Kept apart from `scansInFlight`, which a scan leaves before it applies its results, so a
-	 * listener that rescans from `onScanCompleted` is not skipped.
+	 * Forgotten keys, each with the count of scans started by the time it was forgotten. A scan
+	 * among those read the list before the forget, and what it lists for the key is dropped.
 	 */
-	private readonly runningScans = new Set<Promise<void>>();
+	private readonly forgottenAt = new Map<BrickKey, number>();
 	private polling = false;
 	/** Set by dispose(). A scan still in flight must not fire on disposed emitters. */
 	private disposed = false;
@@ -136,12 +137,13 @@ export class DiscoveryScheduler implements vscode.Disposable {
 
 	/** Run one discovery cycle for all providers (useful for testing). */
 	scanOnce(): Promise<void> {
-		return this.trackScan(this.scanAll());
+		return this.scanAll();
 	}
 
 	private async scanAll(): Promise<void> {
 		const providers = this.registry.all().filter(p => !this.scansInFlight.has(p.transport));
 		for (const p of providers) { this.scansInFlight.add(p.transport); }
+		const scan = ++this.scansStarted;
 
 		let results: PromiseSettledResult<DiscoveryScanResult>[];
 		try {
@@ -163,7 +165,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		results.forEach((result, index) => {
 			if (result.status === 'fulfilled') {
 				answered.add(providers[index].transport);
-				this.processScanResult(result.value, seenKeys);
+				this.processScanResult(result.value, seenKeys, scan);
 			} else {
 				this.scanFailed.fire({ transport: providers[index].transport, error: result.reason });
 			}
@@ -188,30 +190,22 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	 * forgotten brick from a tracked sighting that still says paired.
 	 *
 	 * Fires no presence change: the brick layer is forgetting the whole brick and clears the
-	 * list itself. A later scan that lists a key again reports it as a first discovery.
+	 * list itself. A scan running now read Windows' list before the unpair, so what it lists for
+	 * these keys is dropped when it lands, instead of tracking the brick as paired again; nobody
+	 * waits for it. A scan that starts later lists a key again as a first discovery.
 	 */
 	forget(brickKeys: Iterable<BrickKey>): void {
-		for (const key of brickKeys) { this.tracked.delete(key); }
-	}
-
-	/**
-	 * Resolves once every scan running now has finished, its results applied and
-	 * `onScanCompleted` fired; at once when none is running.
-	 *
-	 * A forget waits here before it clears memory (step-3 plan, KTD1 step 5): a scan that read
-	 * Windows' cache before the unpair would otherwise re-track the brick as paired afterwards.
-	 * It waits for every transport, not just the brick's: one `scanOnce` covers them all, and
-	 * the cost is a forget that waits out an unrelated slow scan. Scans started later are not
-	 * waited for; they read the state after the unpair.
-	 */
-	async scansSettled(): Promise<void> {
-		await Promise.allSettled([...this.runningScans]);
+		for (const key of brickKeys) {
+			this.tracked.delete(key);
+			this.forgottenAt.set(key, this.scansStarted);
+		}
 	}
 
 	dispose(): void {
 		this.disposed = true;
 		this.stop();
 		this.scansInFlight.clear();
+		this.forgottenAt.clear();
 		this.tracked.clear();
 		this.presenceChanged.dispose();
 		this.scanCompleted.dispose();
@@ -229,7 +223,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 			?? this.options.defaultIntervalMs;
 
 		const timer = setInterval(() => {
-			void this.trackScan(this.scanProvider(provider));
+			void this.scanProvider(provider);
 		}, interval);
 
 		this.timers.set(provider.transport, timer);
@@ -243,24 +237,17 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		}
 	}
 
-	/** Hold a scan in `runningScans` until it settles, either way. */
-	private trackScan(scan: Promise<void>): Promise<void> {
-		this.runningScans.add(scan);
-		const settle = (): void => { this.runningScans.delete(scan); };
-		scan.then(settle, settle);
-		return scan;
-	}
-
 	private async scanProvider(provider: TransportProvider): Promise<void> {
 		if (this.scansInFlight.has(provider.transport)) {
 			return;
 		}
 		this.scansInFlight.add(provider.transport);
+		const scan = ++this.scansStarted;
 		try {
 			const result = await provider.discover();
 			if (this.disposed) { return; }
 			const seenKeys = new Set<BrickKey>();
-			this.processScanResult(result, seenKeys);
+			this.processScanResult(result, seenKeys, scan);
 
 			// Only process misses for bricks belonging to this transport
 			for (const [brickKey, tracked] of this.tracked) {
@@ -277,8 +264,14 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		}
 	}
 
-	private processScanResult(result: DiscoveryScanResult, seenKeys: Set<BrickKey>): void {
+	/** Apply what scan number `scan` listed; for a key forgotten since it started, nothing. */
+	private processScanResult(result: DiscoveryScanResult, seenKeys: Set<BrickKey>, scan: number): void {
 		for (const item of result.items) {
+			const forgottenAt = this.forgottenAt.get(item.brickKey);
+			if (forgottenAt !== undefined) {
+				if (scan <= forgottenAt) { continue; }
+				this.forgottenAt.delete(item.brickKey);
+			}
 			seenKeys.add(item.brickKey);
 
 			const existing = this.tracked.get(item.brickKey);

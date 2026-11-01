@@ -148,8 +148,9 @@ function clearLeftBehindLines(report: ClearListReport): string[] {
 	}
 	if (report.paired && report.pairingLeft === 'not-on-brick') {
 		// Only the current name was looked for: what an entry under an earlier one means depends on
-		// whether any entry is left.
-		const listEmptied = report.entries.every((entry) => entry.status === 'confirmed');
+		// whether any entry is left. Only the list as read back says so: a name held twice is
+		// confirmed once a copy goes, and an entry can appear while the clear runs.
+		const listEmptied = report.left?.length === 0 && report.entries.every((entry) => entry.status !== 'sent');
 		lines.push('  On this computer: its Bluetooth pairing with the brick.',
 			'    No entry on the brick carried this computer\'s current Bluetooth name, so the cockpit left the pairing alone. '
 				+ (listEmptied

@@ -51,18 +51,18 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
     name the brick stores, the registry key's casing, menu power-off persisting the list, and
     that this computer's entry reads `connected` while its Bluetooth link is open (clearing
     over Bluetooth relies on that mark).
-  - Waiting on scans has no deadline. "Connect a Brick" (after a pairing) and forget both
-    await `scansSettled()`, and nothing times out a provider's `discover()`: a native callback
-    that never fires (`SerialPort.list()` in the SPP port scan, or a libusb callback on the USB
-    bus queue) would hang them. Owner decision: a deadline on the wait, or after a pairing
-    telling sign-in the channel is paired instead of waiting for a scan to report it.
-  - The clear report says the list "holds no entry now" from confirmed removals, not from the
-    final read-back.
+  - Round-4 audit of the rebuild below. After three audit rounds each found a race between a
+    scan and the cockpit's own pairing in the previous fix, the area was rebuilt (step-3 plan,
+    KTD11, 01.11.2026): the cockpit records a pairing it made itself, discovery drops what a scan
+    older than a forget lists for the forgotten keys, and neither "Connect a Brick" nor forget
+    nor the clear waits on a scan any more, so a `discover()` hung in native code
+    (`SerialPort.list()`, a libusb callback) can no longer hang them. The clear report now says
+    the list "holds no entry now" only from the list as read back.
   - Owner decision: a Bluetooth channel of an unpaired brick is never joined (`joinCandidates`),
     which also changes step 2's sign-in of a cabled brick; record it as a KTD if accepted.
   - The step-3 plan's KTD9, KTD10 and R19 trail the code: the `duplicate-link-entry` refusal,
-    up to three rescans after a pairing, unpairing only when the read-back holds none of this
-    computer's entries, and the unpaired-Bluetooth join rule.
+    unpairing only when the read-back holds none of this computer's entries, and the
+    unpaired-Bluetooth join rule.
 
 Open, by phase:
 

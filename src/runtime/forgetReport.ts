@@ -179,6 +179,11 @@ export interface ClearListReport {
 	readonly peers?: readonly string[];
 	/** One outcome per entry read, in the list's order. */
 	readonly entries: readonly ClearedEntry[];
+	/**
+	 * The names on the brick's list as last read back after the removals, less the one whose
+	 * removal counts as sent; absent when the clear stopped before removing anything.
+	 */
+	readonly left?: readonly string[];
 	/** This computer's pairing with the brick, when its entry went and the brick was paired (KTD10). */
 	readonly pairing: readonly PairingOutcome[];
 	/** Why the pairing was left alone; absent when it was acted on. */
