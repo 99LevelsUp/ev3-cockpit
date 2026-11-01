@@ -196,6 +196,8 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			hidden: false,
 			/** Connecting fails. */
 			refuseConnect: false,
+			/** Discover reports that the last presence check did not hear the brick. */
+			heardFalse: false,
 		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
@@ -205,7 +207,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 				radio.discovers += 1;
 				const item = radio.unpairedNext ? { ...bob, paired: false, remembered: false } : { ...bob };
 				radio.unpairedNext = false;
-				const items = radio.hidden ? [] : [item];
+				const items = radio.hidden ? [] : [radio.heardFalse ? { ...item, heard: false } : item];
 				const held = radio.discoverGate;
 				radio.discoverGate = undefined;
 				if (held) { await held; }
@@ -362,6 +364,39 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		await connectPickedBrick(w.bob, deps);
 
 		assert.deepEqual(w.shown.errors, [], 'an older scan took the freshly paired brick\'s channel away');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		w.done();
+	});
+
+	it('connects a freshly paired brick that a presence check missed while its owner was confirming', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();   // the inquiry's sighting
+		const held = gate();
+		let stale: Promise<void> | undefined;
+		const pair = w.deps.pair;
+		const deps = {
+			...w.deps,
+			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+				const result = await pair(mac, onEvent);
+				// Windows lists the pairing before the helper reports it, and the presence check of a
+				// brick still busy with the ceremony did not hear it.
+				assert.ok(w.scheduler.getTrackedBricks().get(w.bobKey), 'the sighting is not tracked, so this test shows nothing');
+				w.radio.heardFalse = true;
+				await w.scheduler.scanOnce();
+				// One more scan reads that list before the pairing is recorded, and lands after it.
+				w.radio.discoverGate = held.promise;
+				stale = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+				return result;
+			},
+			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
+				if (title.startsWith('EVƎ Cockpit: connecting')) { held.open(); await stale; }
+				return w.deps.progress(title, task);
+			},
+		};
+
+		await connectPickedBrick(w.bob, deps);
+
+		assert.deepEqual(w.shown.errors, [], 'a presence check older than the pairing took the channel away');
 		assert.equal(w.bricks.isSignedIn(w.bob), true);
 		w.done();
 	});

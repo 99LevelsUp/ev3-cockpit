@@ -54,7 +54,16 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   - Audit of the rebuild below: round 4 found two real majors in its pairing half (the pairing
     was recorded in the list only, not in discovery, which rebuilds the list), fixed; one
     finding rejected (a stale USB scan relisting a forgotten cabled brick as a stranger is R4's
-    intended end state). Round 5 audits that fix. After three audit rounds each found a race between a
+    intended end state). Round 5 found one more real major, fixed (a presence check that missed
+    the brick during the pairing survived it and could take the channel away). Its second
+    finding is latent, not reachable today: forget unpairs only the channels the list knows, so
+    a brick whose Bluetooth channel the list has not seen keeps its Windows pairing, and an older
+    scan then lists it paired again (true, since it is). "Forget a Brick" offers only paired
+    bricks, and the list holds a paired brick's Bluetooth channel, so the command cannot reach
+    it; it opens once persistence makes a remembered brick without a listed Bluetooth channel a
+    forget candidate (Phase 6), or the panel's trash action (Phase 5) calls forget on any brick.
+    Then forget should also try the Bluetooth address the brick ID gives, and tell "was not
+    paired" apart from "removed". After three audit rounds each found a race between a
     scan and the cockpit's own pairing in the previous fix, the area was rebuilt (step-3 plan,
     KTD11, 01.11.2026): the cockpit records a pairing it made itself, discovery drops what a scan
     older than a forget lists for the forgotten keys, and neither "Connect a Brick" nor forget
