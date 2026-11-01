@@ -63,7 +63,10 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
     it; it opens once persistence makes a remembered brick without a listed Bluetooth channel a
     forget candidate (Phase 6), or the panel's trash action (Phase 5) calls forget on any brick.
     Then forget should also try the Bluetooth address the brick ID gives, and tell "was not
-    paired" apart from "removed". After three audit rounds each found a race between a
+    paired" apart from "removed". Round 6 (a confirmation of round 5's fix) found the same stale
+    presence check coming back through a scan started after the pairing, from the presence
+    monitor's own memory; minor (only between the pairing and the sign-in choosing its channels),
+    fixed without a further round: the monitor drops its checks of a brick the cockpit pairs. After three audit rounds each found a race between a
     scan and the cockpit's own pairing in the previous fix, the area was rebuilt (step-3 plan,
     KTD11, 01.11.2026): the cockpit records a pairing it made itself, discovery drops what a scan
     older than a forget lists for the forgotten keys, and neither "Connect a Brick" nor forget

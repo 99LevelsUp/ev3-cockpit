@@ -127,6 +127,16 @@ export class BtPresenceMonitor {
 	}
 
 	/**
+	 * Record a pairing the cockpit has just made (step-3 plan, KTD11): drop the brick's check
+	 * results, which are older than the pairing. A check that missed the brick while its owner
+	 * was confirming on it would otherwise mark the fresh channel as not heard on the next scan;
+	 * until the next check the brick counts as heard, as any paired brick does before its first.
+	 */
+	notePaired(mac: string): void {
+		this.paired.delete(normalise(mac));
+	}
+
+	/**
 	 * One round of presence checks, one brick at a time. Skipped while the previous round runs.
 	 *
 	 * The queue is released between bricks, so a user's connect waits for at most one check.

@@ -173,6 +173,23 @@ describe('BtPresenceMonitor — forgetting a brick (step-3 plan, U3)', () => {
 	});
 });
 
+describe('BtPresenceMonitor — a pairing the cockpit made (step-3 plan, KTD11)', () => {
+	it('drops the checks from before the pairing, however the address is written, and keeps the rest', async () => {
+		const { presence } = monitor({
+			targets: [AAA, BBB],
+			answers: new Map([[AAA, [false, false, false]], [BBB, [false, false, false]]]),
+		});
+		for (let round = 0; round < 3; round++) { await presence.runChecks(); }
+		assert.equal(presence.presenceOf(AAA)?.heard, false, 'the checks did not miss it, so this test shows nothing');
+
+		presence.notePaired(AAA.replace(/:/g, '').toLowerCase());
+
+		assert.equal(presence.presenceOf(AAA), undefined, 'a check older than the pairing still speaks for the brick');
+		assert.equal(presence.presenceOf(BBB)?.heard, false, 'other bricks stay');
+		presence.dispose();
+	});
+});
+
 describe('BtTransportProvider — discovery with presence', () => {
 	function provider(presence: BtPresenceMonitor) {
 		return new BtTransportProvider({
