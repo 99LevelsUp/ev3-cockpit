@@ -7,7 +7,7 @@ import { BrickId } from './contracts';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { connectPickedBrick, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
-import { forgetBrick } from './ui/forgetBrick';
+import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -144,27 +144,29 @@ export function activate(context: vscode.ExtensionContext): void {
 		logger.info(`Disconnected ${brickLabel(aggregator, picked.brickId)}`);
 	}));
 
+	// The picker, modal confirmation, progress and messages the forget and clear-list commands share.
+	const brickCommandUi = (title: string, placeHolder: string): BrickCommandDeps<typeof bricks> => ({
+		aggregator, bricks, log: logger,
+		pick: (rows) => vscode.window.showQuickPick(rows, { title, placeHolder }),
+		confirm: async (message, detail, action) =>
+			(await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
+		progress: (progressTitle, task) => vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false }, task),
+		showInfo: (message) => { void vscode.window.showInformationMessage(message); },
+		showResult: (message) => {
+			void vscode.window.showInformationMessage(message, 'Show details').then((choice) => {
+				if (choice) { logger.show(true); }
+			});
+		},
+		showError: (message) => { void vscode.window.showErrorMessage(message); },
+	});
+
 	// ── Forget a brick ──────────────────────────────────────────
 	// The whole brick (step-3 KD1): signed out, unpaired, dropped from the cockpit's memory,
 	// and removed from the brick's own list when it is reachable. The message names what is
 	// left and where; the details are in the output channel (KTD8).
 	services.add(vscode.commands.registerCommand('ev3-cockpit.forgetBrick', async () => {
-		await forgetBrick({
-			aggregator, bricks, log: logger,
-			pick: (rows) => vscode.window.showQuickPick(rows,
-				{ title: 'EVƎ Cockpit: forget a brick', placeHolder: 'Pick a brick to forget' }),
-			confirm: async (message, detail, action) =>
-				(await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
-			progress: (title, task) => vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title, cancellable: false }, task),
-			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
-			showResult: (message) => {
-				void vscode.window.showInformationMessage(message, 'Show details').then((choice) => {
-					if (choice) { logger.show(true); }
-				});
-			},
-			showError: (message) => { void vscode.window.showErrorMessage(message); },
-		});
+		await forgetBrick(brickCommandUi('EVƎ Cockpit: forget a brick', 'Pick a brick to forget'));
 	}));
 
 	// ── Clear a brick's Bluetooth list ──────────────────────────
@@ -172,22 +174,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	// blocking new pairings. The USB session stays open; this computer's Bluetooth pairing goes
 	// only when its own entry did (KTD10).
 	services.add(vscode.commands.registerCommand('ev3-cockpit.clearBrickBluetoothList', async () => {
-		await clearBrickBluetoothList({
-			aggregator, bricks, log: logger,
-			pick: (rows) => vscode.window.showQuickPick(rows,
-				{ title: 'EVƎ Cockpit: clear a brick\'s Bluetooth list', placeHolder: 'Pick a brick to clear' }),
-			confirm: async (message, detail, action) =>
-				(await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
-			progress: (title, task) => vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title, cancellable: false }, task),
-			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
-			showResult: (message) => {
-				void vscode.window.showInformationMessage(message, 'Show details').then((choice) => {
-					if (choice) { logger.show(true); }
-				});
-			},
-			showError: (message) => { void vscode.window.showErrorMessage(message); },
-		});
+		await clearBrickBluetoothList(
+			brickCommandUi('EVƎ Cockpit: clear a brick\'s Bluetooth list', 'Pick a brick to clear'));
 	}));
 
 	logger.info('Connect, disconnect, forget and clear-list commands registered');

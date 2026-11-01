@@ -12,9 +12,10 @@ export type { HeartbeatMonitorOptions } from './heartbeatMonitor';
 export { ReconnectStrategy } from './reconnectStrategy';
 export type { ReconnectStrategyOptions } from './reconnectStrategy';
 export { BrickManager } from './brickManager';
-export type { BrickManagerOptions, RouteChangeEvent, ActiveBrickIdChangeEvent } from './brickManager';
+export type { BrickManagerOptions, ClearListConfirm, RouteChangeEvent, ActiveBrickIdChangeEvent } from './brickManager';
 export type {
-	BrickSideOutcome, BrickSideSkip, ForgetReport, MemoryOutcome, PairingOutcome, PeerRemoval,
+	BrickSideOutcome, BrickSideSkip, ClearListReport, ClearPairingSkip, ClearSkip, ClearedEntry, ForgetReport, MemoryOutcome,
+	PairingOutcome, PeerRemoval,
 } from './forgetReport';
 export { BrickChannel } from './brickChannel';
 export { BaseChannelStateMachine } from './channelStateMachine';

@@ -52,7 +52,6 @@ export function forgetPickRows(list: readonly BrickEntry[], isSignedIn: (brickId
 	return forgetCandidates(list).map((brick) => plainPickRow(brick, isSignedIn));
 }
 
-/** A picker row like the connect picker's, without its "new" mark: picking a brick here pairs nothing. */
 export function plainPickRow(brick: BrickEntry, isSignedIn: (brickId: BrickId) => boolean): BrickPickRow {
 	return {
 		label: `${isSignedIn(brick.brickId) ? '$(check) ' : ''}${brick.name.value}`,
@@ -221,10 +220,10 @@ export function forgetNotification(report: ForgetReport, label: string): string 
 	return sentences.join(' ');
 }
 
-/** What the command needs besides the brick layer. */
-export interface ForgetBrickDeps {
+/** What a brick command needs besides the brick layer, whose part it uses is `B`. */
+export interface BrickCommandDeps<B> {
 	readonly aggregator: Pick<PresenceAggregator, 'getDiscoveryList' | 'getBrick'>;
-	readonly bricks: Pick<BrickManager, 'forget' | 'isSignedIn'>;
+	readonly bricks: B;
 	/** Shows the rows and resolves with the one picked, or undefined when dismissed. */
 	readonly pick: (rows: readonly BrickPickRow[]) => PromiseLike<BrickPickRow | undefined>;
 	/** A modal question with one action; resolves true only when that action was chosen. */
@@ -237,6 +236,9 @@ export interface ForgetBrickDeps {
 	readonly showResult: (message: string) => void;
 	readonly showError: (message: string) => void;
 }
+
+/** What the command needs besides the brick layer. */
+export type ForgetBrickDeps = BrickCommandDeps<Pick<BrickManager, 'forget' | 'isSignedIn'>>;
 
 /**
  * Offers the bricks this computer knows, asks before forgetting the one picked, forgets it, and

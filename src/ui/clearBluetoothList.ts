@@ -11,13 +11,11 @@
 import { BrickEntry, BrickId, ChannelState, Transport } from '../contracts';
 import type { BrickManager } from '../runtime/brickManager';
 import { brickLabel } from '../runtime/brickLabels';
-import type { RuntimeLog } from '../runtime/createRuntime';
 import type { ClearListReport, ClearedEntry } from '../runtime/forgetReport';
-import type { PresenceAggregator } from '../runtime/presenceAggregator';
 import { compareBricks } from './brickOrder';
 import type { BrickPickRow } from './brickPickRows';
 import {
-	MENU_SAVE_NOTE, memoryLines, over, pairingLines, plainPickRow, quoteNames, residueLines, sentence,
+	BrickCommandDeps, MENU_SAVE_NOTE, memoryLines, over, pairingLines, plainPickRow, quoteNames, residueLines, sentence,
 } from './forgetBrick';
 
 /** The one action of the confirmation (R16). */
@@ -200,21 +198,7 @@ export function clearNotification(report: ClearListReport, label: string): strin
 }
 
 /** What the command needs besides the brick layer. */
-export interface ClearBrickBluetoothListDeps {
-	readonly aggregator: Pick<PresenceAggregator, 'getDiscoveryList' | 'getBrick'>;
-	readonly bricks: Pick<BrickManager, 'clearBluetoothList' | 'isSignedIn'>;
-	/** Shows the rows and resolves with the one picked, or undefined when dismissed. */
-	readonly pick: (rows: readonly BrickPickRow[]) => PromiseLike<BrickPickRow | undefined>;
-	/** A modal question with one action; resolves true only when that action was chosen. */
-	readonly confirm: (message: string, detail: string, action: string) => PromiseLike<boolean>;
-	/** A notification that stays up while `task` runs. */
-	readonly progress: <T>(title: string, task: () => Promise<T>) => PromiseLike<T>;
-	readonly log: RuntimeLog;
-	readonly showInfo: (message: string) => void;
-	/** The outcome, with a way to the details already written to the log. */
-	readonly showResult: (message: string) => void;
-	readonly showError: (message: string) => void;
-}
+export type ClearBrickBluetoothListDeps = BrickCommandDeps<Pick<BrickManager, 'clearBluetoothList' | 'isSignedIn'>>;
 
 /**
  * Offers the bricks reachable now, reads the picked brick's list, asks before removing the
