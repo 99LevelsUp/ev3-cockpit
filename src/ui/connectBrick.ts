@@ -6,7 +6,7 @@
  * command in `extension.ts` hands it a QuickPick, progress notifications and messages.
  */
 
-import { BrickId, Transport, brickKeyId } from '../contracts';
+import { BrickId, ChannelState, Transport, brickKeyId } from '../contracts';
 import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '../errors/CockpitError';
 import type { BrickManager } from '../runtime/brickManager';
 import { brickLabel, transportLabel } from '../runtime/brickLabels';
@@ -97,9 +97,11 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 		return;
 	}
 
-	// A brick only an inquiry has heard has nothing to connect over until it is paired.
+	// A brick only an inquiry has heard has nothing to connect over until it is paired. A channel
+	// the list still shows lost, a cable pulled since, does not count (U7, 01.11.2026).
 	const bt = brick?.channels.find((c) => c.transport === Transport.BT);
-	const onlyNewBluetooth = brick && !brick.paired && bt && brick.channels.length === 1;
+	const onlyNewBluetooth = brick && !brick.paired && bt
+		&& brick.channels.every((c) => c === bt || c.state === ChannelState.Lost);
 	if (onlyNewBluetooth && deps.pair) {
 		const pair = deps.pair;
 		const mac = brickKeyId(bt.brickKey) ?? '';
