@@ -184,6 +184,11 @@ describe('Clear a Brick\'s Bluetooth List — asking first (R16)', () => {
 	it('says when this computer is not among them, and when its name is unknown', () => {
 		assert.match(clearConfirmation(LABEL, ['OLD-PC'], false, THIS_PC).detail, /"PETR-PC", is not among them/);
 		assert.match(clearConfirmation(LABEL, ['OLD-PC'], false, undefined).detail, /name is unknown/);
+		// Over Bluetooth alone, the entry the brick marks connected stands in for the unknown name.
+		const linked = clearConfirmation(LABEL, ['OLD-PC'], true, undefined).detail;
+		assert.match(linked, /holds its Bluetooth link to this computer/);
+		assert.match(linked, /pairing is removed too/);
+		assert.doesNotMatch(linked, /nothing shows whether/);
 	});
 
 	it('shows nothing and logs nothing when the user declines', async () => {
