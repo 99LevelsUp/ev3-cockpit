@@ -156,6 +156,23 @@ export class PresenceAggregator implements vscode.Disposable {
 	}
 
 	/**
+	 * Record a Bluetooth pairing the cockpit has just made: the list says paired at once, and the
+	 * channel is available, without waiting for a scan to read the pairing back from Windows.
+	 *
+	 * The pairing is proof the brick is there, so a sighting that expired while its owner was
+	 * confirming on the brick is listed again. A scan that read Windows' list before the pairing
+	 * cannot undo it: a sighting only ever sets `paired`.
+	 */
+	markPaired(brickKey: BrickKey): void {
+		if (brickKeyTransport(brickKey) !== Transport.BT) { return; }
+		const record = this.recordFor(brickIdOf(brickKey));
+		const channel = this.channelFor(record, brickKey, Transport.BT);
+		if (channel.state !== ChannelState.Available && channel.accepts('seen')) { channel.apply('seen'); }
+		record.paired = true;
+		this.emitListChanged();
+	}
+
+	/**
 	 * Forget a brick: drop its record, so the list holds nothing about it (step-3 plan, KTD7).
 	 *
 	 * Deleting the record is the only way to clear `paired`, which every sighting sets with

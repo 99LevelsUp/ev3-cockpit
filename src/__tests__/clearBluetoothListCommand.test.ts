@@ -278,12 +278,32 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 	it('a list read back empty, with no entry under this computer\'s name: the brick does not know this computer', () => {
 		const r = report({
 			peers: ['OLD-PC', 'Zed'], entries: [{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: 'Zed' }],
-			pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],
+			left: [], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],
 		});
 		const text = details(r);
 		assert.match(text, /On this computer: its Bluetooth pairing with the brick\.\n.*The list read back holds no entry now, so the brick does not know this computer/);
 		assert.match(text, /fails until "Forget a Brick" removes the pairing/);
 		assert.doesNotMatch(text, /may still be on the brick/);
+	});
+
+	it('a removal sent but not read back: the list is not called empty', () => {
+		// The read-back after it failed, so the last list read is not the list now.
+		const r = report({
+			peers: ['OLD-PC', 'Zed'], entries: [{ status: 'confirmed', name: 'OLD-PC' }, { status: 'sent', name: 'Zed', detail: 'timeout' }],
+			left: [], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],
+		});
+		assert.doesNotMatch(details(r), /holds no entry now|does not know this computer/);
+	});
+
+	it('every entry it was shown confirmed gone, but the list read back still holds one: not called empty', () => {
+		// An entry that appeared while the clear ran is not removed unseen (R16), and stays.
+		const r = report({
+			peers: ['OLD-PC', 'Zed'], entries: [{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: 'Zed' }],
+			left: ['NEWCOMER'], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],
+		});
+		const text = details(r);
+		assert.doesNotMatch(text, /holds no entry now|does not know this computer/);
+		assert.match(text, /An entry under an earlier name of this computer may still be on the brick/);
 	});
 
 	it('a brick that could not be reached: nothing changed', () => {

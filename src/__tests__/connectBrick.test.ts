@@ -228,7 +228,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		};
 		const shown = { titles: [] as string[], reports: [] as string[], info: [] as string[], errors: [] as string[] };
 		const deps = {
-			aggregator: l.aggregator, bricks: l.bricks, scheduler: l.scheduler, log: quiet, pair,
+			aggregator: l.aggregator, bricks: l.bricks, log: quiet, pair,
 			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
 				shown.titles.push(title);
 				return task((message) => shown.reports.push(message));
@@ -259,78 +259,79 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		w.done();
 	});
 
-	it('connects a freshly paired brick though a background scan read Windows\' list before the pairing', async () => {
+	it('connects a freshly paired brick while a Bluetooth scan never answers', async () => {
 		const w = world({ paired: false });
 		await w.scheduler.scanOnce();
-		// A scheduled Bluetooth scan reads Windows' list now, before the pairing, and answers late.
+		// A scan stuck in the operating system: nothing the connect does may wait for it.
 		const held = gate();
 		w.radio.discoverGate = held.promise;
-		const background = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+		const stuck = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
 
-		const connecting = connectPickedBrick(w.bob, w.deps);
-		await waitFor(() => w.radio.pairedMacs.length === 1, 1000);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		assert.equal(w.aggregator.getBrick(w.bob)?.paired, false, 'the list already says paired, so this test shows nothing');
-		assert.equal(w.bricks.isSignedIn(w.bob), false);
+		const outcome = await Promise.race([
+			connectPickedBrick(w.bob, w.deps).then(() => 'done'),
+			new Promise((resolve) => setTimeout(() => resolve('waiting'), 1000)),
+		]);
 		held.open();
-		await connecting;
-		await background;
+		await stuck;
 
-		assert.deepEqual(w.shown.errors, [], 'the freshly paired brick did not connect');
-		assert.equal(w.bricks.isSignedIn(w.bob), true);
-		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
-		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
-		assert.equal(w.radio.discovers, 3, 'no scan read Windows\' list after the pairing');
-		w.done();
-	});
-
-	it('connects a freshly paired brick though a timer starts a Bluetooth scan after the earlier ones settled', async () => {
-		const w = world({ paired: false });
-		await w.scheduler.scanOnce();
-		// The poll timer fires just after the scans running at the pairing have settled: its
-		// scan reads Windows' list before it shows the pairing, and answers late. The connect's
-		// own scan skips Bluetooth while that one runs.
-		const held = gate();
-		let settles = 0;
-		let timerScan: Promise<void> | undefined;
-		let listedPairedAtTimerScan: boolean | undefined;
-		const scheduler = {
-			scanOnce: () => w.scheduler.scanOnce(),
-			scansSettled: async () => {
-				settles += 1;
-				if (settles > 1) { held.open(); }
-				await w.scheduler.scansSettled();
-				if (settles === 1) {
-					w.radio.discoverGate = held.promise;
-					w.radio.unpairedNext = true;
-					timerScan = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
-					listedPairedAtTimerScan = w.aggregator.getBrick(w.bob)?.paired;
-				}
-			},
-		};
-
-		await connectPickedBrick(w.bob, { ...w.deps, scheduler });
-		held.open();
-		await timerScan;
-
-		assert.equal(listedPairedAtTimerScan, false, 'the list already said paired, so this test shows nothing');
-		assert.deepEqual(w.shown.errors, [], 'the freshly paired brick did not connect');
+		assert.equal(outcome, 'done', 'the connect waited for a scan');
+		assert.deepEqual(w.shown.errors, []);
 		assert.equal(w.bricks.isSignedIn(w.bob), true);
 		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
 		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
 		w.done();
 	});
 
-	it('stops rescanning after a few rounds when the list never shows the pairing, and says why the connect failed', async () => {
+	it('connects a freshly paired brick without a scan showing the pairing', async () => {
 		const w = world({ paired: false, listsPairingNever: true });
 		await w.scheduler.scanOnce();
 
 		await connectPickedBrick(w.bob, w.deps);
 
 		assert.deepEqual(w.radio.pairedMacs, [BOB_MAC]);
-		assert.equal(w.radio.discovers, 1 + 3, 'not three settle-then-scan rounds after the pairing');
-		assert.deepEqual(w.shown.errors, ['EVƎ Cockpit: could not connect to Bob — Brick 0016530000B0 is not available on any channel.']);
-		assert.equal(w.bricks.isSignedIn(w.bob), false);
+		assert.equal(w.radio.discovers, 1, 'the pairing it made is known without reading it back');
+		assert.deepEqual(w.shown.errors, []);
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		assert.equal(w.aggregator.getBrick(w.bob)?.paired, true);
+		w.done();
+	});
+
+	it('keeps the pairing when a scan that read Windows\' list before it lands afterwards', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const held = gate();
+		w.radio.discoverGate = held.promise;
+		w.radio.unpairedNext = true;
+		const stale = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+
+		await connectPickedBrick(w.bob, w.deps);
+		held.open();
+		await stale;
+
+		assert.equal(w.aggregator.getBrick(w.bob)?.paired, true, 'an older reading undid the pairing');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		w.done();
+	});
+
+	it('connects a freshly paired brick whose sighting the list dropped during the pairing', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const pair = w.deps.pair;
+		// Pairing takes the brick's owner tens of seconds; an inquiry sighting can expire meanwhile.
+		const deps = {
+			...w.deps,
+			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+				w.scheduler.forget([w.bobKey]);
+				w.aggregator.forget(w.bob);
+				return pair(mac, onEvent);
+			},
+		};
+
+		await connectPickedBrick(w.bob, deps);
+
+		assert.deepEqual(w.shown.errors, []);
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
 		w.done();
 	});
 

@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
 		mockBricks: mockBricksWanted(context),
 	}));
-	const { bricks, aggregator, scheduler, btDiscovery, btPresence } = runtime;
+	const { bricks, aggregator, btDiscovery, btPresence } = runtime;
 	/** What a user calls a brick: its name, or its id until it has one. */
 	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
 
@@ -109,7 +109,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		if (!picked) { return; }
 
 		await connectPickedBrick(picked, {
-			aggregator, bricks, scheduler, log: logger,
+			aggregator, bricks, log: logger,
 			pair: btDiscovery?.pair,
 			progress: (title, task) => vscode.window.withProgress(
 				{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
