@@ -20,8 +20,12 @@ import type { BrickId, BrickKey, ForgetResidue } from '../contracts';
  * (`c_com.c` 5567–5606), so its reply says only that the brick answered.
  */
 export type PeerRemoval =
-	/** The list read back afterwards no longer holds the entry. */
-	| { readonly status: 'confirmed'; readonly name: string; readonly over: BrickKey }
+	/**
+	 * The list read back afterwards holds one entry of that name fewer. The firmware removes only
+	 * the first entry whose name matches (`c_bt.c` 2215, 3603–3622), so a brick that held the name
+	 * twice still holds it once: `remaining` counts those left, and is absent when none is.
+	 */
+	| { readonly status: 'confirmed'; readonly name: string; readonly over: BrickKey; readonly remaining?: number }
 	/**
 	 * Sent, and nothing shows whether it took: the removal cut the Bluetooth link it went
 	 * over before any reply (`c_bt.c` 3609–3612), the reply timed out, or the list could not
@@ -29,8 +33,9 @@ export type PeerRemoval =
 	 */
 	| { readonly status: 'sent'; readonly name: string; readonly over: BrickKey; readonly detail: string }
 	/**
-	 * The list read back still holds the entry — the firmware runs a removal only while its
-	 * Bluetooth is on and idle (`c_bt.c` 3594–3656) — or the brick rejected the command.
+	 * The list read back holds as many entries of that name as before — the firmware runs a
+	 * removal only while its Bluetooth is on and idle (`c_bt.c` 3594–3656) — or the brick
+	 * rejected the command.
 	 */
 	| { readonly status: 'failed'; readonly name: string; readonly over: BrickKey; readonly detail: string };
 
@@ -119,17 +124,23 @@ export type ClearSkip =
 	/** The list was empty, or held only entries without a name. */
 	| 'nothing-to-remove'
 	/**
-	 * Only Bluetooth reaches the brick and this computer's Bluetooth name is unknown: removing
-	 * this computer's entry cuts the link, so it has to go last, and without the name nothing
-	 * tells which entry it is.
+	 * Only Bluetooth reaches the brick, this computer's Bluetooth name is unknown, and the list
+	 * does not mark exactly one entry connected: removing this computer's entry cuts the link, so
+	 * it has to go last, and nothing tells which entry it is.
 	 */
 	| 'radio-name-unknown';
 
 /** Why this computer's pairing with the brick was left alone (KTD10). */
 export type ClearPairingSkip =
-	/** This computer's Bluetooth name is unknown, so nothing tells whether its entry was on the brick. */
+	/**
+	 * This computer's Bluetooth name is unknown and no entry marked connected stood in for it,
+	 * so nothing tells whether its entry was on the brick.
+	 */
 	| 'radio-name-unknown'
-	/** No entry on the brick carried this computer's exact Bluetooth name. */
+	/**
+	 * No entry on the brick carried this computer's exact Bluetooth name, nor, over Bluetooth
+	 * alone, was marked connected.
+	 */
 	| 'not-on-brick'
 	/** This computer's entry was on the brick and was not removed. */
 	| 'not-removed'

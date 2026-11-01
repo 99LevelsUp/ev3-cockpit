@@ -45,7 +45,12 @@ export function clearConfirmation(
 	label: string, names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined,
 ): { message: string; detail: string } {
 	const detail = [`It will remove ${entries(names.length)}: ${quoteNames(names)}.`];
-	if (thisComputer === undefined) {
+	if (thisComputer === undefined && includesThisComputer) {
+		// Over Bluetooth alone, the brick layer finds this computer's entry by the brick's connected mark.
+		detail.push('This computer\'s Bluetooth name is unknown, but the brick marks one of them as the entry that holds '
+			+ 'its Bluetooth link to this computer: the brick will no longer know this computer, '
+			+ 'and if this computer is paired with the brick, that pairing is removed too.');
+	} else if (thisComputer === undefined) {
 		detail.push('This computer\'s Bluetooth name is unknown, so nothing shows whether this computer is among them.');
 	} else if (includesThisComputer) {
 		detail.push(`This computer, "${thisComputer}", is among them: the brick will no longer know it, `

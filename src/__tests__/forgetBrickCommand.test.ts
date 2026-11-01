@@ -261,6 +261,19 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 		assert.match(text, /Clear a Brick's Bluetooth List/);
 	});
 
+	it('one of two entries under this computer\'s name removed: says one remains, and that it blocks re-pairing', () => {
+		const r = report({
+			brickSide: { status: 'confirmed', name: 'UCEBNA-PC', over: usb(CCC_MAC), remaining: 1 },
+			peers: ['UCEBNA-PC', 'UCEBNA-PC'],
+		});
+		const text = details(r);
+		assert.match(text, /still holds 1 more entry named "UCEBNA-PC"/);
+		assert.match(text, /switched off from its own menu/);
+		assert.match(text, /On the brick: 1 more entry under this computer's name/);
+		assert.match(text, /blocks re-pairing with this computer/);
+		assert.match(forgetNotification(r, 'CCC'), /still lists this computer/);
+	});
+
 	it('sent over the Bluetooth link it cut: not confirmed, needs the menu power-off, and may still be on the brick', () => {
 		const r = report({ brickSide: { status: 'sent', name: 'UCEBNA-PC', over: bt(CCC_MAC), detail: 'The link closed.' } });
 		const text = details(r);

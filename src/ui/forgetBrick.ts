@@ -116,8 +116,11 @@ export function brickSideLines(report: ForgetReport): string[] {
 	const lines: string[] = [];
 	switch (side.status) {
 	case 'confirmed':
-		lines.push(`The brick's Bluetooth list: removed this computer's entry "${side.name}" ${over(side.over)}; `
-			+ 'the list read back no longer holds it.');
+		lines.push(side.remaining
+			? `The brick's Bluetooth list: removed one of this computer's entries "${side.name}" ${over(side.over)}; `
+				+ `the list read back still holds ${moreEntries(side.remaining)} named "${side.name}".`
+			: `The brick's Bluetooth list: removed this computer's entry "${side.name}" ${over(side.over)}; `
+				+ 'the list read back no longer holds it.');
 		break;
 	case 'sent':
 		lines.push(`The brick's Bluetooth list: sent the removal of this computer's entry "${side.name}" ${over(side.over)}, `
@@ -146,14 +149,20 @@ export function brickSideLines(report: ForgetReport): string[] {
 	return lines;
 }
 
+/** "1 more entry", "2 more entries". */
+const moreEntries = (count: number): string => `${count} more ${count === 1 ? 'entry' : 'entries'}`;
+
 /**
  * This computer's entry on the brick, when it may still be there: the removal was not run,
- * failed, or was sent without proof (R11). A list read without this computer's name has no such
- * entry, so `no-match` adds none.
+ * failed, or was sent without proof (R11), or removed one of several entries under the name. A
+ * list read without this computer's name has no such entry, so `no-match` adds none.
  */
 function brickEntryLeftBehind(side: BrickSideOutcome): string | undefined {
 	switch (side.status) {
-	case 'confirmed': return undefined;
+	case 'confirmed':
+		return side.remaining
+			? `On the brick: ${moreEntries(side.remaining)} under this computer's name in the brick's Bluetooth list.`
+			: undefined;
 	case 'failed': return 'On the brick: this computer\'s entry in the brick\'s Bluetooth list is still there.';
 	case 'sent': return 'On the brick: this computer\'s entry in the brick\'s Bluetooth list may still be there.';
 	case 'skipped':
@@ -203,7 +212,9 @@ export function forgetNotification(report: ForgetReport, label: string): string 
 	const side = report.brickSide;
 	switch (side.status) {
 	case 'confirmed':
-		sentences.push('Removed from the brick\'s list; switch the brick off from its menu to save that.');
+		sentences.push(side.remaining
+			? 'Removed one of its entries from the brick\'s list; the brick still lists this computer.'
+			: 'Removed from the brick\'s list; switch the brick off from its menu to save that.');
 		break;
 	case 'sent':
 		sentences.push('Removal sent to the brick, not confirmed.');
