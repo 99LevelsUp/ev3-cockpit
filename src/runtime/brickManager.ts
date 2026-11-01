@@ -78,9 +78,11 @@ export interface BrickManagerOptions {
  * Asked once the brick's list is read and before anything is removed from it (R16).
  *
  * @param names Every entry it will remove, in the list's order; a name held twice is here twice.
- * @param includesThisComputer Whether one of them carries this computer's exact Bluetooth name.
+ * @param includesThisComputer Whether one of them carries this computer's exact Bluetooth name
+ *   or, when only Bluetooth reaches the brick, is the entry the brick marks connected: the one
+ *   it holds the link the list was read over under.
  * @param thisComputer This computer's Bluetooth name; undefined when it is unknown, and then
- *   nothing tells whether this computer is among `names`.
+ *   only an entry marked connected tells whether this computer is among `names`.
  * @returns True to go ahead.
  */
 export type ClearListConfirm = (
@@ -115,6 +117,23 @@ function isLinkFailure(error: unknown, options: SendCommandOptions | undefined):
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** One entry of a brick's Bluetooth list, as `FAVOUR_ITEM` returns it (KTD2). */
+interface Peer {
+	/** Untrimmed, as the brick stores it. */
+	readonly name: string;
+	/**
+	 * Whether the brick holds an open link to it: `DevList[].Connected` (`c_bt.c` 3566), the flag
+	 * whose link a removal of the entry closes (`c_bt.c` 3609–3612). U7 confirms on hardware that
+	 * this computer's entry reads connected while its SPP link is open.
+	 */
+	readonly connected: boolean;
+}
+
+const namesOf = (peers: readonly Peer[]): string[] => peers.map((peer) => peer.name);
+
+/** How many entries of a brick's Bluetooth list carry exactly `name`; the brick tells entries apart by nothing else. */
+const countOf = (names: readonly string[], name: string): number => names.filter((n) => n === name).length;
 
 export class BrickManager implements vscode.Disposable {
 	private readonly sessionManager: SessionManager;
@@ -306,8 +325,9 @@ export class BrickManager implements vscode.Disposable {
 	 *    is sent, a channel this opened is closed, and it resolves undefined;
 	 * 3. remove each named entry until the list is empty or a pass removes nothing (KTD9). Over
 	 *    USB or TCP the brick's Bluetooth sessions are closed first; over Bluetooth alone this
-	 *    computer's entry goes last, because its removal cuts the link, and the brick is then
-	 *    signed out, as nothing else reaches it;
+	 *    computer's entry — the one the brick marks connected, or the one carrying the radio
+	 *    name — goes last, because its removal cuts the link, and the brick is then signed out,
+	 *    as nothing else reaches it;
 	 * 4. when this computer's entry went and the brick was paired, forget its Bluetooth channel
 	 *    only: the pairing and the cockpit's memory of that channel (KTD10). Its other channels
 	 *    stay as they are, a USB session too (R18).
@@ -489,12 +509,22 @@ export class BrickManager implements vscode.Disposable {
 
 	// ── Internal: joining ───────────────────────────────────────────
 
-	/** Channels of a brick that are available and have no session yet. */
+	/**
+	 * Channels of a brick that are available, have no session yet, and can be connected over —
+	 * the one list {@link signIn}, {@link reconcile} and {@link peerListChannel} all join from.
+	 *
+	 * A Bluetooth channel of a brick nobody has paired is left out: it is a sighting — an
+	 * inquiry, or Windows' cache relisting the brick unpaired after a forget or a cleared list
+	 * (KTD10) — not a link. Connecting to such a brick needs pairing first, which "Connect a
+	 * Brick" owns: `connectPickedBrick` pairs a brick only Bluetooth reaches, scans, then signs
+	 * it in. A brick still signed in over USB after its list was cleared would otherwise connect
+	 * to a brick that no longer knows this computer.
+	 */
 	private joinCandidates(brickId: BrickId): BrickKey[] {
 		const entry = this.aggregator.getBrick(brickId);
 		if (!entry) { return []; }
 		return entry.channels
-			.filter((c) => c.state === ChannelState.Available)
+			.filter((c) => c.state === ChannelState.Available && (c.transport !== Transport.BT || entry.paired))
 			.map((c) => c.brickKey)
 			.filter((key) => !this.sessionManager.getSession(key));
 	}
@@ -505,17 +535,10 @@ export class BrickManager implements vscode.Disposable {
 		// A brick being forgotten loses its channels on purpose; none joins again (KTD4). A
 		// rejoin that `scheduleRejoin` set up runs through here too, so it needs no check of its own.
 		if (!signIn || this.disposed || this.forgetting.has(brickId)) { return; }
-		// A Bluetooth channel of a brick nobody has paired is a sighting — an inquiry, or Windows'
-		// cache after an unpair — not a link: a brick still signed in over USB after its list was
-		// cleared would otherwise connect to a brick that no longer knows this computer (KTD10).
-		// Looked up once, and only when a Bluetooth channel gets this far.
-		let paired: boolean | undefined;
 		for (const key of this.joinCandidates(brickId)) {
 			if (signIn.pending.has(key) || signIn.awaitingEvidence.has(key) || signIn.retryTimers.has(key)) {
 				continue;
 			}
-			if (this.transportOf(key) === Transport.BT
-				&& !(paired ??= this.aggregator.getBrick(brickId)?.paired ?? false)) { continue; }
 			this.join(brickId, key).catch(() => { /* recorded by join; retried per transport */ });
 		}
 	}
@@ -669,12 +692,13 @@ export class BrickManager implements vscode.Disposable {
 		}
 		let peers: string[];
 		try {
-			peers = await this.readPeers(channel.key);
+			peers = namesOf(await this.readPeers(channel.key));
 		} catch (error) {
 			return { outcome: { status: 'skipped', reason: 'list-unreadable', detail: messageOf(error) } };
 		}
-		if (!peers.includes(name)) { return { outcome: { status: 'skipped', reason: 'no-match' }, peers }; }
-		return { outcome: await this.removePeer(brickId, channel.key, name), peers };
+		const held = countOf(peers, name);
+		if (held === 0) { return { outcome: { status: 'skipped', reason: 'no-match' }, peers }; }
+		return { outcome: await this.removePeer(brickId, channel.key, name, held), peers };
 	}
 
 	/**
@@ -719,20 +743,20 @@ export class BrickManager implements vscode.Disposable {
 	 * The brick's Bluetooth list over one channel, names untrimmed: the count, then each index
 	 * below it, because the firmware does not bounds-check the index (KTD2, `c_bt.c` 3561–3567).
 	 */
-	private async readPeers(key: BrickKey): Promise<string[]> {
+	private async readPeers(key: BrickKey): Promise<Peer[]> {
 		const count = await this.sessionManager.send(key, { kind: 'brick:bluetoothPeerCount' });
 		if (count.kind !== 'brick:bluetoothPeerCount') {
 			throw new ProtocolError(`Expected the Bluetooth peer count, got ${count.kind}.`);
 		}
-		const names: string[] = [];
+		const peers: Peer[] = [];
 		for (let index = 0; index < count.count; index++) {
 			const peer = await this.sessionManager.send(key, { kind: 'brick:bluetoothPeer', index });
 			if (peer.kind !== 'brick:bluetoothPeer') {
 				throw new ProtocolError(`Expected Bluetooth peer ${index}, got ${peer.kind}.`);
 			}
-			names.push(peer.name);
+			peers.push({ name: peer.name, connected: peer.connected });
 		}
-		return names;
+		return peers;
 	}
 
 	/**
@@ -748,8 +772,13 @@ export class BrickManager implements vscode.Disposable {
 	 * Sent once, with the normal timeout, and through the session manager rather than
 	 * {@link send}, so a failure here is not a failover. The brick's VM waits on BlueZ while it
 	 * removes; a retry would only wait again.
+	 *
+	 * `held` is how many entries carried the name in the list read before. The firmware removes
+	 * only the first that matches (`c_bt.c` 2215, 3603–3622), so the read-back is judged by count,
+	 * not by whether the name is still there: one fewer is confirmed, and any still held under
+	 * the name are reported as remaining.
 	 */
-	private async removePeer(brickId: BrickId, key: BrickKey, name: string): Promise<PeerRemoval> {
+	private async removePeer(brickId: BrickId, key: BrickKey, name: string, held: number): Promise<PeerRemoval> {
 		if (this.transportOf(key) !== Transport.BT) { await this.closeBluetoothSessions(brickId); }
 		try {
 			await this.sessionManager.send(key, { kind: 'brick:removeBluetoothPeer', name });
@@ -760,13 +789,15 @@ export class BrickManager implements vscode.Disposable {
 		}
 		let after: string[];
 		try {
-			after = await this.readPeers(key);
+			after = namesOf(await this.readPeers(key));
 		} catch (error) {
 			return { status: 'sent', name, over: key, detail: messageOf(error) };
 		}
-		return after.includes(name)
-			? { status: 'failed', name, over: key, detail: 'The list read back still holds the entry.' }
-			: { status: 'confirmed', name, over: key };
+		const remaining = countOf(after, name);
+		if (remaining >= held) {
+			return { status: 'failed', name, over: key, detail: 'The list read back still holds the entry.' };
+		}
+		return { status: 'confirmed', name, over: key, ...(remaining > 0 ? { remaining } : {}) };
 	}
 
 	/** Close every Bluetooth session of a brick explicitly, so the session manager reopens none. */
@@ -866,13 +897,14 @@ export class BrickManager implements vscode.Disposable {
 			if (channel.opened && !this.signedIn.has(brickId)) { await this.sessionManager.disconnect(key); }
 		};
 
-		let peers: string[];
+		let list: Peer[];
 		try {
-			peers = await this.readPeers(key);
+			list = await this.readPeers(key);
 		} catch (error) {
 			await closeOpened();
 			return { ...skipped('list-unreadable', messageOf(error)), over: key };
 		}
+		const peers = namesOf(list);
 		const read = { over: key, peers };
 		const names = peers.filter((name) => !isBlankPeerName(name));
 		const unnamed = peers.filter(isBlankPeerName).map((name): ClearedEntry => ({ status: 'not-removable', name, reason: 'blank-name' }));
@@ -880,13 +912,20 @@ export class BrickManager implements vscode.Disposable {
 			await closeOpened();
 			return { ...skipped('nothing-to-remove'), ...read, entries: unnamed };
 		}
-		// Over Bluetooth alone no order is safe without the name: any removal may be the one that
-		// cuts the link, leaving the entries after it and a pairing nothing can tell is one-sided.
-		if (overBt && !thisComputer) {
+		// Over Bluetooth alone, the entry the brick holds this link under reads connected
+		// (`c_bt.c` 3566) — under whatever name this computer had when it paired, an earlier one
+		// too. Its removal is the one that cuts the link (`c_bt.c` 3609–3612), so it goes last with
+		// any entry carrying the radio name; with none marked, the radio name alone decides.
+		const linked = overBt ? list.filter((peer) => peer.connected && !isBlankPeerName(peer.name)) : [];
+		// Over Bluetooth alone no order is safe when nothing tells which entry is this link's: any
+		// removal may be the one that cuts it, leaving the entries after it and a pairing nothing
+		// can tell is one-sided. One entry marked connected tells it without the name; two do not.
+		if (overBt && !thisComputer && linked.length !== 1) {
 			await closeOpened();
 			return { ...skipped('radio-name-unknown'), ...read };
 		}
-		const includesThisComputer = thisComputer !== undefined && names.includes(thisComputer);
+		const thisComputersNames = new Set([...(thisComputer ? [thisComputer] : []), ...namesOf(linked)]);
+		const includesThisComputer = names.some((name) => thisComputersNames.has(name));
 		if (!await confirm(names, includesThisComputer, thisComputer)) {
 			await closeOpened();
 			return undefined;
@@ -897,16 +936,16 @@ export class BrickManager implements vscode.Disposable {
 			// The removal of this computer's entry cuts its Bluetooth link (KTD5); closed first, so
 			// nothing reconnects it to a brick that has just dropped this computer.
 			if (!overBt) { await this.closeBluetoothSessions(brickId); }
-			const { entries, linkCut } = await this.removeEntries(key, peers, overBt ? thisComputer : undefined);
+			const { entries, linkCut } = await this.removeEntries(key, peers, overBt ? thisComputersNames : undefined);
 			if (overBt && linkCut) {
 				// The link the list went over is gone, and nothing else reached the brick.
 				if (this.signedIn.has(brickId)) { await this.signOut(brickId); } else { await this.sessionManager.disconnect(key); }
 			}
 
-			const thisComputerWent = entries.some((entry) => entry.name === thisComputer
+			const thisComputerWent = entries.some((entry) => thisComputersNames.has(entry.name)
 				&& (entry.status === 'confirmed' || entry.status === 'sent'));
 			let pairingLeft: ClearPairingSkip | undefined;
-			if (!thisComputer) { pairingLeft = 'radio-name-unknown'; }
+			if (thisComputersNames.size === 0) { pairingLeft = 'radio-name-unknown'; }
 			else if (!includesThisComputer) { pairingLeft = 'not-on-brick'; }
 			else if (!thisComputerWent) { pairingLeft = 'not-removed'; }
 			else if (!btKey || !wasPaired) { pairingLeft = 'not-paired'; }
@@ -931,33 +970,33 @@ export class BrickManager implements vscode.Disposable {
 	 * removed unseen (R16). A pass sends each name still to go once and reads the list back after
 	 * each; a name held twice goes once per pass. It stops when every name has gone, when a pass
 	 * removes nothing, so an entry the brick keeps cannot loop, or after as many passes as the
-	 * list had entries. `last`, over Bluetooth alone, is this computer's name: its entries go
-	 * only after every other, because their removal cuts the link (KTD5).
+	 * list had entries. `last`, over Bluetooth alone, is this computer's names — its radio name
+	 * and the entry marked connected: their entries go only after every other, because the
+	 * removal of the link's entry cuts the link (KTD5).
 	 *
 	 * A link lost on a removal, or a list that cannot be read back after one, ends it: that
 	 * removal counts as sent, and the entries not yet removed as not sent.
 	 */
-	private async removeEntries(key: BrickKey, peers: readonly string[], last: string | undefined): Promise<{
+	private async removeEntries(key: BrickKey, peers: readonly string[], last: ReadonlySet<string> | undefined): Promise<{
 		entries: ClearedEntry[]; linkCut: boolean;
 	}> {
 		const toGo = new Map<string, number>();
 		for (const name of peers) { if (!isBlankPeerName(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
 		const removed = new Map<string, number>();
 		const lastFailure = new Map<string, string>();
-		const held = (list: readonly string[], name: string): number => list.filter((n) => n === name).length;
 		let current: readonly string[] = peers;
 		let sent: { name: string; detail: string } | undefined;
 
 		const phases: ((name: string) => boolean)[] = last === undefined
 			? [() => true]
-			: [(name) => name !== last, (name) => name === last];
+			: [(name) => !last.has(name), (name) => last.has(name)];
 		for (const inPhase of phases) {
 			for (let pass = 0; pass < peers.length && !sent; pass++) {
 				const names = [...toGo].filter(([name, left]) => left > 0 && inPhase(name)).map(([name]) => name);
 				if (names.length === 0) { break; }
 				let progress = false;
 				for (const name of names) {
-					const before = held(current, name);
+					const before = countOf(current, name);
 					try {
 						await this.sessionManager.send(key, { kind: 'brick:removeBluetoothPeer', name });
 					} catch (error) {
@@ -966,12 +1005,12 @@ export class BrickManager implements vscode.Disposable {
 						continue;
 					}
 					try {
-						current = await this.readPeers(key);
+						current = namesOf(await this.readPeers(key));
 					} catch (error) {
 						sent = { name, detail: messageOf(error) };
 						break;
 					}
-					if (held(current, name) < before) {
+					if (countOf(current, name) < before) {
 						removed.set(name, (removed.get(name) ?? 0) + 1);
 						toGo.set(name, (toGo.get(name) ?? 1) - 1);
 						progress = true;
