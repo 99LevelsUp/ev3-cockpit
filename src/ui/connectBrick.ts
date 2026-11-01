@@ -14,6 +14,7 @@ import type { RuntimeLog } from '../runtime/createRuntime';
 import type { PresenceAggregator } from '../runtime/presenceAggregator';
 import type { PairingResult } from '../transports/btClassicDiscovery';
 import type { BtPairingEvent } from '../transports/btPairingHelper';
+import type { BtPresenceMonitor } from '../transports/btPresence';
 import { BrickPickRow, brickPickRows } from './brickPickRows';
 
 /** The picker as the flow uses it; a `vscode.QuickPick<BrickPickRow>` is one. */
@@ -73,6 +74,8 @@ export interface ConnectBrickDeps {
 	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf'>;
 	/** Pairs a brick over Bluetooth; absent without Bluetooth. */
 	readonly pair?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
+	/** Bluetooth presence checks, told of a pairing; absent without them. */
+	readonly presence?: Pick<BtPresenceMonitor, 'notePaired'>;
 	readonly log: RuntimeLog;
 	/** A notification that stays up while `task` runs; `task` may change its message. */
 	readonly progress: <T>(title: string, task: (report: (message: string) => void) => Promise<T>) => PromiseLike<T>;
@@ -121,6 +124,8 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 		// pairing, so it says so itself instead of waiting for a scan to read it back from
 		// Windows: a scan can be slow, can have read the list before the pairing, or can hang.
 		aggregator.markPaired(bt.brickKey);
+		// A presence check from before the pairing would mark the fresh channel as not heard.
+		deps.presence?.notePaired(mac);
 	}
 
 	await deps.progress(`EVƎ Cockpit: connecting to ${label}`, async () => {

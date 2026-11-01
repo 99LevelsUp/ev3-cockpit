@@ -196,8 +196,11 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			hidden: false,
 			/** Connecting fails. */
 			refuseConnect: false,
-			/** Discover reports that the last presence check did not hear the brick. */
-			heardFalse: false,
+		};
+		/** The presence checks: the bricks whose last check did not hear them. */
+		const presence = {
+			unheard: new Set<string>(),
+			notePaired(mac: string) { this.unheard.delete(mac); },
 		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
@@ -207,7 +210,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 				radio.discovers += 1;
 				const item = radio.unpairedNext ? { ...bob, paired: false, remembered: false } : { ...bob };
 				radio.unpairedNext = false;
-				const items = radio.hidden ? [] : [radio.heardFalse ? { ...item, heard: false } : item];
+				const items = radio.hidden ? [] : [presence.unheard.has(BOB_MAC) ? { ...item, heard: false } : item];
 				const held = radio.discoverGate;
 				radio.discoverGate = undefined;
 				if (held) { await held; }
@@ -236,7 +239,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		};
 		const shown = { titles: [] as string[], reports: [] as string[], info: [] as string[], errors: [] as string[] };
 		const deps = {
-			aggregator: l.aggregator, bricks: l.bricks, log: quiet, pair,
+			aggregator: l.aggregator, bricks: l.bricks, log: quiet, pair, presence,
 			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
 				shown.titles.push(title);
 				return task((message) => shown.reports.push(message));
@@ -244,7 +247,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			showInfo: (message: string) => shown.info.push(message),
 			showError: (message: string) => shown.errors.push(message),
 		};
-		return { ...l, radio, shown, deps, bob: idOf(BOB_MAC), bobKey };
+		return { ...l, radio, presence, shown, deps, bob: idOf(BOB_MAC), bobKey };
 	}
 
 	it('pairs a brick only an inquiry has heard, then connects it', async () => {
@@ -381,7 +384,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 				// Windows lists the pairing before the helper reports it, and the presence check of a
 				// brick still busy with the ceremony did not hear it.
 				assert.ok(w.scheduler.getTrackedBricks().get(w.bobKey), 'the sighting is not tracked, so this test shows nothing');
-				w.radio.heardFalse = true;
+				w.presence.unheard.add(BOB_MAC);
 				await w.scheduler.scanOnce();
 				// One more scan reads that list before the pairing is recorded, and lands after it.
 				w.radio.discoverGate = held.promise;
@@ -390,6 +393,31 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			},
 			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
 				if (title.startsWith('EVƎ Cockpit: connecting')) { held.open(); await stale; }
+				return w.deps.progress(title, task);
+			},
+		};
+
+		await connectPickedBrick(w.bob, deps);
+
+		assert.deepEqual(w.shown.errors, [], 'a presence check older than the pairing took the channel away');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		w.done();
+	});
+
+	it('connects a freshly paired brick though a scan after the pairing carries a presence check from before it', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();   // the inquiry's sighting
+		const pair = w.deps.pair;
+		const deps = {
+			...w.deps,
+			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+				// The presence check ran while the owner was confirming on the brick, and missed it.
+				w.presence.unheard.add(BOB_MAC);
+				return pair(mac, onEvent);
+			},
+			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
+				// A scan that starts after the pairing lands just before the sign-in.
+				if (title.startsWith('EVƎ Cockpit: connecting')) { await w.scheduler.scanOnce(); }
 				return w.deps.progress(title, task);
 			},
 		};
