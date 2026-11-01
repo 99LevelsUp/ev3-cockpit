@@ -93,6 +93,11 @@ function skipLine(report: ClearListReport, skip: NonNullable<ClearListReport['sk
 			+ `so that entry has to go last; no entry carries this computer's Bluetooth name${report.thisComputer ? ` ("${report.thisComputer}")` : ''}, `
 			+ 'and the brick does not mark exactly one entry connected, so nothing shows which entry it is. '
 			+ 'Connect the brick with a USB cable and clear its list again.';
+	case 'duplicate-link-entry':
+		return 'Nothing changed on the brick. Only Bluetooth reaches it, and removing this computer\'s entry cuts that link, '
+			+ 'so that entry has to go last; its list holds that entry\'s name more than once, and the brick removes '
+			+ 'the first entry a name matches, which may be the one holding the link, so the other would never be removed. '
+			+ 'Connect the brick with a USB cable and clear its list again.';
 	}
 }
 
@@ -137,9 +142,16 @@ function clearLeftBehindLines(report: ClearListReport): string[] {
 				+ 'and connecting over Bluetooth fails until "Forget a Brick" removes it.');
 	}
 	if (report.paired && report.pairingLeft === 'not-on-brick') {
+		// Only the current name was looked for: what an entry under an earlier one means depends on
+		// whether any entry is left.
+		const listEmptied = report.entries.every((entry) => entry.status === 'confirmed');
 		lines.push('  On this computer: its Bluetooth pairing with the brick.',
-			'    No entry on the brick carried this computer\'s Bluetooth name, so the brick does not know this computer, '
-				+ 'and connecting over Bluetooth fails until "Forget a Brick" removes the pairing.');
+			'    No entry on the brick carried this computer\'s current Bluetooth name, so the cockpit left the pairing alone. '
+				+ (listEmptied
+					? 'The list read back holds no entry now, so the brick does not know this computer, '
+						+ 'and connecting over Bluetooth fails until "Forget a Brick" removes the pairing.'
+					: 'An entry under an earlier name of this computer may still be on the brick; if one is, this computer '
+						+ 'cannot pair with the brick again until that entry is removed.'));
 	}
 	lines.push(...residueLines(report.residue));
 	return lines.length > 0 ? ['Left behind:', ...lines] : ['Left behind: nothing.'];
@@ -191,6 +203,9 @@ export function clearNotification(report: ClearListReport, label: string): strin
 	case 'link-entry-unknown':
 		return `EVƎ Cockpit: nothing changed on ${label}. Over Bluetooth alone its list can be cleared only `
 			+ 'when the brick shows which entry is this computer\'s; connect it with a USB cable.';
+	case 'duplicate-link-entry':
+		return `EVƎ Cockpit: nothing changed on ${label}. Its list holds the name of this computer's entry more than once, `
+			+ 'which over Bluetooth alone cannot be cleared; connect it with a USB cable.';
 	case undefined:
 		break;
 	}

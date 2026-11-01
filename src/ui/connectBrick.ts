@@ -68,6 +68,9 @@ export async function pickBrick(
 	return picked;
 }
 
+/** How many settle-then-scan rounds a freshly paired brick gets to show up paired in the list. */
+const PAIRED_SCAN_ROUNDS = 3;
+
 /** What connecting a picked brick needs besides the brick layer. */
 export interface ConnectBrickDeps {
 	readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
@@ -129,9 +132,17 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 		// sign-in joins no Bluetooth channel the list holds unpaired, so the list has to learn
 		// of the pairing first. A scan already in flight may have read Windows' list before the
 		// pairing, and `scanOnce` skips a transport that is scanning; so the scan that reads it
-		// starts only once those have settled.
-		if (justPaired) { await scheduler.scansSettled(); }
-		await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
+		// starts only once those have settled. A timer can start another one in between, so this
+		// repeats until the list says paired, a few rounds at most; past those, the sign-in's own
+		// error says what is wrong.
+		if (justPaired) {
+			for (let round = 0; round < PAIRED_SCAN_ROUNDS && !aggregator.getBrick(picked)?.paired; round++) {
+				await scheduler.scansSettled();
+				await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
+			}
+		} else {
+			await scheduler.scanOnce().catch(() => { /* connect is what matters here */ });
+		}
 		try {
 			await bricks.signIn(picked);
 			const route = bricks.routeOf(picked);

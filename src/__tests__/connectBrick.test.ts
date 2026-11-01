@@ -177,7 +177,7 @@ describe('Connect a Brick — a live scan while the list is open (R18)', () => {
 
 describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 	/** A Bluetooth radio with one brick on it, and a pairing the test decides the outcome of. */
-	function world(options: { paired: boolean; pairing?: PairingResult }) {
+	function world(options: { paired: boolean; pairing?: PairingResult; listsPairingNever?: boolean }) {
 		const bobKey = makeBrickKey(Transport.BT, BOB_MAC);
 		const bob: DiscoveryItem = {
 			brickKey: bobKey, displayName: 'Bob', nameSource: 'bt-cache', transport: Transport.BT,
@@ -190,6 +190,8 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			connects: 0, discovers: 0, listedPairedAtConnect: [] as boolean[], pairedMacs: [] as string[],
 			/** Holds the next discover's answer, which is read from Windows' list before the hold. */
 			discoverGate: undefined as Promise<void> | undefined,
+			/** The next discover lists the brick unpaired: Windows' list has not caught up yet. */
+			unpairedNext: false,
 		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
@@ -197,7 +199,8 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
 			async discover(): Promise<DiscoveryScanResult> {
 				radio.discovers += 1;
-				const item = { ...bob };
+				const item = radio.unpairedNext ? { ...bob, paired: false, remembered: false } : { ...bob };
+				radio.unpairedNext = false;
 				const held = radio.discoverGate;
 				radio.discoverGate = undefined;
 				if (held) { await held; }
@@ -220,7 +223,7 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			onEvent?.({ type: 'found', id: mac, name: 'Bob', alreadyPaired: false });
 			const result = options.pairing ?? { ok: true };
 			// Windows knows the pairing at once; discovery lists it as paired from now on.
-			if (result.ok) { bob.paired = true; bob.remembered = true; }
+			if (result.ok && !options.listsPairingNever) { bob.paired = true; bob.remembered = true; }
 			return result;
 		};
 		const shown = { titles: [] as string[], reports: [] as string[], info: [] as string[], errors: [] as string[] };
@@ -278,6 +281,56 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
 		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
 		assert.equal(w.radio.discovers, 3, 'no scan read Windows\' list after the pairing');
+		w.done();
+	});
+
+	it('connects a freshly paired brick though a timer starts a Bluetooth scan after the earlier ones settled', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		// The poll timer fires just after the scans running at the pairing have settled: its
+		// scan reads Windows' list before it shows the pairing, and answers late. The connect's
+		// own scan skips Bluetooth while that one runs.
+		const held = gate();
+		let settles = 0;
+		let timerScan: Promise<void> | undefined;
+		let listedPairedAtTimerScan: boolean | undefined;
+		const scheduler = {
+			scanOnce: () => w.scheduler.scanOnce(),
+			scansSettled: async () => {
+				settles += 1;
+				if (settles > 1) { held.open(); }
+				await w.scheduler.scansSettled();
+				if (settles === 1) {
+					w.radio.discoverGate = held.promise;
+					w.radio.unpairedNext = true;
+					timerScan = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
+					listedPairedAtTimerScan = w.aggregator.getBrick(w.bob)?.paired;
+				}
+			},
+		};
+
+		await connectPickedBrick(w.bob, { ...w.deps, scheduler });
+		held.open();
+		await timerScan;
+
+		assert.equal(listedPairedAtTimerScan, false, 'the list already said paired, so this test shows nothing');
+		assert.deepEqual(w.shown.errors, [], 'the freshly paired brick did not connect');
+		assert.equal(w.bricks.isSignedIn(w.bob), true);
+		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
+		assert.deepEqual(w.radio.listedPairedAtConnect, [true]);
+		w.done();
+	});
+
+	it('stops rescanning after a few rounds when the list never shows the pairing, and says why the connect failed', async () => {
+		const w = world({ paired: false, listsPairingNever: true });
+		await w.scheduler.scanOnce();
+
+		await connectPickedBrick(w.bob, w.deps);
+
+		assert.deepEqual(w.radio.pairedMacs, [BOB_MAC]);
+		assert.equal(w.radio.discovers, 1 + 3, 'not three settle-then-scan rounds after the pairing');
+		assert.deepEqual(w.shown.errors, ['EVƎ Cockpit: could not connect to Bob — Brick 0016530000B0 is not available on any channel.']);
+		assert.equal(w.bricks.isSignedIn(w.bob), false);
 		w.done();
 	});
 

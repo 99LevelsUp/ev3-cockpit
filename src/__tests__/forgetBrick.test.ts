@@ -98,6 +98,8 @@ function world(options: WorldOptions = {}) {
 		ignoresRemoval: false,
 		/** Names whose removal the firmware acks and does not run. */
 		refuses: new Set<string>(),
+		/** Names the firmware removes this many copies of, then acks the next removal and does not run it. */
+		refusesAfter: new Map<string, number>(),
 		/** After a removal, the list cannot be read back. */
 		readBackFails: false,
 		removalSeen: false,
@@ -108,6 +110,8 @@ function world(options: WorldOptions = {}) {
 		 * (`c_bt.c` 3566). None by default, as the mock answers.
 		 */
 		connected: new Set<string>(),
+		/** Entries the list marks connected, by their place in the list, for one copy of a name held twice. */
+		connectedAt: new Set<number>(),
 		/** A reply that waits for this, by command kind, once. */
 		holds: new Map<BrickCommand['kind'], Promise<void>>(),
 		peers: (): string[] => mock['bricks'].get(mockKey)!.bluetoothPeers.slice(),
@@ -146,6 +150,11 @@ function world(options: WorldOptions = {}) {
 		if (command.kind === 'brick:removeBluetoothPeer') {
 			brick.removalSeen = true;
 			if (brick.ignoresRemoval || brick.refuses.has(command.name)) { return { kind: 'brick:removeBluetoothPeer' }; }
+			const allowed = brick.refusesAfter.get(command.name);
+			if (allowed !== undefined) {
+				if (allowed === 0) { return { kind: 'brick:removeBluetoothPeer' }; }
+				brick.refusesAfter.set(command.name, allowed - 1);
+			}
 			const reply = await mock.executeCommand(mockKey, command);
 			// The brick closes the removed peer's RFCOMM channel before it answers anything.
 			if (command.name === brick.linkEntry && bt.open) {
@@ -155,7 +164,9 @@ function world(options: WorldOptions = {}) {
 			return reply;
 		}
 		const reply = await mock.executeCommand(mockKey, command);
-		return reply.kind === 'brick:bluetoothPeer' && brick.connected.has(reply.name) ? { ...reply, connected: true } : reply;
+		const marked = reply.kind === 'brick:bluetoothPeer' && (brick.connected.has(reply.name)
+			|| (command.kind === 'brick:bluetoothPeer' && brick.connectedAt.has(command.index)));
+		return marked ? { ...reply, connected: true } : reply;
 	};
 
 	const usbProvider: TransportProvider = {
@@ -907,6 +918,53 @@ describe('Clear a brick\'s Bluetooth list — removing every entry (R16, R17)', 
 		w.done();
 	});
 
+	it('over Bluetooth alone, removes nothing when the list holds this computer\'s name twice', async () => {
+		// The brick removes the first copy a name matches; that may be the one holding this link,
+		// which cuts it before the other copy is sent.
+		const w = world({ cabled: false, peers: [THIS_PC, 'Zed', THIS_PC] });
+		await signedInOver(w, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(report?.skipped, { reason: 'duplicate-link-entry' });
+		assert.deepEqual(report?.peers, [THIS_PC, 'Zed', THIS_PC]);
+		assert.equal(ask.calls.length, 0);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.brick.peers(), [THIS_PC, 'Zed', THIS_PC]);
+		assert.deepEqual(w.bt.unpairs, []);
+		w.done();
+	});
+
+	it('over Bluetooth alone, removes nothing when the entry marked connected shares its name with another', async () => {
+		// This computer paired as OLD-PC; the brick holds the link under the first copy.
+		const w = world({ cabled: false, peers: ['OLD-PC', 'Zed', 'OLD-PC'] });
+		w.brick.linkEntry = 'OLD-PC';
+		w.brick.connectedAt.add(0);
+		await signedInOver(w, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(report?.skipped, { reason: 'duplicate-link-entry' });
+		assert.equal(ask.calls.length, 0);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.bt.unpairs, []);
+		w.done();
+	});
+
+	it('over USB, clears a list that holds this computer\'s name twice', async () => {
+		const w = world({ peers: [THIS_PC, 'Zed', THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.equal(report?.skipped, undefined);
+		assert.deepEqual(w.brick.peers(), []);
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		w.done();
+	});
+
 	it('is refused while the brick is being forgotten', async () => {
 		const w = world({ paired: false });
 		await signedInOver(w, Transport.USB);
@@ -1083,6 +1141,23 @@ describe('Clear a brick\'s Bluetooth list — this computer\'s pairing (R18, KTD
 		const entry = w.aggregator.getBrick(CCC);
 		assert.equal(entry?.paired, true, 'the cockpit forgot the pairing of a brick that still lists this computer');
 		assert.deepEqual(entry?.channels.map((c) => c.transport), [Transport.USB, Transport.BT]);
+		w.done();
+	});
+
+	it('leaves the Windows pairing alone when the brick lists this computer twice and keeps one copy', async () => {
+		const w = world({ peers: [THIS_PC, THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		w.brick.refusesAfter.set(THIS_PC, 1);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.deepEqual(w.brick.peers(), [THIS_PC]);
+		assert.deepEqual(report?.entries.map((entry) => entry.status), ['confirmed', 'failed'],
+			'the first copy did not go, so this test shows nothing');
+		assert.equal(report?.pairingLeft, 'not-removed');
+		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that still lists this computer');
+		assert.deepEqual(report?.pairing, []);
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
 		w.done();
 	});
 });

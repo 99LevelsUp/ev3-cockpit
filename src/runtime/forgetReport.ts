@@ -134,7 +134,14 @@ export type ClearSkip =
 	 * list does not mark exactly one entry connected: nothing tells which entry is this computer's,
 	 * so a removal of another computer's entry could pass for it and leave the pairing one-sided.
 	 */
-	| 'link-entry-unknown';
+	| 'link-entry-unknown'
+	/**
+	 * Only Bluetooth reaches the brick, and the name of this computer's entry (its Bluetooth name,
+	 * or the name of the entry marked connected) is held more than once. The brick removes the
+	 * first entry a name matches, which may be the one holding the link: the link is cut before
+	 * the other copy is sent.
+	 */
+	| 'duplicate-link-entry';
 
 /** Why this computer's pairing with the brick was left alone (KTD10). */
 export type ClearPairingSkip =
