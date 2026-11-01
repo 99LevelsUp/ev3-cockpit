@@ -189,6 +189,12 @@ describe('Clear a Brick\'s Bluetooth List — asking first (R16)', () => {
 		assert.match(linked, /holds its Bluetooth link to this computer/);
 		assert.match(linked, /pairing is removed too/);
 		assert.doesNotMatch(linked, /nothing shows whether/);
+		// The name is known but not on the list: the linked entry stands in, and the text must not
+		// claim the current name is among them (R16).
+		const renamed = clearConfirmation(LABEL, ['OLD-PC', 'Zed'], true, THIS_PC).detail;
+		assert.match(renamed, /No entry carries this computer's current name, "PETR-PC"/);
+		assert.match(renamed, /holds its Bluetooth link to this computer/);
+		assert.doesNotMatch(renamed, /"PETR-PC", is among them/);
 	});
 
 	it('shows nothing and logs nothing when the user declines', async () => {
