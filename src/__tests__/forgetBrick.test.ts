@@ -830,6 +830,83 @@ describe('Clear a brick\'s Bluetooth list — removing every entry (R16, R17)', 
 		w.done();
 	});
 
+	it('over Bluetooth alone, removes nothing when no entry carries this computer\'s name and two are marked connected', async () => {
+		// This computer paired as OLD-PC and is now THIS_PC; another computer holds a link as OTHER-PC.
+		const w = world({ cabled: false, peers: ['OTHER-PC', 'OLD-PC', 'Zed'] });
+		w.brick.linkEntry = 'OLD-PC';
+		w.brick.connected.add('OTHER-PC').add('OLD-PC');
+		w.brick.refuses.add('OLD-PC');
+		await signedInOver(w, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(report?.skipped, { reason: 'link-entry-unknown' });
+		assert.deepEqual(report?.peers, ['OTHER-PC', 'OLD-PC', 'Zed']);
+		assert.equal(ask.calls.length, 0);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that may still list this computer');
+		w.done();
+	});
+
+	it('over USB, leaves the Windows pairing alone when no entry carries this computer\'s name, though entries are marked connected', async () => {
+		const w = world({ peers: ['OTHER-PC', 'OLD-PC', 'Zed'] });
+		w.brick.linkEntry = 'OLD-PC';
+		w.brick.connected.add('OTHER-PC').add('OLD-PC');
+		w.brick.refuses.add('OLD-PC');
+		await signedInOver(w, Transport.USB, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.equal(report?.over, usbKey);
+		assert.equal(ask.calls[0].includesThisComputer, false);
+		assert.deepEqual(w.brick.peers(), ['OLD-PC'], 'the clear did not run, so this test shows nothing');
+		assert.equal(report?.entries.find((entry) => entry.name === 'OTHER-PC')?.status, 'confirmed');
+		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that may still list this computer');
+		assert.deepEqual(report?.pairing, []);
+		assert.equal(report?.pairingLeft, 'not-on-brick');
+		w.done();
+	});
+
+	it('over Bluetooth alone, removes the entry marked connected after the one carrying this computer\'s name', async () => {
+		// The brick holds this computer's link under OLD-PC, and also lists it under its current name.
+		const w = world({ cabled: false, peers: ['OLD-PC', THIS_PC, 'Zed'] });
+		w.brick.linkEntry = 'OLD-PC';
+		w.brick.connected.add('OLD-PC');
+		await signedInOver(w, Transport.BT);
+		const ask = asked();
+
+		const report = await w.bricks.clearBluetoothList(CCC, ask.confirm);
+
+		assert.deepEqual(ask.calls, [{ names: ['OLD-PC', THIS_PC, 'Zed'], includesThisComputer: true, thisComputer: THIS_PC }]);
+		assert.deepEqual(w.removals(), ['Zed', THIS_PC, 'OLD-PC'],
+			'the entry marked connected went before another, and its removal cut the link the rest needed');
+		assert.deepEqual(report?.entries, [
+			{ status: 'sent', name: 'OLD-PC', detail: 'BT reply timed out' },
+			{ status: 'confirmed', name: THIS_PC },
+			{ status: 'confirmed', name: 'Zed' },
+		]);
+		assert.deepEqual(w.bt.unpairs, [btKey], 'this computer\'s entry went, and Windows still has the brick paired');
+		w.done();
+	});
+
+	it('over Bluetooth alone, leaves the Windows pairing alone when the entry carrying this computer\'s name stays, though the marked one went', async () => {
+		const w = world({ cabled: false, peers: ['OLD-PC', THIS_PC] });
+		w.brick.linkEntry = 'OLD-PC';
+		w.brick.connected.add('OLD-PC');
+		w.brick.refuses.add(THIS_PC);
+		await signedInOver(w, Transport.BT);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.deepEqual(w.removals(), [THIS_PC, 'OLD-PC']);
+		assert.equal(report?.entries.find((entry) => entry.name === 'OLD-PC')?.status, 'sent');
+		assert.equal(report?.pairingLeft, 'not-removed');
+		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that still lists this computer');
+		w.done();
+	});
+
 	it('is refused while the brick is being forgotten', async () => {
 		const w = world({ paired: false });
 		await signedInOver(w, Transport.USB);

@@ -128,7 +128,13 @@ export type ClearSkip =
 	 * does not mark exactly one entry connected: removing this computer's entry cuts the link, so
 	 * it has to go last, and nothing tells which entry it is.
 	 */
-	| 'radio-name-unknown';
+	| 'radio-name-unknown'
+	/**
+	 * Only Bluetooth reaches the brick, no entry carries this computer's Bluetooth name, and the
+	 * list does not mark exactly one entry connected: nothing tells which entry is this computer's,
+	 * so a removal of another computer's entry could pass for it and leave the pairing one-sided.
+	 */
+	| 'link-entry-unknown';
 
 /** Why this computer's pairing with the brick was left alone (KTD10). */
 export type ClearPairingSkip =
@@ -138,8 +144,9 @@ export type ClearPairingSkip =
 	 */
 	| 'radio-name-unknown'
 	/**
-	 * No entry on the brick carried this computer's exact Bluetooth name, nor, over Bluetooth
-	 * alone, was marked connected.
+	 * No entry on the brick carried this computer's exact Bluetooth name. Only a list read over USB
+	 * or Wi-Fi ends here: there an entry marked connected may be another computer's link, so it
+	 * does not stand in for the name.
 	 */
 	| 'not-on-brick'
 	/** This computer's entry was on the brick and was not removed. */
