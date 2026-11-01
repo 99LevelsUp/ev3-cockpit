@@ -708,6 +708,11 @@ export class BrickManager implements vscode.Disposable {
 	 * same order holds among connected channels, so a brick connected over TCP and Bluetooth
 	 * is changed over TCP although its traffic goes over Bluetooth.
 	 *
+	 * Without one available, a paired Bluetooth channel the presence checks did not hear is tried
+	 * as well: the checks miss bricks right next to the computer (step-3 U7, 01.11.2026), and a
+	 * brick that is there should lose this computer's entry too (KD2). A brick that is really off
+	 * costs one failed connect, and the report says why.
+	 *
 	 * `opened` says the channel was opened here, so whoever asked closes it when done.
 	 */
 	private async peerListChannel(brickId: BrickId): Promise<{ key?: BrickKey; failure?: string; opened?: boolean }> {
@@ -720,7 +725,7 @@ export class BrickManager implements vscode.Disposable {
 			.map((s) => s.brickKey));
 		if (connected) { return { key: connected }; }
 
-		const available = best(this.joinCandidates(brickId));
+		const available = best(this.joinCandidates(brickId)) ?? this.unheardBluetooth(brickId);
 		if (!available) { return {}; }
 		try {
 			await this.sessionManager.connect(available, this.transportOf(available),
@@ -729,6 +734,14 @@ export class BrickManager implements vscode.Disposable {
 		} catch (error) {
 			return { failure: messageOf(error) };
 		}
+	}
+
+	/** The brick's paired Bluetooth channel when the presence checks lost it and nothing holds it open. */
+	private unheardBluetooth(brickId: BrickId): BrickKey | undefined {
+		const entry = this.aggregator.getBrick(brickId);
+		const bt = entry?.channels.find((c) => c.transport === Transport.BT);
+		if (!entry?.paired || bt?.state !== ChannelState.Lost || this.sessionManager.getSession(bt.brickKey)) { return undefined; }
+		return bt.brickKey;
 	}
 
 	private peerListRank(key: BrickKey): number {

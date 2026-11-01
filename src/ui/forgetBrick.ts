@@ -100,7 +100,9 @@ function skipReason(side: Extract<BrickSideOutcome, { status: 'skipped' }>): str
 	case 'radio-name-unknown':
 		return 'This computer\'s Bluetooth name is unknown, and the brick lists computers only by name.' + detail;
 	case 'not-reachable':
-		return 'The brick was not reachable: no channel to it was connected, and none could be opened.' + detail;
+		return side.detail
+			? `The brick was not reachable: a channel to it could not be opened.${detail}`
+			: 'The brick was not reachable: no channel to it was connected or available.';
 	case 'list-unreadable':
 		return 'Its Bluetooth list could not be read.' + detail;
 	case 'no-match':
