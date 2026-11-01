@@ -260,10 +260,24 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 		assert.match(text, /an entry without a name/);
 		assert.match(text, /Pairing on this computer: left alone; no entry on the brick carried this computer's exact Bluetooth name/);
 		assert.doesNotMatch(text, /BTHPORT/);
-		// The pairing it left is one-sided now, and only this computer's own entry blocks re-pairing with it.
-		assert.match(text, /On this computer: its Bluetooth pairing with the brick\.\n.*does not know this computer/);
+		// Only the current name was looked for: an entry under an earlier one may stay, so the text
+		// claims no one-sided pairing, and only this computer's own entry blocks re-pairing with it.
+		assert.match(text, /On this computer: its Bluetooth pairing with the brick\.\n.*no entry on the brick carried this computer's current Bluetooth name, so the cockpit left the pairing alone/i);
+		assert.match(text, /An entry under an earlier name of this computer may still be on the brick/);
+		assert.doesNotMatch(text, /does not know this computer|one-sided|fails until/);
 		assert.match(text, /the removed entries come back\./);
 		assert.doesNotMatch(text, /blocks re-pairing with this computer/);
+	});
+
+	it('a list read back empty, with no entry under this computer\'s name: the brick does not know this computer', () => {
+		const r = report({
+			peers: ['OLD-PC', 'Zed'], entries: [{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: 'Zed' }],
+			pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],
+		});
+		const text = details(r);
+		assert.match(text, /On this computer: its Bluetooth pairing with the brick\.\n.*The list read back holds no entry now, so the brick does not know this computer/);
+		assert.match(text, /fails until "Forget a Brick" removes the pairing/);
+		assert.doesNotMatch(text, /may still be on the brick/);
 	});
 
 	it('a brick that could not be reached: nothing changed', () => {
@@ -285,6 +299,19 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 		assert.doesNotMatch(clearNotification(r, LABEL), /removed/);
 	});
 
+	it('a Bluetooth-only brick whose list holds the name of this computer\'s entry twice: nothing changed, and why', () => {
+		const r: ClearListReport = {
+			brickId: CCC, thisComputer: THIS_PC, paired: true, skipped: { reason: 'duplicate-link-entry' },
+			peers: [THIS_PC, 'Zed', THIS_PC], entries: [], pairing: [], residue: [],
+		};
+		const text = details(r);
+		assert.match(text, /Nothing changed on the brick/);
+		assert.match(text, /holds that entry's name more than once/);
+		assert.match(text, /Connect the brick with a USB cable and clear its list again/);
+		assert.match(clearNotification(r, LABEL), /nothing changed on .*more than once.*USB cable/);
+		assert.doesNotMatch(clearNotification(r, LABEL), /removed|cleared the/);
+	});
+
 	it('never tells the user to take ownership, change permissions, elevate, edit the registry or reboot', () => {
 		const reports: ClearListReport[] = [
 			report(),
@@ -293,6 +320,9 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 			report({ entries: [{ status: 'failed', name: 'X', detail: 'still listed' }], pairing: [], pairingLeft: 'not-removed' }),
 			{ brickId: CCC, paired: false, skipped: { reason: 'radio-name-unknown' }, peers: ['A'], entries: [], pairing: [], residue: [] },
 			{ brickId: CCC, paired: true, skipped: { reason: 'link-entry-unknown' }, peers: ['A'], entries: [], pairing: [], residue: [] },
+			{ brickId: CCC, paired: true, skipped: { reason: 'duplicate-link-entry' }, peers: ['A', 'A'], entries: [], pairing: [], residue: [] },
+			report({ entries: [{ status: 'confirmed', name: 'OLD-PC' }], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [] }),
+			report({ entries: [{ status: 'failed', name: 'OLD-PC', detail: 'still listed' }], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [] }),
 			{ brickId: CCC, paired: false, skipped: { reason: 'list-unreadable', detail: 'timeout' }, entries: [], pairing: [], residue: [] },
 			{ brickId: CCC, paired: false, skipped: { reason: 'nothing-to-remove' }, peers: [], entries: [], pairing: [], residue: [] },
 		];
