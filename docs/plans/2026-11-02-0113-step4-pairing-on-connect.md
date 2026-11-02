@@ -53,7 +53,7 @@ The step-3 hardware session (U7, 01.11.2026) added two gaps: the long wait befor
 **One-sided pairing**
 
 - R6. When USB or TCP is connected and this computer's Bluetooth name is known, a one-sided pairing is repaired: the half that is left is removed (this computer's entry on this brick, or the Windows pairing of this brick) and the brick is paired again, and the user is told what was found and done.
-- R7. When a Bluetooth connect to a paired brick fails and neither USB nor TCP reaches the brick, the message says the brick may be out of reach and, if it keeps failing, that the pairing may be one-sided and connecting USB or TCP and running "Connect a Brick" again repairs it; it never states that the pairing is broken.
+- R7. When a Bluetooth connect to a paired brick fails and no USB or TCP channel to the brick is connected, the message says the brick may be out of reach and, if it keeps failing, that the pairing may be one-sided and connecting USB or TCP and running "Connect a Brick" again repairs it; it never states that the pairing is broken.
 
 **Information and diagnostics**
 
@@ -80,9 +80,10 @@ The step-3 hardware session (U7, 01.11.2026) added two gaps: the long wait befor
 ### Scope Boundaries
 
 - Showing the paired list, the firmware version or any of this in the panel: Phase 5 (5.7.3, 3.5.6); this plan keeps the data and an event.
+- Removing chosen entries of other computers or bricks from the brick's list, from the panel: decided later (KD6). The one-sided repair's removal of this computer's own entry (KTD6) is in scope.
 - Making pairing faster: this plan only measures where it waits (R9, U10).
 - A user-initiated unpairing of only this computer's Bluetooth with USB connected: deferred (KD7); U11 describes the situation in `IMPLEMENTATION_PLAN.md`. The one-sided repair's removal of the Windows pairing (KTD6) is in scope, because R6 requires it.
-- Switching the brick's Bluetooth visibility on over USB so an invisible brick can be paired: not decided by the owner; an invisible brick gets no sighting and is not paired (the owner's channel table, case 7).
+- Switching the brick's Bluetooth visibility on over USB so an invisible brick can be paired: not decided by the owner; an invisible brick gets no sighting and is not paired: a brick on USB with Bluetooth on but invisible and unpaired connects over USB alone (the owner's walk-through of 02.11.2026).
 - Considered and not built:
   - A pre-check that skips pairing when the brick's list marks another device connected (its page scan is then off, `c_bt.c` 3013–3016): the pairing fails and suspends (R5), which is visible and cheap; build it if the hardware session shows such failures are common.
   - A computer-side "Cancel" for a pairing in progress: the brick's Cancel is the consent and ends it; forget and clear cancel it internally (KTD5).
@@ -172,7 +173,7 @@ flowchart TB
 | U8 | Hint for a failed Bluetooth-only connect | `src/transports/btWinsockAdapter.ts`, `src/ui/connectBrick.ts` | U5 |
 | U9 | Logging the heard flip | `src/runtime/presenceAggregator.ts`, `src/runtime/createRuntime.ts` | — |
 | U10 | Hardware session | `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md` | U1–U9 |
-| U11 | Documents | `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`, `IMPLEMENTATION_PLAN.md`, `DESIGN.md`, `src/runtime/brickManager.ts` | U4 |
+| U11 | Documents | `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`, `IMPLEMENTATION_PLAN.md`, `DESIGN.md`, `REQUIREMENTS.md`, `src/runtime/brickManager.ts` | U4 |
 
 ### U1. Pairing result, cancel and phase log
 
@@ -417,11 +418,13 @@ flowchart TB
   - `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`
   - `IMPLEMENTATION_PLAN.md`
   - `DESIGN.md`
+  - `REQUIREMENTS.md`
   - `src/runtime/brickManager.ts`
 - **Approach:**
   1. Rewrite step-3 KTD12 as KTD10 says, and the `joinCandidates` doc comment with it.
   2. In `IMPLEMENTATION_PLAN.md`, replace the 02.11.2026 decision list under step 3 with a step-4 entry, and describe the deferred keep-USB unpair: the situation, why Forget and Clear do more, and that automatic pairing would undo it unless it suspended (KD7).
   3. Add the pairing rules to `DESIGN.md` beside the step-2 sign-in rules.
+  4. Bring `REQUIREMENTS.md` in line with R1–R9: connecting over every channel, the brick's dialog as consent, the suspension, the one-sided repair and the peer list.
 - **Test expectation:** none — documentation.
 - **Verification:** a grep for "user's own act" finds nothing outside history, and the deferred item reads on its own.
 
@@ -445,7 +448,7 @@ flowchart TB
 - The U10 appendix has a verdict for each success criterion and a value for each measurement, or the reason it is missing; if `fRemembered` and the helper's bonded lookup disagree, the one-sided check uses the bonded lookup.
 - No code path changes the `BTHPORT` key, asks for elevation, restarts `bthserv` or tells the user to reboot.
 - `npm run test:ci` is green and code from abandoned attempts is removed from the diff.
-- Step-3 KTD12, the `joinCandidates` comment, `IMPLEMENTATION_PLAN.md` and `DESIGN.md` match what was built (U11).
+- Step-3 KTD12, the `joinCandidates` comment, `IMPLEMENTATION_PLAN.md`, `DESIGN.md` and `REQUIREMENTS.md` match what was built (U11).
 
 ---
 
