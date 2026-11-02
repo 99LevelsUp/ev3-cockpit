@@ -40,15 +40,22 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   detection (4.6.1–4.6.3, 4.6.5–4.6.12, 4.6.14–4.6.15) ✅
 - one brick across its channels (2.8.13, step 2, closed 31.10.2026): one list entry per brick,
   sign-in over every channel, failover, and "Connect a Brick" with pairing and a live scan ✅ —
-  pairing from the picker and the live-scan row are tested, not yet tried by hand (deferred to
-  the testing with the panel)
+  pairing from the picker was tried by hand in the step-3 U7 session (01.11.2026, after
+  `450cdb2`); the live-scan row is tested, not yet tried by hand (deferred to the testing with
+  the panel)
 - forgetting a brick (step 3, `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`): "Forget a
   Brick" signs it out, removes this computer from the brick's own list when the brick is
   reachable, unpairs it, clears the cockpit's memory and names what Windows keeps; "Clear a
   Brick's Bluetooth List" unpairs a brick from every peer it remembers — built and reviewed,
   **not closed**. Open:
   - Owner decisions 02.11.2026, from walking through which channels a brick offers (USB, BT on
-    or off, visible or not, paired or not), not built yet:
+    or off, visible or not, paired or not), not built yet. Refined the same night in
+    `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md`, which governs where they differ:
+    there is no separate pairing control, a forced "Connect a Brick" and automatic pairing of a
+    signed-in brick replace it (KD1); with USB or TCP a one-sided pairing is repaired
+    automatically by removing only the half that is left (KD5, KTD6), without them the message
+    names USB or TCP; and KTD12 loses its "pairing is always the user's own act" sentence
+    (step-4 KTD10). The list as first written:
     - "Connect a Brick" pairs a brick whose Bluetooth channel is a new, unpaired sighting
       whatever else reaches it. Over USB (or TCP) it connects that channel first, then starts
       the pairing, so the brick shows its pairing dialog; the user cancels there to decline.
@@ -73,12 +80,15 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
       information beside its firmware version, in the panel (Phase 5): read on connect, after a
       pairing, a forget or a clear, and on request, not polled. Removing only some entries is
       for the owner to decide later.
-    - Still to check: whether a brick connected over Bluetooth to another device turns its page
-      scan off (`c_bt.c` 3015), so a second device cannot reach it.
+    - The firmware turns page scan off on each completed connection (`c_bt.c` 3013–3016,
+      commented for master mode); whether a brick linked to another device as a slave then
+      refuses a second device is measured in step-4 U10.
   - U7 hardware session done 01.11.2026; verdicts in the step-3 plan's appendix. Every success
-    criterion run holds, two after fixes made in the session (`121c393`, `450cdb2`). Not
-    verified: the `connected` mark on this computer's entry (matters only with the radio name
-    unknown), a battery pull undoing a removal, and R14 (waiting for a never-met brick). Future:
+    criterion run holds, one after a fix made in the session (`121c393`); `450cdb2` fixed step
+    2's pairing from the picker, found in the same session. Not verified: a brick known only over
+    USB naming no key (tests only), the `connected` mark on this computer's entry (matters only
+    with the radio name unknown), a battery pull undoing a removal, R14 (waiting for a never-met
+    brick), and the brick's own menu path for removing a device. Future:
     pairing from the picker is slow before the brick asks; heard/not-heard changes are not logged.
   - Audit of the rebuild below: round 4 found two real majors in its pairing half (the pairing
     was recorded in the list only, not in discovery, which rebuilds the list), fixed; one
@@ -102,11 +112,8 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
     nor the clear waits on a scan any more, so a `discover()` hung in native code
     (`SerialPort.list()`, a libusb callback) can no longer hang them. The clear report now says
     the list "holds no entry now" only from the list as read back.
-  - Owner decision: a Bluetooth channel of an unpaired brick is never joined (`joinCandidates`),
-    which also changes step 2's sign-in of a cabled brick; record it as a KTD if accepted.
-  - The step-3 plan's KTD9, KTD10 and R19 trail the code: the `duplicate-link-entry` refusal,
-    unpairing only when the read-back holds none of this computer's entries, and the
-    unpaired-Bluetooth join rule.
+  - The step-3 plan's KTD9, KTD10 and R19 trail the code: the `duplicate-link-entry` refusal, and
+    unpairing only when the read-back holds none of this computer's entries.
 
 Open, by phase:
 
@@ -813,8 +820,10 @@ Build the source of truth for connected bricks.
     showed its old name for good, and the mismatch caused real trouble, so the cache must never
     outrank the brick. If a supported API can write the brick's fresh name back into Windows'
     record (check `BluetoothUpdateDeviceRecord`, which updates only `szName`, against Microsoft
-    Learn first), do that too. Not started: fix `readName`, measure whether the name is there,
-    then wire it as a `bt-cache` name below `brick`.
+    Learn first), do that too. Not started: fix `readName` to accept the string koffi returns,
+    as `readRadioName` already does, then measure whether the name is there. The `bt-cache`
+    source and its rank below `brick` and `beacon` are already wired (`btTransportProvider`,
+    `PresenceAggregator`).
   - [x] 2.8.16 **Isolate what makes an RFCOMM connect fail.** 2.8.14 established what it is
     not: not the backend (40% against 47%), and not the wait before trying (47% at 15/30 s
     against ~50% at 2 s). Instrument fixed first: `bt-backend-comparison.js` now separates
