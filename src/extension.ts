@@ -5,7 +5,7 @@ import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
-import { connectPickedBrick, pickBrick } from './ui/connectBrick';
+import { ShowProgress, connectPickedBrick, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 
@@ -39,9 +39,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
 		mockBricks: mockBricksWanted(context),
 	}));
-	const { bricks, aggregator, btDiscovery, btPresence } = runtime;
+	const { bricks, aggregator, btPresence } = runtime;
 	/** What a user calls a brick: its name, or its id until it has one. */
 	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
+	/** A notification that stays up while a task runs, with the message the task reports. */
+	const notificationProgress: ShowProgress = (title, task) => vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
+		(progress) => task((message) => progress.report({ message })));
 
 	// ── Filesystem ──────────────────────────────────────────────
 	// Palette commands are diagnostics, not the primary UX (DESIGN §14). They exist here
@@ -109,14 +113,16 @@ export function activate(context: vscode.ExtensionContext): void {
 		if (!picked) { return; }
 
 		await connectPickedBrick(picked, {
-			aggregator, bricks, log: logger,
-			pair: btDiscovery?.pair, presence: btPresence,
-			progress: (title, task) => vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
-				(progress) => task((message) => progress.report({ message }))),
+			aggregator, bricks, log: logger, progress: notificationProgress,
 			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
 			showError: (message) => { void vscode.window.showErrorMessage(message); },
 		});
+	}));
+
+	// Every pairing shows its progress, whoever started it: the person at the brick has to know
+	// when to look at its display.
+	services.add(bricks.onPairingStarted((event) => {
+		void followPairing(event, { aggregator, progress: notificationProgress });
 	}));
 
 	// ── Disconnect a brick ──────────────────────────────────────

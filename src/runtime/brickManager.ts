@@ -23,6 +23,8 @@ import { isBlankPeerName } from '../protocol/ev3Commands';
 import { PacketCommandChannel } from '../commands/commandChannel';
 import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
+import type { PairingResult } from '../transports/btClassicDiscovery';
+import type { BtPairingEvent } from '../transports/btPairingHelper';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { channelLabel } from './brickLabels';
 import type { DiscoveryScheduler } from './discoveryScheduler';
@@ -48,6 +50,15 @@ export interface ActiveBrickIdChangeEvent {
 	readonly current: BrickId | undefined;
 }
 
+/** A pairing started, whoever started it; the brick shows its pairing dialog shortly. */
+export interface PairingStartedEvent {
+	readonly brickId: BrickId;
+	/** Settles with the pairing's outcome. */
+	readonly done: Promise<PairingResult>;
+	/** Hear this pairing's progress from now on: the pairing helper's events, in order. */
+	onEvent(listener: (event: BtPairingEvent) => void): void;
+}
+
 // ── Options ─────────────────────────────────────────────────────────
 
 export interface BrickManagerOptions {
@@ -65,8 +76,18 @@ export interface BrickManagerOptions {
 	 * KTD7). Absent, a forget does none of that.
 	 */
 	readonly discovery?: Pick<DiscoveryScheduler, 'forget' | 'scanOnce'>;
-	/** Bluetooth presence, which a forget tells to drop the brick's address (KTD7). Absent: nothing to drop. */
-	readonly btPresence?: { forget(mac: string): void };
+	/**
+	 * Bluetooth presence, which a forget tells to drop the brick's address (KTD7), and a pairing
+	 * to drop the checks from before it. Absent: nothing to drop.
+	 */
+	readonly btPresence?: { forget(mac: string): void; notePaired?(mac: string): void };
+	/**
+	 * Pairs a brick over Bluetooth, by address; an aborted signal stops it. Absent without
+	 * Bluetooth, and then {@link BrickManager.pair} answers that it cannot.
+	 */
+	readonly pair?: (
+		mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
+	) => Promise<PairingResult>;
 	/**
 	 * This computer's Bluetooth name, the only key to its entry on a brick (KTD3). Absent, or
 	 * returning undefined, when it cannot be read; a forget then leaves the brick's list alone.
@@ -166,6 +187,14 @@ export class BrickManager implements vscode.Disposable {
 	private readonly discovery?: BrickManagerOptions['discovery'];
 	private readonly btPresence?: BrickManagerOptions['btPresence'];
 	private readonly radioName?: BrickManagerOptions['radioName'];
+	private readonly pairDevice?: BrickManagerOptions['pair'];
+	/** The pairing running for each brick, so a second caller joins it rather than showing a second dialog. */
+	private readonly pairings = new Map<BrickId, { readonly done: Promise<PairingResult>; readonly abort: AbortController }>();
+	/**
+	 * How many forgets and clears have held a brick's guards. A pairing that began before one of
+	 * them records nothing when it ends: the brick it would record was forgotten under it.
+	 */
+	private readonly guardHolds = new Map<BrickId, number>();
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -173,6 +202,10 @@ export class BrickManager implements vscode.Disposable {
 
 	private readonly _onActiveBrickChange = new vscode.EventEmitter<ActiveBrickIdChangeEvent>();
 	readonly onActiveBrickChange = this._onActiveBrickChange.event;
+
+	private readonly _onPairingStarted = new vscode.EventEmitter<PairingStartedEvent>();
+	/** Fired when a pairing starts, so whoever shows progress can tell the user to look at the brick. */
+	readonly onPairingStarted = this._onPairingStarted.event;
 
 	private readonly subscriptions: vscode.Disposable[] = [];
 
@@ -186,6 +219,7 @@ export class BrickManager implements vscode.Disposable {
 		this.discovery = options.discovery;
 		this.btPresence = options.btPresence;
 		this.radioName = options.radioName;
+		this.pairDevice = options.pair;
 
 		this.subscriptions.push(
 			this.sessionManager.onSessionStateChange((e) => {
@@ -283,6 +317,49 @@ export class BrickManager implements vscode.Disposable {
 		for (const key of keys) { this.dropped.delete(key); }
 		this.recomputeRoute(brickId);
 		if (this.activeBrickId === brickId) { this.clearActiveBrick(); }
+	}
+
+	// ── Pairing ─────────────────────────────────────────────────────
+
+	/**
+	 * Pair a brick over its Bluetooth channel, the one way into pairing (step-4 plan, KTD1).
+	 *
+	 * One pairing per brick: a second call while one runs gets the same outcome, and the brick
+	 * shows one dialog. A pairing that succeeds is recorded at once (step-3 plan, KTD11): the list
+	 * says paired and the channel available, and the presence checks from before it are dropped.
+	 * One that ends after the brick was forgotten or its list cleared, or after this layer was
+	 * disposed, records nothing and answers that it did not pair.
+	 */
+	pair(brickId: BrickId): Promise<PairingResult> {
+		const running = this.pairings.get(brickId);
+		if (running) { return running.done; }
+		const btKey = this.aggregator.getBrick(brickId)?.channels.find((c) => c.transport === Transport.BT)?.brickKey;
+		const mac = btKey ? brickKeyId(btKey) : undefined;
+		const pairDevice = this.pairDevice;
+		if (!pairDevice || !btKey || !mac) {
+			return Promise.resolve({ ok: false, reason: `Brick ${brickId} has no Bluetooth channel to pair.` });
+		}
+
+		const abort = new AbortController();
+		const listeners: ((event: BtPairingEvent) => void)[] = [];
+		const holdsAtStart = this.guardHolds.get(brickId) ?? 0;
+		const done = (async (): Promise<PairingResult> => {
+			// After the event below, so whoever shows progress hears the pairing from its start.
+			await Promise.resolve();
+			const result = await pairDevice(mac, (event) => { for (const listener of listeners) { listener(event); } }, abort.signal);
+			if (!result.ok) { return result; }
+			if (this.disposed || this.forgetting.has(brickId) || (this.guardHolds.get(brickId) ?? 0) !== holdsAtStart) {
+				return { ok: false, reason: `Brick ${brickId} was forgotten or its list cleared while it was being paired.` };
+			}
+			this.aggregator.markPaired(btKey);
+			this.btPresence?.notePaired?.(mac);
+			return result;
+		})().finally(() => {
+			if (this.pairings.get(brickId)?.abort === abort) { this.pairings.delete(brickId); }
+		});
+		this.pairings.set(brickId, { done, abort });
+		this._onPairingStarted.fire({ brickId, done, onEvent: (listener) => { listeners.push(listener); } });
+		return done;
 	}
 
 	// ── Forget ──────────────────────────────────────────────────────
@@ -503,10 +580,13 @@ export class BrickManager implements vscode.Disposable {
 	dispose(): void {
 		this.disposed = true;
 		for (const brickId of [...this.signedIn.keys()]) { this.forgetSignIn(brickId); }
+		// A pairing would otherwise keep the radio and the brick's dialog after nobody listens.
+		for (const pairing of this.pairings.values()) { pairing.abort.abort(); }
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.subscriptions.length = 0;
 		this._onRouteChange.dispose();
 		this._onActiveBrickChange.dispose();
+		this._onPairingStarted.dispose();
 	}
 
 	// ── Internal: joining ───────────────────────────────────────────
@@ -623,6 +703,7 @@ export class BrickManager implements vscode.Disposable {
 	/** Hold the guards of a forget for a brick (KTD4); each hold needs its own {@link releaseGuards}. */
 	private holdGuards(brickId: BrickId): void {
 		this.forgetting.set(brickId, (this.forgetting.get(brickId) ?? 0) + 1);
+		this.guardHolds.set(brickId, (this.guardHolds.get(brickId) ?? 0) + 1);
 	}
 
 	private releaseGuards(brickId: BrickId): void {

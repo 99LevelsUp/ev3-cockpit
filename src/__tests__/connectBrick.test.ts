@@ -20,9 +20,9 @@ import type { BtPairingEvent, ScannedBrick } from '../transports/btPairingHelper
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
 import { SessionManager } from '../runtime/sessionManager';
-import { BrickManager } from '../runtime/brickManager';
+import { BrickManager, BrickManagerOptions } from '../runtime/brickManager';
 import { BrickPickRow, brickPickRows } from '../ui/brickPickRows';
-import { BrickPickerView, connectPickedBrick, pickBrick } from '../ui/connectBrick';
+import { BrickPickerView, connectPickedBrick, followPairing, pickBrick } from '../ui/connectBrick';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -84,11 +84,11 @@ function fakePicker() {
 	};
 }
 
-function layers(registry: ProviderRegistry) {
+function layers(registry: ProviderRegistry, extra: Pick<BrickManagerOptions, 'pair' | 'btPresence'> = {}) {
 	const scheduler = new DiscoveryScheduler(registry);
 	const aggregator = new PresenceAggregator(scheduler, registry);
 	const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
-	const bricks = new BrickManager({ sessionManager, aggregator, providerRegistry: registry });
+	const bricks = new BrickManager({ sessionManager, aggregator, providerRegistry: registry, ...extra });
 	const done = () => {
 		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
 	};
@@ -185,7 +185,27 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			connected: false, favorite: false, lastSeenAt: Date.now(),
 		};
 		const registry = new ProviderRegistry();
-		const l = layers(registry);
+		/** The presence checks: the bricks whose last check did not hear them. */
+		const presence = {
+			unheard: new Set<string>(),
+			forget(mac: string) { this.unheard.delete(mac); },
+			notePaired(mac: string) { this.unheard.delete(mac); },
+		};
+		/** The pairing the brick layer runs; a test swaps `impl` to stage what happens during it. */
+		const pairing = {
+			impl: async (mac: string, onEvent?: (event: BtPairingEvent) => void, _signal?: AbortSignal): Promise<PairingResult> => {
+				radio.pairedMacs.push(mac);
+				onEvent?.({ type: 'found', id: mac, name: 'Bob', alreadyPaired: false });
+				const result = options.pairing ?? { ok: true };
+				// Windows knows the pairing at once; discovery lists it as paired from now on.
+				if (result.ok && !options.listsPairingNever) { bob.paired = true; bob.remembered = true; }
+				return result;
+			},
+		};
+		const l = layers(registry, {
+			pair: (mac, onEvent, signal) => pairing.impl(mac, onEvent, signal),
+			btPresence: presence,
+		});
 		const radio = {
 			connects: 0, discovers: 0, listedPairedAtConnect: [] as boolean[], pairedMacs: [] as string[],
 			/** Holds the next discover's answer, which is read from Windows' list before the hold. */
@@ -196,11 +216,6 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			hidden: false,
 			/** Connecting fails. */
 			refuseConnect: false,
-		};
-		/** The presence checks: the bricks whose last check did not hear them. */
-		const presence = {
-			unheard: new Set<string>(),
-			notePaired(mac: string) { this.unheard.delete(mac); },
 		};
 		const provider: TransportProvider = {
 			transport: Transport.BT,
@@ -229,25 +244,19 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		};
 		registry.register(provider);
 
-		const pair = async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
-			radio.pairedMacs.push(mac);
-			onEvent?.({ type: 'found', id: mac, name: 'Bob', alreadyPaired: false });
-			const result = options.pairing ?? { ok: true };
-			// Windows knows the pairing at once; discovery lists it as paired from now on.
-			if (result.ok && !options.listsPairingNever) { bob.paired = true; bob.remembered = true; }
-			return result;
-		};
 		const shown = { titles: [] as string[], reports: [] as string[], info: [] as string[], errors: [] as string[] };
+		const progress = async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
+			shown.titles.push(title);
+			return task((message) => shown.reports.push(message));
+		};
 		const deps = {
-			aggregator: l.aggregator, bricks: l.bricks, log: quiet, pair, presence,
-			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
-				shown.titles.push(title);
-				return task((message) => shown.reports.push(message));
-			},
+			aggregator: l.aggregator, bricks: l.bricks, log: quiet, progress,
 			showInfo: (message: string) => shown.info.push(message),
 			showError: (message: string) => shown.errors.push(message),
 		};
-		return { ...l, radio, presence, shown, deps, bob: idOf(BOB_MAC), bobKey };
+		// The extension shows every pairing's progress, whoever started it.
+		l.bricks.onPairingStarted((event) => { void followPairing(event, { aggregator: l.aggregator, progress }); });
+		return { ...l, radio, presence, pairing, shown, deps, bob: idOf(BOB_MAC), bobKey };
 	}
 
 	it('pairs a brick only an inquiry has heard, then connects it', async () => {
@@ -327,18 +336,15 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 	it('connects a freshly paired brick whose sighting the list dropped during the pairing', async () => {
 		const w = world({ paired: false });
 		await w.scheduler.scanOnce();
-		const pair = w.deps.pair;
+		const pair = w.pairing.impl;
 		// Pairing takes the brick's owner tens of seconds; an inquiry sighting can expire meanwhile.
-		const deps = {
-			...w.deps,
-			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
-				w.scheduler.forget([w.bobKey]);
-				w.aggregator.forget(w.bob);
-				return pair(mac, onEvent);
-			},
+		w.pairing.impl = async (mac, onEvent) => {
+			w.scheduler.forget([w.bobKey]);
+			w.aggregator.forget(w.bob);
+			return pair(mac, onEvent);
 		};
 
-		await connectPickedBrick(w.bob, deps);
+		await connectPickedBrick(w.bob, w.deps);
 
 		assert.deepEqual(w.shown.errors, []);
 		assert.equal(w.bricks.isSignedIn(w.bob), true);
@@ -376,10 +382,8 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		await w.scheduler.scanOnce();   // the inquiry's sighting
 		const held = gate();
 		let stale: Promise<void> | undefined;
-		const pair = w.deps.pair;
-		const deps = {
-			...w.deps,
-			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => {
 				const result = await pair(mac, onEvent);
 				// Windows lists the pairing before the helper reports it, and the presence check of a
 				// brick still busy with the ceremony did not hear it.
@@ -390,7 +394,9 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 				w.radio.discoverGate = held.promise;
 				stale = w.scheduler.scanOnce().catch(() => { /* the connect is what is under test */ });
 				return result;
-			},
+		};
+		const deps = {
+			...w.deps,
 			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
 				if (title.startsWith('EVƎ Cockpit: connecting')) { held.open(); await stale; }
 				return w.deps.progress(title, task);
@@ -407,14 +413,14 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 	it('connects a freshly paired brick though a scan after the pairing carries a presence check from before it', async () => {
 		const w = world({ paired: false });
 		await w.scheduler.scanOnce();   // the inquiry's sighting
-		const pair = w.deps.pair;
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => {
+			// The presence check ran while the owner was confirming on the brick, and missed it.
+			w.presence.unheard.add(BOB_MAC);
+			return pair(mac, onEvent);
+		};
 		const deps = {
 			...w.deps,
-			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
-				// The presence check ran while the owner was confirming on the brick, and missed it.
-				w.presence.unheard.add(BOB_MAC);
-				return pair(mac, onEvent);
-			},
 			progress: async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
 				// A scan that starts after the pairing lands just before the sign-in.
 				if (title.startsWith('EVƎ Cockpit: connecting')) { await w.scheduler.scanOnce(); }
@@ -433,23 +439,90 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		const w = world({ paired: false });
 		await w.scheduler.scanOnce();
 		w.radio.refuseConnect = true;
-		const pair = w.deps.pair;
-		const deps = {
-			...w.deps,
-			pair: async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
-				// The sighting expires while the owner confirms, and nothing lists the brick afterwards.
-				w.scheduler.forget([w.bobKey]);
-				w.aggregator.forget(w.bob);
-				w.radio.hidden = true;
-				return pair(mac, onEvent);
-			},
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => {
+			// The sighting expires while the owner confirms, and nothing lists the brick afterwards.
+			w.scheduler.forget([w.bobKey]);
+			w.aggregator.forget(w.bob);
+			w.radio.hidden = true;
+			return pair(mac, onEvent);
 		};
 
-		await connectPickedBrick(w.bob, deps);
+		await connectPickedBrick(w.bob, w.deps);
 		assert.equal(w.shown.errors.length, 1, 'the connect did not fail, so this test shows nothing');
 		for (let scan = 0; scan < 8; scan++) { await w.scheduler.scanOnce(); }
 
 		assert.equal(w.aggregator.getBrick(w.bob), undefined, 'the paired row stays in the list for ever');
+		w.done();
+	});
+
+	it('runs one pairing for two callers that pair the same brick at once', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const held = gate();
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => { await held.promise; return pair(mac, onEvent); };
+		let started = 0;
+		w.bricks.onPairingStarted(() => { started += 1; });
+
+		const first = w.bricks.pair(w.bob);
+		const second = w.bricks.pair(w.bob);
+		held.open();
+		const [a, b] = await Promise.all([first, second]);
+
+		assert.deepEqual(w.radio.pairedMacs, [BOB_MAC], 'the brick was paired twice');
+		assert.deepEqual(a, b);
+		assert.equal(started, 1, 'two pairings were announced');
+		w.done();
+	});
+
+	it('records a pairing it made: the list says paired, the channel is available, older presence checks are dropped', async () => {
+		const w = world({ paired: false, listsPairingNever: true });
+		await w.scheduler.scanOnce();
+		w.presence.unheard.add(BOB_MAC);
+
+		const result = await w.bricks.pair(w.bob);
+
+		assert.equal(result.ok, true);
+		const entry = w.aggregator.getBrick(w.bob);
+		assert.equal(entry?.paired, true);
+		assert.equal(entry?.channels.find((c) => c.transport === Transport.BT)?.state, ChannelState.Available);
+		assert.equal(w.presence.unheard.has(BOB_MAC), false, 'a presence check from before the pairing survived it');
+		w.done();
+	});
+
+	it('records nothing from a pairing that ends after the brick was forgotten', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const held = gate();
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => { await held.promise; return pair(mac, onEvent); };
+
+		const pairing = w.bricks.pair(w.bob);
+		await new Promise((resolve) => setImmediate(resolve));
+		await w.bricks.forget(w.bob);
+		held.open();
+		const result = await pairing;
+
+		assert.equal(result.ok, false);
+		assert.equal(w.aggregator.getBrick(w.bob)?.paired ?? false, false, 'the forgotten brick came back paired');
+		w.done();
+	});
+
+	it('records nothing, and throws nothing, from a pairing that ends after the brick layer was disposed', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+		const held = gate();
+		const pair = w.pairing.impl;
+		w.pairing.impl = async (mac, onEvent) => { await held.promise; return pair(mac, onEvent); };
+
+		const pairing = w.bricks.pair(w.bob);
+		w.bricks.dispose();
+		held.open();
+		const result = await pairing;
+
+		assert.equal(result.ok, false);
+		assert.equal(w.aggregator.getBrick(w.bob)?.paired, false);
 		w.done();
 	});
 
