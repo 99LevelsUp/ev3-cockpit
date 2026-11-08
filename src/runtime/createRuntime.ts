@@ -235,6 +235,9 @@ function registerRealProviders(
 		),
 		connectionQueue: btQueue,
 		pairDevice: createHelperPairing({ helperPath: btHelperPath }),
+		// At info, with the time since the pairing began: pairing is rare and paced by a person,
+		// and the wait before the brick asks has to be findable (step-3 hardware session).
+		onPairingEvent: (mac, event, elapsedMs) => log.info(`Pairing ${mac} +${elapsedMs} ms: ${JSON.stringify(event)}`),
 	});
 	// Which Bluetooth bricks are actually there (step-2 plan, U7): an inquiry now and then, so
 	// a brick nobody has paired yet appears without anyone opening a picker; and a check of

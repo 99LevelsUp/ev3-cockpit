@@ -124,7 +124,7 @@ describe('createHelperPairing — outcomes the helper reports', () => {
 			lines: [FOUND, PAIRING_REQUESTED, JSON.stringify({ type: 'result', status: 'Paired', ok: true })],
 			exitCode: 0,
 		});
-		assert.deepEqual(await pair(MAC), { ok: true });
+		assert.deepEqual(await pair(MAC), { ok: true, status: 'Paired' });
 	});
 
 	it('treats an already-paired brick as success, though the helper sends no result line', async () => {
@@ -137,7 +137,7 @@ describe('createHelperPairing — outcomes the helper reports', () => {
 			],
 			exitCode: 0,
 		});
-		assert.deepEqual(await pair(MAC), { ok: true });
+		assert.deepEqual(await pair(MAC), { ok: true, status: 'AlreadyPaired' });
 	});
 
 	it('explains a brick the inquiry never saw', async () => {
@@ -151,6 +151,7 @@ describe('createHelperPairing — outcomes the helper reports', () => {
 		const result = await pair(MAC);
 		assert.equal(result.ok, false);
 		assert.match(result.reason ?? '', /not find|not found/i);
+		assert.equal(result.status, 'NotFound', 'Windows\' own status is lost behind the wording');
 	});
 
 	it('carries the status string when Windows refuses', async () => {
@@ -174,6 +175,7 @@ describe('createHelperPairing — outcomes the helper reports', () => {
 		const result = await pair(MAC);
 		assert.equal(result.ok, false);
 		assert.match(result.reason ?? '', /brick/i);
+		assert.equal(result.status, 'AuthenticationTimeout');
 		assert.notEqual(result.reason, (await pairWith({
 			lines: [FOUND, JSON.stringify({ type: 'result', status: 'Failed', ok: false })],
 			exitCode: 1,
@@ -188,6 +190,45 @@ describe('createHelperPairing — outcomes the helper reports', () => {
 		const result = await pair(MAC);
 		assert.equal(result.ok, false);
 		assert.match(result.reason ?? '', /not a MAC address/);
+	});
+});
+
+describe('createHelperPairing — cancelled from outside', () => {
+	it('stops the helper when the pairing is aborted, and says it was cancelled', async () => {
+		const { fake, pair } = pairWith({ lines: [FOUND], neverExits: true });
+		const abort = new AbortController();
+
+		const pairing = pair(MAC, undefined, abort.signal);
+		await new Promise((resolve) => setImmediate(resolve));
+		abort.abort();
+		const result = await pairing;
+
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /cancel/i);
+		assert.equal(fake.killCount(), 1, 'the helper was left running');
+	});
+
+	it('starts no helper for a pairing aborted before it began', async () => {
+		const { fake, pair } = pairWith({ lines: [FOUND], neverExits: true });
+		const abort = new AbortController();
+		abort.abort();
+
+		const result = await pair(MAC, undefined, abort.signal);
+
+		assert.equal(result.ok, false);
+		assert.equal(fake.lastCommand(), undefined, 'a helper was started for a pairing nobody wants');
+	});
+
+	it('tells its listeners when the helper has started', async () => {
+		const heard: string[] = [];
+		const { pair } = pairWith({
+			lines: [FOUND, JSON.stringify({ type: 'result', status: 'Paired', ok: true })],
+			exitCode: 0,
+		});
+
+		await pair(MAC, (event) => heard.push(event.type));
+
+		assert.deepEqual(heard, ['helperStarted', 'found', 'result']);
 	});
 });
 
@@ -217,7 +258,7 @@ describe('createHelperPairing — the helper misbehaving', () => {
 			lines: [FOUND, '{ this is not json', JSON.stringify({ type: 'result', status: 'Paired', ok: true })],
 			exitCode: 0,
 		});
-		assert.deepEqual(await pair(MAC), { ok: true });
+		assert.deepEqual(await pair(MAC), { ok: true, status: 'Paired' });
 	});
 
 	it('kills a helper that never exits, and says so', async () => {
@@ -259,8 +300,8 @@ describe('createHelperPairing — host and process wiring', () => {
 			{ onEvent: (event) => built.push(event.type) }
 		);
 		await pair(MAC, (event) => mine.push(event.type));
-		assert.deepEqual(mine, ['found', 'result']);
-		assert.deepEqual(built, ['found', 'result']);
+		assert.deepEqual(mine, ['helperStarted', 'found', 'result']);
+		assert.deepEqual(built, ['helperStarted', 'found', 'result']);
 	});
 
 	it('passes the mac, pin and windows through to the helper', async () => {
@@ -297,7 +338,7 @@ describe('createHelperPairing — host and process wiring', () => {
 		);
 		await pair(MAC);
 		assert.deepEqual(seen.map((event) => event.type), [
-			'searching', 'found', 'pairingRequested', 'result',
+			'helperStarted', 'searching', 'found', 'pairingRequested', 'result',
 		]);
 	});
 
@@ -315,8 +356,8 @@ describe('createHelperPairing — host and process wiring', () => {
 			},
 			{ onEvent: (event) => seen.push(event) }
 		);
-		assert.deepEqual(await pair(MAC), { ok: true });
-		assert.equal(seen[0].type, 'somethingNew');
+		assert.deepEqual(await pair(MAC), { ok: true, status: 'Paired' });
+		assert.ok(seen.some((event) => event.type === 'somethingNew'));
 	});
 });
 
