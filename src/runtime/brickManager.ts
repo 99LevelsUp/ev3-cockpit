@@ -195,6 +195,13 @@ export class BrickManager implements vscode.Disposable {
 	 * them records nothing when it ends: the brick it would record was forgotten under it.
 	 */
 	private readonly guardHolds = new Map<BrickId, number>();
+	/**
+	 * Bricks that are not paired by themselves until the user runs "Connect a Brick" on them
+	 * again: a pairing failed or was cancelled on the brick, or a forget or a clear ran. Windows'
+	 * cache relists a brick unpaired for minutes after one; without this the brick would show its
+	 * pairing dialog again and again. Keyed by brick, so it outlives a forgotten brick's record.
+	 */
+	private readonly pairingSuspended = new Set<BrickId>();
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -346,8 +353,12 @@ export class BrickManager implements vscode.Disposable {
 		const done = (async (): Promise<PairingResult> => {
 			// After the event below, so whoever shows progress hears the pairing from its start.
 			await Promise.resolve();
-			const result = await pairDevice(mac, (event) => { for (const listener of listeners) { listener(event); } }, abort.signal);
-			if (!result.ok) { return result; }
+			const result = await pairDevice(mac, (event) => { for (const listener of listeners) { listener(event); } }, abort.signal)
+				.catch((error: unknown): PairingResult => ({ ok: false, reason: messageOf(error) }));
+			if (!result.ok) {
+				this.pairingSuspended.add(brickId);
+				return result;
+			}
 			if (this.disposed || this.forgetting.has(brickId) || (this.guardHolds.get(brickId) ?? 0) !== holdsAtStart) {
 				return { ok: false, reason: `Brick ${brickId} was forgotten or its list cleared while it was being paired.` };
 			}
@@ -623,6 +634,25 @@ export class BrickManager implements vscode.Disposable {
 			}
 			this.join(brickId, key).catch(() => { /* recorded by join; retried per transport */ });
 		}
+		this.pairSighting(brickId);
+	}
+
+	/**
+	 * Pair a signed-in brick's Bluetooth channel when it is a sighting nobody has paired (step-4
+	 * plan, KTD3): connecting means every channel that can work, and the brick's own dialog is
+	 * the consent. The success's list change joins the channel.
+	 *
+	 * Runs on nearly every list change, so it is cheap and starts at most one pairing: `pair`
+	 * joins one in flight, and none starts while the brick is suspended, which a clear does from
+	 * its start; `reconcile` already skips a brick being forgotten. A sighting nothing hears any
+	 * more is not paired: the pairing would only fail and suspend the brick.
+	 */
+	private pairSighting(brickId: BrickId): void {
+		if (this.pairingSuspended.has(brickId)) { return; }
+		const entry = this.aggregator.getBrick(brickId);
+		const bt = entry?.channels.find((c) => c.transport === Transport.BT);
+		if (!entry || entry.paired || bt?.state !== ChannelState.Available) { return; }
+		this.pair(brickId).catch(() => { /* a failed pairing suspends the brick and is announced */ });
 	}
 
 	private async join(brickId: BrickId, key: BrickKey): Promise<void> {
@@ -706,6 +736,20 @@ export class BrickManager implements vscode.Disposable {
 		this.guardHolds.set(brickId, (this.guardHolds.get(brickId) ?? 0) + 1);
 	}
 
+	/**
+	 * Suspend the brick's automatic pairing and stop a pairing in flight, waiting until it has
+	 * ended: a forget or clear that went on beside it could have a pairing finish behind it and
+	 * leave this computer's entry on the brick, or Windows paired, after the user asked otherwise.
+	 * Called before the brick's list is read.
+	 */
+	private async stopPairing(brickId: BrickId): Promise<void> {
+		this.pairingSuspended.add(brickId);
+		const pairing = this.pairings.get(brickId);
+		if (!pairing) { return; }
+		pairing.abort.abort();
+		await pairing.done.catch(() => undefined);
+	}
+
 	private releaseGuards(brickId: BrickId): void {
 		const left = (this.forgetting.get(brickId) ?? 1) - 1;
 		if (left > 0) { this.forgetting.set(brickId, left); } else { this.forgetting.delete(brickId); }
@@ -715,6 +759,7 @@ export class BrickManager implements vscode.Disposable {
 		this.holdGuards(brickId);
 		let report: ForgetReport;
 		try {
+			await this.stopPairing(brickId);
 			// Read before anything is forgotten: the list is where the channels and the Bluetooth
 			// address come from, and step 5 deletes it.
 			const keys = this.channelKeysOf(brickId);
@@ -963,6 +1008,9 @@ export class BrickManager implements vscode.Disposable {
 	// ── Internal: clearing a brick's list ───────────────────────────
 
 	private async runClear(brickId: BrickId, confirm: ClearListConfirm): Promise<ClearListReport | undefined> {
+		// Before the list is read: a pairing that finished while the list was being read would add
+		// an entry for this computer that the clear never shows or removes.
+		await this.stopPairing(brickId);
 		let thisComputer: string | undefined;
 		try {
 			thisComputer = this.radioName?.() || undefined;
