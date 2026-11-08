@@ -494,14 +494,16 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 	it('records nothing from a pairing that ends after the brick was forgotten', async () => {
 		const w = world({ paired: false });
 		await w.scheduler.scanOnce();
-		const held = gate();
 		const pair = w.pairing.impl;
-		w.pairing.impl = async (mac, onEvent) => { await held.promise; return pair(mac, onEvent); };
+		// The person accepts on the brick just as the forget stops the pairing: it completes anyway.
+		w.pairing.impl = async (mac, onEvent, signal) => {
+			await new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }));
+			return pair(mac, onEvent);
+		};
 
 		const pairing = w.bricks.pair(w.bob);
 		await new Promise((resolve) => setImmediate(resolve));
 		await w.bricks.forget(w.bob);
-		held.open();
 		const result = await pairing;
 
 		assert.equal(result.ok, false);

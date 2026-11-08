@@ -267,10 +267,42 @@ function world(options: WorldOptions = {}) {
 		reconnectBaseMs: options.reconnectBaseMs ?? 20,
 		reconnectMaxMs: Math.max(40, options.reconnectBaseMs ?? 0),
 	});
-	const presence = { forgotten: [] as string[], forget(mac: string) { this.forgotten.push(mac); } };
+	const presence = {
+		forgotten: [] as string[],
+		forget(mac: string) { this.forgotten.push(mac); },
+		notePaired() { /* the checks are not under test here */ },
+	};
+	/** Pairing as Windows and the brick do it: an accepted pairing pairs Windows and adds this computer to the brick's list. */
+	const pairing = {
+		calls: 0,
+		/** Holds every pairing until it opens, or until the pairing is aborted. */
+		gate: undefined as Promise<void> | undefined,
+		/** What the person at the brick answers. */
+		accepts: true,
+		/** The brick's dialog was accepted just as the pairing was aborted: it pairs anyway. */
+		completesOnAbort: false,
+	};
+	const completePairing = (): void => {
+		bt.paired = true;
+		mock['bricks'].get(mockKey)!.bluetoothPeers.push(radio ?? THIS_PC);
+	};
 	const bricks = new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40,
 		discovery: scheduler, btPresence: presence, radioName: options.radioName ?? (() => radio),
+		pair: async (_mac, _onEvent, signal) => {
+			pairing.calls += 1;
+			if (pairing.gate) {
+				await Promise.race([pairing.gate, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+			}
+			if (signal?.aborted) {
+				// Windows takes a moment to report a pairing the brick accepted as it was cancelled.
+				if (pairing.completesOnAbort) { await settle(100); completePairing(); }
+				return { ok: false, reason: 'The pairing was cancelled.' };
+			}
+			if (!pairing.accepts) { return { ok: false, reason: 'The brick did not confirm.' }; }
+			completePairing();
+			return { ok: true, status: 'Paired' };
+		},
 	});
 	const done = () => {
 		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
@@ -284,7 +316,8 @@ function world(options: WorldOptions = {}) {
 	const removals = (): (string | undefined)[] => brick.received
 		.filter((r) => r.kind === 'brick:removeBluetoothPeer').map((r) => r.name);
 	return {
-		mock, brick, usb, bt, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic, removals, done,
+		mock, brick, usb, bt, pairing, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic,
+		removals, done,
 	};
 }
 
@@ -1131,8 +1164,9 @@ describe('Clear a brick\'s Bluetooth list — this computer\'s pairing (R18, KTD
 		w.done();
 	});
 
-	it('signs a brick in over USB alone when its Bluetooth channel is a sighting nobody has paired', async () => {
+	it('signs a brick in over USB alone when its Bluetooth channel is a sighting the user declines to pair', async () => {
 		const w = world({ paired: false });
+		w.pairing.accepts = false;       // the pairing it starts is cancelled on the brick
 		w.bt.cachedAfterUnpair = true;   // Windows' cache lists the brick, unpaired
 		await w.scheduler.scanOnce();
 		assert.deepEqual(w.aggregator.getBrick(CCC)?.channels.map((c) => c.transport), [Transport.USB, Transport.BT],
@@ -1242,6 +1276,174 @@ describe('Clear a brick\'s Bluetooth list — this computer\'s pairing (R18, KTD
 		assert.deepEqual(w.bt.unpairs, [], 'Windows was unpaired from a brick that still lists this computer');
 		assert.deepEqual(report?.pairing, []);
 		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
+		w.done();
+	});
+});
+
+// ── Automatic pairing (step 4: pairing is part of connecting) ──────
+
+describe('Automatic pairing of a signed-in brick', () => {
+	/** A brick signed in over USB alone whose Bluetooth then shows up as a sighting nobody has paired. */
+	async function signedInOverUsbThenSighted(w: World): Promise<void> {
+		await signedInOver(w, Transport.USB);
+		w.bt.cachedAfterUnpair = true;   // listed, unpaired: what an inquiry or Windows' cache reports
+		await w.scheduler.scanOnce();
+	}
+
+	it('pairs the Bluetooth sighting of a brick signed in over USB, then joins it; USB stays connected', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		await signedInOverUsbThenSighted(w);
+
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+
+		assert.equal(w.pairing.calls, 1);
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, true);
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected, 'USB dropped');
+		w.done();
+	});
+
+	it('announces an automatic pairing, so its progress is shown', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		let announced = 0;
+		w.bricks.onPairingStarted(() => { announced += 1; });
+		await signedInOverUsbThenSighted(w);
+
+		await waitFor(() => w.pairing.calls === 1, 2000);
+
+		assert.equal(announced, 1);
+		w.done();
+	});
+
+	it('starts one pairing however many times the list changes while it waits', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		const held = gate();
+		w.pairing.gate = held.promise;
+		await signedInOverUsbThenSighted(w);
+		for (let scan = 0; scan < 10; scan++) { await w.scheduler.scanOnce(); }
+
+		assert.equal(w.pairing.calls, 1);
+		held.open();
+		w.done();
+	});
+
+	it('does not pair from a sighting of a brick that is not signed in', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.equal(w.pairing.calls, 0);
+		w.done();
+	});
+
+	it('does not start a pairing for a paired brick whose Bluetooth channel the presence checks lost', async () => {
+		const w = world({ paired: true });
+		await signedInOver(w, Transport.USB);
+		w.bt.unheard = true;
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.equal(w.pairing.calls, 0);
+		w.done();
+	});
+
+	it('pairs no more once a pairing failed: the brick is suspended', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.pairing.accepts = false;   // the person at the brick cancels
+		await signedInOverUsbThenSighted(w);
+		await waitFor(() => w.pairing.calls === 1, 2000);
+		await settle();
+
+		for (let scan = 0; scan < 5; scan++) { await w.scheduler.scanOnce(); }
+		await settle();
+
+		assert.equal(w.pairing.calls, 1, 'the brick asked again after the user cancelled');
+		w.done();
+	});
+
+	it('does not pair a brick whose list a clear is reading before the user confirms', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		await signedInOver(w, Transport.USB);
+		const answer = gate();
+		const clearing = w.bricks.clearBluetoothList(CCC, async () => { await answer.promise; return false; });
+		await waitFor(() => w.peerTraffic(Transport.USB).length > 0, 1000);
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.equal(w.pairing.calls, 0);
+		answer.open();
+		await clearing;
+		w.done();
+	});
+
+	it('leaves a brick suspended after a clear: Windows relisting it unpaired starts no pairing', async () => {
+		const w = world({ peers: ['OLD-PC', THIS_PC] });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		w.bt.cachedAfterUnpair = true;
+
+		await w.bricks.clearBluetoothList(CCC, asked().confirm);
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, false, 'the clear did not unpair, so this test shows nothing');
+		assert.equal(w.pairing.calls, 0, 'the brick asked to pair right after the user cleared its list');
+		w.done();
+	});
+
+	it('does not pair a sighting nothing hears any more', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();   // the sighting
+		w.bt.cachedAfterUnpair = false;
+		await w.scheduler.scanOnce();   // gone: the channel is lost
+		assert.equal(w.aggregator.getBrick(CCC)?.channels.find((c) => c.transport === Transport.BT)?.state,
+			ChannelState.Lost, 'the sighting is not lost, so this test shows nothing');
+
+		await w.bricks.signIn(CCC);
+		await settle();
+
+		assert.equal(w.pairing.calls, 0, 'a pairing started for a brick nobody can hear');
+		w.done();
+	});
+
+	it('does not pair a brick Windows has paired', async () => {
+		const w = world({ paired: true });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.equal(w.pairing.calls, 0);
+		w.done();
+	});
+
+	it('aborts a pairing in flight before a clear reads the brick\'s list, so the clear removes this computer\'s entry too', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.pairing.gate = gate().promise;   // never opens: only the abort ends it
+		w.pairing.completesOnAbort = true; // the person accepts just as the clear begins
+		await signedInOverUsbThenSighted(w);
+		await waitFor(() => w.pairing.calls === 1, 2000);
+
+		await w.bricks.clearBluetoothList(CCC, asked().confirm);
+		await settle(150);   // a pairing still finishing behind the clear would show by now
+
+		assert.deepEqual(w.brick.peers(), [], 'an entry the pairing added stayed after the clear');
+		w.done();
+	});
+
+	it('aborts a pairing in flight before a forget reads the brick\'s list, so no entry for this computer stays', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.pairing.gate = gate().promise;   // never opens: only the abort ends it
+		w.pairing.completesOnAbort = true; // the person accepts just as the forget begins
+		await signedInOverUsbThenSighted(w);
+		await waitFor(() => w.pairing.calls === 1, 2000);
+
+		await w.bricks.forget(CCC);
+		await settle(150);   // a pairing still finishing behind the forget would show by now
+
+		assert.deepEqual(w.brick.peers(), ['Office PC'], 'this computer\'s entry stayed on the brick');
+		assert.ok(w.bt.unpairs.includes(btKey), 'Windows kept the pairing');
+		assert.equal(w.aggregator.getBrick(CCC)?.paired ?? false, false);
 		w.done();
 	});
 });
