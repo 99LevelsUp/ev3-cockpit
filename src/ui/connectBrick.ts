@@ -6,15 +6,12 @@
  * command in `extension.ts` hands it a QuickPick, progress notifications and messages.
  */
 
-import { BrickId, ChannelState, Transport, brickKeyId } from '../contracts';
+import { BrickId, ChannelState, Transport } from '../contracts';
 import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '../errors/CockpitError';
-import type { BrickManager } from '../runtime/brickManager';
+import type { BrickManager, PairingStartedEvent } from '../runtime/brickManager';
 import { brickLabel, transportLabel } from '../runtime/brickLabels';
 import type { RuntimeLog } from '../runtime/createRuntime';
 import type { PresenceAggregator } from '../runtime/presenceAggregator';
-import type { PairingResult } from '../transports/btClassicDiscovery';
-import type { BtPairingEvent } from '../transports/btPairingHelper';
-import type { BtPresenceMonitor } from '../transports/btPresence';
 import { BrickPickRow, brickPickRows } from './brickPickRows';
 
 /** The picker as the flow uses it; a `vscode.QuickPick<BrickPickRow>` is one. */
@@ -68,19 +65,42 @@ export async function pickBrick(
 	return picked;
 }
 
+/** A notification that stays up while `task` runs; `task` may change its message. */
+export type ShowProgress = <T>(title: string, task: (report: (message: string) => void) => Promise<T>) => PromiseLike<T>;
+
 /** What connecting a picked brick needs besides the brick layer. */
 export interface ConnectBrickDeps {
-	readonly aggregator: Pick<PresenceAggregator, 'getBrick' | 'markPaired'>;
-	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf'>;
-	/** Pairs a brick over Bluetooth; absent without Bluetooth. */
-	readonly pair?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
-	/** Bluetooth presence checks, told of a pairing; absent without them. */
-	readonly presence?: Pick<BtPresenceMonitor, 'notePaired'>;
+	readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
+	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf' | 'pair'>;
 	readonly log: RuntimeLog;
-	/** A notification that stays up while `task` runs; `task` may change its message. */
-	readonly progress: <T>(title: string, task: (report: (message: string) => void) => Promise<T>) => PromiseLike<T>;
+	readonly progress: ShowProgress;
 	readonly showInfo: (message: string) => void;
 	readonly showError: (message: string) => void;
+}
+
+/**
+ * Shows a pairing's progress while it runs, whoever started it: the brick layer announces each
+ * pairing, and this tells the person at the brick when to look at its display.
+ */
+export function followPairing(
+	event: PairingStartedEvent,
+	deps: { readonly aggregator: Pick<PresenceAggregator, 'getBrick'>; readonly progress: ShowProgress },
+): PromiseLike<unknown> {
+	let report: ((message: string) => void) | undefined;
+	let waiting: string | undefined;
+	event.onEvent((pairingEvent) => {
+		// Prompt on `found`, not on `pairingRequested`: by the time the brick is asking, whoever
+		// is meant to press it has seconds. On `found` they have the whole ceremony.
+		if (pairingEvent.type !== 'found' || pairingEvent.alreadyPaired !== false) { return; }
+		const message = 'Confirm on the brick\'s display, then accept PIN 1234.';
+		if (report) { report(message); } else { waiting = message; }
+	});
+	const label = deps.aggregator.getBrick(event.brickId)?.name.value ?? event.brickId;
+	return deps.progress(`EVƎ Cockpit: pairing ${label}`, (reportMessage) => {
+		report = reportMessage;
+		if (waiting) { reportMessage(waiting); }
+		return event.done;
+	});
 }
 
 /**
@@ -102,32 +122,15 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 	const bt = brick?.channels.find((c) => c.transport === Transport.BT);
 	const onlyNewBluetooth = brick && !brick.paired && bt
 		&& brick.channels.every((c) => c === bt || c.state === ChannelState.Lost);
-	if (onlyNewBluetooth && deps.pair) {
-		const pair = deps.pair;
-		const mac = brickKeyId(bt.brickKey) ?? '';
-		const paired = await deps.progress(`EVƎ Cockpit: pairing ${label}`, async (report) => {
-			const result = await pair(mac, (event: BtPairingEvent) => {
-				log.debug(`Pairing ${brickLabel(aggregator, picked)}: ${JSON.stringify(event)}`);
-				// Prompt on `found`, not on `pairingRequested`: by the time the brick is
-				// asking, whoever is meant to press it has seconds. On `found` they have
-				// the whole ceremony.
-				if (event.type === 'found' && event.alreadyPaired === false) {
-					report('Confirm on the brick\'s display, then accept PIN 1234.');
-				}
-			});
-			if (!result.ok) {
-				log.warn(`Pairing ${brickLabel(aggregator, picked)} failed: ${result.reason ?? 'no reason given'}`);
-				deps.showError(`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
-			}
-			return result.ok;
-		});
-		if (!paired) { return; }
-		// A sign-in joins no Bluetooth channel the list holds unpaired. The cockpit made this
-		// pairing, so it says so itself instead of waiting for a scan to read it back from
-		// Windows: a scan can be slow, can have read the list before the pairing, or can hang.
-		aggregator.markPaired(bt.brickKey);
-		// A presence check from before the pairing would mark the fresh channel as not heard.
-		deps.presence?.notePaired(mac);
+	if (onlyNewBluetooth) {
+		// The brick layer records a pairing it made at once, so the sign-in below joins the fresh
+		// channel without waiting for a scan to read the pairing back from Windows.
+		const result = await bricks.pair(picked);
+		if (!result.ok) {
+			log.warn(`Pairing ${brickLabel(aggregator, picked)} failed: ${result.reason ?? 'no reason given'}`);
+			deps.showError(`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
+			return;
+		}
 	}
 
 	await deps.progress(`EVƎ Cockpit: connecting to ${label}`, async () => {

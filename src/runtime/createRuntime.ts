@@ -120,7 +120,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	// a forget then has no presence to clear and leaves the brick's own list alone.
 	const bricks = services.add(new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, log,
-		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName,
+		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName, pair: btDiscovery?.pair,
 	}));
 	services.add(bricks.onRouteChange(e => {
 		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');
