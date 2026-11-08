@@ -73,6 +73,8 @@ interface WorldOptions {
 	readonly radioName?: () => string | undefined;
 	/** Whether the brick layer checks for a pairing broken on one side (step-4 plan, U7). */
 	readonly checkOneSided?: boolean;
+	/** The brick layer's first rejoin delay for a channel that failed to join; short by default. */
+	readonly rejoinBaseMs?: number;
 }
 
 /** What reached the brick, in order: each command's kind, its channel, and whether a Bluetooth link was open. */
@@ -313,7 +315,8 @@ function world(options: WorldOptions = {}) {
 	/** What the brick layer warned about. */
 	const warnings: string[] = [];
 	const bricks = new BrickManager({
-		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40,
+		sessionManager, aggregator, providerRegistry: registry,
+		rejoinBaseMs: options.rejoinBaseMs ?? 20, rejoinMaxMs: Math.max(40, 16 * (options.rejoinBaseMs ?? 0)),
 		log: { warn: (message) => { warnings.push(message); } },
 		discovery: scheduler, ...(options.checkOneSided ? { windowsPairing: scheduler } : {}), btPresence: presence, radioName: options.radioName ?? (() => radio),
 		pair: async (_mac, _onEvent, signal) => {
@@ -2165,6 +2168,109 @@ describe('Connect a Brick over Bluetooth alone, when it fails', () => {
 
 		assert.ok(c.errors.some((message) => /could not pair/.test(message)), c.errors.join(' | '));
 		assert.ok(c.errors.every((message) => !ONE_SIDED.test(message)), c.errors.join(' | '));
+		w.done();
+	});
+});
+
+// ── Review fixes (step-4 review, 08.11.2026) ────────────────────────
+
+describe('A pairing never starts beside a clear', () => {
+	it('pairs nothing after a repair whose removal ends while a clear has begun', async () => {
+		const w = world({ checkOneSided: true, paired: false });   // the brick lists this computer; Windows has it unpaired
+		const removal = gate();
+		w.brick.holds.set('brick:removeBluetoothPeer', removal.promise);
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.removals().length === 1, 3000);   // the repair's removal is at the brick, unanswered
+		const decided = gate();
+		const clearing = w.bricks.clearBluetoothList(CCC, async () => { await decided.promise; return false; });
+		await settle(50);
+
+		removal.open();
+		await settle(200);
+
+		assert.equal(w.pairing.calls, 0, 'the repair paired a brick whose list is being cleared');
+		decided.open();
+		await clearing;
+		w.done();
+	});
+
+	it('pairs nothing after a repair whose removal outlasts a clear the user declined', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		const removal = gate();
+		w.brick.holds.set('brick:removeBluetoothPeer', removal.promise);
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.removals().length === 1, 3000);
+		const clearing = w.bricks.clearBluetoothList(CCC, async () => false);   // declined at once
+
+		removal.open();
+		await clearing;
+		await settle(200);
+
+		assert.equal(w.pairing.calls, 0, 'the repair paired a brick the clear had suspended');
+		w.done();
+	});
+
+	it('refuses a pairing asked for while the brick\'s list is being cleared', async () => {
+		const w = world();
+		await signedInOver(w, Transport.USB);
+		const decided = gate();
+		const clearing = w.bricks.clearBluetoothList(CCC, async () => { await decided.promise; return false; });
+		await settle(50);
+
+		const result = await w.bricks.pair(CCC);
+
+		assert.equal(result.ok, false);
+		assert.equal(w.pairing.calls, 0, 'a pairing started under a clear');
+		decided.open();
+		await clearing;
+		w.done();
+	});
+});
+
+describe('Connect a Brick on a signed-in brick, with a channel waiting to rejoin', () => {
+	/** Signed in over Bluetooth; then the cable goes in and USB fails to open, so it waits out a backoff. */
+	async function usbWaiting(w: World): Promise<void> {
+		await signedInOver(w, Transport.BT);
+		w.usb.cabled = true;
+		w.usb.connectFails = true;
+		await w.scheduler.scanOnce();
+		// Until the failed join has ended, a Connect leaves the channel to it.
+		await waitFor(() => w.warnings.some((warning) => warning.includes('USB failed')), 2000);
+	}
+
+	function connect(w: World): Promise<void> {
+		const quiet = () => { /* not under test here */ };
+		return connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
+		});
+	}
+
+	it('joins a USB channel waiting out a backoff at once', async () => {
+		const w = world({ cabled: false, rejoinBaseMs: 5000 });
+		await usbWaiting(w);
+		w.usb.connectFails = false;
+
+		await connect(w);
+
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected,
+			'USB was left to its backoff');
+		w.done();
+	});
+
+	it('restarts the backoff of a channel it tried, rather than leave the old one running beside a new one', async () => {
+		const w = world({ cabled: false, rejoinBaseMs: 300 });
+		await usbWaiting(w);   // failed once; its next try is due 300 ms after that
+		await settle(150);
+
+		await connect(w);   // fails again; the next try is due 300 ms from now
+		assert.equal(w.usb.connects, 2);
+		await settle(200);
+
+		assert.equal(w.usb.connects, 2, 'the backoff from before the Connect still ran');
 		w.done();
 	});
 });

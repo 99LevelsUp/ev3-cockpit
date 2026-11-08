@@ -376,8 +376,16 @@ export class BrickManager implements vscode.Disposable {
 			return;
 		}
 		const lost = this.unheardBluetooth(brickId);
-		const keys = [...this.joinCandidates(brickId), ...(lost ? [lost] : [])];
-		const joins = keys.filter((key) => !signIn.pending.has(key)).map((key) => this.join(brickId, key));
+		const keys = [...this.joinCandidates(brickId), ...(lost ? [lost] : [])].filter((key) => !signIn.pending.has(key));
+		// The user asks now (KTD4): what a failed join was waiting for goes, and so does its backoff,
+		// or the old retry timer would run beside the one a failure here sets.
+		for (const key of keys) {
+			clearTimeout(signIn.retryTimers.get(key));
+			signIn.retryTimers.delete(key);
+			signIn.awaitingEvidence.delete(key);
+			signIn.backoff.delete(key);
+		}
+		const joins = keys.map((key) => this.join(brickId, key));
 		// The user asks now: a USB or TCP channel already connected is checked again (KTD4, KTD6).
 		if (this.windowsPairing && this.checkableChannelConnected(brickId)) {
 			this.oneSidedPending.set(brickId, this.peerReadsKept);
@@ -439,6 +447,11 @@ export class BrickManager implements vscode.Disposable {
 	private pairOver(brickId: BrickId, btKey: BrickKey | undefined): Promise<PairingResult> {
 		const running = this.pairings.get(brickId);
 		if (running) { return running.done; }
+		// A clear waiting on its confirmation holds no guards yet, and would not see a pairing that
+		// started now (KTD5).
+		if (this.disposed || this.peerListBusy(brickId)) {
+			return Promise.resolve({ ok: false, reason: PAIRING_CANCELLED });
+		}
 		const mac = btKey ? brickKeyId(btKey) : undefined;
 		const pairDevice = this.pairDevice;
 		if (!pairDevice || !btKey || !mac) {
@@ -1147,7 +1160,8 @@ export class BrickManager implements vscode.Disposable {
 				removal = await this.removePeer(brickId, list.over, name, countOf(namesOf(list.peers), name));
 			}
 			const removed = removal.status === 'removed' || removal.status === 'confirmed';
-			const pairing = removed && btKey && !this.disposed && this.signedIn.has(brickId) && !this.forgetting.has(brickId)
+			// A forget or a clear that began during the removal suspended the brick (KD2).
+			const pairing = removed && btKey && this.signedIn.has(brickId) && !this.pairingSuspended.has(brickId)
 				? this.pairOver(brickId, btKey)
 				: undefined;
 			this._onOneSidedRepair.fire({ brickId, found, removal, others, ...(pairing ? { pairing } : {}) });
