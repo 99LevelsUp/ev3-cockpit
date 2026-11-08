@@ -96,6 +96,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		log.debug(`Discovery list updated (${e.items.length} brick(s)):`,
 			e.items.map(i => `${i.name.value} [${i.channels.map(c => `${c.transport}:${c.state}`).join(' ')}]`));
 	}));
+	// The change the picker shows as "BT not heard", so a wait seen there can be found here (KTD9).
+	services.add(aggregator.onHeardChange(e => {
+		log.info(`Presence check: ${channelLabel(aggregator, e.brickKey)} ${e.heard ? 'heard again' : 'not heard'}`);
+	}));
 	services.add(aggregator.onPresenceChanged(e => {
 		// The brick's name, not this channel's: a channel that has none yet would otherwise
 		// print a different name for the same brick.
