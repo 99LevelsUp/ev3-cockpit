@@ -5,7 +5,7 @@ import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
-import { ShowProgress, connectPickedBrick, followPairing, pickBrick } from './ui/connectBrick';
+import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 
@@ -126,6 +126,12 @@ export function activate(context: vscode.ExtensionContext): void {
 			aggregator, progress: notificationProgress,
 			showError: (message) => { void vscode.window.showErrorMessage(message); },
 		});
+	}));
+
+	// A pairing broken on one side, found over USB or TCP: what was found and done (step-4 R6).
+	services.add(bricks.onOneSidedRepair((repair) => {
+		const { message, warning } = describeRepair(repair, nameOf(repair.brickId));
+		void (warning ? vscode.window.showWarningMessage(message) : vscode.window.showInformationMessage(message));
 	}));
 
 	// ── Disconnect a brick ──────────────────────────────────────

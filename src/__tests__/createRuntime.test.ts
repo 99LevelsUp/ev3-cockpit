@@ -41,4 +41,11 @@ describe('createRuntime', () => {
 		assert.equal(runtime.btPresence, undefined);
 		runtime.dispose();
 	});
+
+	it('gives the brick layer Windows\' side of a pairing, so the one-sided check can run (step-4 plan, U7)', () => {
+		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, providers: [] });
+		// Absent, the check is silently off: nothing else in the product would show it.
+		assert.ok((runtime.bricks as unknown as { windowsPairing?: unknown }).windowsPairing, 'the check has no source');
+		runtime.dispose();
+	});
 });

@@ -26,7 +26,8 @@ import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
 import { SessionManager } from '../runtime/sessionManager';
 import { BrickManager } from '../runtime/brickManager';
-import { connectPickedBrick, followPairing } from '../ui/connectBrick';
+import type { OneSidedRepair } from '../runtime/forgetReport';
+import { connectPickedBrick, describeRepair, followPairing } from '../ui/connectBrick';
 import { waitFor } from './waitFor';
 
 const THIS_PC = 'Petrův PC';
@@ -70,6 +71,8 @@ interface WorldOptions {
 	readonly reconnectBaseMs?: number;
 	/** Replaces the radio-name hook, for one that throws. */
 	readonly radioName?: () => string | undefined;
+	/** Whether the brick layer checks for a pairing broken on one side (step-4 plan, U7). */
+	readonly checkOneSided?: boolean;
 }
 
 /** What reached the brick, in order: each command's kind, its channel, and whether a Bluetooth link was open. */
@@ -138,6 +141,10 @@ function world(options: WorldOptions = {}) {
 		forgetGate: undefined as Promise<void> | undefined,
 		/** Once unpaired, Windows' in-memory record still lists the brick, unpaired. */
 		cachedAfterUnpair: false,
+		/** The brick refuses a link from a computer its list does not hold: a pairing broken on its side. */
+		needsEntry: false,
+		/** How many of the next scans fail. */
+		scanFails: 0,
 	};
 
 	const answer = async (over: Transport, command: BrickCommand): Promise<BrickResponse> => {
@@ -215,6 +222,10 @@ function world(options: WorldOptions = {}) {
 			supportsSignalInfo: false, supportsForget: true, supportsTelemetryFrames: false, rejoinOnEvidenceOnly: true,
 		},
 		async discover(): Promise<DiscoveryScanResult> {
+			if (bt.scanFails > 0) {
+				bt.scanFails -= 1;
+				throw new TransportError('Bluetooth inquiry failed');
+			}
 			// Read before any hold: a scan that started before the unpair lists what it saw then.
 			const listed = bt.paired;
 			const cached = !bt.paired && bt.cachedAfterUnpair;
@@ -232,6 +243,9 @@ function world(options: WorldOptions = {}) {
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			bt.connects += 1;
 			if (bt.off) { throw new TransportError('BT connect failed: no answer'); }
+			if (bt.needsEntry && !brick.peers().includes(radio ?? THIS_PC)) {
+				throw new TransportError('BT connect failed: the brick does not know this computer');
+			}
 			bt.open = true;
 			return { brickKey, transport: Transport.BT };
 		},
@@ -284,20 +298,25 @@ function world(options: WorldOptions = {}) {
 		accepts: true,
 		/** The brick's dialog was accepted just as the pairing was aborted: it pairs anyway. */
 		completesOnAbort: false,
+		/** The brick's list when each pairing started. */
+		peersAtStart: [] as string[][],
+		/** The name the brick stores this computer under when a pairing completes; the radio name by default. */
+		storedName: undefined as string | undefined,
 	};
 	const completePairing = (): void => {
 		bt.paired = true;
-		mock['bricks'].get(mockKey)!.bluetoothPeers.push(radio ?? THIS_PC);
+		mock['bricks'].get(mockKey)!.bluetoothPeers.push(pairing.storedName ?? radio ?? THIS_PC);
 	};
 	/** What the brick layer warned about. */
 	const warnings: string[] = [];
 	const bricks = new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40,
 		log: { warn: (message) => { warnings.push(message); } },
-		discovery: scheduler, btPresence: presence, radioName: options.radioName ?? (() => radio),
+		discovery: scheduler, ...(options.checkOneSided ? { windowsPairing: scheduler } : {}), btPresence: presence, radioName: options.radioName ?? (() => radio),
 		pair: async (_mac, _onEvent, signal) => {
 			pairing.calls += 1;
 			pairing.usbOpenAtStart.push(usb.open);
+			pairing.peersAtStart.push(brick.peers());
 			if (pairing.gate) {
 				await Promise.race([pairing.gate, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
 			}
@@ -1733,6 +1752,285 @@ describe('The brick\'s list of paired computers, kept per brick', () => {
 		await settle(300);
 
 		assert.deepEqual(w.peerTraffic(), [], 'the list was read with nothing asking for it');
+		w.done();
+	});
+});
+
+// ── One-sided pairing, found and repaired over USB (step-4 plan, U7) ──
+
+describe('A pairing broken on one side, repaired over USB', () => {
+	/** Every repair the brick layer announced. */
+	function repairsOf(w: World): OneSidedRepair[] {
+		const repairs: OneSidedRepair[] = [];
+		w.bricks.onOneSidedRepair((repair) => { repairs.push(repair); });
+		return repairs;
+	}
+
+	async function signedIn(w: World): Promise<void> {
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+	}
+
+	/** Connect a Brick, as the palette command runs it. */
+	function connect(w: World): Promise<void> {
+		const quiet = () => { /* not under test here */ };
+		return connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
+		});
+	}
+
+	it('Windows paired, the brick without this computer: unpairs Windows, keeps USB, pairs again and joins Bluetooth', async () => {
+		const w = world({ checkOneSided: true, peers: ['Office PC'] });
+		w.bt.needsEntry = true;   // the brick refuses a link from a computer it does not list
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 3000);
+
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		assert.equal(w.pairing.calls, 1);
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected, 'USB dropped');
+		assert.equal(repairs.length, 1);
+		assert.equal(repairs[0].found, 'windows-only');
+		assert.deepEqual(w.removals(), []);
+		w.done();
+	});
+
+	it('the brick lists this computer, Windows not paired: removes the entry over USB, reads it back gone, then pairs', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+
+		assert.deepEqual(w.removals(), [THIS_PC]);
+		assert.deepEqual(w.pairing.peersAtStart, [['Office PC']], 'the pairing started before the entry was removed');
+		assert.equal(repairs[0].found, 'brick-only');
+		assert.equal(repairs[0].removal?.status, 'confirmed');
+		assert.deepEqual(w.bt.unpairs, []);
+		w.done();
+	});
+
+	it('removes the entry before a pairing of a Bluetooth sighting listed when the brick signs in', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		w.bt.cachedAfterUnpair = true;   // an unpaired sighting, there before the sign-in
+
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+
+		assert.deepEqual(w.pairing.peersAtStart, [['Office PC']], 'the sighting was paired before the check ran');
+		assert.deepEqual(w.removals(), [THIS_PC]);
+		w.done();
+	});
+
+	it('removes nothing and pairs nothing when both halves are there', async () => {
+		const w = world({ checkOneSided: true });
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+		await peerReadsDone(w);
+
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.bt.unpairs, []);
+		assert.equal(w.pairing.calls, 0);
+		assert.deepEqual(repairs, []);
+		w.done();
+	});
+
+	it('does not check without this computer\'s radio name', async () => {
+		const w = world({ checkOneSided: true, paired: false, radio: undefined });
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await peerReadsDone(w);
+		await settle();
+
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(repairs, []);
+		w.done();
+	});
+
+	it('does not check when only Bluetooth reaches the brick', async () => {
+		const w = world({ checkOneSided: true, cabled: false, peers: ['Office PC'] });
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+		await peerReadsDone(w);
+		await settle();
+
+		assert.deepEqual(w.bt.unpairs, []);
+		assert.deepEqual(repairs, []);
+		w.done();
+	});
+
+	it('waits for a Bluetooth scan to answer before it judges Windows\' side, and checks once one has', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		w.bt.scanFails = 1;   // the first scan lists USB; the Bluetooth one fails, so nobody has looked yet
+
+		await signedIn(w);
+		await peerReadsDone(w);
+		await settle();
+		assert.deepEqual(w.removals(), [], 'judged Windows unpaired before any Bluetooth scan answered');
+
+		await w.scheduler.scanOnce();   // answers, and lists nothing new
+
+		await waitFor(() => w.removals().length === 1, 2000);
+		w.done();
+	});
+
+	it('judges Windows\' side by what discovery lists now, not by the list\'s sticky paired flag', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.off = true;   // its Bluetooth link plays no part here
+		const repairs = repairsOf(w);
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(usbKey)?.connectionState === ConnectionState.Connected, 2000);
+		await peerReadsDone(w);
+		await settle();
+		assert.equal(repairs.length, 0, 'both halves were there');
+		// Removed in Windows' Settings: Windows' cache lists it unpaired, the list still says paired.
+		w.bt.paired = false;
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+
+		await w.sessionManager.disconnect(usbKey);
+		await waitFor(() => repairs.length === 1, 3000);
+
+		assert.equal(repairs[0].found, 'brick-only');
+		assert.deepEqual(w.removals(), [THIS_PC]);
+		w.done();
+	});
+
+	it('does not take a pairing Windows no longer lists for one it still has', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.off = true;
+		const repairs = repairsOf(w);
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(usbKey)?.connectionState === ConnectionState.Connected, 2000);
+		await peerReadsDone(w);
+		await settle();
+		// Removed in Windows' Settings and gone from its list; discovery still tracks it as paired, missed.
+		w.bt.paired = false;
+		await w.scheduler.scanOnce();
+
+		await w.sessionManager.disconnect(usbKey);
+		await waitFor(() => repairs.length === 1, 3000);
+
+		assert.equal(repairs[0].found, 'brick-only');
+		w.done();
+	});
+
+	it('pairs nothing when the entry the repair removes stays on the brick, and says so', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		w.brick.ignoresRemoval = true;   // the brick's Bluetooth is busy: it answers the removal and does nothing
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => repairs.length === 1, 3000);
+		await settle();
+
+		assert.equal(repairs[0].removal?.status, 'failed');
+		assert.equal(repairs[0].pairing, undefined);
+		assert.equal(w.pairing.calls, 0, 'paired beside the entry the brick kept');
+		assert.equal(describeRepair(repairs[0], 'CCC').warning, true);
+		w.done();
+	});
+
+	it('names the other entries the brick holds and the command that clears them', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['OLD-PC', THIS_PC] });
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => repairs.length === 1, 3000);
+
+		assert.deepEqual(repairs[0].others, ['OLD-PC']);
+		const { message } = describeRepair(repairs[0], 'CCC');
+		assert.match(message, /OLD-PC/);
+		assert.match(message, /Clear a Brick's Bluetooth List/);
+		w.done();
+	});
+
+	it('leaves the removed half removed and suspends the brick when the repair\'s pairing is cancelled', async () => {
+		const w = world({ checkOneSided: true, paired: false });
+		w.pairing.accepts = false;
+
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		await settle();
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		await settle();
+
+		assert.deepEqual(w.brick.peers(), ['Office PC']);
+		assert.equal(w.pairing.calls, 1, 'paired again after the cancel without a Connect a Brick');
+		w.done();
+	});
+
+	it('finds both halves after a pairing it just made, and removes nothing when USB joins again', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 3000);
+		await w.sessionManager.disconnect(usbKey);   // USB joins again, and its list is read and checked again
+		await waitFor(() => w.usb.connects === 2, 2000);
+		await peerReadsDone(w);
+		await settle();
+
+		assert.equal(w.pairing.calls, 1);
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(w.bt.unpairs, []);
+		w.done();
+	});
+
+	it('repairs a suspended brick only when Connect a Brick runs on it', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+		w.pairing.accepts = false;
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);   // declined: the brick is suspended
+		await settle();
+		w.pairing.accepts = true;
+		w.mock['bricks'].get(makeBrickKey(Transport.Mock, 'CCC'))!.bluetoothPeers.push(THIS_PC);   // one-sided now
+
+		await w.sessionManager.disconnect(usbKey);   // USB joins again while suspended
+		await waitFor(() => w.usb.connects === 2, 2000);
+		await peerReadsDone(w);
+		await settle();
+		assert.deepEqual(w.removals(), [], 'a suspended brick was repaired without a Connect a Brick');
+		assert.equal(w.pairing.calls, 1);
+		assert.ok(w.warnings.some((warning) => warning.includes('one-sided')), 'the one-sided state was not logged');
+
+		await connect(w);
+		await waitFor(() => w.pairing.calls === 2, 3000);
+
+		assert.deepEqual(w.removals(), [THIS_PC]);
+		w.done();
+	});
+
+	it('repairs once: a pairing that still looks one-sided afterwards is reported, not repaired again', async () => {
+		const w = world({ checkOneSided: true, peers: ['Office PC'] });
+		w.pairing.storedName = `${THIS_PC} `;   // the brick stores this computer under a name that is not byte-exact
+		const repairs = repairsOf(w);
+
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		await settle();
+		await w.sessionManager.disconnect(usbKey);
+		await waitFor(() => w.usb.connects === 2, 2000);
+		await peerReadsDone(w);
+		await settle();
+
+		assert.equal(w.bt.unpairs.length, 1, 'repaired again');
+		assert.equal(w.pairing.calls, 1);
+		assert.equal(repairs.length, 2);
+		assert.equal(repairs[1].repeated, true);
+
+		await connect(w);   // the user asks: a repair is allowed again
+		await waitFor(() => w.bt.unpairs.length === 2, 3000);
 		w.done();
 	});
 });
