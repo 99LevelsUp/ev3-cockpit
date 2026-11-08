@@ -50,7 +50,9 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   **not closed**. Open:
   - Pairing becomes part of connecting: step 4,
     `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md`, from the owner's walk-through of
-    02.11.2026. Code built (U1–U9, 08.11.2026); hardware session (U10) and review open.
+    02.11.2026. Code built (U1–U9, U11, 08.11.2026) and reviewed (verdict "Ready with fixes",
+    fixed in `96f2c5f`, confirmation round clean); open: the hardware session (U10) and one owner
+    decision on repeated one-sided repairs (the step-4 plan's appendix, "Review").
     - "Connect a Brick" connects every channel that can work; a Bluetooth channel nobody has
       paired is paired on the way, after USB or TCP are connected, and the brick's dialog is the
       consent. There is no separate pairing command (KD1).

@@ -464,6 +464,28 @@ flowchart TB
 - Queue: a pairing holds the Bluetooth slot for up to 120 s (`src/transports/btPairingHelper.ts`), a connect waits at most 45 s for it (`src/transports/btConnectionQueue.ts`), and a success arms the 15 s cooldown (`src/transports/transportConstants.ts`).
 - Brick information: `info` already decodes firmware and OS versions (`src/protocol/ev3Responses.ts`), which `readNameOverSession` drops; Phase 5 shows system information in 5.7.3 and 3.5.6.
 
+### Review (08.11.2026)
+
+ce-code-review on `b7bc822..32a9395` (src/): correctness, project-standards, testing,
+maintainability, reliability, and an independent cross-model pass (codex). Verdict "Ready with
+fixes".
+
+| # | Finding | Severity | Agreement | Outcome |
+|---|---|---|---|---|
+| 1 | A one-sided repair could pair the brick again under a clear that began during its removal, or after a clear the user declined | P1 | correctness, reliability, codex | fixed in `96f2c5f`: no pairing starts while a forget or a clear holds the brick; the repair pairs only a brick that is not suspended |
+| 2 | A missed discovery scan would remove a working pairing | P1 | codex | rejected: the Bluetooth provider lists every paired brick on every scan, heard or not (`btTransportProvider.ts`), so a paired item turns unavailable only when Windows stops listing it |
+| 3 | No test of "Connect a Brick" joining a USB channel waiting out a backoff (R2) | P2 | testing | test added in `96f2c5f` |
+| 4 | `BrickPeer` and `BrickPeerList` indented with spaces | P3 | project-standards | left: the whole of `src/contracts/models.ts` is space-indented; a reformat belongs in its own change |
+| 5 | `connectAgain` left a channel's old retry timer running, so a failed forced join retried twice as often (KTD4 says it clears the rejoin state) | P3 | correctness | fixed in `96f2c5f` |
+| 6 | Not in the plan: one automatic repair per brick until the next "Connect a Brick", then only a "still one-sided" notice | P3 | report | **owner decision open**: keep the rule? The notice now comes on every USB or TCP reconnect of such a brick; once per repair may be enough |
+
+Every fix has a test that fails without it (mutation-checked, 4 of 4). A confirmation round on
+`96f2c5f` (codex) found nothing: READY. Residual risks the review named, not acted on: a pairing
+aborted while queued in the Bluetooth connection queue still takes its slot later and stamps the
+cooldown; the helper may report a cancel for a pairing Windows completed as it closed;
+`brickManager.ts` grew to about 1,600 lines, and extracting the peer list and the one-sided check
+is worth doing after U10.
+
 ### Hardware results
 
 Filled in by U10.
