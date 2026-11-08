@@ -83,6 +83,8 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	 */
 	private readonly fences = new Map<BrickKey, { readonly at: number; readonly change: 'forgotten' | 'paired' }>();
 	private polling = false;
+	/** Transports whose provider has answered a scan; a failed scan does not count. */
+	private readonly answeredTransports = new Set<Transport>();
 	/** Set by dispose(). A scan still in flight must not fire on disposed emitters. */
 	private disposed = false;
 
@@ -167,6 +169,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		results.forEach((result, index) => {
 			if (result.status === 'fulfilled') {
 				answered.add(providers[index].transport);
+				this.answeredTransports.add(providers[index].transport);
 				this.processScanResult(result.value, seenKeys, scan);
 			} else {
 				this.scanFailed.fire({ transport: providers[index].transport, error: result.reason });
@@ -176,6 +179,14 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		this.processMisses(seenKeys, answered, scan);
 
 		this.scanCompleted.fire(undefined);
+	}
+
+	/**
+	 * Whether a scan of this transport has answered since the scheduler was made: until one has,
+	 * what is tracked for it says nothing about what is there (step-4 plan, KTD6).
+	 */
+	hasScanned(transport: Transport): boolean {
+		return this.answeredTransports.has(transport);
 	}
 
 	/** Get the current snapshot of all tracked bricks. */
@@ -271,6 +282,7 @@ export class DiscoveryScheduler implements vscode.Disposable {
 		try {
 			const result = await provider.discover();
 			if (this.disposed) { return; }
+			this.answeredTransports.add(provider.transport);
 			const seenKeys = new Set<BrickKey>();
 			this.processScanResult(result, seenKeys, scan);
 

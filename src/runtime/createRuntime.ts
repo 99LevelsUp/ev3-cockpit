@@ -121,6 +121,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const bricks = services.add(new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, log,
 		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName, pair: btDiscovery?.pair,
+		windowsPairing: scheduler,
 	}));
 	services.add(bricks.onRouteChange(e => {
 		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');

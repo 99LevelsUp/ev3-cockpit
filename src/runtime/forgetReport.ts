@@ -12,6 +12,7 @@
  */
 
 import type { BrickId, BrickKey, ForgetResidue } from '../contracts';
+import type { PairingResult } from '../transports/btClassicDiscovery';
 
 /**
  * How one removal from a brick's Bluetooth list ended (R9).
@@ -65,6 +66,27 @@ export type PairingOutcome =
 	| { readonly status: 'removed'; readonly channel: BrickKey }
 	/** The provider refused; `reason` carries the operating system's own words. */
 	| { readonly status: 'refused'; readonly channel: BrickKey; readonly reason: string };
+
+/**
+ * A pairing found broken on one side over USB or TCP, and what the cockpit did about it
+ * (step-4 plan, KTD6, R6).
+ */
+export interface OneSidedRepair {
+	readonly brickId: BrickId;
+	/**
+	 * `windows-only`: Windows has the brick paired, and the brick's list lacks this computer's
+	 * name. `brick-only`: the brick lists this computer, and Windows does not have it paired.
+	 */
+	readonly found: 'windows-only' | 'brick-only';
+	/** The half removed: Windows' pairing, or this computer's entry on the brick. Absent when `repeated`. */
+	readonly removal?: PairingOutcome | PeerRemoval;
+	/** The brick's other named entries, which "Clear a Brick's Bluetooth List" removes with the rest. */
+	readonly others: readonly string[];
+	/** The pairing started once the half was removed; absent when it was not removed, or when `repeated`. */
+	readonly pairing?: Promise<PairingResult>;
+	/** Found again after a repair since the last "Connect a Brick": reported, and nothing done. */
+	readonly repeated?: boolean;
+}
 
 export type MemoryOutcome =
 	| { readonly status: 'cleared' }

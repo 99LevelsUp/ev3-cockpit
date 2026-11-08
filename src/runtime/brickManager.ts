@@ -12,7 +12,7 @@
 import * as vscode from 'vscode';
 import {
 	BrickCommand, BrickId, BrickKey, BrickPeer, BrickPeerList, BrickResponse, ChannelState, ConnectionState, ForgetResidue,
-	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyId, brickKeyTransport, describeChannel,
+	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyId, brickKeyTransport, describeChannel, makeBrickKey,
 } from '../contracts';
 import {
 	ChannelChangedError, ConnectionAbandonedError, ConnectionError, NotConnectedError, ProtocolError, TimeoutError,
@@ -30,7 +30,7 @@ import { brickLabel, channelLabel } from './brickLabels';
 import type { DiscoveryScheduler } from './discoveryScheduler';
 import type {
 	BrickSideOutcome, ClearListReport, ClearPairingSkip, ClearSkip, ClearedEntry, ForgetReport, MemoryOutcome,
-	PairingOutcome, PeerRemoval,
+	OneSidedRepair, PairingOutcome, PeerRemoval,
 } from './forgetReport';
 import { PresenceAggregator } from './presenceAggregator';
 import { ReconnectStrategy } from './reconnectStrategy';
@@ -100,6 +100,12 @@ export interface BrickManagerOptions {
 	 * returning undefined, when it cannot be read; a forget then leaves the brick's list alone.
 	 */
 	readonly radioName?: () => string | undefined;
+	/**
+	 * Where the one-sided check learns whether Windows has a brick paired (step-4 plan, KTD6):
+	 * discovery's tracked Bluetooth items, which the cockpit's own pairings and unpairs fence
+	 * (step-3 plan, KTD11), not the list's sticky `paired` flag. Absent, no check runs.
+	 */
+	readonly windowsPairing?: Pick<DiscoveryScheduler, 'getTrackedBricks' | 'hasScanned'>;
 }
 
 /**
@@ -155,6 +161,10 @@ const namesOf = (peers: readonly Peer[]): string[] => peers.map((peer) => peer.n
 const samePeers = (a: readonly Peer[], b: readonly Peer[]): boolean =>
 	a.length === b.length && a.every((peer, i) => peer.name === b[i].name && peer.connected === b[i].connected);
 
+/** The Bluetooth channel of a brick whose id is its hardware address, as a pairing addresses it. */
+const bluetoothKeyOf = (brickId: BrickId): BrickKey | undefined =>
+	/^[0-9A-F]{12}$/.test(brickId) ? makeBrickKey(Transport.BT, brickId.match(/../g)!.join(':')) : undefined;
+
 /** How many entries of a brick's Bluetooth list carry exactly `name`; the brick tells entries apart by nothing else. */
 const countOf = (names: readonly string[], name: string): number => names.filter((n) => n === name).length;
 
@@ -206,6 +216,24 @@ export class BrickManager implements vscode.Disposable {
 	private readonly pairingSuspended = new Set<BrickId>();
 	/** Each brick's list of paired Bluetooth devices as last read, kept for the panel (KTD8). */
 	private readonly peerLists = new Map<BrickId, BrickPeerList>();
+	/** How many reads of a list have been kept, and the number of the one each brick's list came from. */
+	private peerReadsKept = 0;
+	private readonly peerListNumber = new Map<BrickId, number>();
+	private readonly windowsPairing?: BrickManagerOptions['windowsPairing'];
+	/**
+	 * Bricks waiting for the one-sided check since a USB or TCP channel joined, with the number of
+	 * list reads kept by then: the check needs a list read after the join, and automatic pairing
+	 * waits for the check (KTD3), so a stale half is removed before any dialog.
+	 */
+	private readonly oneSidedPending = new Map<BrickId, number>();
+	/** Bricks whose one-sided pairing is being repaired now. */
+	private readonly repairing = new Set<BrickId>();
+	/**
+	 * Bricks repaired since the user last ran "Connect a Brick" on them. A brick that stores this
+	 * computer under a name that is not byte-exact looks one-sided after every repair; a second
+	 * finding is reported instead of showing the dialog again and again.
+	 */
+	private readonly repaired = new Set<BrickId>();
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -222,6 +250,10 @@ export class BrickManager implements vscode.Disposable {
 	/** Fired when a read of a brick's list finds it changed, and when the brick is forgotten. */
 	readonly onPeerListChange = this._onPeerListChange.event;
 
+	private readonly _onOneSidedRepair = new vscode.EventEmitter<OneSidedRepair>();
+	/** Fired when a pairing broken on one side is found over USB or TCP, with what was done (R6). */
+	readonly onOneSidedRepair = this._onOneSidedRepair.event;
+
 	private readonly subscriptions: vscode.Disposable[] = [];
 
 	constructor(options: BrickManagerOptions) {
@@ -235,9 +267,13 @@ export class BrickManager implements vscode.Disposable {
 		this.btPresence = options.btPresence;
 		this.radioName = options.radioName;
 		this.pairDevice = options.pair;
+		this.windowsPairing = options.windowsPairing;
 
 		this.subscriptions.push(
 			this.sessionManager.onSessionStateChange((e) => {
+				// Before the list follows: a list change starts a reconcile, which must not pair the
+				// brick before the check of a USB or TCP channel that has just joined (KTD3).
+				this.noteCheckableChannel(e.brickKey, e.newState);
 				// The list's channel state follows its session.
 				this.aggregator.updateChannelSession(e.brickKey, e.newState);
 				if (e.newState === ConnectionState.Connected) { this.dropped.delete(e.brickKey); }
@@ -246,6 +282,11 @@ export class BrickManager implements vscode.Disposable {
 				// A channel whose session ended while its brick stays signed in joins again once
 				// it is available — whatever ended it.
 				if (e.newState === ConnectionState.Disconnected) { this.reconcile(brickId); }
+				// A channel that has just connected, by a join or by the session manager's own
+				// reconnect, is when the brick's list may have changed (KTD8) and is checked (KTD6).
+				if (e.newState === ConnectionState.Connected && this.signedIn.has(brickId)) {
+					this.readPeerListAfter(brickId, 'connecting');
+				}
 			}),
 			this.aggregator.onPresenceChanged((e) => {
 				if (e.currentState !== PresenceState.Available) { return; }
@@ -340,6 +381,11 @@ export class BrickManager implements vscode.Disposable {
 		const lost = this.unheardBluetooth(brickId);
 		const keys = [...this.joinCandidates(brickId), ...(lost ? [lost] : [])];
 		const joins = keys.filter((key) => !signIn.pending.has(key)).map((key) => this.join(brickId, key));
+		// The user asks now: a USB or TCP channel already connected is checked again (KTD4, KTD6).
+		if (this.windowsPairing && this.checkableChannelConnected(brickId)) {
+			this.oneSidedPending.set(brickId, this.peerReadsKept);
+			this.readPeerListAfter(brickId, 'Connect a Brick');
+		}
 		this.pairSighting(brickId);
 		const outcomes = await Promise.allSettled(joins);
 		if (this.signedIn.get(brickId) !== signIn) {
@@ -361,6 +407,7 @@ export class BrickManager implements vscode.Disposable {
 	 */
 	resumePairing(brickId: BrickId): void {
 		this.pairingSuspended.delete(brickId);
+		this.repaired.delete(brickId);
 	}
 
 	/** Sign a brick out: close every channel; it does not reconnect until signed in again. */
@@ -388,9 +435,13 @@ export class BrickManager implements vscode.Disposable {
 	 * disposed, records nothing and answers that it did not pair.
 	 */
 	pair(brickId: BrickId): Promise<PairingResult> {
+		return this.pairOver(brickId, this.aggregator.getBrick(brickId)?.channels.find((c) => c.transport === Transport.BT)?.brickKey);
+	}
+
+	/** {@link pair}, over a Bluetooth channel the list may no longer hold: a repair forgot it first. */
+	private pairOver(brickId: BrickId, btKey: BrickKey | undefined): Promise<PairingResult> {
 		const running = this.pairings.get(brickId);
 		if (running) { return running.done; }
-		const btKey = this.aggregator.getBrick(brickId)?.channels.find((c) => c.transport === Transport.BT)?.brickKey;
 		const mac = btKey ? brickKeyId(btKey) : undefined;
 		const pairDevice = this.pairDevice;
 		if (!pairDevice || !btKey || !mac) {
@@ -680,6 +731,7 @@ export class BrickManager implements vscode.Disposable {
 		this._onActiveBrickChange.dispose();
 		this._onPairingStarted.dispose();
 		this._onPeerListChange.dispose();
+		this._onOneSidedRepair.dispose();
 	}
 
 	// ── Internal: joining ───────────────────────────────────────────
@@ -716,6 +768,7 @@ export class BrickManager implements vscode.Disposable {
 			}
 			this.join(brickId, key).catch(() => { /* recorded by join; retried per transport */ });
 		}
+		this.checkOneSided(brickId);
 		this.pairSighting(brickId);
 	}
 
@@ -730,7 +783,7 @@ export class BrickManager implements vscode.Disposable {
 	 * more is not paired: the pairing would only fail and suspend the brick.
 	 */
 	private pairSighting(brickId: BrickId): void {
-		if (this.pairingSuspended.has(brickId)) { return; }
+		if (this.pairingSuspended.has(brickId) || this.oneSidedPending.has(brickId) || this.repairing.has(brickId)) { return; }
 		const entry = this.aggregator.getBrick(brickId);
 		const bt = entry?.channels.find((c) => c.transport === Transport.BT);
 		if (!entry || entry.paired || bt?.state !== ChannelState.Available) { return; }
@@ -754,8 +807,6 @@ export class BrickManager implements vscode.Disposable {
 			// A newer sign-in keeps the channel; it is the one it would have opened.
 			if (!this.signedIn.has(brickId)) {
 				await this.sessionManager.disconnect(key);
-			} else {
-				this.readPeerListAfter(brickId, 'joining');
 			}
 		} catch (error) {
 			// Nothing to say or retry for a join its sign-in no longer wants.
@@ -810,6 +861,7 @@ export class BrickManager implements vscode.Disposable {
 		if (!signIn) { return; }
 		for (const timer of signIn.retryTimers.values()) { clearTimeout(timer); }
 		this.signedIn.delete(brickId);
+		this.oneSidedPending.delete(brickId);
 	}
 
 	// ── Internal: forgetting ────────────────────────────────────────
@@ -828,6 +880,8 @@ export class BrickManager implements vscode.Disposable {
 	 */
 	private async stopPairing(brickId: BrickId): Promise<void> {
 		this.pairingSuspended.add(brickId);
+		// What a forget or clear reads is not checked (KTD6): it is about to change both halves.
+		this.oneSidedPending.delete(brickId);
 		const pairing = this.pairings.get(brickId);
 		if (!pairing) { return; }
 		pairing.abort.abort();
@@ -966,6 +1020,7 @@ export class BrickManager implements vscode.Disposable {
 		const previous = this.peerLists.get(brickId);
 		const list: BrickPeerList = { peers: [...peers], over, readAt: Date.now() };
 		this.peerLists.set(brickId, list);
+		this.peerListNumber.set(brickId, ++this.peerReadsKept);
 		if (!previous || !samePeers(previous.peers, peers)) { this._onPeerListChange.fire({ brickId, current: list }); }
 		return list;
 	}
@@ -977,10 +1032,126 @@ export class BrickManager implements vscode.Disposable {
 	 */
 	private readPeerListAfter(brickId: BrickId, what: string): void {
 		if (this.disposed || this.peerListBusy(brickId) || !this.connectedPeerListChannel(brickId)) { return; }
-		this.refreshPeerList(brickId).catch((error: unknown) => {
+		this.refreshPeerList(brickId).then(() => { this.checkOneSided(brickId); }, (error: unknown) => {
 			this.log?.warn(`Reading the list of paired computers of ${brickLabel(this.aggregator, brickId)} after `
 				+ `${what} failed: ${messageOf(error)}`);
+			// Nothing to check against: automatic pairing goes on rather than wait for a read that
+			// may never come.
+			if (this.oneSidedPending.delete(brickId)) { this.pairSighting(brickId); }
 		});
+	}
+
+	// ── Internal: a pairing broken on one side ──────────────────────
+
+	/** A USB or TCP channel of a signed-in brick joined or ended: the brick waits for the check, or no longer can. */
+	private noteCheckableChannel(key: BrickKey, state: ConnectionState): void {
+		if (!this.windowsPairing || this.transportOf(key) === Transport.BT) { return; }
+		const brickId = brickIdOf(key);
+		if (state === ConnectionState.Connected && this.signedIn.has(brickId) && !this.peerListBusy(brickId)) {
+			this.oneSidedPending.set(brickId, this.peerReadsKept);
+		} else if (state === ConnectionState.Disconnected && !this.checkableChannelConnected(brickId)) {
+			// Over Bluetooth alone the check does not run (KTD6); the brick pairs as before.
+			this.oneSidedPending.delete(brickId);
+		}
+	}
+
+	/** Whether a USB or TCP channel of the brick is connected: the only ones its list is checked over. */
+	private checkableChannelConnected(brickId: BrickId): boolean {
+		return this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
+			&& s.connectionState === ConnectionState.Connected && this.transportOf(s.brickKey) !== Transport.BT);
+	}
+
+	/**
+	 * The one-sided check (step-4 plan, KTD6, R6): once the brick's list has been read over USB or
+	 * TCP since such a channel joined, compare it, by this computer's exact radio name, with
+	 * Windows' pairing as discovery tracks it, and repair the half that is left.
+	 *
+	 * Held, and run again by what ends the wait, while a pairing of the brick is in flight (the
+	 * read after it), while a forget or clear runs (they drop the wait), before any Bluetooth scan
+	 * has answered (the first that does: the list is rebuilt after every scan, which reconciles),
+	 * and until the list is read. A list read over Bluetooth is not checked even then: with the USB
+	 * channel out of routing, a removal over Bluetooth would cut the link it goes over. Released without a check
+	 * when there is nothing to check with — no radio name, no pairing — and automatic pairing goes
+	 * on as it did before. A suspended brick gets nothing but a line in the log (KD2); a brick
+	 * repaired since the last "Connect a Brick" gets a report and nothing else.
+	 */
+	private checkOneSided(brickId: BrickId): void {
+		const since = this.oneSidedPending.get(brickId);
+		if (since === undefined || this.repairing.has(brickId)) { return; }
+		let name: string | undefined;
+		try {
+			name = this.radioName?.() || undefined;
+		} catch {
+			name = undefined;   // the same as a name that cannot be read
+		}
+		if (!name || !this.pairDevice || !this.windowsPairing) {
+			this.oneSidedPending.delete(brickId);
+			this.pairSighting(brickId);
+			return;
+		}
+		if (this.pairings.has(brickId) || this.peerListBusy(brickId) || !this.windowsPairing.hasScanned(Transport.BT)) { return; }
+		const list = this.peerLists.get(brickId);
+		if (!list || this.transportOf(list.over) === Transport.BT || (this.peerListNumber.get(brickId) ?? 0) <= since) { return; }
+		this.oneSidedPending.delete(brickId);
+
+		const tracked = [...this.windowsPairing.getTrackedBricks().values()]
+			.find((item) => item.transport === Transport.BT && brickIdOf(item.brickKey) === brickId);
+		// Paired as Windows lists it now: a pairing removed elsewhere leaves the item marked paired
+		// until the scans that miss it expire it.
+		const windowsPaired = tracked?.paired === true && tracked.presenceState === PresenceState.Available;
+		const onBrick = list.peers.some((peer) => peer.name === name);
+		if (windowsPaired === onBrick) {
+			this.pairSighting(brickId);
+			return;
+		}
+
+		const found = windowsPaired ? 'windows-only' : 'brick-only';
+		const others = namesOf(list.peers).filter((entry) => entry !== name && !isBlankPeerName(entry));
+		const label = brickLabel(this.aggregator, brickId);
+		if (this.pairingSuspended.has(brickId)) {
+			this.log?.warn(`The pairing with ${label} looks one-sided (${found}); "Connect a Brick" repairs it.`);
+			return;
+		}
+		if (this.repaired.has(brickId)) {
+			this.log?.warn(`The pairing with ${label} still looks one-sided (${found}) after a repair; left alone.`);
+			this._onOneSidedRepair.fire({ brickId, found, others, repeated: true });
+			return;
+		}
+		void this.repairOneSided(brickId, found, name, list, tracked?.brickKey, others);
+	}
+
+	/**
+	 * Remove the half of a one-sided pairing that is left, keeping the brick's other channels, then
+	 * pair again: the brick's dialog is the consent (KD5). Nothing pairs when the removal did not
+	 * take, or when the brick was signed out or is being forgotten meanwhile.
+	 */
+	private async repairOneSided(
+		brickId: BrickId, found: OneSidedRepair['found'], name: string, list: BrickPeerList,
+		trackedKey: BrickKey | undefined, others: readonly string[],
+	): Promise<void> {
+		this.repairing.add(brickId);
+		this.repaired.add(brickId);
+		try {
+			const btKey = trackedKey
+				?? this.aggregator.getBrick(brickId)?.channels.find((c) => c.transport === Transport.BT)?.brickKey
+				?? bluetoothKeyOf(brickId);
+			let removal: PairingOutcome | PeerRemoval;
+			if (found === 'windows-only' && btKey) {
+				const { pairing } = await this.forgetBluetoothChannel(brickId, btKey);
+				removal = pairing[0] ?? { status: 'refused', channel: btKey, reason: 'No provider can unpair it.' };
+			} else {
+				removal = await this.removePeer(brickId, list.over, name, countOf(namesOf(list.peers), name));
+			}
+			const removed = removal.status === 'removed' || removal.status === 'confirmed';
+			const pairing = removed && btKey && !this.disposed && this.signedIn.has(brickId) && !this.forgetting.has(brickId)
+				? this.pairOver(brickId, btKey)
+				: undefined;
+			this._onOneSidedRepair.fire({ brickId, found, removal, others, ...(pairing ? { pairing } : {}) });
+		} catch (error) {
+			this.log?.warn(`Repairing the pairing of ${brickLabel(this.aggregator, brickId)} failed: ${messageOf(error)}`);
+		} finally {
+			this.repairing.delete(brickId);
+		}
 	}
 
 	/** The brick's paired Bluetooth channel when the presence checks lost it and nothing holds it open. */
@@ -1094,6 +1265,8 @@ export class BrickManager implements vscode.Disposable {
 	private forgetMemory(brickId: BrickId, keys: readonly BrickKey[]): MemoryOutcome {
 		const outcome = this.forgetLayers(keys, () => this.aggregator.forget(brickId));
 		if (this.peerLists.delete(brickId)) { this._onPeerListChange.fire({ brickId, current: undefined }); }
+		this.peerListNumber.delete(brickId);
+		this.repaired.delete(brickId);
 		// Sign-out already did these; a sign-out that failed part-way may not have.
 		this.forgetSignIn(brickId);
 		this.recomputeRoute(brickId);

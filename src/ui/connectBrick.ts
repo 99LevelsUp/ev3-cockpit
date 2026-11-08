@@ -9,6 +9,7 @@
 import { BrickId, ChannelState, Transport } from '../contracts';
 import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '../errors/CockpitError';
 import type { BrickManager, PairingStartedEvent } from '../runtime/brickManager';
+import type { OneSidedRepair } from '../runtime/forgetReport';
 import { brickLabel, transportLabel } from '../runtime/brickLabels';
 import type { RuntimeLog } from '../runtime/createRuntime';
 import type { PresenceAggregator } from '../runtime/presenceAggregator';
@@ -176,4 +177,42 @@ async function connectOver(
 				: `EVƎ Cockpit: could not connect to ${label} — ${err.message}`);
 		}
 	});
+}
+
+/**
+ * The notification for a pairing found broken on one side (step-4 plan, U7, R6): what was found,
+ * what the cockpit did, and, when the brick lists other computers, that "Clear a Brick's
+ * Bluetooth List" removes them all.
+ *
+ * @param label What the user calls the brick.
+ * @returns The message, and whether it is a warning: nothing was repaired.
+ */
+export function describeRepair(repair: OneSidedRepair, label: string): { message: string; warning: boolean } {
+	const found = repair.found === 'windows-only'
+		? `Windows was paired with ${label}, but ${label} no longer lists this computer.`
+		: `${label} still lists this computer, but Windows was not paired with it.`;
+	const others = repair.others.length > 0
+		? ` ${label} also lists ${repair.others.join(', ')}; "Clear a Brick's Bluetooth List" removes every entry.`
+		: '';
+	if (repair.repeated) {
+		return {
+			warning: true,
+			message: `EVƎ Cockpit: ${found} It still looks that way after a repair, so the cockpit left it alone. `
+				+ `Run "Forget a Brick" on ${label}, then "Connect a Brick".${others}`,
+		};
+	}
+	const half = repair.found === 'windows-only' ? 'Windows\' pairing' : `this computer's entry on ${label}`;
+	const removal = repair.removal;
+	if (removal?.status !== 'removed' && removal?.status !== 'confirmed') {
+		const why = removal?.status === 'refused' ? removal.reason : removal?.detail;
+		return {
+			warning: true,
+			message: `EVƎ Cockpit: ${found} The cockpit could not remove ${half}${why ? ` — ${why}` : '.'} `
+				+ `"Forget a Brick" removes both halves.${others}`,
+		};
+	}
+	const next = repair.pairing
+		? 'and is pairing again: confirm on the brick\'s display.'
+		: '; run "Connect a Brick" to pair again.';
+	return { warning: false, message: `EVƎ Cockpit: ${found} The cockpit removed ${half} ${next}${others}` };
 }
