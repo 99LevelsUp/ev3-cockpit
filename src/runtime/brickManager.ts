@@ -740,12 +740,11 @@ export class BrickManager implements vscode.Disposable {
 	 * Channels of a brick that are available, have no session yet, and can be connected over —
 	 * the one list {@link signIn}, {@link reconcile} and {@link peerListChannel} all join from.
 	 *
-	 * A Bluetooth channel of a brick nobody has paired is left out: it is a sighting — an
-	 * inquiry, or Windows' cache relisting the brick unpaired after a forget or a cleared list
-	 * (KTD10) — not a link. Connecting to such a brick needs pairing first, which "Connect a
-	 * Brick" owns: `connectPickedBrick` pairs a brick only Bluetooth reaches, scans, then signs
-	 * it in. A brick still signed in over USB after its list was cleared would otherwise connect
-	 * to a brick that no longer knows this computer.
+	 * A Bluetooth channel of a brick nobody has paired is left out (step-3 KTD12): it is a
+	 * sighting — an inquiry, or Windows' cache relisting the brick unpaired after a forget or a
+	 * cleared list — not a link. It joins once it is paired: by "Connect a Brick", or, for a
+	 * signed-in brick, by the pairing {@link pairSighting} starts by itself, with the brick's
+	 * dialog as the consent (step-4 KD1, KD2).
 	 */
 	private joinCandidates(brickId: BrickId): BrickKey[] {
 		const entry = this.aggregator.getBrick(brickId);
