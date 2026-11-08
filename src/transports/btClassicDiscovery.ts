@@ -26,7 +26,7 @@ import {
 import { BT } from './transportConstants';
 import { formatMac } from './btSppDiscovery';
 import type { BtConnectionQueue } from './btConnectionQueue';
-import type { BtPairingEvent } from './btPairingHelper';
+import { PAIRING_CANCELLED, type BtPairingEvent } from './btPairingHelper';
 
 /** Configuration for {@link BtClassicDiscovery}. */
 export interface BtClassicDiscoveryOptions {
@@ -49,7 +49,15 @@ export interface BtClassicDiscoveryOptions {
 	 * `onEvent` carries the progress of this one pairing; a binding without progress events
 	 * (the legacy `bthprops.cpl` path) simply ignores it.
 	 */
-	pairDevice?: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<{ ok: boolean; reason?: string }>;
+	pairDevice?: (
+		mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
+	) => Promise<{ ok: boolean; reason?: string; status?: string }>;
+	/**
+	 * Hears every pairing's phases, with the milliseconds since it began: `queued`, then
+	 * `slotAcquired`, then the binding's own events, then `finished` with the outcome. The log
+	 * hangs off this, so a slow pairing shows where it waited.
+	 */
+	onPairingEvent?: (mac: string, event: BtPairingEvent, elapsedMs: number) => void;
 	/** Removes a pairing. */
 	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
 	/**
@@ -78,6 +86,8 @@ export interface PairingResult {
 	ok: boolean;
 	/** Why it did not happen. Absent on success. */
 	reason?: string;
+	/** Windows' own pairing status, when the binding reported one; for the log. */
+	status?: string;
 }
 
 /**
@@ -87,7 +97,10 @@ export class BtClassicDiscovery {
 	private readonly listDevices: () => BluetoothDeviceInfo[];
 	private readonly portScan?: () => Promise<BtDiscoveryDevice[]>;
 	private readonly onCacheUnavailable?: (reason: string) => void;
-	private readonly pairDevice: (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<PairingResult>;
+	private readonly pairDevice: (
+		mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
+	) => Promise<PairingResult>;
+	private readonly onPairingEvent?: (mac: string, event: BtPairingEvent, elapsedMs: number) => void;
 	private readonly unpairDevice: (mac: string) => PairingResult;
 	private readonly readRadioName: () => string | undefined;
 	private readonly connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
@@ -97,6 +110,7 @@ export class BtClassicDiscovery {
 		this.portScan = options.portScan;
 		this.onCacheUnavailable = options.onCacheUnavailable;
 		this.pairDevice = options.pairDevice ?? pairBluetoothDevice;
+		this.onPairingEvent = options.onPairingEvent;
 		// Wrapped, not passed: the default binding's optional second parameter is a test seam,
 		// and handing the function over bare would let a caller fill it by accident.
 		this.unpairDevice = options.unpairDevice ?? ((mac) => removeBluetoothDevice(mac));
@@ -117,14 +131,31 @@ export class BtClassicDiscovery {
 	 *
 	 * @param onEvent Progress of this pairing only, so the caller can prompt the user at the
 	 *   right moment without sharing a listener with any other pairing in flight.
+	 * @param signal Aborts the pairing. One still waiting for its slot answers at once and never
+	 *   runs; one already running stops its helper and answers once the helper has exited, so
+	 *   nothing is left pairing behind whoever aborted it.
 	 */
-	pair = async (mac: string, onEvent?: (event: BtPairingEvent) => void): Promise<PairingResult> => {
+	pair = async (mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal): Promise<PairingResult> => {
+		const began = Date.now();
+		const report = (event: BtPairingEvent): void => this.onPairingEvent?.(mac, event, Date.now() - began);
+		const forward = (event: BtPairingEvent): void => { report(event); onEvent?.(event); };
+		const finish = (result: PairingResult): PairingResult => {
+			report({ type: 'finished', ...result });
+			return result;
+		};
 		const failed = (error: unknown): PairingResult =>
 			({ ok: false, reason: error instanceof Error ? error.message : String(error) });
+		const cancelled = (): PairingResult => ({ ok: false, reason: PAIRING_CANCELLED });
 
+		if (signal?.aborted) { return finish(cancelled()); }
+		report({ type: 'queued' });
+		let running = false;
 		const attempt = async (): Promise<PairingResult> => {
+			if (signal?.aborted) { return cancelled(); }
+			running = true;
+			report({ type: 'slotAcquired' });
 			try {
-				return await this.pairDevice(mac, onEvent);
+				return await this.pairDevice(mac, forward, signal);
 			} catch (error) {
 				// Includes the helper being missing entirely, which arrives as a
 				// BackendUnavailableError and is an install fault rather than a refusal — the
@@ -133,14 +164,19 @@ export class BtClassicDiscovery {
 			}
 		};
 
-		if (!this.connectionQueue) { return attempt(); }
+		if (!this.connectionQueue) { return finish(await attempt()); }
+		// An abort wins only while the pairing waits for its slot; once it runs, its helper is
+		// what has to stop, and the attempt answers when it has.
+		const abortedWhileQueued = new Promise<PairingResult>((resolve) => {
+			signal?.addEventListener('abort', () => { if (!running) { resolve(cancelled()); } }, { once: true });
+		});
 		try {
-			return await this.connectionQueue.enqueue(mac, attempt);
+			return finish(await Promise.race([this.connectionQueue.enqueue(mac, attempt), abortedWhileQueued]));
 		} catch (error) {
 			// The queue itself can refuse before the attempt ever runs: no slot within its
 			// acquire timeout (a connected Bluetooth brick holds the only one), or a disposed
 			// queue. Same contract as above — an answer, not a throw.
-			return failed(error);
+			return finish(failed(error));
 		}
 	};
 

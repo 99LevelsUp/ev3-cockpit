@@ -240,6 +240,73 @@ describe('BtClassicDiscovery — pairing', () => {
 		assert.deepEqual(heard, ['searching']);
 	});
 
+	it('reports each phase of a pairing to its listener, in order, with the time since it began', async () => {
+		const phases: { mac: string; type: string; elapsedMs: number }[] = [];
+		const discovery = new BtClassicDiscovery({
+			onPairingEvent: (mac, event, elapsedMs) => phases.push({ mac, type: event.type, elapsedMs }),
+			pairDevice: (_mac, onEvent) => {
+				onEvent?.({ type: 'helperStarted' });
+				onEvent?.({ type: 'result', status: 'Paired', ok: true });
+				return Promise.resolve({ ok: true, status: 'Paired' });
+			},
+			connectionQueue: {
+				enqueue: async <T>(_brickId: string, task: () => Promise<T>): Promise<T> => {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					return task();
+				},
+			},
+		});
+
+		await discovery.pair('00:16:53:00:00:0C');
+
+		assert.deepEqual(phases.map((p) => p.type), ['queued', 'slotAcquired', 'helperStarted', 'result', 'finished']);
+		assert.ok(phases.every((p) => p.mac === '00:16:53:00:00:0C'));
+		const times = phases.map((p) => p.elapsedMs);
+		assert.deepEqual(times, [...times].sort((a, b) => a - b), 'the times run backwards');
+		assert.ok(times[1] >= 5, 'the wait for the slot is not in the times');
+	});
+
+	it('answers at once when a pairing waiting for its slot is aborted, and never runs the binding', async () => {
+		let runs = 0;
+		let grant: () => void = () => { /* replaced below */ };
+		const slot = new Promise<void>((resolve) => { grant = resolve; });
+		const discovery = new BtClassicDiscovery({
+			pairDevice: () => { runs += 1; return Promise.resolve({ ok: true }); },
+			connectionQueue: {
+				enqueue: async <T>(_brickId: string, task: () => Promise<T>): Promise<T> => {
+					await slot;
+					return task();
+				},
+			},
+		});
+		const abort = new AbortController();
+
+		const pairing = discovery.pair('00:16:53:00:00:0C', undefined, abort.signal);
+		abort.abort();
+		const outcome = await Promise.race([
+			pairing,
+			new Promise((resolve) => setTimeout(() => resolve('still waiting'), 200)),
+		]);
+		grant();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		assert.notEqual(outcome, 'still waiting', 'the aborted pairing waited for the slot');
+		assert.equal((outcome as { ok: boolean }).ok, false);
+		assert.equal(runs, 0, 'the binding ran for an aborted pairing');
+	});
+
+	it('hands the abort signal to the binding', async () => {
+		let handed: AbortSignal | undefined;
+		const discovery = new BtClassicDiscovery({
+			pairDevice: (_mac, _onEvent, signal) => { handed = signal; return Promise.resolve({ ok: true }); },
+		});
+		const abort = new AbortController();
+
+		await discovery.pair('00:16:53:00:00:0C', undefined, abort.signal);
+
+		assert.equal(handed, abort.signal);
+	});
+
 	it('still pairs when no queue was supplied', async () => {
 		// The queue is optional so the discovery layer stays usable on its own; a missing one
 		// must not silently skip the pairing itself.

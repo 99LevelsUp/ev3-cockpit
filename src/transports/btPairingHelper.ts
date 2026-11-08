@@ -45,7 +45,16 @@ export interface HelperPairingResult {
 	ok: boolean;
 	/** Why it did not happen. Absent on success. */
 	reason?: string;
+	/**
+	 * Windows' own pairing status (`Paired`, `NotFound`, `AuthenticationTimeout`, …), or
+	 * `AlreadyPaired`; absent when the helper never reported one. For the log: `reason` is the
+	 * wording a user reads.
+	 */
+	status?: string;
 }
+
+/** The reason a pairing gives when whoever started it cancelled it. */
+export const PAIRING_CANCELLED = 'The pairing was cancelled.';
 
 /** A readable stream, narrowed to what this module listens for. */
 interface HelperStream {
@@ -198,7 +207,7 @@ export interface BrickScanOptions extends Omit<BtPairingHelperOptions, 'onEvent'
  */
 export function createHelperPairing(
 	options: BtPairingHelperOptions
-): (mac: string, onEvent?: (event: BtPairingEvent) => void) => Promise<HelperPairingResult> {
+): (mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal) => Promise<HelperPairingResult> {
 	const {
 		pin = BT.PAIRING_PIN,
 		inquirySeconds = DEFAULT_INQUIRY_SECONDS,
@@ -209,10 +218,15 @@ export function createHelperPairing(
 	// Two listeners because two parties want the events: whoever built the function (logging,
 	// for every pairing) and whoever is waiting on this one pairing (its progress prompt). A
 	// per-call listener is what keeps two pairings from talking over each other's prompt.
-	return (mac: string, onCallEvent?: (event: BtPairingEvent) => void) => {
+	//
+	// An aborted signal stops the helper, which is how a forget keeps a pairing it did not ask
+	// for from completing behind it.
+	return (mac: string, onCallEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal) => {
+		if (signal?.aborted) { return Promise.resolve({ ok: false, reason: PAIRING_CANCELLED }); }
 		let result: { status: string; ok: boolean } | undefined;
 		let helperError: string | undefined;
 		let alreadyPaired = false;
+		let aborted = false;
 
 		const run = runHelper([
 			'--mac', mac,
@@ -239,9 +253,10 @@ export function createHelperPairing(
 			onEvent?.(event);
 			onCallEvent?.(event);
 		});
+		signal?.addEventListener('abort', () => { aborted = true; run.cancel(); }, { once: true });
 
 		return run.done.then((outcome) => interpret({
-			result, alreadyPaired, helperError, timeoutSeconds, ...outcome,
+			result, alreadyPaired, helperError, timeoutSeconds, aborted, ...outcome,
 		}));
 	};
 }
@@ -457,6 +472,7 @@ function runHelper(
 			if (settled) { return; }
 			child.kill();
 		};
+		onEvent({ type: 'helperStarted' });
 
 		const handleLine = (line: string): void => {
 			const trimmed = line.trim();
@@ -522,7 +538,9 @@ function interpret(run: {
 	code: number | null;
 	timedOut: boolean;
 	timeoutSeconds: number;
+	aborted?: boolean;
 }): HelperPairingResult {
+	if (run.aborted) { return { ok: false, reason: PAIRING_CANCELLED }; }
 	if (run.timedOut) {
 		return {
 			ok: false,
@@ -531,11 +549,12 @@ function interpret(run: {
 	}
 
 	if (run.result) {
-		return run.result.ok ? { ok: true } : { ok: false, reason: describeStatus(run.result.status) };
+		const { status } = run.result;
+		return run.result.ok ? { ok: true, status } : { ok: false, reason: describeStatus(status), status };
 	}
 
 	// The idempotent path: Program.cs reports `alreadyPaired` and exits 0 without a result.
-	if (run.alreadyPaired) { return { ok: true }; }
+	if (run.alreadyPaired) { return { ok: true, status: 'AlreadyPaired' }; }
 
 	if (run.helperError) { return { ok: false, reason: run.helperError }; }
 
