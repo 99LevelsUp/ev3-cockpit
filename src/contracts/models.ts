@@ -87,6 +87,27 @@ export interface BrickEntry {
     readonly lastSeenAt: number;
 }
 
+/** One entry of a brick's list of paired Bluetooth devices, as `FAVOUR_ITEM` returns it. */
+export interface BrickPeer {
+    /** Untrimmed, as the brick stores it. */
+    readonly name: string;
+    /**
+     * Whether the brick holds an open link to it: `DevList[].Connected` (`c_bt.c` 3566), the flag
+     * whose link a removal of the entry closes (`c_bt.c` 3609–3612).
+     */
+    readonly connected: boolean;
+}
+
+/** A brick's list of paired Bluetooth devices, as last read (step-4 plan, KTD8). */
+export interface BrickPeerList {
+    /** In the brick's order. */
+    readonly peers: readonly BrickPeer[];
+    /** The channel it was read over. */
+    readonly over: BrickKey;
+    /** When it was read, in ms since the epoch. */
+    readonly readAt: number;
+}
+
 export type HeartbeatState = 'ok' | 'missed' | 'unknown';
 
 export interface ConnectedSession {

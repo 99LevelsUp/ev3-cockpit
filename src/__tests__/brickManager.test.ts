@@ -39,6 +39,15 @@ interface FakeChannel {
 	failing: boolean;
 	/** Commands that reached this channel, by kind. */
 	readonly sent: string[];
+	/** Reads of the brick's list that reached this channel; not recorded in `sent`. */
+	peerReads: number;
+	/**
+	 * The brick's Bluetooth list, shared by every channel to it; unset, the list is empty and
+	 * cannot be changed. A read answers from the list as it was when its count was asked.
+	 */
+	peerList?: string[];
+	/** When set, the next read of the list takes its snapshot, then waits for this before answering. */
+	peerHold?: Promise<void>;
 	/** When set, a `fs:continueWrite` waits for it before answering: the middle of a transfer. */
 	gate?: Promise<void>;
 	/** The name the brick answers `info` with; `info` is not recorded in `sent`. */
@@ -80,13 +89,31 @@ function fakeChannel(
 	probes = false,
 ): FakeChannel {
 	const channel: FakeChannel = {
-		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [], name: 'CCC', probes: 0,
+		seen: [], connectFailures: 0, connects: 0, failing: false, sent: [], peerReads: 0, name: 'CCC', probes: 0,
 		connectHolds: [], connecting: 0, mostConnecting: 0, open: false, openLinks: 0,
 		provider: undefined as unknown as TransportProvider,
 	};
+	let snapshot: string[] = [];
 	const execute = async (command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> => {
 		if (command.kind === 'info' && !channel.failing) {
 			return { kind: 'info', displayName: channel.name };
+		}
+		// The brick layer reads the brick's list after each join (step-4 plan, U6); not what these tests send.
+		if (command.kind === 'brick:bluetoothPeerCount' && !channel.failing) {
+			channel.peerReads += 1;
+			snapshot = [...(channel.peerList ?? [])];
+			const hold = channel.peerHold;
+			channel.peerHold = undefined;
+			if (hold) { await hold; }
+			return { kind: 'brick:bluetoothPeerCount', count: snapshot.length };
+		}
+		if (command.kind === 'brick:bluetoothPeer' && channel.peerList) {
+			return { kind: 'brick:bluetoothPeer', name: snapshot[command.index] ?? '', paired: true, connected: false, type: 0 };
+		}
+		if (command.kind === 'brick:removeBluetoothPeer' && channel.peerList) {
+			const at = channel.peerList.indexOf(command.name);
+			if (at !== -1) { channel.peerList.splice(at, 1); }
+			return { kind: 'brick:removeBluetoothPeer' };
 		}
 		channel.sent.push(command.kind);
 		if (options?.signal?.aborted) {
@@ -291,6 +318,9 @@ describe('BrickManager — failing over', () => {
 		await w.scheduler.scanOnce();
 		await w.bricks.signIn(CCC);
 		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		// The reads of the brick's list after the joins, ended: the command below must not queue behind them.
+		await waitFor(() => w.usb.peerReads === 2, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 30));
 
 		w.usb.failing = true;
 		const failed = w.bricks.send(CCC, battery);
@@ -546,13 +576,55 @@ describe('BrickManager — forgetting (step-3 plan, KTD5)', () => {
 		await waitFor(() => sessionManager.getSession(tcpKey)?.connectionState === ConnectionState.Connected
 			&& sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
 		assert.equal(bricks.routeOf(CCC), btKey);
+		await waitFor(() => tcp.peerReads + bt.peerReads === 2, 1000);   // the reads after the joins
+		tcp.peerReads = 0;
+		bt.peerReads = 0;
 
 		const report = await bricks.forget(CCC);
 
-		assert.ok(tcp.sent.includes('brick:bluetoothPeerCount'), 'the list was not read over TCP');
-		assert.ok(!bt.sent.includes('brick:bluetoothPeerCount'), 'the list was read over Bluetooth');
+		assert.ok(tcp.peerReads > 0, 'the list was not read over TCP');
+		assert.equal(bt.peerReads, 0, 'the list was read over Bluetooth');
 		// Built without discovery, which still tracks the channels the list is rebuilt from.
 		assert.equal(report.memory.status, 'failed');
+		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
+	});
+});
+
+describe('BrickManager — the brick\'s list of paired computers (step-4 plan, U6)', () => {
+	it('keeps the list a clear left, not an older read over another channel that ends after it', async () => {
+		const tcpKey = makeBrickKey(Transport.TCP, '001653f00c0c');
+		const tcp = fakeChannel(Transport.TCP, 10);
+		const usb = fakeChannel(Transport.USB, 30);
+		const brickList = ['OLD-PC'];
+		tcp.peerList = brickList;
+		usb.peerList = brickList;
+		tcp.seen.push(item(tcpKey, Transport.TCP));
+		const registry = new ProviderRegistry();
+		registry.register(tcp.provider);
+		registry.register(usb.provider);
+		const scheduler = new DiscoveryScheduler(registry);
+		const aggregator = new PresenceAggregator(scheduler, registry);
+		const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
+		const bricks = new BrickManager({
+			sessionManager, aggregator, providerRegistry: registry, discovery: scheduler, radioName: () => 'Petrův PC',
+		});
+		await scheduler.scanOnce();
+		await bricks.signIn(CCC);
+		await waitFor(() => bricks.peerListOf(CCC) !== undefined, 1000);
+
+		const held = gate();
+		tcp.peerHold = held.promise;
+		const older = bricks.refreshPeerList(CCC);   // over TCP, the only channel; answers OLD-PC once let go
+		await waitFor(() => tcp.peerReads === 2, 1000);
+		usb.seen.push(item(usbKey, Transport.USB));
+		await scheduler.scanOnce();
+		await waitFor(() => usb.peerReads === 1, 1000);
+		await bricks.clearBluetoothList(CCC, async () => true);   // over USB, which ranks above TCP
+		assert.deepEqual(brickList, [], 'the clear did not run, so this test shows nothing');
+		held.open();
+		await older;
+
+		assert.deepEqual(bricks.peerListOf(CCC)?.peers, [], 'a read from before the clear replaced what it left');
 		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
 	});
 });
