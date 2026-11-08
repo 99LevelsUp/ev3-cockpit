@@ -37,7 +37,11 @@ export class CockpitError extends Error {
 }
 
 export class TransportError extends CockpitError {
-	constructor(message: string, cause?: unknown) {
+	/**
+	 * @param wsaCode The Winsock error a Bluetooth connect ended with, kept so it can be measured
+	 *   and told apart later (step-4 plan, KTD7); absent from every other failure.
+	 */
+	constructor(message: string, cause?: unknown, readonly wsaCode?: number) {
 		super(ErrorCode.TransportFailed, message, cause);
 		this.name = 'TransportError';
 	}
@@ -68,8 +72,8 @@ export class BackendUnavailableError extends TransportError {
  * Winsock code behind it, which stays in the message for the log.
  */
 export class BrickUnreachableError extends TransportError {
-	constructor(message: string, cause?: unknown) {
-		super(message, cause);
+	constructor(message: string, cause?: unknown, wsaCode?: number) {
+		super(message, cause, wsaCode);
 		this.name = 'BrickUnreachableError';
 	}
 }

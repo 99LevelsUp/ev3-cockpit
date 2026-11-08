@@ -149,7 +149,9 @@ export class BtWinsockAdapter implements TransportAdapter {
 			api.closesocket(socket);
 			const message = `BT connect to ${describeAddress(this.mac)} failed (WSA error ${code}).`;
 			// Timed out, host down, host unreachable: the brick did not answer.
-			return WSA_UNANSWERED.has(code) ? new BrickUnreachableError(message) : new TransportError(message);
+			return WSA_UNANSWERED.has(code)
+				? new BrickUnreachableError(message, undefined, code)
+				: new TransportError(message, undefined, code);
 		};
 		if (api.setNonBlocking(socket, true) !== 0) {
 			throw failed(api.lastError());

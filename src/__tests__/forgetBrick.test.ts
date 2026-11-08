@@ -126,6 +126,8 @@ function world(options: WorldOptions = {}) {
 		attempted: [] as string[],
 		/** Commands of these kinds fail as a dead link would. */
 		failKinds: new Set<string>(),
+		/** A connect fails: the device is there and will not open. */
+		connectFails: false,
 	};
 	const bt = {
 		paired: options.paired ?? true, connects: 0, open: false,
@@ -193,6 +195,7 @@ function world(options: WorldOptions = {}) {
 		},
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			usb.connects += 1;
+			if (usb.connectFails) { throw new TransportError('USB connect failed: LIBUSB_ERROR_ACCESS'); }
 			usb.open = true;
 			return { brickKey, transport: Transport.USB };
 		},
@@ -2031,6 +2034,137 @@ describe('A pairing broken on one side, repaired over USB', () => {
 
 		await connect(w);   // the user asks: a repair is allowed again
 		await waitFor(() => w.bt.unpairs.length === 2, 3000);
+		w.done();
+	});
+});
+
+// ── A failed connect over Bluetooth alone (step-4 plan, U8) ─────────
+
+describe('Connect a Brick over Bluetooth alone, when it fails', () => {
+	const ONE_SIDED = /one-sided/;
+
+	/** Connect a Brick as the palette runs it, with what it shows. */
+	function command(w: World) {
+		const errors: string[] = [];
+		const quiet = () => { /* not under test here */ };
+		const showError = (message: string): void => { errors.push(message); };
+		w.bricks.onPairingStarted((event) => {
+			void followPairing(event, { aggregator: w.aggregator, progress: (_title, task) => task(quiet), showError });
+		});
+		const connect = () => connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError,
+		});
+		return { errors, connect };
+	}
+
+	it('says the brick may be out of reach and that USB or TCP and Connect a Brick repair a one-sided pairing', async () => {
+		const w = world({ cabled: false });
+		w.bt.off = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(c.errors.length, 1);
+		assert.match(c.errors[0], /out of reach/);
+		assert.match(c.errors[0], ONE_SIDED);
+		assert.match(c.errors[0], /USB or TCP/);
+		assert.match(c.errors[0], /"Connect a Brick"/);
+		assert.doesNotMatch(c.errors[0], /broken/i);
+		w.done();
+	});
+
+	it('gives the same hint when the only channel left of a signed-in brick is a paired Bluetooth one', async () => {
+		const w = world({ cabled: false });
+		await signedInOver(w, Transport.BT);
+		w.bt.off = true;
+		await w.sessionManager.disconnect(btKey);
+		await settle();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(c.errors.length, 1);
+		assert.match(c.errors[0], ONE_SIDED);
+		w.done();
+	});
+
+	it('gives no hint when the Bluetooth channel fails and USB connects', async () => {
+		const w = world();
+		w.bt.off = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		assert.ok(c.errors.every((message) => !ONE_SIDED.test(message)), c.errors.join(' | '));
+		w.done();
+	});
+
+	it('gives no hint when the failed connect was over USB to a brick nobody has paired', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.usb.connectFails = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(c.errors.length, 1);
+		assert.doesNotMatch(c.errors[0], ONE_SIDED);
+		w.done();
+	});
+
+	it('gives no hint when USB was there to try and failed too', async () => {
+		const w = world();
+		w.usb.connectFails = true;
+		w.bt.off = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(c.errors.length, 1);
+		assert.doesNotMatch(c.errors[0], ONE_SIDED);
+		w.done();
+	});
+
+	it('gives no hint for a signed-in brick whose Bluetooth nobody has paired, once its cable is out', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		await signedInOver(w, Transport.USB);
+		w.pairing.accepts = false;
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		await waitFor(() => w.pairing.calls === 1, 2000);   // declined
+		w.usb.cabled = false;
+		w.usb.connectFails = true;
+		await w.sessionManager.disconnect(usbKey);
+		await w.scheduler.scanOnce();   // the cable is out: USB is lost, the unpaired sighting stays
+		await settle();
+		const c = command(w);
+
+		await c.connect();
+		await settle();
+
+		assert.ok(c.errors.length > 0, 'the failed connect said nothing');
+		assert.ok(c.errors.every((message) => !ONE_SIDED.test(message)), c.errors.join(' | '));
+		w.done();
+	});
+
+	it('says why the pairing failed, not this hint, for a brick nobody has paired', async () => {
+		const w = world({ cabled: false, paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+		w.pairing.accepts = false;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+		await settle();
+
+		assert.ok(c.errors.some((message) => /could not pair/.test(message)), c.errors.join(' | '));
+		assert.ok(c.errors.every((message) => !ONE_SIDED.test(message)), c.errors.join(' | '));
 		w.done();
 	});
 });
