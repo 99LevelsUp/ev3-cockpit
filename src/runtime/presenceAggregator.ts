@@ -15,6 +15,12 @@ export interface DiscoveryListChangeEvent {
 	readonly items: ReadonlyArray<BrickEntry>;
 }
 
+/** The Bluetooth presence checks stopped hearing a channel, or heard it again. */
+export interface HeardChangeEvent {
+	readonly brickKey: BrickKey;
+	readonly heard: boolean;
+}
+
 // ── Name trust ──────────────────────────────────────────────────────
 
 /** Sources that follow a rename. Between these the newest wins. */
@@ -60,11 +66,17 @@ export class PresenceAggregator implements vscode.Disposable {
 
 	private readonly listChanged: TypedEvent<DiscoveryListChangeEvent>;
 	private readonly presenceChanged: TypedEvent<PresenceChangeEvent>;
+	private readonly heardChanged: TypedEvent<HeardChangeEvent>;
 
 	/** Fired whenever the discovery list changes. */
 	readonly onListChanged: vscode.Event<DiscoveryListChangeEvent>;
 	/** Fired on individual channel presence transitions (forwarded from the scheduler). */
 	readonly onPresenceChanged: vscode.Event<PresenceChangeEvent>;
+	/**
+	 * Fired when the Bluetooth presence checks stop hearing a channel, which the list then shows
+	 * lost ("BT not heard"), or hear it again (step-4 plan, KTD9). Not for a flag a scan repeats.
+	 */
+	readonly onHeardChange: vscode.Event<HeardChangeEvent>;
 
 	private readonly disposables: vscode.Disposable[] = [];
 
@@ -74,8 +86,10 @@ export class PresenceAggregator implements vscode.Disposable {
 	) {
 		this.listChanged = createTypedEvent<DiscoveryListChangeEvent>();
 		this.presenceChanged = createTypedEvent<PresenceChangeEvent>();
+		this.heardChanged = createTypedEvent<HeardChangeEvent>();
 		this.onListChanged = this.listChanged.event;
 		this.onPresenceChanged = this.presenceChanged.event;
+		this.onHeardChange = this.heardChanged.event;
 
 		this.disposables.push(
 			scheduler.onPresenceChanged(e => this.handlePresenceChange(e)),
@@ -214,6 +228,7 @@ export class PresenceAggregator implements vscode.Disposable {
 		this.disposables.length = 0;
 		this.listChanged.dispose();
 		this.presenceChanged.dispose();
+		this.heardChanged.dispose();
 		this.bricks.clear();
 	}
 
@@ -261,10 +276,10 @@ export class PresenceAggregator implements vscode.Disposable {
 	 */
 	private applyHeard(channel: BrickChannel, item: DiscoveryItem, heardBefore: number | undefined): void {
 		if (item.heard === false && channel.state === ChannelState.Available) {
-			channel.apply('gone');
+			if (channel.apply('gone')) { this.heardChanged.fire({ brickKey: item.brickKey, heard: false }); }
 		} else if (item.heard === true && item.heardAt !== undefined && item.heardAt !== heardBefore
 			&& channel.state === ChannelState.Lost && !channel.expired) {
-			channel.apply('seen');
+			if (channel.apply('seen')) { this.heardChanged.fire({ brickKey: item.brickKey, heard: true }); }
 		}
 	}
 

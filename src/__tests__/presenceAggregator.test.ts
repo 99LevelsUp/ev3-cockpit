@@ -264,6 +264,26 @@ describe('PresenceAggregator — a paired brick nobody hears', () => {
 		done();
 	});
 
+	it('says once when the checks stop hearing a paired brick, and once when they hear it again (step-4 plan, U9)', async () => {
+		const { seen, scheduler, aggregator, done } = setup();
+		const flips: string[] = [];
+		aggregator.onHeardChange((e) => { flips.push(`${e.brickKey} ${e.heard ? 'heard' : 'not heard'}`); });
+		seen.bt.push({ ...item(CCC.bt, Transport.BT, 'CCC'), paired: true, heard: true, heardAt: Date.now() });
+		await scheduler.scanOnce();
+		assert.deepEqual(flips, [], 'a brick first listed as heard is not a change');
+
+		seen.bt[0] = { ...seen.bt[0], heard: false };
+		await scheduler.scanOnce();
+		await scheduler.scanOnce();   // still not heard: nothing new
+		assert.deepEqual(flips, [`${CCC.bt} not heard`]);
+
+		seen.bt[0] = { ...seen.bt[0], heard: true, heardAt: Date.now() + 1 };
+		await scheduler.scanOnce();
+		await scheduler.scanOnce();   // the same answer again: nothing new
+		assert.deepEqual(flips, [`${CCC.bt} not heard`, `${CCC.bt} heard`]);
+		done();
+	});
+
 	it('does not bring back a channel lost to a dropped session on an old answer', async () => {
 		const { seen, scheduler, aggregator, done } = setup();
 		const heardAt = Date.now();
