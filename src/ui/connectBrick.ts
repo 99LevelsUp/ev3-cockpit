@@ -150,6 +150,29 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 	await connectOver(deps, picked, label, () => bricks.signIn(picked), `EVƎ Cockpit: connected to ${label}.`);
 }
 
+/**
+ * Whether a failed connect could only have gone over Bluetooth to a paired brick: nothing else
+ * that reaches it is there (step-4 plan, R7).
+ */
+function bluetoothAlone(aggregator: Pick<PresenceAggregator, 'getBrick'>, brickId: BrickId): boolean {
+	const brick = aggregator.getBrick(brickId);
+	return brick?.paired === true
+		&& brick.channels.some((c) => c.transport === Transport.BT)
+		&& brick.channels.every((c) => c.transport === Transport.BT
+			|| (c.state !== ChannelState.Available && c.state !== ChannelState.Connected));
+}
+
+/**
+ * What else may be wrong when a paired brick fails over Bluetooth alone (KTD7, R7). Hedged: no
+ * error code is known to tell a one-sided pairing from a brick out of reach, so it never says
+ * the pairing is broken.
+ */
+function oneSidedHint(saidInRange: boolean): string {
+	return (saidInRange ? '' : ' It may be out of reach.')
+		+ ' If it keeps failing while it is in range, its pairing may be one-sided: connect it over USB or TCP'
+		+ ' and run "Connect a Brick" again, which repairs it.';
+}
+
 /** Runs a connect under its progress notification and says how it went. */
 async function connectOver(
 	deps: ConnectBrickDeps, picked: BrickId, label: string, connect: () => Promise<void>, connected: string,
@@ -172,9 +195,10 @@ async function connectOver(
 			// The cause of a brick that did not answer is the Winsock code, which says
 			// nothing to the person holding the brick; it stays in the log.
 			const unanswered = err instanceof BrickUnreachableError || err instanceof TimeoutError;
-			deps.showError(unanswered
+			deps.showError((unanswered
 				? `EVƎ Cockpit: ${label} did not answer. Check that it is switched on and in range, then try again.`
-				: `EVƎ Cockpit: could not connect to ${label} — ${err.message}`);
+				: `EVƎ Cockpit: could not connect to ${label} — ${err.message}`)
+				+ (bluetoothAlone(aggregator, picked) ? oneSidedHint(unanswered) : ''));
 		}
 	});
 }

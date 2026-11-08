@@ -202,6 +202,21 @@ describe('BtWinsockAdapter — opening', () => {
 		assert.deepEqual(api.closed, [42], 'the refused socket is released');
 	});
 
+	it('carries the Winsock code on the error, whichever kind it is (step-4 plan, KTD7)', async () => {
+		for (const code of [10060, 10013]) {
+			const api = new FakeWinsock();
+			api.connectResult = SOCKET_ERROR;
+			api.lastErrorCode = code;
+			const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api });
+
+			await assert.rejects(adapter.open(), (error: unknown) => {
+				assert.ok(error instanceof TransportError);
+				assert.equal(error.wsaCode, code);
+				return true;
+			});
+		}
+	});
+
 	it('gives up on a connect that never answers, and closes the socket to abort it', async () => {
 		const api = new FakeWinsock();
 		api.holdConnect = true;
