@@ -42,7 +42,6 @@ export function activate(context: vscode.ExtensionContext): void {
 	const { bricks, aggregator, btPresence } = runtime;
 	/** What a user calls a brick: its name, or its id until it has one. */
 	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
-	/** A notification that stays up while a task runs, with the message the task reports. */
 	const notificationProgress: ShowProgress = (title, task) => vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
 		(progress) => task((message) => progress.report({ message })));

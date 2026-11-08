@@ -173,7 +173,6 @@ function oneSidedHint(saidInRange: boolean): string {
 		+ ' and run "Connect a Brick" again, which repairs it.';
 }
 
-/** Runs a connect under its progress notification and says how it went. */
 async function connectOver(
 	deps: ConnectBrickDeps, picked: BrickId, label: string, connect: () => Promise<void>, connected: string,
 ): Promise<void> {
