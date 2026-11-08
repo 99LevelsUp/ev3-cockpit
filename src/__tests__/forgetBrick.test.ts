@@ -289,8 +289,11 @@ function world(options: WorldOptions = {}) {
 		bt.paired = true;
 		mock['bricks'].get(mockKey)!.bluetoothPeers.push(radio ?? THIS_PC);
 	};
+	/** What the brick layer warned about. */
+	const warnings: string[] = [];
 	const bricks = new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40,
+		log: { warn: (message) => { warnings.push(message); } },
 		discovery: scheduler, btPresence: presence, radioName: options.radioName ?? (() => radio),
 		pair: async (_mac, _onEvent, signal) => {
 			pairing.calls += 1;
@@ -321,12 +324,25 @@ function world(options: WorldOptions = {}) {
 		.filter((r) => r.kind === 'brick:removeBluetoothPeer').map((r) => r.name);
 	return {
 		mock, brick, usb, bt, pairing, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic,
-		removals, done,
+		removals, warnings, done,
 	};
 }
 
 type World = ReturnType<typeof world>;
 
+/** Until nothing more reaches the brick: the reads of its list that the joins started have ended. */
+async function peerReadsDone(w: World): Promise<void> {
+	let seen = -1;
+	while (seen !== w.brick.received.length) {
+		seen = w.brick.received.length;
+		await settle(30);
+	}
+}
+
+/**
+ * Sign the brick in and wait until these channels are connected and the reads of its list that
+ * the joins started have ended; what reached the brick until then is not what a test looks at.
+ */
 async function signedInOver(w: World, ...transports: Transport[]): Promise<void> {
 	await w.scheduler.scanOnce();
 	await w.bricks.signIn(CCC);
@@ -334,6 +350,8 @@ async function signedInOver(w: World, ...transports: Transport[]): Promise<void>
 		const key = transport === Transport.USB ? usbKey : btKey;
 		await waitFor(() => w.sessionManager.getSession(key)?.connectionState === ConnectionState.Connected, 1000);
 	}
+	await peerReadsDone(w);
+	w.brick.received.length = 0;
 }
 
 // ── The brick's own list ────────────────────────────────────────────
@@ -1561,6 +1579,160 @@ describe('Connect a Brick connects every channel', () => {
 		await c.connect();
 
 		assert.equal(c.shown.errors.length, 1, 'the failed connect said nothing');
+		w.done();
+	});
+});
+
+// ── The brick's list of paired computers (step-4 plan, U6) ──────────
+
+describe('The brick\'s list of paired computers, kept per brick', () => {
+	const entries = (w: World) => w.bricks.peerListOf(CCC)?.peers.map((peer) => ({ ...peer }));
+
+	it('reads the list once after a USB join, with the names and connected marks the brick holds', async () => {
+		const w = world({ paired: false });
+		w.brick.connected.add('Office PC');
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		await waitFor(() => w.bricks.peerListOf(CCC) !== undefined, 1000);
+		await peerReadsDone(w);
+
+		assert.deepEqual(entries(w), [{ name: 'Office PC', connected: true }, { name: THIS_PC, connected: false }]);
+		assert.equal(w.bricks.peerListOf(CCC)?.over, usbKey);
+		assert.deepEqual(w.peerTraffic(), ['bluetoothPeerCount', 'bluetoothPeer', 'bluetoothPeer'], 'not read exactly once');
+		w.done();
+	});
+
+	it('reads the list again after a pairing that succeeds, over the channel already connected', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		await signedInOver(w, Transport.USB);
+		w.bt.off = true;   // the Bluetooth join fails, so only the pairing can bring the new entry in
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+
+		await waitFor(() => w.pairing.calls === 1, 2000);
+		await waitFor(() => (w.bricks.peerListOf(CCC)?.peers.length ?? 0) === 2, 2000);
+
+		assert.deepEqual(entries(w), [{ name: 'Office PC', connected: false }, { name: THIS_PC, connected: false }]);
+		assert.equal(w.bricks.peerListOf(CCC)?.over, usbKey);
+		w.done();
+	});
+
+	it('keeps the list a clear read back, without reading it again', async () => {
+		const w = world({ peers: ['OLD-PC', 'STUCK', 'Zed'], paired: false });
+		await signedInOver(w, Transport.USB);
+		w.brick.refuses.add('STUCK');
+
+		await w.bricks.clearBluetoothList(CCC, async () => true);
+		const reads = w.peerTraffic().filter((kind) => kind === 'bluetoothPeerCount').length;
+		await peerReadsDone(w);
+
+		assert.deepEqual(entries(w), [{ name: 'STUCK', connected: false }]);
+		assert.equal(w.peerTraffic().filter((kind) => kind === 'bluetoothPeerCount').length, reads, 'read again after the clear');
+		w.done();
+	});
+
+	it('keeps the list a declined clear read', async () => {
+		const w = world({ peers: ['OLD-PC'], paired: false });
+		await signedInOver(w, Transport.USB);
+		w.mock['bricks'].get(makeBrickKey(Transport.Mock, 'CCC'))!.bluetoothPeers.push('NEW-PC');
+
+		await w.bricks.clearBluetoothList(CCC, async () => false);
+
+		assert.deepEqual(entries(w)?.map((peer) => peer.name), ['OLD-PC', 'NEW-PC']);
+		w.done();
+	});
+
+	it('drops the list when the brick is forgotten, and says so', async () => {
+		const w = world({ paired: false });
+		await signedInOver(w, Transport.USB);
+		const changes: unknown[] = [];
+		w.bricks.onPeerListChange((event) => { changes.push(event.current); });
+
+		await w.bricks.forget(CCC);
+
+		assert.equal(w.bricks.peerListOf(CCC), undefined);
+		assert.deepEqual(changes, [undefined]);
+		w.done();
+	});
+
+	it('keeps the list it had when a read fails, and the join stands when its read fails', async () => {
+		const w = world({ paired: false });
+		await signedInOver(w, Transport.USB);
+		const before = w.bricks.peerListOf(CCC);
+		w.brick.removalSeen = true;
+		w.brick.readBackFails = true;   // the count gets no reply from now on
+
+		await assert.rejects(w.bricks.refreshPeerList(CCC));
+
+		assert.equal(w.bricks.peerListOf(CCC), before);
+		w.done();
+
+		const v = world({ paired: false });
+		v.brick.removalSeen = true;
+		v.brick.readBackFails = true;
+		await v.scheduler.scanOnce();
+		await v.bricks.signIn(CCC);
+		await waitFor(() => v.warnings.some((warning) => warning.includes('list of paired')), 1000);
+
+		assert.equal(v.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		assert.equal(v.bricks.peerListOf(CCC), undefined);
+		v.done();
+	});
+
+	it('announces a change of names or marks, and not a read that returns the same list', async () => {
+		const w = world({ paired: false });
+		await signedInOver(w, Transport.USB);
+		const changes: (string[] | undefined)[] = [];
+		w.bricks.onPeerListChange((event) => {
+			changes.push(event.current?.peers.map((peer) => `${peer.name}${peer.connected ? '*' : ''}`));
+		});
+
+		await w.bricks.refreshPeerList(CCC);
+		assert.deepEqual(changes, [], 'an unchanged list was announced');
+
+		w.brick.connected.add(THIS_PC);
+		await w.bricks.refreshPeerList(CCC);
+		w.mock['bricks'].get(makeBrickKey(Transport.Mock, 'CCC'))!.bluetoothPeers.push('NEW-PC');
+		await w.bricks.refreshPeerList(CCC);
+
+		assert.deepEqual(changes, [['Office PC', `${THIS_PC}*`], ['Office PC', `${THIS_PC}*`, 'NEW-PC']]);
+		w.done();
+	});
+
+	it('reads the list on request over a connected channel only, and opens none for it', async () => {
+		const w = world({ paired: false });
+		await w.scheduler.scanOnce();
+
+		await assert.rejects(w.bricks.refreshPeerList(CCC));
+
+		assert.equal(w.usb.connects, 0, 'a channel was opened to read the list');
+		w.done();
+	});
+
+	it('keeps nothing from a read that ends after the brick was forgotten', async () => {
+		const w = world({ paired: false, radio: undefined });   // the forget reads nothing itself
+		await signedInOver(w, Transport.USB);
+		const held = gate();
+		w.brick.holds.set('brick:bluetoothPeerCount', held.promise);
+		const reading = w.bricks.refreshPeerList(CCC);
+		await waitFor(() => w.peerTraffic().length === 1, 1000);
+
+		await w.bricks.forget(CCC);
+		held.open();
+		await reading.catch(() => undefined);
+
+		assert.equal(w.bricks.peerListOf(CCC), undefined, 'a forgotten brick has a list again');
+		w.done();
+	});
+
+	it('reads nothing by itself while the brick sits idle', async () => {
+		const w = world({ paired: false });
+		await signedInOver(w, Transport.USB);
+
+		await settle(300);
+
+		assert.deepEqual(w.peerTraffic(), [], 'the list was read with nothing asking for it');
 		w.done();
 	});
 });
