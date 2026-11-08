@@ -12,6 +12,7 @@ import type { BrickManager, PairingStartedEvent } from '../runtime/brickManager'
 import { brickLabel, transportLabel } from '../runtime/brickLabels';
 import type { RuntimeLog } from '../runtime/createRuntime';
 import type { PresenceAggregator } from '../runtime/presenceAggregator';
+import { PAIRING_CANCELLED } from '../transports/btPairingHelper';
 import { BrickPickRow, brickPickRows } from './brickPickRows';
 
 /** The picker as the flow uses it; a `vscode.QuickPick<BrickPickRow>` is one. */
@@ -71,7 +72,7 @@ export type ShowProgress = <T>(title: string, task: (report: (message: string) =
 /** What connecting a picked brick needs besides the brick layer. */
 export interface ConnectBrickDeps {
 	readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
-	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'setActiveBrick' | 'signIn' | 'routeOf' | 'pair'>;
+	readonly bricks: Pick<BrickManager, 'isSignedIn' | 'signIn' | 'routeOf' | 'pair' | 'connectAgain' | 'resumePairing'>;
 	readonly log: RuntimeLog;
 	readonly progress: ShowProgress;
 	readonly showInfo: (message: string) => void;
@@ -80,11 +81,16 @@ export interface ConnectBrickDeps {
 
 /**
  * Shows a pairing's progress while it runs, whoever started it: the brick layer announces each
- * pairing, and this tells the person at the brick when to look at its display.
+ * pairing, and this tells the person at the brick when to look at its display. A pairing that
+ * fails says why, unless it was stopped on purpose by a forget or a clear.
  */
 export function followPairing(
 	event: PairingStartedEvent,
-	deps: { readonly aggregator: Pick<PresenceAggregator, 'getBrick'>; readonly progress: ShowProgress },
+	deps: {
+		readonly aggregator: Pick<PresenceAggregator, 'getBrick'>;
+		readonly progress: ShowProgress;
+		readonly showError?: (message: string) => void;
+	},
 ): PromiseLike<unknown> {
 	let report: ((message: string) => void) | undefined;
 	let waiting: string | undefined;
@@ -96,6 +102,10 @@ export function followPairing(
 		if (report) { report(message); } else { waiting = message; }
 	});
 	const label = deps.aggregator.getBrick(event.brickId)?.name.value ?? event.brickId;
+	void event.done.then((result) => {
+		if (result.ok || result.reason === PAIRING_CANCELLED) { return; }
+		deps.showError?.(`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
+	});
 	return deps.progress(`EVƎ Cockpit: pairing ${label}`, (reportMessage) => {
 		report = reportMessage;
 		if (waiting) { reportMessage(waiting); }
@@ -104,16 +114,19 @@ export function followPairing(
 }
 
 /**
- * Makes a signed-in brick the active one; otherwise pairs a brick only an inquiry has heard,
- * and signs the brick in over every channel it is available on (KD1).
+ * Connects a brick over every channel that can work (step-4 plan, KTD4). A brick only an inquiry
+ * has heard is paired first; one that USB or TCP reaches is signed in over those, and its
+ * Bluetooth sighting is paired by the brick layer once it is. A brick already signed in tries
+ * every channel that is not connected yet. Either way the user asked, so a pairing they cancelled
+ * earlier may be asked again.
  */
 export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps): Promise<void> {
 	const { aggregator, bricks, log } = deps;
 	const brick = aggregator.getBrick(picked);
 	const label = brick?.name.value ?? picked;
+	bricks.resumePairing(picked);
 	if (bricks.isSignedIn(picked)) {
-		bricks.setActiveBrick(picked);
-		deps.showInfo(`EVƎ Cockpit: ${label} is the active brick.`);
+		await connectOver(deps, picked, label, () => bricks.connectAgain(picked), `EVƎ Cockpit: ${label} is the active brick.`);
 		return;
 	}
 
@@ -124,21 +137,29 @@ export async function connectPickedBrick(picked: BrickId, deps: ConnectBrickDeps
 		&& brick.channels.every((c) => c === bt || c.state === ChannelState.Lost);
 	if (onlyNewBluetooth) {
 		// The brick layer records a pairing it made at once, so the sign-in below joins the fresh
-		// channel without waiting for a scan to read the pairing back from Windows.
+		// channel without waiting for a scan to read the pairing back from Windows. A failure is
+		// shown by the progress that follows every pairing.
 		const result = await bricks.pair(picked);
 		if (!result.ok) {
 			log.warn(`Pairing ${brickLabel(aggregator, picked)} failed: ${result.reason ?? 'no reason given'}`);
-			deps.showError(`EVƎ Cockpit: could not pair ${label} — ${result.reason ?? 'no reason given.'}`);
 			return;
 		}
 	}
 
+	await connectOver(deps, picked, label, () => bricks.signIn(picked), `EVƎ Cockpit: connected to ${label}.`);
+}
+
+/** Runs a connect under its progress notification and says how it went. */
+async function connectOver(
+	deps: ConnectBrickDeps, picked: BrickId, label: string, connect: () => Promise<void>, connected: string,
+): Promise<void> {
+	const { aggregator, bricks, log } = deps;
 	await deps.progress(`EVƎ Cockpit: connecting to ${label}`, async () => {
 		try {
-			await bricks.signIn(picked);
+			await connect();
 			const route = bricks.routeOf(picked);
 			log.info(`Connected to ${brickLabel(aggregator, picked)} over ${route ? transportLabel(route) : 'no channel'}`);
-			deps.showInfo(`EVƎ Cockpit: connected to ${label}.`);
+			deps.showInfo(connected);
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
 			// The user disconnected it before it was through; nothing failed.

@@ -26,6 +26,7 @@ import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
 import { SessionManager } from '../runtime/sessionManager';
 import { BrickManager } from '../runtime/brickManager';
+import { connectPickedBrick, followPairing } from '../ui/connectBrick';
 import { waitFor } from './waitFor';
 
 const THIS_PC = 'Petrův PC';
@@ -275,6 +276,8 @@ function world(options: WorldOptions = {}) {
 	/** Pairing as Windows and the brick do it: an accepted pairing pairs Windows and adds this computer to the brick's list. */
 	const pairing = {
 		calls: 0,
+		/** Whether the USB link was open when each pairing started. */
+		usbOpenAtStart: [] as boolean[],
 		/** Holds every pairing until it opens, or until the pairing is aborted. */
 		gate: undefined as Promise<void> | undefined,
 		/** What the person at the brick answers. */
@@ -291,6 +294,7 @@ function world(options: WorldOptions = {}) {
 		discovery: scheduler, btPresence: presence, radioName: options.radioName ?? (() => radio),
 		pair: async (_mac, _onEvent, signal) => {
 			pairing.calls += 1;
+			pairing.usbOpenAtStart.push(usb.open);
 			if (pairing.gate) {
 				await Promise.race([pairing.gate, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
 			}
@@ -1444,6 +1448,119 @@ describe('Automatic pairing of a signed-in brick', () => {
 		assert.deepEqual(w.brick.peers(), ['Office PC'], 'this computer\'s entry stayed on the brick');
 		assert.ok(w.bt.unpairs.includes(btKey), 'Windows kept the pairing');
 		assert.equal(w.aggregator.getBrick(CCC)?.paired ?? false, false);
+		w.done();
+	});
+});
+
+// ── Connect a Brick: every channel that can work ───────────────────
+
+describe('Connect a Brick connects every channel', () => {
+	/** The command's dependencies over this world, with every pairing's progress followed as the extension does. */
+	function command(w: World) {
+		const shown = { titles: [] as string[], info: [] as string[], errors: [] as string[] };
+		const progress = async <T>(title: string, task: (report: (message: string) => void) => Promise<T>): Promise<T> => {
+			shown.titles.push(title);
+			return task(() => { /* the messages are not under test here */ });
+		};
+		const showError = (message: string): void => { shown.errors.push(message); };
+		w.bricks.onPairingStarted((event) => { void followPairing(event, { aggregator: w.aggregator, progress, showError }); });
+		const log = { info: () => { /* quiet */ }, warn: () => { /* quiet */ }, error: () => { /* quiet */ }, debug: () => { /* quiet */ } };
+		const deps = {
+			aggregator: w.aggregator, bricks: w.bricks, log, progress, showError,
+			showInfo: (message: string) => { shown.info.push(message); },
+		};
+		return { shown, connect: () => connectPickedBrick(CCC, deps) };
+	}
+
+	it('connects USB first, then pairs the Bluetooth sighting and joins it', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+
+		assert.deepEqual(w.pairing.usbOpenAtStart, [true], 'the pairing did not wait for USB, or ran twice');
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		assert.deepEqual(c.shown.errors, []);
+		w.done();
+	});
+
+	it('keeps USB connected when the pairing is cancelled on the brick, says so, and asks no more', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.pairing.accepts = false;
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+		await waitFor(() => c.shown.errors.length === 1, 2000);
+		for (let scan = 0; scan < 3; scan++) { await w.scheduler.scanOnce(); }
+		await settle();
+
+		assert.match(c.shown.errors[0], /could not pair CCC/);
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		assert.equal(w.pairing.calls, 1, 'the brick asked again before the user connected it again');
+		w.done();
+	});
+
+	it('pairs again on a Connect after the user cancelled: the Connect lifts the suspension', async () => {
+		const w = world({ paired: false, peers: ['Office PC'] });
+		w.pairing.accepts = false;
+		w.bt.cachedAfterUnpair = true;
+		await w.scheduler.scanOnce();
+		const c = command(w);
+		await c.connect();
+		await waitFor(() => w.pairing.calls === 1, 2000);
+		await settle();
+		w.pairing.accepts = true;
+
+		await c.connect();
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+
+		assert.equal(w.pairing.calls, 2);
+		w.done();
+	});
+
+	it('tries the paired Bluetooth channel of a signed-in brick that the presence checks did not hear', async () => {
+		const w = world({ paired: true });
+		w.bt.unheard = true;   // the checks miss it from the start: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		assert.equal(w.bt.connects, 0, 'Bluetooth was joined already, so this test shows nothing');
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(w.bt.connects, 1, 'the Bluetooth channel was not tried');
+		w.done();
+	});
+
+	it('makes a brick connected on every channel the active one and starts nothing', async () => {
+		const w = world({ paired: true });
+		await signedInOver(w, Transport.USB, Transport.BT);
+		const before = { usb: w.usb.connects, bt: w.bt.connects };
+		const c = command(w);
+
+		await c.connect();
+
+		assert.deepEqual({ usb: w.usb.connects, bt: w.bt.connects }, before);
+		assert.equal(w.pairing.calls, 0);
+		assert.match(c.shown.info.at(-1) ?? '', /CCC is the active brick/);
+		w.done();
+	});
+
+	it('reports the failure when the only channel left, a paired Bluetooth one, does not connect', async () => {
+		const w = world({ paired: true, cabled: false });
+		await signedInOver(w, Transport.BT);
+		w.bt.off = true;
+		await w.sessionManager.disconnect(btKey);
+		await settle();
+		const c = command(w);
+
+		await c.connect();
+
+		assert.equal(c.shown.errors.length, 1, 'the failed connect said nothing');
 		w.done();
 	});
 });
