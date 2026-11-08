@@ -26,6 +26,7 @@ import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import type { PairingResult } from '../transports/btClassicDiscovery';
 import { PAIRING_CANCELLED, type BtPairingEvent } from '../transports/btPairingHelper';
 import { ProviderRegistry } from '../transports/providerRegistry';
+import { formatMac } from '../transports/btSppDiscovery';
 import { brickLabel, channelLabel } from './brickLabels';
 import type { DiscoveryScheduler } from './discoveryScheduler';
 import type {
@@ -152,18 +153,14 @@ function isLinkFailure(error: unknown, options: SendCommandOptions | undefined):
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** One entry of a brick's Bluetooth list (step-3 plan, KTD2). */
-type Peer = BrickPeer;
+const namesOf = (peers: readonly BrickPeer[]): string[] => peers.map((peer) => peer.name);
 
-const namesOf = (peers: readonly Peer[]): string[] => peers.map((peer) => peer.name);
-
-/** Whether two reads of a brick's list hold the same entries, names and marks, in the same order. */
-const samePeers = (a: readonly Peer[], b: readonly Peer[]): boolean =>
+const samePeers = (a: readonly BrickPeer[], b: readonly BrickPeer[]): boolean =>
 	a.length === b.length && a.every((peer, i) => peer.name === b[i].name && peer.connected === b[i].connected);
 
 /** The Bluetooth channel of a brick whose id is its hardware address, as a pairing addresses it. */
 const bluetoothKeyOf = (brickId: BrickId): BrickKey | undefined =>
-	/^[0-9A-F]{12}$/.test(brickId) ? makeBrickKey(Transport.BT, brickId.match(/../g)!.join(':')) : undefined;
+	/^[0-9A-F]{12}$/.test(brickId) ? makeBrickKey(Transport.BT, formatMac(brickId)) : undefined;
 
 /** How many entries of a brick's Bluetooth list carry exactly `name`; the brick tells entries apart by nothing else. */
 const countOf = (names: readonly string[], name: string): number => names.filter((n) => n === name).length;
@@ -993,13 +990,21 @@ export class BrickManager implements vscode.Disposable {
 		}
 	}
 
-	/** The connected channel {@link peerListChannel} would take, if one is connected. */
 	private connectedPeerListChannel(brickId: BrickId): BrickKey | undefined {
 		return this.bestForPeerList(this.sessionManager.getAllSessions()
 			.filter((s) => brickIdOf(s.brickKey) === brickId
 				&& s.connectionState === ConnectionState.Connected
 				&& !this.dropped.has(s.brickKey))
 			.map((s) => s.brickKey));
+	}
+
+	/** This computer's Bluetooth name; undefined when it cannot be read, whatever the reason. */
+	private readRadioName(): string | undefined {
+		try {
+			return this.radioName?.() || undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private bestForPeerList(keys: BrickKey[]): BrickKey | undefined {
@@ -1015,7 +1020,7 @@ export class BrickManager implements vscode.Disposable {
 	 * Keep a read of the brick's list, and say so when it differs from the last one (KTD8). A read
 	 * that returns the same list replaces the last one silently: only when and over what changed.
 	 */
-	private recordPeers(brickId: BrickId, over: BrickKey, peers: readonly Peer[]): BrickPeerList {
+	private recordPeers(brickId: BrickId, over: BrickKey, peers: readonly BrickPeer[]): BrickPeerList {
 		const previous = this.peerLists.get(brickId);
 		const list: BrickPeerList = { peers: [...peers], over, readAt: Date.now() };
 		this.peerLists.set(brickId, list);
@@ -1077,13 +1082,7 @@ export class BrickManager implements vscode.Disposable {
 	private checkOneSided(brickId: BrickId): void {
 		const since = this.oneSidedPending.get(brickId);
 		if (since === undefined || this.repairing.has(brickId)) { return; }
-		let name: string | undefined;
-		try {
-			name = this.radioName?.() || undefined;
-		} catch {
-			name = undefined;   // the same as a name that cannot be read
-		}
-		if (!name || !this.pairDevice || !this.windowsPairing) {
+		if (!this.pairDevice || !this.windowsPairing) {
 			this.oneSidedPending.delete(brickId);
 			this.pairSighting(brickId);
 			return;
@@ -1092,6 +1091,12 @@ export class BrickManager implements vscode.Disposable {
 		const list = this.peerLists.get(brickId);
 		if (!list || this.transportOf(list.over) === Transport.BT || (this.peerListNumber.get(brickId) ?? 0) <= since) { return; }
 		this.oneSidedPending.delete(brickId);
+		// Read last: a native call, and this runs on every list change while the brick waits.
+		const name = this.readRadioName();
+		if (!name) {
+			this.pairSighting(brickId);
+			return;
+		}
 
 		const tracked = [...this.windowsPairing.getTrackedBricks().values()]
 			.find((item) => item.transport === Transport.BT && brickIdOf(item.brickKey) === brickId);
@@ -1169,12 +1174,12 @@ export class BrickManager implements vscode.Disposable {
 	 * The brick's Bluetooth list over one channel, names untrimmed: the count, then each index
 	 * below it, because the firmware does not bounds-check the index (KTD2, `c_bt.c` 3561–3567).
 	 */
-	private async readPeers(key: BrickKey): Promise<Peer[]> {
+	private async readPeers(key: BrickKey): Promise<BrickPeer[]> {
 		const count = await this.sessionManager.send(key, { kind: 'brick:bluetoothPeerCount' });
 		if (count.kind !== 'brick:bluetoothPeerCount') {
 			throw new ProtocolError(`Expected the Bluetooth peer count, got ${count.kind}.`);
 		}
-		const peers: Peer[] = [];
+		const peers: BrickPeer[] = [];
 		for (let index = 0; index < count.count; index++) {
 			const peer = await this.sessionManager.send(key, { kind: 'brick:bluetoothPeer', index });
 			if (peer.kind !== 'brick:bluetoothPeer') {
@@ -1305,12 +1310,7 @@ export class BrickManager implements vscode.Disposable {
 		// Before the list is read: a pairing that finished while the list was being read would add
 		// an entry for this computer that the clear never shows or removes.
 		await this.stopPairing(brickId);
-		let thisComputer: string | undefined;
-		try {
-			thisComputer = this.radioName?.() || undefined;
-		} catch {
-			thisComputer = undefined;   // the same as a name that cannot be read
-		}
+		const thisComputer = this.readRadioName();
 		// Read before anything changes: whether Windows has the brick paired decides KTD10.
 		const wasPaired = this.aggregator.getBrick(brickId)?.paired ?? false;
 		const btKey = this.channelKeysOf(brickId).find((key) => this.transportOf(key) === Transport.BT);
@@ -1329,7 +1329,7 @@ export class BrickManager implements vscode.Disposable {
 			if (channel.opened && !this.signedIn.has(brickId)) { await this.sessionManager.disconnect(key); }
 		};
 
-		let list: Peer[];
+		let list: BrickPeer[];
 		try {
 			list = await this.readPeers(key);
 		} catch (error) {
@@ -1430,17 +1430,17 @@ export class BrickManager implements vscode.Disposable {
 	 * removal counts as sent, and the entries not yet removed as not sent. `left` is the list as
 	 * last read back, less the one entry whose removal counts as sent.
 	 */
-	private async removeEntries(key: BrickKey, list: readonly Peer[], last: {
+	private async removeEntries(key: BrickKey, list: readonly BrickPeer[], last: {
 		readonly named: ReadonlySet<string>; readonly linked: ReadonlySet<string>;
 	} | undefined): Promise<{
-		entries: ClearedEntry[]; linkCut: boolean; left: Peer[];
+		entries: ClearedEntry[]; linkCut: boolean; left: BrickPeer[];
 	}> {
 		const peers = namesOf(list);
 		const toGo = new Map<string, number>();
 		for (const name of peers) { if (!isBlankPeerName(name)) { toGo.set(name, (toGo.get(name) ?? 0) + 1); } }
 		const removed = new Map<string, number>();
 		const lastFailure = new Map<string, string>();
-		let current: readonly Peer[] = list;
+		let current: readonly BrickPeer[] = list;
 		let sent: { name: string; detail: string } | undefined;
 
 		const phases: ((name: string) => boolean)[] = last === undefined
