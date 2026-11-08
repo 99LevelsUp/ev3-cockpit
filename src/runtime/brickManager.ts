@@ -24,7 +24,7 @@ import { PacketCommandChannel } from '../commands/commandChannel';
 import type { TelemetryHost } from '../telemetry/telemetryService';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import type { PairingResult } from '../transports/btClassicDiscovery';
-import type { BtPairingEvent } from '../transports/btPairingHelper';
+import { PAIRING_CANCELLED, type BtPairingEvent } from '../transports/btPairingHelper';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { channelLabel } from './brickLabels';
 import type { DiscoveryScheduler } from './discoveryScheduler';
@@ -313,6 +313,48 @@ export class BrickManager implements vscode.Disposable {
 		this.setActiveBrick(brickId);
 	}
 
+	/**
+	 * Connect a signed-in brick again over every channel that is not connected (step-4 plan,
+	 * KTD4): what the user asks for by running "Connect a Brick" on it.
+	 *
+	 * Joins every available channel now, whatever a failed join was waiting for, and the paired
+	 * Bluetooth channel the presence checks lost too; and pairs a Bluetooth sighting nobody has
+	 * paired. Waits for the joins and makes the brick the active one, or
+	 * rejects with the first failure when no channel ends up connected. A brick not signed in is
+	 * signed in.
+	 */
+	async connectAgain(brickId: BrickId): Promise<void> {
+		const signIn = this.signedIn.get(brickId);
+		if (!signIn || this.forgetting.has(brickId)) {
+			await this.signIn(brickId);
+			return;
+		}
+		const lost = this.unheardBluetooth(brickId);
+		const keys = [...this.joinCandidates(brickId), ...(lost ? [lost] : [])];
+		const joins = keys.filter((key) => !signIn.pending.has(key)).map((key) => this.join(brickId, key));
+		this.pairSighting(brickId);
+		const outcomes = await Promise.allSettled(joins);
+		if (this.signedIn.get(brickId) !== signIn) {
+			throw new ConnectionAbandonedError(`Brick ${brickId} was disconnected while it was connecting.`);
+		}
+		const connected = this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
+			&& s.connectionState === ConnectionState.Connected);
+		if (!connected) {
+			const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+			if (!failure) { throw new NotConnectedError(`Brick ${brickId} is not available on any channel.`); }
+			throw failure.reason instanceof Error ? failure.reason : new Error(String(failure.reason));
+		}
+		this.setActiveBrick(brickId);
+	}
+
+	/**
+	 * Let the brick pair by itself again (step-4 plan, KTD2): the user ran "Connect a Brick" on
+	 * it, so a pairing they cancelled, or a forget or clear, no longer holds automatic pairing back.
+	 */
+	resumePairing(brickId: BrickId): void {
+		this.pairingSuspended.delete(brickId);
+	}
+
 	/** Sign a brick out: close every channel; it does not reconnect until signed in again. */
 	async signOut(brickId: BrickId): Promise<void> {
 		// Cleared first, so nothing that fires while the channels close joins them again.
@@ -360,7 +402,8 @@ export class BrickManager implements vscode.Disposable {
 				return result;
 			}
 			if (this.disposed || this.forgetting.has(brickId) || (this.guardHolds.get(brickId) ?? 0) !== holdsAtStart) {
-				return { ok: false, reason: `Brick ${brickId} was forgotten or its list cleared while it was being paired.` };
+				// Stopped by a forget or a clear, or by disposal: nobody asked to be told.
+				return { ok: false, reason: PAIRING_CANCELLED };
 			}
 			this.aggregator.markPaired(btKey);
 			this.btPresence?.notePaired?.(mac);

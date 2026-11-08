@@ -122,7 +122,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Every pairing shows its progress, whoever started it: the person at the brick has to know
 	// when to look at its display.
 	services.add(bricks.onPairingStarted((event) => {
-		void followPairing(event, { aggregator, progress: notificationProgress });
+		void followPairing(event, {
+			aggregator, progress: notificationProgress,
+			showError: (message) => { void vscode.window.showErrorMessage(message); },
+		});
 	}));
 
 	// ── Disconnect a brick ──────────────────────────────────────

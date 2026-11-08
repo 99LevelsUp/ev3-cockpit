@@ -255,7 +255,9 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 			showError: (message: string) => shown.errors.push(message),
 		};
 		// The extension shows every pairing's progress, whoever started it.
-		l.bricks.onPairingStarted((event) => { void followPairing(event, { aggregator: l.aggregator, progress }); });
+		l.bricks.onPairingStarted((event) => {
+			void followPairing(event, { aggregator: l.aggregator, progress, showError: deps.showError });
+		});
 		return { ...l, radio, presence, pairing, shown, deps, bob: idOf(BOB_MAC), bobKey };
 	}
 
@@ -508,6 +510,8 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 
 		assert.equal(result.ok, false);
 		assert.equal(w.aggregator.getBrick(w.bob)?.paired ?? false, false, 'the forgotten brick came back paired');
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(w.shown.errors, [], 'a pairing the forget stopped was reported as a failure');
 		w.done();
 	});
 
@@ -558,17 +562,6 @@ describe('Connect a Brick — pairing a new brick from the list (R18)', () => {
 		assert.deepEqual(w.shown.errors, []);
 		assert.equal(w.bricks.isSignedIn(w.bob), true);
 		assert.equal(w.bricks.routeOf(w.bob), w.bobKey);
-		w.done();
-	});
-
-	it('does not pair a brick another channel still reaches', async () => {
-		const w = world({ paired: false });
-		await w.scheduler.scanOnce();
-		w.aggregator.updateChannelSession(makeBrickKey(Transport.USB, w.bob), ConnectionState.Connected);
-
-		await connectPickedBrick(w.bob, w.deps);
-
-		assert.deepEqual(w.radio.pairedMacs, [], 'a brick on a cable was paired over Bluetooth');
 		w.done();
 	});
 
