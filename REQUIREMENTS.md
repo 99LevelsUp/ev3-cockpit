@@ -292,6 +292,18 @@ Requirements:
 
 The choice of specific technology for a given transport may rely on external experiments outside this repository.
 
+### 12.1 Connecting and Pairing
+
+- Connecting a brick connects every channel that can reach it. A Bluetooth channel nobody has paired is paired on the way, after the other channels are connected, and joins once the pairing succeeds.
+- Connecting a brick that is already connected retries every channel that is not connected, a paired Bluetooth channel the presence checks did not hear too.
+- A connected brick joins a channel that appears later without asking, and pairs a new Bluetooth sighting by itself.
+- The brick's pairing dialog is the only consent. The cockpit never connects to a Bluetooth channel nobody has paired, and while it pairs it tells the user to confirm on the brick.
+- A cancelled or failed pairing, clearing the brick's Bluetooth list and forgetting the brick stop automatic pairing of that brick until the user connects it again; channels already connected stay connected.
+- With USB or TCP connected, a pairing broken on one side is repaired: the half that is left is removed, the brick is paired again, and the user is told what was found and done.
+- When a Bluetooth connect to a paired brick fails and nothing else reaches it, the message says the brick may be out of reach and that connecting USB or TCP and connecting again repairs a one-sided pairing; it never states that the pairing is broken.
+- The brick's list of paired computers is read when a channel connects, after a pairing, a forget or a clear, and on request; it is kept per brick for the panel and never polled.
+- Pairing phases and changes between a Bluetooth channel being heard and not heard are logged.
+
 ## 13. Mock
 
 Mock is a full transport channel within the same architecture as physical transports.

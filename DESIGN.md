@@ -784,6 +784,26 @@ Sign-in has **no persistence**: it lives in the extension host's memory and nowh
 Closing the cockpit signs every brick out, which is what makes the startup rule above true
 rather than merely usual.
 
+Pairing is part of connecting (step 4, `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md`):
+
+- a connection goes only to a paired brick; an unpaired Bluetooth sighting never joins as it is,
+- "Connect a Brick" connects every channel that can work and pairs an unpaired Bluetooth
+  sighting on the way, after USB or TCP are connected, and a signed-in brick pairs a new
+  sighting by itself. The brick's pairing dialog is the consent; the cockpit shows a
+  notification telling the user to confirm on the brick,
+- the brick layer owns pairing, one run per brick, so one brick never shows two dialogs,
+- a cancelled or failed pairing, "Clear a Brick's Bluetooth List" and "Forget a Brick" suspend
+  automatic pairing of that brick until the user runs "Connect a Brick" on it again; Windows'
+  cache relists a brick unpaired for minutes after a forget, and without this the dialog would
+  come back again and again,
+- when USB or TCP connects, the brick's list of paired computers is read and compared, by this
+  computer's exact Bluetooth name, with Windows' pairing as discovery lists it. A pairing left on
+  one side only is repaired before any new pairing: the half that is left goes and the brick is
+  paired again. A suspended brick is not repaired until "Connect a Brick", and a brick is
+  repaired once until the next "Connect a Brick", so a name that does not match exactly cannot
+  loop. Over Bluetooth alone nothing is checked; a failed connect says that USB or TCP repairs a
+  one-sided pairing, without claiming that the pairing is broken.
+
 After sign-out:
 
 - if the brick is still visible in discovery → it transitions to `available`,

@@ -48,41 +48,32 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
   reachable, unpairs it, clears the cockpit's memory and names what Windows keeps; "Clear a
   Brick's Bluetooth List" unpairs a brick from every peer it remembers — built and reviewed,
   **not closed**. Open:
-  - Owner decisions 02.11.2026, from walking through which channels a brick offers (USB, BT on
-    or off, visible or not, paired or not), not built yet. Refined the same night in
-    `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md`, which governs where they differ:
-    there is no separate pairing control, a forced "Connect a Brick" and automatic pairing of a
-    signed-in brick replace it (KD1); with USB or TCP a one-sided pairing is repaired
-    automatically by removing only the half that is left (KD5, KTD6), without them the message
-    names USB or TCP; and KTD12 loses its "pairing is always the user's own act" sentence
-    (step-4 KTD10). The list as first written:
-    - "Connect a Brick" pairs a brick whose Bluetooth channel is a new, unpaired sighting
-      whatever else reaches it. Over USB (or TCP) it connects that channel first, then starts
-      the pairing, so the brick shows its pairing dialog; the user cancels there to decline.
-      One behaviour for one Bluetooth state, instead of pairing only when nothing else reaches
-      the brick. A declined pairing leaves the USB connection as it is; the next "Connect a
-      Brick" asks again, which is accepted, since the user may want to pair later.
-    - A control that pairs a brick already connected over USB or TCP, without breaking those
-      connections. Today the only way is to disconnect and connect again, which drops them too.
-      (Unpairing exists only as forget, which disconnects everything, or as clearing the brick's
-      whole list; unpairing just this computer's Bluetooth while USB stays is not there either.)
-    - The unpaired-Bluetooth rule is accepted (step-3 plan, KTD12). When a Bluetooth connect
-      fails and the pairing may be one-sided (the missing scenarios: paired on Windows but not on
-      the brick, or the reverse), show an error that says how to fix it: connect USB and clear
-      the pairing. With USB connected, offer to do it: remove this computer's entry on this
-      brick and the Windows pairing, then pair again. Over USB the brick's list tells which side
-      is missing, so the error can say so rather than guess; a Bluetooth connect also fails for
-      plain reasons (out of range, the measured ~50% RFCOMM failures), which must not be shown
-      as a broken pairing.
-    - When the user picks a brick, connecting also tries its paired Bluetooth channel when the
-      presence checks did not hear it (as forget and clear do since `121c393`).
-    - The brick's list of paired computers (name, `connected` mark) is shown with the brick's
-      information beside its firmware version, in the panel (Phase 5): read on connect, after a
-      pairing, a forget or a clear, and on request, not polled. Removing only some entries is
-      for the owner to decide later.
-    - The firmware turns page scan off on each completed connection (`c_bt.c` 3013–3016,
-      commented for master mode); whether a brick linked to another device as a slave then
-      refuses a second device is measured in step-4 U10.
+  - Pairing becomes part of connecting: step 4,
+    `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md`, from the owner's walk-through of
+    02.11.2026. Code built (U1–U9, 08.11.2026); hardware session (U10) and review open.
+    - "Connect a Brick" connects every channel that can work; a Bluetooth channel nobody has
+      paired is paired on the way, after USB or TCP are connected, and the brick's dialog is the
+      consent. There is no separate pairing command (KD1).
+    - A signed-in brick pairs a new Bluetooth sighting by itself. A cancelled or failed pairing,
+      a clear and a forget suspend that until the next "Connect a Brick" on the brick (KD2).
+    - "Connect a Brick" on a signed-in brick retries every channel that is not connected, a
+      paired Bluetooth channel the presence checks did not hear too (KD3).
+    - Over USB or TCP, a pairing broken on one side is found by comparing the brick's list with
+      Windows' pairing, the half that is left is removed, and the brick is paired again; over
+      Bluetooth alone a failed connect says that USB or TCP and "Connect a Brick" repair it,
+      without claiming the pairing is broken (KD5).
+    - The brick's list of paired computers is read when a channel connects, after a pairing, a
+      forget or a clear, and on request, and kept per brick for the panel (KD6). Showing it, and
+      removing only some of its entries, waits for Phase 5 and the owner.
+    - Pairings log their phases with times, and the log says when a Bluetooth channel stops or
+      starts being heard (R9).
+  - Deferred (step-4 KD7): unpairing only this computer's Bluetooth while USB stays connected.
+    Today a brick connected over USB loses its Bluetooth pairing only with "Forget a Brick",
+    which also signs it out, forgets it and removes this computer from the brick's list, or with
+    "Clear a Brick's Bluetooth List", which removes every entry on the brick. Both do more than
+    drop the Bluetooth channel. A command doing only that would also have to suspend automatic
+    pairing (KD2), or the next scan, still listing the brick from Windows' cache, would pair it
+    again with a dialog nobody asked for.
   - U7 hardware session done 01.11.2026; verdicts in the step-3 plan's appendix. Every success
     criterion run holds, one after a fix made in the session (`121c393`); `450cdb2` fixed step
     2's pairing from the picker, found in the same session. Not verified: a brick known only over
