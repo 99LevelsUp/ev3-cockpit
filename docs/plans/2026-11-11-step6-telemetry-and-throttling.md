@@ -1,0 +1,96 @@
+---
+title: Step 6 — telemetry, adaptive throttling, telemetry on the API
+date: 2026-11-11
+status: draft — decisions D1–D5 wait for the owner
+origin: owner, 11.11.2026 — finish Phases 1–4 so only the visuals remain; adaptive throttling 3.4 built now, not gated
+---
+
+# Step 6: telemetry, adaptive throttling and telemetry on the API - Plan
+
+## Goal Capsule
+
+- **Objective:** a consumer subscribes to rows of a brick's telemetry through the public API and gets a snapshot, then events, at an interval it negotiated; the cockpit keeps one telemetry loop per brick that slows itself when the brick's latency tail grows, and never starves the heartbeat or explicit commands.
+- **Means:** what Phase 3 already built (rows, frame assembler, scheduler, `BrickTelemetry`, `TelemetryService`) gets a row registry, a mock that serves frames, a schedule that can change while running, subscriptions, a read model, wiring into the runtime, the throttler (3.4), and the API surface (4.5).
+- **Authority:** owner decisions D1–D5 below > `DESIGN.md` (§4.4, §4.5, §5.4, §9.x, §10) > this plan's KTDs > existing code.
+- **Not in this step:** the panel and its diagnostic display (Phase 5) — this step exposes the numbers the display will show; daisy chain beyond layer 0 (D3); Linux (step 7).
+- **Finishes and ships:** Claude implements, commits and pushes per unit; the owner runs the hardware session (U10).
+
+## Where the code is (inventory 11.11.2026, checked against the repo)
+
+Built and tested: rows (`telemetryRow.ts`), a catalogue of 26 EV3 rows (`ev3Rows.ts`, no direct test), the frame assembler with alignment, the 1019-byte cap and the HID budget (`frameAssembler.ts`), the scheduler with base tick, dividers, one frame in flight and rotating carry-over (`telemetryScheduler.ts`), one brick's loop (`brickTelemetry.ts`), and the active-brick loop (`telemetryService.ts`).
+
+Not wired: `new TelemetryService` appears only in tests and in `scripts/arena-scenario.js` and `scripts/telemetry-queue-probe.js`; `brickManager.telemetryHost()` is ready and unused in production. Not used: `TELEMETRY_CADENCE.floorMs`; `contracts/api.ts` `TelemetrySnapshot`/`TelemetryEvent` (category-based, imported by nothing); the `TelemetryCategory` subscriptions in `sessionEntry`. The mock refuses `telemetry:frame`. Per-command RTT is measured (`sessionManager.ts` 612–616) but only the last value is kept.
+
+## Drift to settle in U1 (documents only, no owner decision)
+
+| # | Drift | Settled as |
+|---|---|---|
+| 1 | The scheduler merges the divider-5 (slow) rows into the fast frame; DESIGN §9.1b says the slow tier keeps its own command on its own ticks | follow DESIGN (KTD3) |
+| 2 | "57 B of declared globals on HID" (plan 3.1.6, DESIGN §9.3) vs "under 59" (§9.1b) | the code is right: globals ≤ 64 − 5 = 59, bytecode ≤ 64 − 7 = 57; fix both texts |
+| 3 | two sources of `ActivityMode` (`sessionManager` categories, `telemetryService.modeOf`) disagree for an active mock brick | one source, the telemetry service (U5) |
+| 4 | DESIGN §4.4 runs the mock minimal; §13.1 says it must do telemetry | the mock does telemetry (D4) |
+| 5 | plan 4.1.4/4.1.5 ticked for category types that DESIGN §5.4 rejects | unticked, redone in U8 |
+| 6 | plan 4.5.1 `(brickKey, category)` vs DESIGN §9.6 `(brickKey, rows, intervalMs, apiVersion)`; step 5 names bricks by id or `'active'` | `(brick, rows, intervalMs)` on the consumer, `apiVersion` on the API object (KTD6) |
+| 7 | plan 3.4 still "gated" and lists queue depth (3.4.2); DESIGN §4.5 retired depth; REQUIREMENTS §8 still names it | un-gated by the owner; 3.4.2 closed as measured; REQUIREMENTS §8 edited |
+| 8 | `frameAssembler.ts` 104 says registration calls `validateRow`; only tests do | true after U2 |
+| 9 | `telemetryConstants.ts` 22–24 calls `MAX_COMMANDS_PER_SEC`/`COMMAND_RTT_MS` retracted; `transportConstants.ts` holds measured values | header rewritten |
+| 10 | `commandQueue.ts` 5 says depth is for throttling | comment removed |
+
+Also closed in U1 as done or absorbed: 3.1.9 (rotating truncation, test `telemetryScheduler.test.ts` 227), 3.1.4e (DESIGN §4.5), 3.1.4h (`RowResult.alignment`).
+
+## Decisions for the owner
+
+- **D1. Row id format — the contract consumers name rows by.** The code uses `ports.sensor.1.value` / `ports.motor.A.tacho`; DESIGN §9.3 writes `ports.1.value`. *Recommendation:* the code's form. The EV3 names inputs 1–4 and outputs A–D, so `ports.1` is unambiguous today, but `sensor`/`motor` also says what kind of reading it is and leaves room for a layer (`ports.sensor.1` → later `layer.2.ports.sensor.1`).
+- **D2. Granted interval under throttling.** Subscribe returns the interval the rows got (clamped to the transport's floor). The throttler then moves the tick. *Recommendation:* the grant stays what was negotiated; the snapshot and each event carry `effectiveIntervalMs`, and a consumer that cares listens to it. No re-negotiation events.
+- **D3. Daisy chain.** Layer is hardcoded to 0. *Recommendation:* layer 0 only in this step, but every port in the read model and on the API carries `layer: 0`, so adding layers later does not change the shape. Whether the layer belongs in the brick's key or in its session is decided when someone chains bricks.
+- **D4. The mock serves telemetry how?** (a) a small interpreter of the ~7 opcodes the assembler emits, decoding our own frames and answering from the mock's ports; (b) a row-level fake that skips the bytecode. *Recommendation:* (a). The mock must break where the product breaks: (b) would never exercise the encoding, the alignment or the reply layout, which is where telemetry has gone wrong before.
+- **D5. Who owns the program run-state poll** (escalated from step-5 review round 3). (a) keep "follow a started program with nobody listening" and rework its failure accounting; (b) poll only while someone listens, and let the telemetry loop carry it as a row (U9). *Recommendation:* (b) — nothing reads a poll without a listener; rounds 2 and 3 both found majors in keeping it alive.
+
+## Key Technical Decisions
+
+- KTD1. **One loop per signed-in brick, not only the active one.** Foreground preset for the active brick, subscribed preset for a brick some consumer subscribed to, minimal otherwise (DESIGN §4.4). A brick that is not signed in or has no route runs nothing (2.8.10a).
+- KTD2. **The schedule is split from the row.** A row says what to read and how to parse it; how often comes from the claims on it (cockpit foreground, subscribers), recomputed when a claim comes or goes. The scheduler's rows and period change while it runs.
+- KTD3. **The slow tier gets its own command on its own ticks** (DESIGN §9.1b), within the one-frame-in-flight rule: on a slow tick the fast frame goes first and the slow command follows when it returns; a slow command still outstanding at the next tick makes that tick skip like any frame.
+- KTD4. **Fastest subscriber wins, clamped to the transport's floor;** subscriptions are opaque handles; releasing one recomputes the effective interval (DESIGN §9.3).
+- KTD5. **Throttling moves only the base tick** (DESIGN §4.5, §9.5). Input: per brick, a window of the last N telemetry round trips; signal: p95 against the transport's target and the count of stalls (round trip above a stall threshold). Slower in steps when the tail is high, faster in steps when it is low for long enough; never below the floor, never so slow that the slowest row's interval exceeds the heartbeat window. Explicit commands and the heartbeat are not throttled. Thresholds are set from the U10 measurements; until then they are the DESIGN §4.5 numbers (6 ms median, 37 ms p95 with Port View open).
+- KTD6. **Telemetry on the API follows step 5:** a brick by id or `'active'` (resolved at the call), plain data, `sampledAt` per value, the raw type code beside the resolved device name, `listTelemetryRows()`, snapshot before events, subscriptions end with the consumer and when the brick disconnects (with an event saying so).
+- KTD7. **A port has five states** (3.1.11): empty (126), identifying (125), known, error (127), terminal (124); any other code ≥ 124 shows as not readable, and the value is read only when known. The occupancy gate becomes a model the read model and the API expose, with the two documented consequences (a freshly known port shows no value for one extra tick; a just-emptied port had a slot in the frame already in flight).
+
+## Implementation Units
+
+Each unit: tests first (RED), a mutation check of the key assertions, `npm run test:ci`, a topic commit, push. A codex round on U4–U8 with an inline packet; L8 doc drift after the fixes.
+
+### U1. Documents settle the drift
+The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decisions D1–D5 written into DESIGN and IMPLEMENTATION_PLAN. No code.
+
+### U2. Row registry and vocabulary
+3.1.6, 3.1.4 (`PeripheralType`), 3.2.5, 3.1.1–3.1.3 as row bundles. A registry object validates on registration (`validateRow`, mode conflicts with rows already registered), keeps the raw type code beside the resolved name (the occupancy parse keeps the mode), and lists rows with id, unit, tier. `ev3Rows.ts` gets its own tests. New rows: transports and Bluetooth visibility (3.1.3), the pairing list `FAVOUR_ITEMS` (3.1.4k) — encodings verified on hardware in U10.
+
+### U3. The mock serves frames
+3.1.7a per D4: the mock decodes the assembler's bytecode for the opcodes in use and answers from its configured ports, battery and buttons; unknown opcodes are an error, not a zero. Tests run the real `BrickTelemetry` against it.
+
+### U4. A schedule that changes while running; mode ownership; port state
+KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle — 3.1.4b), 3.1.11 (KTD7). A mode conflict defers the later row instead of failing the tick.
+
+### U5. Subscriptions and the effective interval
+3.3.5, 3.1.10, 3.3.2, 3.8 (subscribed interval), KTD4; one source for `ActivityMode` (drift 3); 3.7.3, 3.7.6. The category subscriptions in `sessionEntry` are removed.
+
+### U6. Read model, stale policy, wiring
+3.2.1, 3.2.2, 3.5.x, 3.6.x: per brick, the last value of each row with `sampledAt`, stale after a policy per tier, cleared on disconnect. `TelemetryService` wired into `createRuntime` and `activate()` (checked by grepping the registration, not only the class). 2.8.10a. 3.7.4, 3.7.5.
+
+### U7. Adaptive throttling
+3.4.1 (a per-brick round-trip window with p95 and stall count), 3.4.3 (KTD5), 3.4.4 (per brick), 3.4.5 (the numbers for the diagnostic display, exposed for Phase 5), 3.7.2. Tests drive a fake clock and a brick whose latency tail grows and falls; one slow brick does not slow another.
+
+### U8. Telemetry on the public API
+4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
+
+### U9. The program run-state poll
+Per D5. If (b): the program status becomes a row the program service claims while someone listens; the service's own timer, `following` and its failure count go. If (a): the failure count is reset by every answer and every transition, with the regression test from the step-5 review.
+
+### U10. Hardware session (owner)
+3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. Results go into this plan with a verdict against the rule written beforehand.
+
+## Open, decided later
+
+- Daisy chain beyond layer 0 (D3).
+- The diagnostic display itself (Phase 5).
