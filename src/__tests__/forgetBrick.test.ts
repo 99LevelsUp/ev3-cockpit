@@ -130,11 +130,15 @@ function world(options: WorldOptions = {}) {
 		failKinds: new Set<string>(),
 		/** A connect fails: the device is there and will not open. */
 		connectFails: false,
+		/** Holds the next connect until it opens. */
+		connectGate: undefined as Promise<void> | undefined,
 	};
 	const bt = {
 		paired: options.paired ?? true, connects: 0, open: false,
 		/** Not heard by the presence checks: the list shows the channel lost. */
 		unheard: false,
+		/** When a presence check last answered, once one has: a lost channel turns available on a new answer. */
+		heardAt: undefined as number | undefined,
 		/** Switched off: a connect gets no answer. */
 		off: false,
 		attempted: [] as string[],
@@ -149,6 +153,8 @@ function world(options: WorldOptions = {}) {
 		needsEntry: false,
 		/** How many of the next scans fail. */
 		scanFails: 0,
+		/** How many reads of the brick's list over USB had begun when each Bluetooth connect started. */
+		usbListReadsAtConnect: [] as number[],
 	};
 
 	const answer = async (over: Transport, command: BrickCommand): Promise<BrickResponse> => {
@@ -197,6 +203,9 @@ function world(options: WorldOptions = {}) {
 		},
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			usb.connects += 1;
+			const held = usb.connectGate;
+			usb.connectGate = undefined;
+			if (held) { await held; }
 			if (usb.connectFails) { throw new TransportError('USB connect failed: LIBUSB_ERROR_ACCESS'); }
 			usb.open = true;
 			return { brickKey, transport: Transport.USB };
@@ -241,12 +250,15 @@ function world(options: WorldOptions = {}) {
 			const items: DiscoveryItem[] = listed || cached ? [{
 				brickKey: btKey, displayName: 'CCC', nameSource: 'bt-cache', transport: Transport.BT,
 				presenceState: PresenceState.Available, remembered: listed, paired: listed, connected: false, favorite: false,
-				lastSeenAt: Date.now(), ...(unheard ? { heard: false } : {}),
+				lastSeenAt: Date.now(),
+				...(unheard ? { heard: false } : bt.heardAt !== undefined ? { heard: true, heardAt: bt.heardAt } : {}),
 			}] : [];
 			return { transport: Transport.BT, items };
 		},
 		async connect(brickKey: BrickKey): Promise<SessionHandle> {
 			bt.connects += 1;
+			bt.usbListReadsAtConnect.push(brick.received
+				.filter((r) => r.over === Transport.USB && r.kind === 'brick:bluetoothPeerCount').length);
 			if (bt.off) { throw new TransportError('BT connect failed: no answer'); }
 			if (bt.needsEntry && !brick.peers().includes(radio ?? THIS_PC)) {
 				throw new TransportError('BT connect failed: the brick does not know this computer');
@@ -2037,6 +2049,262 @@ describe('A pairing broken on one side, repaired over USB', () => {
 
 		await connect(w);   // the user asks: a repair is allowed again
 		await waitFor(() => w.bt.unpairs.length === 2, 3000);
+		w.done();
+	});
+});
+
+// ── Bluetooth waits for the one-sided check (U10 hardware session) ──
+
+describe('Bluetooth joins after the one-sided check when USB is there', () => {
+	const btConnected = (w: World): boolean =>
+		w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected;
+
+	it('tries no Bluetooth connect before a Windows-only pairing is repaired: one connect, after the pairing', async () => {
+		const w = world({ checkOneSided: true, peers: ['Office PC'] });
+		w.bt.needsEntry = true;   // a connect before the repair fails, and on hardware holds the radio for 15 s
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => btConnected(w), 3000);
+
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		assert.equal(w.bt.connects, 1, 'Bluetooth was tried on the one-sided pairing before the repair');
+		w.done();
+	});
+
+	it('joins Bluetooth once the check finds both halves, after the list was read over USB', async () => {
+		const w = world({ checkOneSided: true });
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => btConnected(w), 3000);
+
+		assert.equal(w.bt.connects, 1);
+		assert.ok(w.bt.usbListReadsAtConnect[0] >= 1, 'Bluetooth was joined before the list was read over USB');
+		await settle();
+		assert.deepEqual(w.warnings.filter((warning) => warning.startsWith('Joining')), [], 'a channel was joined twice');
+		w.done();
+	});
+
+	it('Connect a Brick waits for a USB join already in flight, and tries the held Bluetooth when it fails', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		const usbJoin = gate();
+		w.usb.connectGate = usbJoin.promise;
+		w.usb.connectFails = true;
+		await w.sessionManager.disconnect(usbKey);   // USB joins again, and hangs
+		await settle();
+		const errors: string[] = [];
+		const quiet = () => { /* not under test here */ };
+
+		const connecting = connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: (message) => { errors.push(message); },
+		});
+		await settle();
+		usbJoin.open();   // the USB join fails
+		await connecting;
+
+		assert.deepEqual(errors, [], 'Connect a Brick failed before the USB join in flight ended');
+		assert.ok(btConnected(w), 'the held Bluetooth channel was not tried once USB failed');
+		w.done();
+	});
+
+	it('joins Bluetooth when this computer\'s radio name is unknown', async () => {
+		const w = world({ checkOneSided: true, radio: undefined });
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		await waitFor(() => btConnected(w), 3000);
+		w.done();
+	});
+
+	it('joins Bluetooth when the list cannot be read over USB', async () => {
+		const w = world({ checkOneSided: true });
+		w.usb.failKinds.add('brick:bluetoothPeerCount');
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		await waitFor(() => btConnected(w), 3000);
+		w.done();
+	});
+
+	it('signs in over Bluetooth when the USB connect fails', async () => {
+		const w = world({ checkOneSided: true });
+		w.usb.connectFails = true;
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		assert.ok(btConnected(w), 'the sign-in resolved without its Bluetooth channel');
+		w.done();
+	});
+
+	it('reports the USB failure when the USB connect fails and Bluetooth does not connect either', async () => {
+		const w = world({ checkOneSided: true });
+		w.usb.connectFails = true;
+		w.bt.off = true;
+
+		await w.scheduler.scanOnce();
+		await assert.rejects(w.bricks.signIn(CCC), /USB connect failed/);
+		assert.equal(w.bt.connects, 1, 'Bluetooth was not tried once USB failed');
+		w.done();
+	});
+
+	it('joins Bluetooth when USB goes before the check could run', async () => {
+		const w = world({ checkOneSided: true });
+		const read = gate();
+		w.brick.holds.set('brick:bluetoothPeerCount', read.promise);   // the first read over USB hangs
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await settle();
+		assert.equal(w.bt.connects, 0, 'Bluetooth did not wait for the check, so this test shows nothing');
+		w.usb.cabled = false;
+		await w.scheduler.scanOnce();
+		await w.sessionManager.disconnect(usbKey);
+
+		await waitFor(() => btConnected(w), 3000);
+		read.open();
+		w.done();
+	});
+
+	it('joins Bluetooth as soon as a USB rejoin that held it back fails', async () => {
+		const w = world({ checkOneSided: true, rejoinBaseMs: 5000 });   // the USB retry is far off
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		const usbRejoin = gate();
+		w.usb.connectGate = usbRejoin.promise;
+		w.usb.connectFails = true;
+		await w.sessionManager.disconnect(usbKey);   // USB tries to join again, and hangs
+		await settle();
+		w.bt.unheard = false;
+		w.bt.heardAt = Date.now();
+		await w.scheduler.scanOnce();   // Bluetooth is heard while the USB join holds it back
+		await settle();
+		assert.equal(w.aggregator.getBrick(CCC)?.channels.find((c) => c.transport === Transport.BT)?.state,
+			ChannelState.Available, 'Bluetooth is not a candidate, so this test shows nothing');
+		assert.equal(w.bt.connects, 0, 'Bluetooth did not wait for the USB join, so this test shows nothing');
+
+		usbRejoin.open();   // the USB join fails; no scan follows
+
+		await waitFor(() => btConnected(w), 1000);
+		w.done();
+	});
+
+	it('Connect a Brick tries the unheard Bluetooth channel of a signed-in brick after the check, not before', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		assert.equal(w.bt.connects, 0, 'Bluetooth was joined already, so this test shows nothing');
+		const quiet = () => { /* not under test here */ };
+		const read = gate();
+		w.brick.holds.set('brick:bluetoothPeerCount', read.promise);   // the Connect's read of the list hangs
+
+		// Connect a Brick waits for the Bluetooth join it starts, so it ends only after the check.
+		const connecting = connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
+		});
+		await settle();
+		assert.equal(w.bt.connects, 0, 'Bluetooth was tried before the check ran');
+
+		read.open();
+		await connecting;
+
+		assert.equal(w.bt.connects, 1);
+		w.done();
+	});
+
+	it('lets a USB join that is a retry after a failure hold nothing: Bluetooth joins while it runs', async () => {
+		const w = world({ checkOneSided: true, rejoinBaseMs: 100 });
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		w.usb.connectFails = true;
+		await w.sessionManager.disconnect(usbKey);   // USB tries to join again, and fails: a retry follows
+		await waitFor(() => w.usb.connects === 2, 1000);
+		const retry = gate();
+		w.usb.connectGate = retry.promise;   // the retry hangs
+		await waitFor(() => w.usb.connects === 3, 1000);
+
+		w.bt.unheard = false;
+		w.bt.heardAt = Date.now();
+		await w.scheduler.scanOnce();   // Bluetooth is heard while the retry runs
+
+		await waitFor(() => btConnected(w), 1000);
+		retry.open();
+		w.done();
+	});
+
+	it('ends a Connect a Brick whose Bluetooth join waits for the check when the brick is signed out', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone
+		await signedInOver(w, Transport.USB);
+		const read = gate();
+		w.brick.holds.set('brick:bluetoothPeerCount', read.promise);   // the check never gets its list
+		const quiet = () => { /* not under test here */ };
+		const connecting = connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
+		});
+		await settle();
+
+		await w.bricks.signOut(CCC);
+
+		const ended = await Promise.race([connecting.then(() => true), settle(500).then(() => false)]);
+		assert.equal(ended, true, 'Connect a Brick still waits for a sign-in that ended');
+		assert.equal(w.bt.connects, 0);
+		read.open();
+		w.done();
+	});
+
+	it('ends a Connect a Brick whose repair\'s pairing is cancelled, with no Bluetooth join left waiting', async () => {
+		const w = world({ checkOneSided: true });
+		w.bt.unheard = true;   // the checks miss it: the sign-in joins USB alone, and Connect tries it (KD3)
+		w.bt.needsEntry = true;
+		await signedInOver(w, Transport.USB);
+		const peers = w.mock['bricks'].get(makeBrickKey(Transport.Mock, 'CCC'))!.bluetoothPeers;
+		peers.splice(peers.indexOf(THIS_PC), 1);   // the brick forgot this computer: one-sided now
+		w.pairing.accepts = false;   // the person cancels the repair's pairing on the brick
+		const quiet = () => { /* not under test here */ };
+
+		const connecting = connectPickedBrick(CCC, {
+			aggregator: w.aggregator, bricks: w.bricks,
+			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
+		});
+
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		const ended = await Promise.race([connecting.then(() => true), settle(1000).then(() => false)]);
+		assert.equal(ended, true, 'Connect a Brick waits for a Bluetooth join nothing will wake');
+		assert.deepEqual(w.bt.unpairs, [btKey]);
+		assert.equal(w.bt.connects, 0);
+		w.done();
+	});
+
+	it('does not join a held Bluetooth channel the repair unpaired, while the repair\'s pairing waits', async () => {
+		const w = world({ checkOneSided: true, peers: ['Office PC'] });
+		w.bt.needsEntry = true;
+		const brickAnswers = gate();
+		w.pairing.gate = brickAnswers.promise;   // the person has not answered the brick's dialog yet
+
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		await w.scheduler.scanOnce();   // the list changes while the pairing waits
+		await settle();
+		assert.equal(w.bt.connects, 0, 'joined a Bluetooth channel Windows no longer has paired');
+
+		brickAnswers.open();
+
+		await waitFor(() => btConnected(w), 3000);
+		assert.equal(w.bt.connects, 1);
 		w.done();
 	});
 });
