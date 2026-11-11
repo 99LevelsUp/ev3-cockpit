@@ -59,7 +59,7 @@ function recordingSender(reply: (payload: Uint8Array) => Uint8Array = () => new 
 }
 
 describe('scheduler — dividers', () => {
-	it('includes a divider-1 row on every tick and a divider-3 row on every third, in its own command (KTD3)', () => {
+	it('includes a divider-1 row on every tick and a divider-3 row on every third; both sampled, so one command (U5)', () => {
 		const seen: string[][] = [];
 		const rows = [
 			row({ id: 'fast', lifetime: { kind: 'repeating', divider: 1 } }),
@@ -74,10 +74,10 @@ describe('scheduler — dividers', () => {
 		return (async () => {
 			for (let i = 0; i < 6; i += 1) { await scheduler.runTick(); }
 			assert.deepEqual(seen.map((ids) => ids.slice().sort()), [
-				['fast'], ['slow'], // tick 0: the slow tier keeps its own command (DESIGN §9.1b)
+				['fast', 'slow'],   // tick 0: both sampled, so both ride in the fast command
 				['fast'],           // 1
 				['fast'],           // 2
-				['fast'], ['slow'], // 3
+				['fast', 'slow'],   // 3
 				['fast'],           // 4
 				['fast'],           // 5
 			]);

@@ -250,8 +250,8 @@ export class TelemetryScheduler {
 			this.ticksEmpty += 1;
 			return;
 		}
-		// The slow tier keeps its own command (DESIGN §9.1b, step-6 KTD3): every-tick rows go
-		// first, the rest after, each truncated and carried over within its own class.
+		// The slow tier keeps its own command (DESIGN §9.1b, step-6 KTD3): sampled rows go first,
+		// event and static rows after, each truncated and carried over within its own class.
 		const fast = candidates.filter(isEveryTick);
 		const slow = candidates.filter((row) => !isEveryTick(row));
 
@@ -436,9 +436,15 @@ export class TelemetryScheduler {
 	}
 }
 
-/** A row on every tick goes in the fast command; anything else — a slower divider, a one-shot — in the slow one. */
+/**
+ * The sampled tier goes in the fast command; the event and static tiers — LEGO's slow tier — in
+ * the slow one. By tier, not by divider: once a subscriber speeds the tick, the foreground's
+ * sampled rows go to divider 2, and classed by divider they would ride in the slow command every
+ * other tick — on Bluetooth about 6 commands a second instead of 4.4 (measured in
+ * `schedulerSchedule.test.ts`, step-6 U5).
+ */
 function isEveryTick(row: TelemetryRow): boolean {
-	return row.lifetime.kind === 'repeating' && row.lifetime.divider === 1;
+	return row.tier === 'sampled';
 }
 
 /**
