@@ -1,0 +1,32 @@
+// Bench: how much of the brick's VM a user program gets while telemetry runs.
+//
+// Counts passes of a tight loop for RUN_MS and writes the count to result.txt beside the
+// program. Draws nothing, so the screen does not take a share of its own. Built with the
+// firmware's own assembler (lmssrc/adk/lmsasm/assembler.jar); run by
+// scripts/program-load-probe.js, which compares counts with telemetry off and on (step 6,
+// the owner's question of 11.11.2026: does reading telemetry slow a running program?).
+
+define    RUN_MS      10000                                       //
+
+vmthread  MAIN                                                    //
+{                                                                 //
+  DATA32  Count                                                   //
+  DATA32  Start                                                   //
+  DATA32  Now                                                     //
+  DATA32  Elapsed                                                 //
+  DATAF   Result                                                  //
+  DATA16  hFile                                                   //
+
+  MOVE32_32(0,Count)                                              //
+  TIMER_READ(Start)                                               //
+Loop:                                                             //
+  ADD32(Count,1,Count)                                            //
+  TIMER_READ(Now)                                                 //
+  SUB32(Now,Start,Elapsed)                                        //
+  JR_LT32(Elapsed,RUN_MS,Loop)                                    //
+
+  MOVE32_F(Count,Result)                                          //
+  FILE(OPEN_WRITE,'/home/root/lms2012/prjs/Bench/result.txt',hFile) //
+  FILE(WRITE_VALUE,hFile,DEL_CRLF,Result,12,0)                    //
+  FILE(CLOSE,hFile)                                               //
+}                                                                 //
