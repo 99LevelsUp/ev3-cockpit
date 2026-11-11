@@ -466,6 +466,8 @@ flowchart TB
 
 - **Goal:** find why the first Bluetooth join after a pairing failed with WSA 10060 in 5 of 8 pairings (U10) and joined by itself 40–90 s later, and remove the wait if the cause allows it.
 - **Approach:** find the cause first (the time from `Paired` to the join, the cooldown, the queue, what the brick does right after a pairing), then decide; this unit may end with a finding only.
+- **Finding (firmware, 11.11.2026):** the pairing opens a baseband link; on its `EVT_CONN_COMPLETE` the brick switches page scan off (`c_bt.c` 3011–3016) and switches it back on only on that link's `EVT_DISCONN_COMPLETE`, when no device is left (3268–3276). When Windows lets the pairing link go is not ours to set. A connect that lands after the link is gone and before page scan is back fails as a page timeout, WSA 10060. On the bench the joins that worked (16–34 s after `Paired`) and the ones that failed (20–34 s) overlap, so no fixed delay separates them.
+- **Proposal, to build after a hardware check:** when the first Bluetooth join after a pairing the cockpit made fails, try once more about 10 s later instead of waiting for the next presence answer (40–90 s on the bench). Measure first: log the time from `Paired` to the first join and its outcome on ten pairings, and whether a retry 10 s later opens.
 
 ---
 
