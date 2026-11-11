@@ -1,0 +1,7 @@
+   0.0 SetDiscoveryFilter success
+   0.0 Discovery started
+   0.0 [CHG] Controller 00:00:00:00:00:00 Discovering: yes
+   2.4 [NEW] Device <other-device-3> <other-device-3>
+   2.9 [NEW] Device <other-device-2> <other-device-2>
+  21.1 [NEW] Device 00:16:53:F0:0C:0C CCC
+  21.3 [NEW] Device 00:16:53:F0:0B:0B BBB
