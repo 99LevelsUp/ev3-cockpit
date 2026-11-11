@@ -9,6 +9,9 @@ import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBr
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 import { createNotifier } from './ui/notify';
+import { AccessMode } from './api/accessPolicy';
+import { CockpitApi, createCockpitApi } from './api/cockpitApi';
+import { NotConnectedError } from './errors/CockpitError';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -24,7 +27,7 @@ function mockBricksWanted(context: vscode.ExtensionContext): boolean {
 	return chosen ?? context.extensionMode === vscode.ExtensionMode.Development;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): CockpitApi {
 	const logger = vscode.window.createOutputChannel('EVƎ Cockpit', { log: true });
 	context.subscriptions.push(logger);
 
@@ -121,12 +124,16 @@ export function activate(context: vscode.ExtensionContext): void {
 			btPresence && (() => btPresence.runInquiry()));
 		if (!picked) { return; }
 
-		await connectPickedBrick(picked, {
+		await connectPickedBrick(picked, connectUi());
+	}));
+	/** What "Connect a Brick" needs, for the palette command and for the public API alike. */
+	function connectUi(): Parameters<typeof connectPickedBrick>[1] {
+		return {
 			aggregator, bricks, log: logger, progress: notificationProgress,
 			showInfo: (message) => { void notify.info(message); },
 			showError: (message) => { void notify.error(message); },
-		});
-	}));
+		};
+	}
 
 	// Every pairing shows its progress, whoever started it: the person at the brick has to know
 	// when to look at its display.
@@ -211,7 +218,31 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	logger.info('Connect, disconnect, forget and clear-list commands registered');
 
-	// Phase 3+: telemetry runtime, public API, UI panel wired here.
+	// ── Public API (step-5 plan, U6) ────────────────────────────
+	// What other extensions get: `vscode.extensions.getExtension(…).exports`. The access mode is
+	// the user's setting and the cockpit enforces it (KD2); connecting is "Connect a Brick" with
+	// its progress and messages (KD4).
+	const readAccessMode = (): AccessMode =>
+		vscode.workspace.getConfiguration('ev3-cockpit').get<AccessMode>('accessMode') === 'full' ? 'full' : 'safe';
+	const api = services.add(createCockpitApi({
+		bricks,
+		aggregator,
+		connect: async (brickId) => {
+			await connectPickedBrick(brickId, connectUi());
+			if (!bricks.isSignedIn(brickId)) {
+				throw new NotConnectedError(`Brick ${brickId} could not be connected; the cockpit said why.`);
+			}
+		},
+		accessMode: readAccessMode,
+		onAccessModeChange: (listener) => vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration('ev3-cockpit.accessMode')) { listener(readAccessMode()); }
+		}),
+		log: logger,
+	}));
+	logger.info(`Public API ${api.apiVersion} ready; access mode ${readAccessMode()}`);
+
+	// Phase 5: the panel is wired here.
+	return api;
 }
 
 export function deactivate(): void {
