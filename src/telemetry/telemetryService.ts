@@ -26,7 +26,10 @@
  * a restarted loop is a new loop: the retired one's frame may still be on its way over the old
  * link, and if it commands a sensor mode it would switch the device behind the new loop's back.
  * Every loop of a brick sends through one chain, so a new loop's first frame waits until the
- * retired one's has settled (review of U5, round 2).
+ * retired one's has settled (review of U5, round 2). The wait is bounded below: every transport
+ * adapter times a send out (`SEND_TIMEOUT_MS`, 1–2 s) and rejects it when its link closes. A frame
+ * that waited in the chain goes out only if its loop is still the brick's loop (a disposed service
+ * has none); otherwise it fails without reaching the brick (round 3).
  *
  * **A grant is fixed when the claim is made** (D2): the request clamped to the floor. What a row
  * really runs at — slower after a route change or under throttling — travels in the data.
@@ -118,6 +121,8 @@ export interface TelemetryServiceOptions {
 
 interface RunningLoop {
 	readonly loop: BrickTelemetry;
+	/** This loop's identity: a frame waiting in the chain goes out only while it is the brick's loop. */
+	readonly token: object;
 	/** The transport the loop was built for; another one restarts it. */
 	readonly transport: Transport | undefined;
 }
@@ -131,8 +136,6 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly registry: RowRegistry;
 	/** Each brick's last telemetry frame, settled or not: the next one, from any loop, goes after it. */
 	private readonly lastFrame = new Map<BrickRef, Promise<unknown>>();
-	/** The host as the loops see it: sends chained per brick. */
-	private readonly sender: TelemetrySender;
 	private readonly subscriptions: vscode.Disposable[] = [];
 	private nextHandle = 1;
 	private disposed = false;
@@ -150,16 +153,6 @@ export class TelemetryService implements vscode.Disposable {
 	constructor(private readonly options: TelemetryServiceOptions) {
 		const { host } = options;
 		this.registry = options.registry ?? createEv3RowRegistry();
-		this.sender = {
-			send: (brickKey, command, sendOptions) => {
-				const before = this.lastFrame.get(brickKey) ?? Promise.resolve();
-				const frame = before.then(() => host.send(brickKey, command, sendOptions));
-				this.lastFrame.set(brickKey, frame.catch(() => undefined));
-				return frame;
-			},
-			...(host.maxPacketBytes ? { maxPacketBytes: (brickKey: BrickRef) => host.maxPacketBytes?.(brickKey) } : {}),
-			...(host.transportOf ? { transportOf: (brickKey: BrickRef) => host.transportOf?.(brickKey) } : {}),
-		};
 
 		this.subscriptions.push(
 			host.onActiveBrickChange((event) => {
@@ -275,19 +268,47 @@ export class TelemetryService implements vscode.Disposable {
 			return;
 		}
 		this.stopFor(brickKey);
+		const token = {};
+		const current = (): boolean => this.loops.get(brickKey)?.token === token;
 		const loop = createBrickTelemetry({
-			sender: this.sender,
+			sender: this.senderFor(brickKey, current),
 			brickKey,
 			rows: plan.rows,
 			tickPeriodMs: plan.periodMs,
 			// The plan's floor, override included: retiming clamps to the same floor the plan used.
 			floorMs: this.cadenceOf(transport).floorMs,
 			now: this.options.now,
-			onValues: (values) => this._onValues.fire({ brickKey, values }),
-			onError: (error) => this._onError.fire({ brickKey, error }),
+			onValues: (values) => { if (current()) { this._onValues.fire({ brickKey, values }); } },
+			// A retired loop's refused frame is not a failure anyone needs to hear about.
+			onError: (error) => { if (current()) { this._onError.fire({ brickKey, error }); } },
 		});
-		this.loops.set(brickKey, { loop, transport });
+		this.loops.set(brickKey, { loop, transport, token });
 		loop.start();
+	}
+
+	/** The host as one loop sees it: its sends chained behind the brick's last frame, from any loop. */
+	private senderFor(brickKey: BrickRef, current: () => boolean): TelemetrySender {
+		const { host } = this.options;
+		return {
+			send: (key, command, sendOptions) => {
+				const go = (): Promise<BrickResponse> => {
+					// Disposing the service stops every loop, so this covers a disposed service too.
+					if (!current()) {
+						return Promise.reject(new SubscriptionError(`Telemetry loop for ${brickKey} was retired before its frame went out.`));
+					}
+					return host.send(key, command, sendOptions);
+				};
+				// Nothing outstanding: out at once, as it was sent. Something outstanding: after it.
+				const before = this.lastFrame.get(key);
+				const frame = before ? before.then(go) : go();
+				const settled = frame.then(() => undefined, () => undefined);
+				this.lastFrame.set(key, settled);
+				void settled.then(() => { if (this.lastFrame.get(key) === settled) { this.lastFrame.delete(key); } });
+				return frame;
+			},
+			...(host.maxPacketBytes ? { maxPacketBytes: (key: BrickRef) => host.maxPacketBytes?.(key) } : {}),
+			...(host.transportOf ? { transportOf: (key: BrickRef) => host.transportOf?.(key) } : {}),
+		};
 	}
 
 	private hasSession(brickKey: BrickRef): boolean {
