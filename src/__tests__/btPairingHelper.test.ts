@@ -503,6 +503,30 @@ describe('scanForBricks', () => {
 	});
 });
 
+describe('createHelperPairing — what a failure says (step-4 U15)', () => {
+	const resultLine = (status: string) => JSON.stringify({ type: 'result', status, ok: false });
+
+	it('names a brick held by another Bluetooth device when the brick was not found', async () => {
+		const { pair } = pairWith({ lines: [resultLine('NotFound')], exitCode: 3 });
+
+		const result = await pair(MAC);
+
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /visibility/);
+		assert.match(result.reason ?? '', /connected to another Bluetooth device/);
+	});
+
+	it('does not claim the brick asked when the pairing timed out, and names a brick held elsewhere', async () => {
+		const { pair } = pairWith({ lines: [FOUND, resultLine('AuthenticationTimeout')], exitCode: 1 });
+
+		const result = await pair(MAC);
+
+		assert.doesNotMatch(result.reason ?? '', /asked for confirmation/);
+		assert.match(result.reason ?? '', /confirm/);
+		assert.match(result.reason ?? '', /connected to another Bluetooth device/);
+	});
+});
+
 describe('createHelperPresenceCheck — the Winsock SDP query (step-4 U12)', () => {
 	function checkWith(run: FakeRun) {
 		const fake = fakeSpawn(run);
