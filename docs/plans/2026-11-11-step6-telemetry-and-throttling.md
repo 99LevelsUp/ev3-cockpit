@@ -69,7 +69,7 @@ The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decision
 ### U3. The mock serves frames — done 11.11.2026
 3.1.7a per D4: the mock decodes the assembler's bytecode for the opcodes in use and answers from its configured ports, battery and buttons; unknown opcodes are an error, not a zero. Tests run the real `BrickTelemetry` against it.
 
-### U4. A schedule that changes while running; mode ownership; port state — built 11.11.2026 (05f9b93, 29ccfb0, 901df00, 3cf25bc, slow tier); codex review pending
+### U4. A schedule that changes while running; mode ownership; port state — done 11.11.2026; review three rounds, converged (see Review)
 KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle — 3.1.4b), 3.1.11 (KTD7). **As built (parts 1–3, 11.11.2026):** the scheduler refuses a row set with two modes of one port, when built and on `setRows`, so a frame never meets a conflict; a carried-over row in an old mode is dropped with its set. A mode switch withholds the port's readings until one comes back as a number, at most `SETTLE_LIMIT_MS` (1200 ms, `MAX_DEVICE_BUSY_TIME`, `lms2012.h` 313; U10 tunes it).
 
 ### U5. Subscriptions and the effective interval
@@ -119,6 +119,14 @@ Mutations on the rework exposed three redundant guards (removed) and one missing
 | 2 | major | a switch command that failed before the brick leaves the mode recorded and its deadline running; the retry after the deadline publishes NaN | CONFIRMED | a failed send forgets the modes and settles it carried |
 
 Both in edges of the round-1 rework, not in its approach. A third round finding majors here stops the patching and questions the approach (owner's rule).
+
+### U4, round 3 — confirmation of round 2 (11.11.2026): no blocker or major
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | a throwing `onValues` landed in the send's `catch` and forgot a mode the brick had received | CONFIRMED | the reply is consumed outside the send's `try`; a listener error goes to `onError` and is not a failed frame |
+
+Convergence gate met: no blocker or major survives. U4 is closed in code; U10 measures the settle time, the read stall and the slow tier's frame costs.
 
 ## Open, decided later
 
