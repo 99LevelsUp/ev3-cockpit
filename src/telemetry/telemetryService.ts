@@ -1,30 +1,42 @@
 /**
- * Decides which brick runs telemetry, and at what cadence.
+ * Decides which bricks run telemetry, which rows each reads and at what cadence (step-6 plan U5;
+ * IMPLEMENTATION_PLAN 3.3.1–3.3.5, 3.1.10; DESIGN §9.1–§9.4).
  *
- * Two modes exist so far, and the distinction is the one the phase gate names (3.3.1,
- * 3.3.3, 3.3.4):
+ * Three modes, one per brick:
  *
- *  - **foreground** — the active brick. One loop, at the transport's measured cadence.
- *  - **minimal** — every other connected brick. No telemetry at all; the session's own
- *    heartbeat and reconnect keep running, which is what "minimal" means.
+ *  - **foreground** — the active brick, read for the cockpit's panel: every row, at the
+ *    transport's foreground cadence.
+ *  - **subscribed** — a connected brick that is not active but that a consumer claimed rows of:
+ *    only those rows, at the interval each was granted.
+ *  - **minimal** — every other connected brick. No telemetry; the session's heartbeat and
+ *    reconnect keep running, which is what "minimal" means.
  *
- * The third mode, **subscribed**, needs the row-level subscription registry (3.3.5) and is
- * deliberately absent rather than stubbed: a mode that nothing can subscribe to would be a
- * branch no test could reach.
+ * **One loop per brick.** The foreground is a claim like the others (`TelemetryClaims`), so the
+ * loop's rows and tick come from one plan: the active brick changing re-plans a running loop
+ * instead of restarting it. A restart would read every static row again and settle every port
+ * afresh. Only a change of transport restarts a loop, because a loop is built for one link's
+ * cadence. Every event funnels into one {@link TelemetryService.refresh}, which works out what a
+ * brick should be doing from the host's state rather than from the event that woke it.
  *
- * **Why only one brick at a time gets telemetry.** Not a limitation of the loop — it is
- * that nothing yet asks for a second one. When subscriptions land, a brick with a live
- * subscription runs its own loop at the granted interval alongside the foreground one; the
- * per-brick queues already keep them from interfering.
+ * **Claims outlive a lost link and end with the session.** While a brick reconnects its loop
+ * stops and its claims wait; when the brick is disconnected or signed out they end, and
+ * {@link TelemetryService.onClaimsEnded} names them so the API can tell its consumers (4.5.4).
+ *
+ * **A grant is fixed when the claim is made** (D2): the request clamped to the floor. What a row
+ * really runs at — slower after a route change or under throttling — travels in the data.
  */
 
 import * as vscode from 'vscode';
 
 import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
 import { ActivityMode, ConnectionState } from '../contracts/enums';
+import { NotConnectedError, SubscriptionError } from '../errors/CockpitError';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { BrickTelemetry, createBrickTelemetry, transportFor } from './brickTelemetry';
-import { RowValue, TelemetryRow } from './telemetryRow';
+import { RowRegistry, createEv3RowRegistry } from './rowRegistry';
+import { ClaimCadence, ClaimHandle, ClaimRequest, Grant, TelemetryClaims } from './telemetryClaims';
+import { cadenceFor } from './telemetryConstants';
+import { RowValue } from './telemetryRow';
 
 /** One brick's telemetry values, tagged with where they came from. */
 export interface TelemetryValuesEvent {
@@ -36,6 +48,18 @@ export interface TelemetryValuesEvent {
 export interface TelemetryErrorEvent {
 	readonly brickKey: BrickRef;
 	readonly error: unknown;
+}
+
+/** A claim as its maker holds it: the handle to release it by and what each row was granted. */
+export interface TelemetryClaimTicket {
+	readonly handle: string;
+	readonly grant: Grant;
+}
+
+/** Claims that ended because their brick went, not because their makers released them. */
+export interface ClaimsEndedEvent {
+	readonly brickKey: BrickRef;
+	readonly handles: readonly string[];
 }
 
 /**
@@ -66,9 +90,9 @@ export interface TelemetryHost {
 	/**
 	 * Fired when a brick's traffic moves to another channel.
 	 *
-	 * The loop's cadence and frame size belong to the channel it started on, so the active
-	 * brick's loop restarts: a loop that began at USB's 100 ms would otherwise keep that
-	 * period over Bluetooth, whose floor is 250 ms, and crowd out every other command.
+	 * The loop's cadence belongs to the transport it started on, so a loop whose transport
+	 * changed restarts: one that began at USB's 100 ms would otherwise keep that period over
+	 * Bluetooth, whose floor is 250 ms, and crowd out every other command.
 	 */
 	readonly onRouteChange?: vscode.Event<{ readonly brickKey: BrickRef }>;
 }
@@ -76,16 +100,31 @@ export interface TelemetryHost {
 export interface TelemetryServiceOptions {
 	readonly host: TelemetryHost;
 	readonly providerRegistry: ProviderRegistry;
-	/** Rows to drive. Defaults to the full EV3 catalogue. */
-	readonly rows?: readonly TelemetryRow[];
-	/** Overrides the transport's cadence. For tests and probes; production leaves it unset. */
+	/** The rows a brick offers. Defaults to the EV3 catalogue. */
+	readonly registry?: RowRegistry;
+	/**
+	 * Overrides the foreground cadence, below the transport's floor if need be. For tests and
+	 * probes; production leaves it unset.
+	 */
 	readonly tickPeriodMs?: number;
 	readonly now?: () => number;
 }
 
+interface RunningLoop {
+	readonly loop: BrickTelemetry;
+	/** The transport the loop was built for; another one restarts it. */
+	readonly transport: Transport | undefined;
+}
+
 export class TelemetryService implements vscode.Disposable {
-	private readonly loops = new Map<BrickRef, BrickTelemetry>();
+	private readonly loops = new Map<BrickRef, RunningLoop>();
+	/** Each brick's claims, kept apart from its loop so they outlive a lost link. */
+	private readonly claims = new Map<BrickRef, TelemetryClaims>();
+	/** The service's handles, unique across bricks: each brick's registry counts its own. */
+	private readonly handles = new Map<string, { readonly brickKey: BrickRef; readonly inner: ClaimHandle }>();
+	private readonly registry: RowRegistry;
 	private readonly subscriptions: vscode.Disposable[] = [];
+	private nextHandle = 1;
 	private disposed = false;
 
 	private readonly _onValues = new vscode.EventEmitter<TelemetryValuesEvent>();
@@ -94,39 +133,34 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly _onError = new vscode.EventEmitter<TelemetryErrorEvent>();
 	readonly onError = this._onError.event;
 
+	private readonly _onClaimsEnded = new vscode.EventEmitter<ClaimsEndedEvent>();
+	/** Claims that ended with their brick (4.5.4); the API's hook to tell their makers. */
+	readonly onClaimsEnded = this._onClaimsEnded.event;
+
 	constructor(private readonly options: TelemetryServiceOptions) {
 		const { host } = options;
+		this.registry = options.registry ?? createEv3RowRegistry();
 
 		this.subscriptions.push(
 			host.onActiveBrickChange((event) => {
-				// Stop first. Two loops on one brick would each hold a frame in flight and
-				// the queue would serve them in turn, doubling what telemetry costs.
-				if (event.previousBrickKey) { this.stopFor(event.previousBrickKey); }
-				this.reconcile(event.newBrickKey);
+				this.refresh(event.previousBrickKey);
+				this.refresh(event.newBrickKey);
 			}),
-			...(host.onRouteChange ? [host.onRouteChange((event) => {
-				if (event.brickKey !== host.getActiveBrickKey()) { return; }
-				this.stopFor(event.brickKey);
-				this.reconcile(event.brickKey);
-			})] : []),
-			host.onSessionStateChange((event) => {
-				// Only the active brick's state is interesting: nothing else is running.
-				if (event.brickKey !== host.getActiveBrickKey()) { return; }
-				if (event.newState === ConnectionState.Connected) {
-					this.reconcile(event.brickKey);
-				} else {
-					this.stopFor(event.brickKey);
-				}
-			}),
+			host.onSessionStateChange((event) => this.refresh(event.brickKey)),
+			...(host.onRouteChange ? [host.onRouteChange((event) => this.refresh(event.brickKey))] : []),
 		);
 
 		// A brick may already be active and connected when the service is built.
-		this.reconcile(host.getActiveBrickKey());
+		this.refresh(host.getActiveBrickKey());
 	}
 
 	/** The mode a brick is currently being driven in. */
 	modeOf(brickKey: BrickRef): ActivityMode {
-		if (this.loops.has(brickKey)) { return ActivityMode.Foreground; }
+		if (this.loops.has(brickKey)) {
+			return brickKey === this.options.host.getActiveBrickKey()
+				? ActivityMode.Foreground
+				: ActivityMode.Subscribed;
+		}
 		return this.options.host.getSession(brickKey) === undefined
 			? ActivityMode.None
 			: ActivityMode.Minimal;
@@ -134,59 +168,158 @@ export class TelemetryService implements vscode.Disposable {
 
 	/** The running loop for a brick, for tests and hardware probes. */
 	loopFor(brickKey: BrickRef): BrickTelemetry | undefined {
-		return this.loops.get(brickKey);
+		return this.loops.get(brickKey)?.loop;
+	}
+
+	/**
+	 * Claims rows of a brick, or throws and claims nothing.
+	 *
+	 * Refused for a brick that has no session, and for one whose link cannot carry telemetry
+	 * frames: such a claim would never be read and nobody would hear why. A brick reconnecting
+	 * has no link to judge yet; its claim is taken and read when the link is back.
+	 */
+	claim(brickKey: BrickRef, request: ClaimRequest, owner: string): TelemetryClaimTicket {
+		if (this.disposed) { throw new SubscriptionError('Telemetry has been shut down.'); }
+		if (!this.hasSession(brickKey)) {
+			throw new NotConnectedError(`Brick ${brickKey} is not connected; telemetry can be claimed of a connected brick only.`);
+		}
+		const transport = transportFor(this.options.host, brickKey);
+		if (transport !== undefined && !this.servesFrames(transport)) {
+			throw new SubscriptionError(`Brick ${brickKey} is connected over a link that does not carry telemetry.`);
+		}
+		const claims = this.claimsFor(brickKey);
+		const { handle: inner } = claims.claim(request, owner);
+		const handle = `telemetry-${this.nextHandle++}`;
+		this.handles.set(handle, { brickKey, inner });
+		this.refresh(brickKey);
+		return { handle, grant: claims.grantOf(inner) as Grant };
+	}
+
+	/** Releases one claim; releasing it again, or after its brick went, does nothing. */
+	release(handle: string): void {
+		const entry = this.handles.get(handle);
+		if (!entry) { return; }
+		this.handles.delete(handle);
+		this.claims.get(entry.brickKey)?.release(entry.inner);
+		this.refresh(entry.brickKey);
+	}
+
+	/** What each row of a claim was granted; undefined once the claim has ended. */
+	grantOf(handle: string): Grant | undefined {
+		const entry = this.handles.get(handle);
+		return entry ? this.claims.get(entry.brickKey)?.grantOf(entry.inner) : undefined;
 	}
 
 	dispose(): void {
 		this.disposed = true;
 		for (const brickKey of [...this.loops.keys()]) { this.stopFor(brickKey); }
+		this.claims.clear();
+		this.handles.clear();
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.subscriptions.length = 0;
 		this._onValues.dispose();
 		this._onError.dispose();
+		this._onClaimsEnded.dispose();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	/** Starts the foreground loop for this brick if it can and should run one. */
-	private reconcile(brickKey: BrickRef | undefined): void {
-		if (this.disposed || !brickKey) { return; }
-		if (this.loops.has(brickKey)) { return; }
-		if (this.options.host.getSession(brickKey)?.connectionState !== ConnectionState.Connected) {
+	/**
+	 * Brings one brick's telemetry in line with the host's state: ends its claims if its session
+	 * went, runs a loop if it is connected and someone wants it read, and gives that loop the
+	 * rows and tick the claims plan. Safe to call for any brick, any number of times.
+	 */
+	private refresh(brickKey: BrickRef | undefined): void {
+		if (this.disposed || brickKey === undefined) { return; }
+		const { host } = this.options;
+		if (!this.hasSession(brickKey)) { this.endClaims(brickKey); }
+
+		const active = brickKey === host.getActiveBrickKey();
+		const transport = transportFor(host, brickKey);
+		const wanted = host.getSession(brickKey)?.connectionState === ConnectionState.Connected
+			&& transport !== undefined && this.servesFrames(transport)
+			&& (active || this.claims.get(brickKey)?.hasClaims() === true);
+		if (!wanted) { this.stopFor(brickKey); return; }
+
+		const claims = this.claimsFor(brickKey);
+		claims.setCadence(this.cadenceOf(transport));
+		claims.setForeground(active);
+		const plan = claims.plan();
+
+		const running = this.loops.get(brickKey);
+		if (running && running.transport === transport) {
+			running.loop.setRows(plan.rows);
+			if (running.loop.tickPeriodMs !== plan.periodMs) { running.loop.setPeriod(plan.periodMs); }
 			return;
 		}
-		if (!this.servesFrames(brickKey)) { return; }
-
+		this.stopFor(brickKey);
 		const loop = createBrickTelemetry({
-			sender: this.options.host,
+			sender: host,
 			brickKey,
-			rows: this.options.rows,
-			tickPeriodMs: this.options.tickPeriodMs,
+			rows: plan.rows,
+			tickPeriodMs: plan.periodMs,
 			now: this.options.now,
 			onValues: (values) => this._onValues.fire({ brickKey, values }),
 			onError: (error) => this._onError.fire({ brickKey, error }),
 		});
-		this.loops.set(brickKey, loop);
+		this.loops.set(brickKey, { loop, transport });
 		loop.start();
 	}
 
+	private hasSession(brickKey: BrickRef): boolean {
+		const state = this.options.host.getSession(brickKey)?.connectionState;
+		return state !== undefined && state !== ConnectionState.Disconnected;
+	}
+
+	private claimsFor(brickKey: BrickRef): TelemetryClaims {
+		let claims = this.claims.get(brickKey);
+		if (!claims) {
+			claims = new TelemetryClaims(this.registry, this.cadenceOf(transportFor(this.options.host, brickKey)));
+			this.claims.set(brickKey, claims);
+		}
+		return claims;
+	}
+
+	/** The transport's cadence, with the foreground override probes use. */
+	private cadenceOf(transport: Transport | undefined): ClaimCadence {
+		const cadence = cadenceFor(transport);
+		const override = this.options.tickPeriodMs;
+		return override === undefined
+			? cadence
+			: { foregroundMs: override, floorMs: Math.min(override, cadence.floorMs) };
+	}
+
+	/** Ends every claim on a brick whose session went, and says which ended. */
+	private endClaims(brickKey: BrickRef): void {
+		const claims = this.claims.get(brickKey);
+		if (!claims) { return; }
+		this.claims.delete(brickKey);
+		const ended = new Set(claims.endAll());
+		const handles: string[] = [];
+		for (const [handle, entry] of this.handles) {
+			if (entry.brickKey === brickKey && ended.has(entry.inner)) {
+				handles.push(handle);
+				this.handles.delete(handle);
+			}
+		}
+		if (handles.length > 0) { this._onClaimsEnded.fire({ brickKey, handles }); }
+	}
+
 	private stopFor(brickKey: BrickRef): void {
-		const loop = this.loops.get(brickKey);
-		if (!loop) { return; }
+		const running = this.loops.get(brickKey);
+		if (!running) { return; }
 		this.loops.delete(brickKey);
-		loop.dispose();
+		running.loop.dispose();
 	}
 
 	/**
-	 * Does this brick's transport execute composed frames?
+	 * Does this transport execute composed frames?
 	 *
 	 * Read from the provider's declared capability rather than probed by sending one: a
 	 * provider that cannot serve frames would otherwise announce itself as a thrown error
 	 * on every tick, for as long as the brick stayed active.
 	 */
-	private servesFrames(brickKey: BrickRef): boolean {
-		const transport = transportFor(this.options.host, brickKey);
-		if (transport === undefined) { return false; }
+	private servesFrames(transport: Transport): boolean {
 		return this.options.providerRegistry.get(transport)
 			?.capabilities.supportsTelemetryFrames === true;
 	}

@@ -142,6 +142,11 @@ export class TelemetryScheduler {
 		this.period = options.tickPeriodMs;
 	}
 
+	/** The rows in force: a set given while a tick was in flight counts from when it was given. */
+	get currentRows(): readonly TelemetryRow[] {
+		return this.pendingRows ?? this.rows;
+	}
+
 	/** Milliseconds between ticks now. */
 	get tickPeriodMs(): number {
 		return this.period;

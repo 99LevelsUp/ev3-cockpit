@@ -124,6 +124,8 @@ describe('Telemetry claims (step-6 U5)', () => {
 		const c = claims(false);
 
 		assert.throws(() => c.claim({ rowIds: ['ports.sensor.9.value'], intervalMs: 100 }, 'x'), /ports\.sensor\.9\.value/);
+		assert.throws(() => c.claim({ rowIds: [], intervalMs: 100 }, 'x'), /at least one row/,
+			'a claim on nothing would keep a loop running that reads nothing');
 		for (const intervalMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
 			assert.throws(() => c.claim({ rowIds: ['ports.sensor.1.value'], intervalMs }, 'x'), /interval/, `accepted ${intervalMs}`);
 		}
