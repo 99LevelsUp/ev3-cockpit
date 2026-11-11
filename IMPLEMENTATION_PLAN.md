@@ -1074,7 +1074,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     (divider 0), repeating (divider *n*), one-shot (first tick after connect, then retired) —
     the static tier needs *once*, which divider 0 cannot express. Registration **validates and
     refuses**: a row whose result would breach 4-byte alignment for the opcode it uses, the
-    1019-byte reply ceiling, or 57 bytes of declared globals on HID fails here rather than
+    1019-byte reply ceiling, or 59 bytes of declared globals on HID (57 of bytecode) fails here rather than
     corrupting a frame at runtime. Rows carry a raw type code alongside the resolved name
   - [x] 3.1.7 **Base-tick scheduler with integer dividers** — `src/telemetry/telemetryScheduler.ts`.
     One command per tick from the rows whose divider comes up. Three invariants, each of which
@@ -1124,7 +1124,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     conflict into alternating frames, where each frame forces a mode change and both rows read
     NAN indefinitely. Two reads of the *same* mode are not a conflict — LEGOev3 takes SI, RAW
     and PCT off one port in one frame
-  - [ ] 3.1.9 Truncation rule for the HID fallback — 64 bytes fits about nine instructions,
+  - [x] 3.1.9 **Closed 11.11.2026 (step 6 U1):** rotating carry-over in the scheduler, pinned by `telemetryScheduler.test.ts` (3.1.9 case). Truncation rule for the HID fallback — 64 bytes fits about nine instructions,
     and it must bound both sides: request bytecode ≤ packet size − 7 (the direct-command
     header) **and** declared globals ≤ packet size − 5. Alignment padding can breach the second
     before the first. Pending 3.1.13, treat an over-long reply as unsupported rather than
@@ -1265,7 +1265,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     were made afterward. `SerialPort.list()` returns nothing, and the only Bluetooth peer the
     host knows is a headset. Needs one brick paired with the PC before the BT column of 3.1.4c
     and 3.1.12 can be filled in
-  - [ ] 3.1.4e **Round-trip cost is per brick, not per transport — and that un-gates 3.4.**
+  - [x] 3.1.4e **Closed 11.11.2026 (step 6 U1): absorbed into DESIGN §4.5.** **Round-trip cost is per brick, not per transport — and that un-gates 3.4.**
     Same command, same USB transport, three bricks, 40 reads each. This table is the
     measurement **before** the two anomalies were isolated; the findings below supersede
     its explanations, not its numbers:
@@ -1387,7 +1387,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     can neither list nor address a chained brick. Needs a design decision: does a layer
     become part of the key, a property of the session, or a separate concept?
 
-  - [ ] 3.1.4h **A 32-bit global must start on a 4-byte boundary.** It *is* documented, in
+  - [x] 3.1.4h **Closed 11.11.2026 (step 6 U1): carried by `RowResult.alignment` and the assembler.** **A 32-bit global must start on a 4-byte boundary.** It *is* documented, in
     the Communication Developer Kit's opening section on direct commands — "Offset in the
     response buffer (global variables) must be aligned (float/32bits first and 8 bits last)"
     — which was found only after three probes had been debugged the hard way. The opcode
@@ -1537,10 +1537,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
     so releasing one claim recomputes the effective interval from those that remain. A registry
     keyed on categories cannot honour 3.1.10
-- [ ] **3.4 Adaptive Throttling** — **gated**: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
+- [ ] **3.4 Adaptive Throttling** — **un-gated by the owner 11.11.2026; built in step 6 U7.** The degradation is recorded and reproduced in DESIGN §4.5 (Wi-Fi 4×, Port View stalls); the input is each brick's latency tail (p95, stalls), not queue depth. The gate as first written: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
   - [ ] 3.4.1 Response latency measurement per command
-  - [ ] 3.4.2 Queue depth monitoring from the command queue
-  - [ ] 3.4.3 Frequency scaling algorithm (increase interval when latency/depth grows)
+  - [~] 3.4.2 ~~Queue depth monitoring from the command queue~~ **Retired:** measured pinned at 0–1 with one frame in flight (DESIGN §4.5)
+  - [ ] 3.4.3 Frequency scaling algorithm (increase the tick period when the latency tail grows)
   - [ ] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
   - [ ] 3.4.5 Diagnostic output — current telemetry speed observable for the UI
 - [ ] **3.5 Read model for the active brick**
@@ -1603,8 +1603,8 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.1.1 `ConnectedBrickSnapshot` — public representation of a connected brick
   - [x] 4.1.2 `BrickStateChangeEvent` — state transition event for consumers
   - [x] 4.1.3 `ActiveBrickSnapshot` — currently active brick or null
-  - [x] 4.1.4 `TelemetrySnapshot` (API version) — category-specific data snapshot
-  - [x] 4.1.5 `TelemetryEvent` (API version) — incremental telemetry update
+  - [ ] 4.1.4 `TelemetrySnapshot` (API version) — **reopened 11.11.2026:** the category-based type DESIGN §5.4 rejects; redone against rows in step 6 U8
+  - [ ] 4.1.5 `TelemetryEvent` (API version) — **reopened 11.11.2026**, as 4.1.4
   - [x] 4.1.6 `FilesystemEvent` — filesystem operation result
 - [x] **4.2 Consumer registration**
   - [x] 4.2.1 `registerConsumer(name)` — register a dependent extension, return consumer handle
@@ -1618,9 +1618,9 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.4.2 `onActiveBrickChanged(callback)` — subscribe to active brick switching
   - [x] 4.4.3 Disposable pattern for all subscriptions
 - [ ] **4.5 Telemetry subscriptions**
-  - [ ] 4.5.1 `subscribeTelemetry(brickKey, category)` — create a telemetry subscription
+  - [ ] 4.5.1 `subscribeTelemetry(brick, rows, intervalMs)` on the consumer — a brick by id or `'active'`, rows by id, `apiVersion` on the API object; returns a handle with the granted interval (DESIGN §9.3, §9.6; step 6 KTD6)
   - [ ] 4.5.2 Initial snapshot delivery before events
-  - [ ] 4.5.3 `unsubscribeTelemetry(subscriptionId)` — cancel a subscription
+  - [ ] 4.5.3 Cancel a subscription by disposing its handle (releases exactly that claim)
   - [ ] 4.5.4 Auto-cancel on brick disconnect
   - [ ] 4.5.5 Integration with telemetry scheduler mode transitions
 - [ ] **4.6 Filesystem services** — scope and behaviour are settled in
