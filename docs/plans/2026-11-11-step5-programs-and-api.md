@@ -111,6 +111,41 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 - Upload a file, list, remove; run a brick's own demo `.rbf` and stop it; run while one runs (refused, then `replace`); emergency stop with a motor turning; a shell `echo` in full mode, refused in safe mode; connect and disconnect through the API.
 - IMPLEMENTATION_PLAN 4.6.4: the largest write chunk the firmware takes over TCP and over Bluetooth (today both use the firmware's 1024-byte buffer); write files of 1, 1000 and 100 000 bytes over each and read them back.
 
+## Review (codex, inline packet)
+
+### Round 1 — U3, U4, U6 (11.11.2026), NOT-READY → fixed in ddcdf57
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | two `run` calls race their checks; the second start is refused in silence | CONFIRMED | run and stop take turns per brick |
+| 2 | major | never seen running reported as a refusal; a short program may have ended | CONFIRMED | answers `false`, no claim either way |
+| 3 | major | a symbolic link inside a user area escapes safe mode | NEEDS-DESIGN-DECISION | documented: safe mode is a guardrail, not a sandbox (DESIGN §10) |
+| 4 | minor | the poll keeps running for a brick that no longer answers | CONFIRMED | following ends on a failed poll |
+| 5 | minor | a throwing listener costs the others the change | CONFIRMED | listeners isolated |
+| 6 | minor | a closed consumer can still subscribe | CONFIRMED | refused with `consumer_failed` |
+| 7 | minor | a wrong reply kind reported as a lost connection | CONFIRMED | `protocol_failed` |
+
+### Round 2 — confirmation of round 1 (11.11.2026), NOT-READY → 6d03495
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | `emergencyStop` is not queued, so a waiting `run` can start the program after it | CONFIRMED | an emergency stop cancels every run asked before it whose start is not sent (`program_cancelled`); test + 2 mutations |
+| 2 | major | one failed poll ends following of a started program | CONFIRMED | three failures in a row; **the fix itself is round 3's finding 1 — not closed** |
+| 3 | minor | program services pile up, also for invalid ids | CONFIRMED | an id the cockpit does not know is refused before any command |
+| 4 | minor | file answers carry no brick id though the module says every answer does | CONFIRMED | the claim narrowed (R7, DESIGN 10.2) |
+
+### Round 3 — confirmation of round 2 (11.11.2026), NOT-READY → escalated
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | the failure count survives a stop and a new run: two failures on program A, stop, run B, one failure ends following of B | CONFIRMED (`stopNow` and `run`'s confirmation call `isRunning` directly; only the poll path resets the count) | **escalated to the owner** — third round in the same area, a defect in the previous round's fix |
+| 2 | minor | "ask `getActiveBrickId()` afterwards" is itself racy | CONFIRMED | docs: take the id first and pass it |
+
+Why escalated, not patched: rounds 2 and 3 both found majors in keeping the poll alive while nobody listens (`following`). Nothing outside the service reads a poll that has no listener: the API's `onProgramStateChanged` is the only reader of the state changes, and `isProgramRunning` asks the brick itself. Options put to the owner:
+
+- **(a)** keep KTD4's following and rework the accounting: failures count against the brick's answers, any answer and every transition reset the count; regression test two failures → stop → run B → one failure, B still followed.
+- **(b)** poll only while someone listens: drop `following` and the counter; step 6's telemetry scheduler takes the poll over, as KTD4 already says. Removes the class of rounds 2–3 instead of closing one more instance. Recommended, since no reader exists.
+
 ## Open, decided later
 
 - 4.7a.4's poll joins the telemetry scheduler (step 6).
