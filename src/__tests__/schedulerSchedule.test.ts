@@ -485,6 +485,30 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		assert.deepEqual(d.delivered, [['a=1']]);
 	});
 
+	it('keeps the mode it sent when a listener throws: the reply was good (round 3)', async () => {
+		const floats = [1, NaN];
+		let call = 0;
+		let thrown = false;
+		const errors: unknown[] = [];
+		const delivered: string[] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: [sensor('a', 0)], limits: LIBUSB, tickPeriodMs: 10, now: () => 0,
+			send: () => { const b = new Uint8Array(64); new DataView(b.buffer).setFloat32(0, floats[Math.min(call++, 1)], true); return Promise.resolve(b); },
+			onValues: (values) => {
+				delivered.push(...values.map((v) => String(v.value)));
+				if (!thrown) { thrown = true; throw new Error('a consumer bug'); }
+			},
+			onError: (error) => { errors.push(error); },
+		});
+
+		await scheduler.runTick();   // mode 0 reads 1; the listener throws
+		await scheduler.runTick();   // the same mode: its NaN is delivered, no fresh settle
+
+		assert.deepEqual(delivered, ['1', 'NaN']);
+		assert.equal(errors.length, 1, 'the listener error was not reported');
+		assert.equal(scheduler.stats.framesFailed, 0, 'counted a good frame as failed');
+	});
+
 	it('remembers the mode a port was left in when its rows are removed and come back in another mode', async () => {
 		const d = driver([sensor('a', 0)], { floats: [1, 1, NaN] });
 		await d.scheduler.runTick();

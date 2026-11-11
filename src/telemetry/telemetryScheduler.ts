@@ -291,13 +291,9 @@ export class TelemetryScheduler {
 		}
 		carried.push(...frame.deferred);
 		this.noteModes(frame);
+		let payload: Uint8Array;
 		try {
-			const payload = await this.options.send(buildTelemetryFrame(frame));
-			this.framesSent += 1;
-			// Disposed while the reply was on its way: nobody is to hear from this loop again.
-			if (this.disposed) { return false; }
-			this.consume(frame, payload);
-			return true;
+			payload = await this.options.send(buildTelemetryFrame(frame));
 		} catch (error) {
 			// The command may never have reached the brick: the mode it carried is not known to be
 			// set, so the next read of those ports settles afresh (review of U4, round 2).
@@ -306,6 +302,12 @@ export class TelemetryScheduler {
 			this.options.onError?.(error);
 			return false;
 		}
+		this.framesSent += 1;
+		// Disposed while the reply was on its way: nobody is to hear from this loop again.
+		if (this.disposed) { return false; }
+		// The command reached the brick: what goes wrong from here is not the link's (round 3).
+		this.consume(frame, payload);
+		return true;
 	}
 
 	private forgetModes(frame: AssembledFrame): void {
@@ -407,7 +409,9 @@ export class TelemetryScheduler {
 			}
 		}
 
-		if (values.length > 0) { this.options.onValues?.(values); }
+		if (values.length === 0) { return; }
+		// A consumer's failing listener is reported, not mistaken for a failed frame (review of U4, round 3).
+		try { this.options.onValues?.(values); } catch (error) { this.options.onError?.(error); }
 	}
 
 	/**
