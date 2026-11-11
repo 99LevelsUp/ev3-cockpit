@@ -1997,6 +1997,13 @@ This order ensures:
 
 See `REQUIREMENTS.md §4`. During implementation, consider these areas only to the extent that they can be added later without a major rewrite.
 
+- **The cockpit as an MCP server** (owner, 11.11.2026): Claude, Codex or another agent connects to
+  the cockpit over MCP and works with the bricks through it. Ideation and brainstorming come
+  first; until then the cockpit keeps the design set out here. It may become its own project,
+  beside `ev3-c` (formerly `ev3-native`) and the cockpit's other sidekick projects, in which case
+  it would be a consumer of the public API (Phase 4) rather than a part of the cockpit. Nothing in
+  Phases 1–5 is built for it now; the API should simply not close the door on it.
+
 ## 14. Maybe Someday
 
 See `REQUIREMENTS.md §16`. Do not design against these areas, but do not block them either.
