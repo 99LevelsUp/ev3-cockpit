@@ -237,6 +237,7 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 			assert.deepEqual(ended, [{ brickKey: B, handles: [onB.handle] }]);
 			assert.equal(service.grantOf(onB.handle), undefined);
 			assert.equal(service.loopFor(B), undefined);
+			assert.equal(service.modeOf(B), ActivityMode.None, 'a disconnected session is no session');
 			assert.equal(service.modeOf(A), ActivityMode.Subscribed, 'another brick\'s claims are untouched');
 
 			bricks.connect(B);
@@ -301,6 +302,22 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 		}
 	});
 
+	it('grants a claim against the brick\'s transport now, not the one its claims were last planned on', () => {
+		const { bricks, service } = world();
+		try {
+			bricks.connect(B);
+			const first = service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			service.release(first.handle);
+			bricks.moveRoute(B, Transport.BT);
+
+			const ticket = service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 10 }, 'ev3-c');
+
+			assert.deepEqual(ticket.grant, { 'ports.motor.A.tacho': 250 }, 'Bluetooth\'s floor, not USB\'s 50 ms');
+		} finally {
+			service.dispose();
+		}
+	});
+
 	it('refuses a claim that could never be read, and adds nothing', () => {
 		const { bricks, service } = world();
 		try {
@@ -358,12 +375,18 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 		}
 	});
 
-	it('keeps a tick override for the foreground, below the floor, as probes need', () => {
+	it('keeps a tick override for the foreground, below the floor, as probes need, also when re-planned', () => {
 		const { bricks, service } = world({ tickPeriodMs: 20 });
 		try {
 			bricks.connect(A);
+			bricks.connect(B);
 			bricks.setActive(A);
 			assert.equal(service.loopFor(A)?.tickPeriodMs, 20);
+
+			service.claim(A, { rowIds: ['ports.motor.A.tacho'], intervalMs: 300 }, 'ev3-c');
+			bricks.setActive(B);
+			bricks.setActive(A);
+			assert.equal(service.loopFor(A)?.tickPeriodMs, 20, 'the timer and the plan agree on 20 ms');
 		} finally {
 			service.dispose();
 		}

@@ -161,9 +161,7 @@ export class TelemetryService implements vscode.Disposable {
 				? ActivityMode.Foreground
 				: ActivityMode.Subscribed;
 		}
-		return this.options.host.getSession(brickKey) === undefined
-			? ActivityMode.None
-			: ActivityMode.Minimal;
+		return this.hasSession(brickKey) ? ActivityMode.Minimal : ActivityMode.None;
 	}
 
 	/** The running loop for a brick, for tests and hardware probes. */
@@ -188,6 +186,9 @@ export class TelemetryService implements vscode.Disposable {
 			throw new SubscriptionError(`Brick ${brickKey} is connected over a link that does not carry telemetry.`);
 		}
 		const claims = this.claimsFor(brickKey);
+		// The grant is fixed now, so against the floor of the link the brick is on now: the registry
+		// keeps the cadence of its last plan, which a brick nobody read since may have left behind.
+		if (transport !== undefined) { claims.setCadence(this.cadenceOf(transport)); }
 		const { handle: inner } = claims.claim(request, owner);
 		const handle = `telemetry-${this.nextHandle++}`;
 		this.handles.set(handle, { brickKey, inner });
@@ -258,6 +259,8 @@ export class TelemetryService implements vscode.Disposable {
 			brickKey,
 			rows: plan.rows,
 			tickPeriodMs: plan.periodMs,
+			// The plan's floor, override included: retiming clamps to the same floor the plan used.
+			floorMs: this.cadenceOf(transport).floorMs,
 			now: this.options.now,
 			onValues: (values) => this._onValues.fire({ brickKey, values }),
 			onError: (error) => this._onError.fire({ brickKey, error }),

@@ -243,6 +243,12 @@ export class BrickManager implements vscode.Disposable {
 	private readonly _onActiveBrickChange = new vscode.EventEmitter<ActiveBrickIdChangeEvent>();
 	readonly onActiveBrickChange = this._onActiveBrickChange.event;
 
+	/**
+	 * A brick's sign-in ended. Its own event because a route event cannot carry it: a brick that
+	 * lost its link has no route left to lose, so signing it out changes no route (step-6 U5 review).
+	 */
+	private readonly _onSignInEnded = new vscode.EventEmitter<BrickId>();
+
 	private readonly _onPairingStarted = new vscode.EventEmitter<PairingStartedEvent>();
 	/** Fired when a pairing starts, so whoever shows progress can tell the user to look at the brick. */
 	readonly onPairingStarted = this._onPairingStarted.event;
@@ -700,13 +706,19 @@ export class BrickManager implements vscode.Disposable {
 					? { connectionState: ConnectionState.Reconnecting }
 					: undefined;
 			},
-			onSessionStateChange: (listener, thisArgs, disposables) => this.onRouteChange(
-				(e) => {
-					listener.call(thisArgs, {
-						brickKey: e.brickId,
-						newState: e.current ? ConnectionState.Connected : ConnectionState.Reconnecting,
-					});
-				}, undefined, disposables),
+			onSessionStateChange: (listener, thisArgs, disposables) => {
+				const tell = (brickKey: BrickId, newState: ConnectionState): void => {
+					listener.call(thisArgs, { brickKey, newState });
+				};
+				const routes = this.onRouteChange((e) => {
+					tell(e.brickId, e.current ? ConnectionState.Connected : ConnectionState.Reconnecting);
+				});
+				// Its channels may still be closing: the state the host reports settles with the route event.
+				const signIns = this._onSignInEnded.event((brickId) => tell(brickId, ConnectionState.Disconnected));
+				const both = { dispose: () => { routes.dispose(); signIns.dispose(); } };
+				disposables?.push(both);
+				return both;
+			},
 			onActiveBrickChange: (listener, thisArgs, disposables) => this.onActiveBrickChange(
 				(e) => { listener.call(thisArgs, { previousBrickKey: e.previous, newBrickKey: e.current }); },
 				undefined, disposables),
@@ -753,6 +765,7 @@ export class BrickManager implements vscode.Disposable {
 		this.subscriptions.length = 0;
 		this._onRouteChange.dispose();
 		this._onActiveBrickChange.dispose();
+		this._onSignInEnded.dispose();
 		this._onPairingStarted.dispose();
 		this._onPeerListChange.dispose();
 		this._onOneSidedRepair.dispose();
@@ -946,6 +959,7 @@ export class BrickManager implements vscode.Disposable {
 		this.pairedBefore.delete(brickId);
 		// A Bluetooth join held for the check belongs to the sign-in that just ended: it gives up.
 		this.wakeBluetooth(brickId);
+		this._onSignInEnded.fire(brickId);
 	}
 
 	// ── Internal: forgetting ────────────────────────────────────────
