@@ -19,7 +19,7 @@
  *    divider comes up, so a stall costs latency and nothing else.
  */
 
-import { TelemetryRow, RowValue, comesUpOnTick } from './telemetryRow';
+import { TelemetryRow, RowValue, comesUpOnTick, assertValidLifetime } from './telemetryRow';
 import { portStateOf, PortState } from './portState';
 import {
 	AssembledFrame,
@@ -107,9 +107,46 @@ export class TelemetryScheduler {
 	private readonly occupancy = new Map<string, number>();
 
 	private readonly now: () => number;
+	/** The rows read now; `setRows` replaces them while running (KTD2). */
+	private rows: readonly TelemetryRow[];
+	private period: number;
 
 	constructor(private readonly options: SchedulerOptions) {
 		this.now = options.now ?? (() => Date.now());
+		this.rows = options.rows;
+		this.period = options.tickPeriodMs;
+	}
+
+	/** Milliseconds between ticks now. */
+	get tickPeriodMs(): number {
+		return this.period;
+	}
+
+	/**
+	 * Replaces the rows while running. Keeps the tick counter (phase), the occupancy gate and the
+	 * retired one-shots; a carried-over row stays only if still wanted, in its new version. A
+	 * refused set leaves the old one in place.
+	 */
+	setRows(rows: readonly TelemetryRow[]): void {
+		const ids = new Set<string>();
+		for (const row of rows) {
+			assertValidLifetime(row.id, row.lifetime);
+			if (ids.has(row.id)) { throw new Error(`Row '${row.id}' is in the set twice.`); }
+			ids.add(row.id);
+		}
+		const byId = new Map(rows.map((row) => [row.id, row] as const));
+		this.rows = [...rows];
+		this.carriedOver = this.carriedOver.flatMap((row) => { const next = byId.get(row.id); return next ? [next] : []; });
+	}
+
+	/**
+	 * Changes the period: restarts the timer, adds no tick, keeps the count. No floor here — the
+	 * scheduler does not know the transport; `BrickTelemetry.setPeriod` clamps to it.
+	 */
+	setPeriod(ms: number): void {
+		if (!(Number.isFinite(ms) && ms > 0)) { throw new Error(`A tick period must be a positive number of milliseconds, not ${ms}.`); }
+		this.period = ms;
+		if (this.timer) { this.stop(); this.start(); }
 	}
 
 	get stats(): SchedulerStats {
@@ -135,7 +172,7 @@ export class TelemetryScheduler {
 
 	start(): void {
 		if (this.timer || this.disposed) { return; }
-		this.timer = setInterval(() => { void this.runTick(); }, this.options.tickPeriodMs);
+		this.timer = setInterval(() => { void this.runTick(); }, this.period);
 	}
 
 	stop(): void {
@@ -227,7 +264,7 @@ export class TelemetryScheduler {
 		};
 
 		for (const row of this.carriedOver) { consider(row); }
-		for (const row of this.options.rows) {
+		for (const row of this.rows) {
 			if (comesUpOnTick(row.lifetime, tick)) { consider(row); }
 		}
 		return chosen;

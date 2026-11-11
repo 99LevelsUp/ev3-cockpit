@@ -112,6 +112,18 @@ export interface TelemetryRow {
 	parse(payload: Uint8Array, slot: RowSlot, sampledAt: number): RowValue;
 }
 
+/** The same row on another schedule: what it reads is unchanged (step-6 plan KTD2). */
+export function withLifetime(row: TelemetryRow, lifetime: RowLifetime): TelemetryRow {
+	return { ...row, lifetime, emit: row.emit.bind(row), parse: row.parse.bind(row) };
+}
+
+/** Throws unless a repeating lifetime's divider is a whole number of ticks, 1 or more. */
+export function assertValidLifetime(id: string, lifetime: RowLifetime): void {
+	if (lifetime.kind === 'repeating' && !(Number.isInteger(lifetime.divider) && lifetime.divider >= 1)) {
+		throw new Error(`Row '${id}' repeats on divider ${lifetime.divider}; a divider is a whole number of ticks, 1 or more.`);
+	}
+}
+
 /** Divider for a repeating row; 0 for anything not on a repeating schedule. */
 export function dividerOf(lifetime: RowLifetime): number {
 	return lifetime.kind === 'repeating' ? lifetime.divider : 0;

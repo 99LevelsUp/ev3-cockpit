@@ -75,6 +75,10 @@ export interface BrickTelemetry {
 	readonly stats: SchedulerStats;
 	/** Tick period this loop actually runs at, in milliseconds. */
 	readonly tickPeriodMs: number;
+	/** Changes the period, clamped to the transport's floor; returns the period granted. */
+	setPeriod(ms: number): number;
+	/** Replaces the rows while running (KTD2). */
+	setRows(rows: readonly TelemetryRow[]): void;
 }
 
 /**
@@ -136,6 +140,12 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 		dispose: () => scheduler.dispose(),
 		runTick: () => scheduler.runTick(),
 		get stats() { return scheduler.stats; },
-		tickPeriodMs,
+		get tickPeriodMs() { return scheduler.tickPeriodMs; },
+		setPeriod: (ms: number) => {
+			const granted = Math.max(ms, cadenceFor(transport).floorMs);
+			scheduler.setPeriod(granted);
+			return granted;
+		},
+		setRows: (rows) => scheduler.setRows(rows),
 	};
 }
