@@ -109,6 +109,7 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 ### U9. Hardware session
 
 - Upload a file, list, remove; run a brick's own demo `.rbf` and stop it; run while one runs (refused, then `replace`); emergency stop with a motor turning; a shell `echo` in full mode, refused in safe mode; connect and disconnect through the API.
+- IMPLEMENTATION_PLAN 4.6.4: the largest write chunk the firmware takes over TCP and over Bluetooth (today both use the firmware's 1024-byte buffer); write files of 1, 1000 and 100 000 bytes over each and read them back.
 
 ## Open, decided later
 
