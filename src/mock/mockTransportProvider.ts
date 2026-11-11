@@ -9,6 +9,8 @@ import { MockConfig, MockBrickConfig, MockPortConfig } from './mockConfig';
 import { evaluateDynamic } from './dynamics';
 import { MockFilesystem } from './mockFilesystem';
 import { PROGRAM_STATUS } from '../protocol/ev3Packet';
+import { typeCodeOf, PeripheralType } from '../protocol/peripheralTypes';
+import { executeTelemetryFrame, MockBrickView, MockPortReading } from './mockFrameInterpreter';
 
 /** The one handle the mock hands out; it stores whole files and has no handle table. */
 const MOCK_FILE_HANDLE = 1;
@@ -52,6 +54,10 @@ function resolveProgramPath(path: string): string {
 	return `/${parts.join('/')}`;
 }
 
+/** `TYPE_NONE` and `TYPE_ERROR` (`bytecodes.h`): an empty port, and a device whose type is invalid. */
+const TYPE_NONE = 126;
+const TYPE_ERROR = 127;
+
 /** `ICON_UNKNOWN` (`bytecodes.h` 1304): the mock keeps names only, not device classes. */
 const MOCK_PEER_TYPE = 6;
 
@@ -73,10 +79,9 @@ export class MockTransportProvider implements TransportProvider {
 	readonly capabilities: TransportCapabilities = {
 		supportsForget: false,
 		supportsSignalInfo: false,
-		// No bytecode interpreter: this provider dispatches typed commands, so a composed
-		// frame is the one thing it cannot answer. Declared so telemetry skips the session
-		// rather than throwing on every tick — see `executeCommand`'s `telemetry:frame` case.
-		supportsTelemetryFrames: false,
+		// The mock interprets the opcodes the telemetry rows emit (step-6 plan D4), so telemetry
+		// runs on it as on a brick — see `mockFrameInterpreter.ts`.
+		supportsTelemetryFrames: true,
 	};
 
 	private readonly bricks = new Map<BrickKey, MockBrickState>();
@@ -194,15 +199,9 @@ export class MockTransportProvider implements TransportProvider {
 
 		switch (command.kind) {
 		case 'telemetry:frame':
-			// The mock answers typed commands, not bytecode, and a composed frame is bytecode.
-			// Returning a plausible-looking buffer would be worse than refusing: the rows would
-			// parse it and report numbers that came from nowhere. Scheduler tests drive a fake
-			// frame sender instead, and a mock that serves telemetry needs a bytecode-aware
-			// fake — recorded as a gap rather than papered over here.
-			throw new TransportError(
-				'The mock provider cannot execute a telemetry frame: it has no bytecode '
-				+ 'interpreter. Drive the scheduler with a fake frame sender instead.'
-			);
+			// Decoded and run opcode by opcode against this brick's state (step-6 plan D4): the
+			// encoding, the alignment and the reply layout are tested, not stood in for.
+			return { kind: 'telemetry:frame', payload: executeTelemetryFrame(command.payload, this.frameView(state, now)) };
 
 		case 'battery':
 			return { kind: 'battery', level: state.config.battery.level, voltage: state.config.battery.voltage };
@@ -481,6 +480,34 @@ export class MockTransportProvider implements TransportProvider {
 			favorite: false,
 			nameSource: 'brick',
 			lastSeenAt: now,
+		};
+	}
+
+	/** The brick's state as a telemetry frame reads it. */
+	private frameView(state: MockBrickState, now: number): MockBrickView {
+		const reading = (ports: ReadonlyArray<MockPortConfig>, label: string): MockPortReading => {
+			const port = ports.find((p) => p.port === label);
+			if (!port) { return { typeCode: TYPE_NONE, mode: 0, value: Number.NaN }; }
+			const typeCode = port.peripheralType === undefined ? TYPE_NONE
+				// A name outside the vocabulary is a device whose type is invalid (TYPE_ERROR).
+				: typeCodeOf(port.peripheralType as PeripheralType) ?? TYPE_ERROR;
+			const v = evaluateDynamic(port.dynamic, now);
+			return { typeCode, mode: 0, value: typeof v === 'number' ? v : Number.NaN };
+		};
+		const { config } = state;
+		return {
+			sensor: (index) => reading(config.sensorPorts, String(index + 1)),
+			motor: (index) => reading(config.motorPorts, 'ABCD'[index] ?? ''),
+			batteryLevel: config.battery.level,
+			batteryVoltage: config.battery.voltage ?? 0,
+			brickName: state.renamedTo ?? config.displayName,
+			firmwareVersion: config.firmwareVersion ?? '',
+			// The mock's radios: Bluetooth on and visible, no Wi-Fi dongle.
+			bluetoothOn: true,
+			bluetoothVisible: true,
+			bluetoothPeers: state.bluetoothPeers.length,
+			wifiOn: false,
+			wifiPresent: false,
 		};
 	}
 
