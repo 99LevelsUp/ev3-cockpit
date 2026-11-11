@@ -99,9 +99,9 @@ Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floo
 
 **Not in U6.** The API surface (U8), throttling (U7), the program-running preset (U9/U7), the panel (Phase 5).
 
-**Owner decisions (recommended defaults; U6 starts on them unless the owner says otherwise).**
-- **D9. Stale and clearing:** stale = loop not running for the row, or older than 3× its effective interval; kept for `staleTimeoutMs` (setting `ev3-cockpit.telemetry.staleTimeoutMs`, default 10 s), then dropped; session end clears at once; static rows stay for the session.
-- **D10. Events carry changed rows only** (value, mode, stale flag or effective interval), as DESIGN §5.4 says; every value still carries `sampledAt`. A consumer that wants every sample (a graph) can be offered a flag in U8 if one asks.
+**Owner decisions (11.11.2026).**
+- **D9. Stale and clearing — agreed, and parametrised:** stale = loop not running for the row, or older than `staleFactor` × its effective interval; kept for `staleTimeoutMs`, then dropped; session end clears at once; static rows stay for the session. Owner: *no fixed constants in the code* — both are user settings (`ev3-cockpit.telemetry.staleFactor`, default 3; `ev3-cockpit.telemetry.staleTimeoutMs`, default 10 000), whose only defaults live in `package.json`; the read model takes them as required options and follows a settings change without a restart; a value out of range falls back to the declared default with a warning.
+- **D10. Events carry changed rows only — agreed on the condition that no information is lost in an outage.** How that holds: during an outage there are no samples to lose; the values turn stale, and that is itself an event; when the link comes back, the first sample makes an event even if its value is unchanged, because the stale flag flips; a reader can take the whole snapshot at any time (U8 sends it before events). Every value carries `sampledAt`. Pinned by a test. A consumer that wants every sample (a graph) can be offered a flag in U8 if one asks.
 
 ### U7. Adaptive throttling
 3.4.1 (a per-brick round-trip window with p95 and stall count), 3.4.3 (KTD5), 3.4.4 (per brick), 3.4.5 (the numbers for the diagnostic display, exposed for Phase 5), 3.7.2. Tests drive a fake clock and a brick whose latency tail grows and falls; one slow brick does not slow another.
