@@ -1112,8 +1112,12 @@ One rule genuinely follows from round trips being scarce, and it survives:
 - **Compose widely within a tick.** Every row coming up on this tick rides in one command.
   What does *not* follow is pulling rows forward from future ticks: neither reference does it,
   and it is what made the HID budget unmanageable while letting intervals ratchet shorter.
-  The slow tier keeps its **own command** on its own ticks rather than being merged into the
-  fast one — again as Device Manager does, calling `GetDeviceInfo()` outside `CheckSensors()`.
+  ~~The slow tier keeps its own command on its own ticks rather than being merged into the fast
+  one, as Device Manager does.~~ **Superseded by owner decision D8 (11.11.2026):** one command a
+  tick, the event and static rows riding with the sampled ones on their ticks. Measured on three
+  bricks, every telemetry command costs a running user program about 2 ms of the VM, nearly
+  whatever it carries (step-6 plan, "does telemetry slow a running program?"); a second
+  command on every slow tick bought nothing that justified that.
 - **Priority is a truncation rule, not the scheduling principle.** It decides what survives
   when a tick's rows genuinely cannot fit one command — in practice the HID fallback.
   Truncation must be **rotating, not static**: a row that loses this tick is carried to the

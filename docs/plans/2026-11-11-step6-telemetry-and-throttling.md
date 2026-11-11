@@ -49,11 +49,13 @@ Also closed in U1 as done or absorbed: 3.1.9 (rotating truncation, test `telemet
 - **D6. A sensor mode is a parameter of the subscription** (owner, 11.11.2026, during U5): row ids stay `ports.sensor.1.value`; a claim may carry `modes: { '1': 2 }`. One row is one value of a port, so ids do not multiply per mode.
 - **D7. The first claim holds a port's mode; a conflicting claim is refused** with the typed error `mode_conflict`, naming the holder (owner, 11.11.2026). Nobody's mode changes under them. The cockpit's own foreground claim holds no mode: it reads whatever mode is held, the device's default when none is — otherwise no consumer could ever ask for another mode of an active brick.
 
+- **D8. One telemetry command a tick** (owner, 11.11.2026, after the program-load measurement): the event and static rows ride in the same command as the sampled ones; KTD3's separate slow command is withdrawn. Every command costs a running program about 2 ms.
+
 ## Key Technical Decisions
 
 - KTD1. **One loop per signed-in brick, not only the active one.** Foreground preset for the active brick, subscribed preset for a brick some consumer subscribed to, minimal otherwise (DESIGN §4.4). A brick that is not signed in or has no route runs nothing (2.8.10a).
 - KTD2. **The schedule is split from the row.** A row says what to read and how to parse it; how often comes from the claims on it (cockpit foreground, subscribers), recomputed when a claim comes or goes. The scheduler's rows and period change while it runs.
-- KTD3. **The slow tier gets its own command on its own ticks** (DESIGN §9.1b), within the one-frame-in-flight rule: on a slow tick the fast frame goes first and the slow command follows when it returns; a slow command still outstanding at the next tick makes that tick skip like any frame.
+- KTD3. ~~**The slow tier gets its own command on its own ticks**~~ — **superseded by D8**: one command a tick. Was: (DESIGN §9.1b), within the one-frame-in-flight rule: on a slow tick the fast frame goes first and the slow command follows when it returns; a slow command still outstanding at the next tick makes that tick skip like any frame.
 - KTD4. **Fastest subscriber wins, clamped to the transport's floor;** subscriptions are opaque handles; releasing one recomputes the effective interval (DESIGN §9.3).
 - KTD5. **Throttling moves only the base tick** (DESIGN §4.5, §9.5). Input: per brick, a window of the last N telemetry round trips; signal: p95 against the transport's target and the count of stalls (round trip above a stall threshold). Slower in steps when the tail is high, faster in steps when it is low for long enough; never below the floor, never so slow that the slowest row's interval exceeds the heartbeat window. Explicit commands and the heartbeat are not throttled. Thresholds are set from the U10 measurements; until then they are the DESIGN §4.5 numbers (6 ms median, 37 ms p95 with Port View open).
 - KTD6. **Telemetry on the API follows step 5:** a brick by id or `'active'` (resolved at the call), plain data, `sampledAt` per value, the raw type code beside the resolved device name, `listTelemetryRows()`, snapshot before events, subscriptions end with the consumer and when the brick disconnects (with an event saying so).
@@ -154,7 +156,7 @@ Rounds of one setting agree within about 1 %. **Verdict against the rule:** 500 
 **What the numbers say beyond the rule.** The loss grows linearly with the commands sent: each telemetry command costs the program about **2 ms** (BBB: 234 ms over 114 frames at 100 ms, 886 ms over 406 at 20 ms), nearly whatever it carries — in line with the VM's 2 ms slice (`PreemptMilliSeconds < 2`). Two consequences:
 
 1. **While a user program runs, telemetry slows down**, as the rule decided beforehand: a fourth preset, USB and TCP at 200 ms (about 1.2 % by this measurement), Bluetooth unchanged at 500 ms. It needs to know a program runs — the program-status row of U9 — so it is built with U9 and U7.
-2. **The slow tier's own command (KTD3) costs the program about 2 ms on every slow tick**, which merging it into the fast frame would save. That contradicts DESIGN §9.1b's reason for the split, so it goes to the owner (D8, open).
+2. **The slow tier's own command (KTD3) costs the program about 2 ms on every slow tick**, which merging it into the fast frame saves. Owner decision **D8**: one command a tick; DESIGN §9.1b corrected.
 
 Not measured yet: Bluetooth and TCP carry their commands through other paths in the VM's communication handling; U10 repeats this over both.
 
