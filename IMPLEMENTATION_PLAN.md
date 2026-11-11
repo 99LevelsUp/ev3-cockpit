@@ -1779,6 +1779,11 @@ Build the main product UX on top of the finished runtime.
   - [ ] 5.3.5 Quick actions: connect (available brick), focus/open (connected brick), forget (remembered offline)
   - [ ] 5.3.6 Ordering by `ui/brickOrder` (D5: USB, paired, rest; by name), built in step 2
   - [ ] 5.3.7 Efficient rendering for dozens of items
+  - [ ] 5.3.8 **Blocked channel, red** (owner decision 11.11.2026, from the step-4 U10 hardware session): a channel that is there and will not join is neither available nor lost. Three causes were met on the bench: the brick's Bluetooth is held by another device (another brick or a phone app: the pairing ends `NotFound` or `AuthenticationTimeout`, no dialog), the person declined the pairing (`AuthenticationNotAllowed`), and a pairing broken on one side over Bluetooth alone (WSA 10060). Today each one stops the retries, which is right, but says so only in a toast that goes away, and the channel keeps looking available.
+    - [ ] the brick layer keeps the blocked state per channel with its reason, and ends it at the next "Connect a Brick" or when what caused it changes,
+    - [ ] the channel is **red** wherever channel colours are shown: the state diagram in `DESIGN.md`, the picker, the panel, and the extension's icon in VS Code,
+    - [ ] the reason is shown as text beside it ("Bluetooth is used by another device", "pairing declined on the brick", "pairing broken on one side: connect USB or TCP").
+    - Why it is a normal state, not a fault of the cockpit (the owner's scenario): at a competition a phone runs a telemetry monitor over Bluetooth while the computer programs the brick over USB. The cable is pulled, the brick runs in the arena, the phone shows its state; back at the desk the cable goes in again. The cockpit must not take the Bluetooth link from the phone, and must say why its own Bluetooth channel does not join.
 - [ ] **5.4 Brick tab**
   - [ ] 5.4.1 Tab creation on connect, removal on disconnect
   - [ ] 5.4.2 Tab header: transport icon with status color, brick name, gear icon, X icon
