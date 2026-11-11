@@ -461,6 +461,30 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		assert.deepEqual(delivered, ['1', 'NaN']);
 	});
 
+	it('sends nothing more when disposed from the fast frame\'s own listener (round 2)', async () => {
+		let calls = 0;
+		const scheduler: TelemetryScheduler = new TelemetryScheduler({
+			rows: [row('f'), row('s', { kind: 'oneShot' })], limits: LIBUSB, tickPeriodMs: 10,
+			send: () => { calls += 1; return Promise.resolve(new Uint8Array(64)); },
+			onValues: () => { scheduler.dispose(); },
+		});
+
+		await scheduler.runTick();
+
+		assert.equal(calls, 1, 'sent the slow command after a listener disposed the loop');
+	});
+
+	it('settles afresh after a switch command that failed before reaching the brick (round 2)', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, NaN], fail: [2] });
+		await d.scheduler.runTick();                     // mode 0: 1
+		d.scheduler.setRows([sensor('b', 1)]);
+		await d.scheduler.runTick();                     // the mode-1 command is lost
+		d.setClock(SETTLE_LIMIT_MS + 100);
+		await d.scheduler.runTick();                     // the retry switches the brick now: NaN withheld
+
+		assert.deepEqual(d.delivered, [['a=1']]);
+	});
+
 	it('remembers the mode a port was left in when its rows are removed and come back in another mode', async () => {
 		const d = driver([sensor('a', 0)], { floats: [1, 1, NaN] });
 		await d.scheduler.runTick();
