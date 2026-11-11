@@ -1430,46 +1430,61 @@ sequenceDiagram
 
 ## 10. Public API Design
 
+Built in step 5 (`docs/plans/2026-11-11-step5-programs-and-api.md`), `src/api/cockpitApi.ts`.
+Consumers: VS Code extensions today (ev3-c, formerly ev3-native; ev3-explorer; later ev3-python,
+ev3-blockly), and possibly an MCP server that wraps the same object (IMPLEMENTATION_PLAN §13).
+
 ### 10.1 Entry Model
 
 A dependent extension:
 
-1. declares Cockpit in `extensionDependencies` and after activation calls `vscode.extensions.getExtension('ev3-cockpit')?.exports`,
-2. registers as a consumer,
-3. receives a snapshot of connected bricks,
-4. subscribes to state change callbacks,
-5. optionally creates telemetry subscriptions.
+1. declares Cockpit in `extensionDependencies` and takes
+   `vscode.extensions.getExtension('99LevelsUp.ev3-cockpit')?.exports` after activation,
+2. checks `apiVersion` (1),
+3. calls `registerConsumer(name)` and works with the consumer it gets,
+4. disposes the consumer when it is done; its subscriptions end with it.
+
+Everything that crosses the API is plain data and promises — no `vscode` types, apart from the
+`dispose` handles of subscriptions — so it serialises and an MCP wrapper needs no translation.
+Every error is a `CockpitError` with a stable `code` (`not_connected`, `access_denied`,
+`program_running`, `program_not_found`, `program_start_refused`, …).
 
 ### 10.2 What the API Exports
 
-The first version of the public API exports:
+A brick is named by its id or by `'active'`, resolved when the call is made; every answer and
+event names it by id (owner, 11.11.2026; both sibling designs use `'active'`).
 
-- `registerConsumer`,
-- `unregisterConsumer`,
-- `getConnectedBricks`,
-- `onBrickStateChanged`,
-- `getActiveBrick`,
-- `onActiveBrickChanged`,
-- `listTelemetryRows` — the row vocabulary and its `apiVersion`, so a consumer can discover
-  what exists rather than hard-coding ids,
-- `subscribeTelemetry` — takes rows and a requested interval, returns the granted one,
-- `unsubscribeTelemetry`,
-- filesystem operations,
-- program control — run, stop, emergency stop, and a running-program query.
+- **Bricks:** `listBricks` (every brick the cockpit knows, with its channels and their states,
+  signed in, active, paired), `getActiveBrickId`, `setActiveBrick`, `connect` ("Connect a Brick":
+  every channel, pairing on the way with the brick's dialog as consent), `disconnect`,
+  `getBrickInfo` (the brick's name, firmware and OS versions), `onBricksChanged`,
+  `onActiveBrickChanged`.
+- **Files:** `list`, `exists`, `size`, `storage`, `readFile` and `writeFile` (chunked, with
+  progress and cancellation), `makeDirectory`, `remove` (`recursive` for a folder with content),
+  `move` (a copy then a removal on the brick, not atomic).
+- **Programs:** `runProgram` (an `.rbf` in the user slot; refused while a program runs unless
+  `replace`), `stopProgram`, `emergencyStop` (the brick's own power-off sequence: user and debug
+  slots, then every motor), `isProgramRunning`, `onProgramStateChanged` (polled while anyone
+  listens). A native program runs through a launcher `.rbf` its consumer puts beside it.
+- **Shell:** `runShell` — a command on the brick through `opSYSTEM`, only in full mode, logged.
+- **Access mode:** `getAccessMode`, `onAccessModeChanged`.
+- **Telemetry:** `listTelemetryRows`, `subscribeTelemetry`, `unsubscribeTelemetry` — step 6.
 
-Program control is listed because `ev3-native` cannot function without it: it compiles a
-binary, puts it on the brick, and runs it. An earlier revision of this list omitted it,
-which would have left that consumer with no supported path at all.
+### 10.3 Access Mode
 
-### 10.3 What the API Does Not Export
+The setting `ev3-cockpit.accessMode` (owner, 11.11.2026). **safe**, the default: a consumer
+writes, deletes and runs only under `/home/root/lms2012/prjs` and `/media/card`, and reads
+everywhere; paths are resolved as the brick resolves them, so `..` cannot climb out, and a user
+area itself cannot be removed. **full**: the whole brick, shell included. The cockpit enforces it
+in the API, so no consumer — ev3-explorer's `ev3://` included — routes around it.
 
-The public API intentionally does not export:
+### 10.4 Connecting Through the API
 
-- physical `connect`,
-- physical `disconnect`,
-- direct access to the discovery list of unconnected bricks.
-
-This keeps responsibility for the session lifecycle in one place.
+An earlier revision kept `connect`, `disconnect` and the list of unconnected bricks out of the
+API, so the session lifecycle stayed in one place. The owner chose to expose them (11.11.2026,
+ev3-explorer needs them). The lifecycle still has one owner: `connect` runs the brick layer's
+sign-in exactly as "Connect a Brick" does, with its pairing, progress and messages, and
+`disconnect` its sign-out.
 
 ## 11. Filesystem Design
 
