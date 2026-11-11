@@ -50,7 +50,8 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		await scheduler.runTick();   // tick 2: b (divider 3) does not come up
 		await scheduler.runTick();   // tick 3: it does
 
-		assert.deepEqual(seen.slice(2), [['a'], ['a', 'b']]);
+		// b is a divider-3 row, so it rides in the slow command of tick 3 (KTD3).
+		assert.deepEqual(seen.slice(2), [['a'], ['a'], ['b']]);
 	});
 
 	it('does not read a retired one-shot again when the rows are replaced', async () => {
@@ -61,7 +62,8 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		scheduler.setRows([row('a'), once]);
 		await scheduler.runTick();
 
-		assert.deepEqual(seen, [['a', 'fw'], ['a']]);
+		// The one-shot goes in tick 0's slow command (KTD3), and not again.
+		assert.deepEqual(seen, [['a'], ['fw'], ['a']]);
 	});
 
 	it('reads a one-shot added after the first tick on the next tick, once', async () => {
@@ -73,19 +75,21 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		await scheduler.runTick();
 		await scheduler.runTick();
 
-		assert.deepEqual(seen.slice(2), [['a', 'fw'], ['a']]);
+		// Read in the next tick's slow command (KTD3), then retired.
+		assert.deepEqual(seen.slice(2), [['a'], ['fw'], ['a']]);
 	});
 
 	it('keeps the occupancy gate when the rows are replaced', async () => {
 		const occupancy = row('p1.occupancy', { kind: 'repeating', divider: 5 }, { port: '1', reportsOccupancy: true });
 		const value = row('p1.value', { kind: 'repeating', divider: 1 }, { port: '1' });
 		const { scheduler, seen } = world([occupancy, value], LIBUSB, () => new Uint8Array(64).fill(126));
-		await scheduler.runTick();   // the port reports empty (126)
+		await scheduler.runTick();   // the port reports empty (126), in tick 0's slow command
+		const before = seen.length;
 
 		scheduler.setRows([occupancy, value]);
 		await scheduler.runTick();
 
-		assert.equal(seen.length, 1, 'read an empty port after the rows were replaced');
+		assert.equal(seen.length, before, 'read an empty port after the rows were replaced');
 		assert.equal(scheduler.portState('1'), 'empty');
 	});
 
@@ -223,5 +227,89 @@ describe('scheduler — one mode per port, and a settle after a switch (step-6 U
 		await scheduler.runTick();
 
 		assert.equal(seen.length, 2, 'withheld a reading although the mode stayed');
+	});
+});
+
+describe('scheduler — the slow tier in its own command (step-6 U4, KTD3, DESIGN §9.1b)', () => {
+	function recording(rows: TelemetryRow[], limits = LIBUSB, fail: (n: number) => boolean = () => false) {
+		const frames: string[][] = [];
+		let n = 0;
+		const scheduler = new TelemetryScheduler({
+			rows, limits, tickPeriodMs: 10,
+			send: () => { n += 1; return fail(n) ? Promise.reject(new Error('lost')) : Promise.resolve(new Uint8Array(64)); },
+			onValues: (values) => { frames.push(values.map((v) => v.rowId).sort()); },
+		});
+		return { scheduler, frames };
+	}
+
+	it('sends divider-1 rows in one command and every other row in a second, on the ticks they come up', async () => {
+		const { scheduler, frames } = recording([row('fast'), row('slow', { kind: 'repeating', divider: 2 }), row('fw', { kind: 'oneShot' })]);
+
+		await scheduler.runTick();   // tick 0: fast, then slow + fw
+		await scheduler.runTick();   // tick 1: fast only
+
+		assert.deepEqual(frames, [['fast'], ['fw', 'slow'], ['fast']]);
+		assert.equal(scheduler.stats.framesSent, 3);
+	});
+
+	it('sends only the slow command on a tick with no fast row', async () => {
+		const { scheduler, frames } = recording([row('slow', { kind: 'repeating', divider: 2 })]);
+
+		await scheduler.runTick();
+		await scheduler.runTick();
+
+		assert.deepEqual(frames, [['slow']]);
+		assert.equal(scheduler.stats.ticksEmpty, 1);
+	});
+
+	it('classifies by the divider in force, so a row slowed by setRows moves to the slow command', async () => {
+		const { scheduler, frames } = recording([row('a'), row('b')]);
+		await scheduler.runTick();
+
+		scheduler.setRows([row('a'), withLifetime(row('b'), { kind: 'repeating', divider: 1 }), withLifetime(row('c'), { kind: 'repeating', divider: 2 })]);
+		await scheduler.runTick();   // tick 1: c does not come up
+		await scheduler.runTick();   // tick 2: it does, in its own command
+
+		assert.deepEqual(frames, [['a', 'b'], ['a', 'b'], ['a', 'b'], ['c']]);
+	});
+
+	it('does not send the slow command when the fast one failed that tick', async () => {
+		const { scheduler, frames } = recording([row('fast'), row('slow', { kind: 'repeating', divider: 1 }), row('fw', { kind: 'oneShot' })], LIBUSB, (n) => n === 1);
+
+		await scheduler.runTick();
+
+		assert.deepEqual(frames, []);
+		assert.equal(scheduler.stats.framesFailed, 1);
+		assert.equal(scheduler.stats.framesSent, 0);
+	});
+
+	it('carries a slow row truncated on HID into the next slow command, not into the fast frame', async () => {
+		const wide = (id: string, lifetime: RowLifetime) => row(id, lifetime, { result: { bytes: 20, alignment: 1 } });
+		const { scheduler, frames } = recording([
+			wide('f1', { kind: 'repeating', divider: 1 }),
+			wide('s1', { kind: 'oneShot' }), wide('s2', { kind: 'oneShot' }), wide('s3', { kind: 'oneShot' }),
+		], HID);
+
+		await scheduler.runTick();   // fast: f1; slow: s1, s2 (s3 deferred)
+		await scheduler.runTick();   // fast: f1; slow: s3
+
+		assert.deepEqual(frames, [['f1'], ['s1', 's2'], ['f1'], ['s3']]);
+	});
+
+	it('holds one frame in flight across both commands of a tick', async () => {
+		let release: () => void = () => undefined;
+		let calls = 0;
+		const scheduler = new TelemetryScheduler({
+			rows: [row('fast'), row('fw', { kind: 'oneShot' })], limits: LIBUSB, tickPeriodMs: 10,
+			send: () => { calls += 1; return calls === 2 ? new Promise((resolve) => { release = () => resolve(new Uint8Array(64)); }) : Promise.resolve(new Uint8Array(64)); },
+		});
+
+		const first = scheduler.runTick();
+		await settle(5);              // the slow command of tick 0 is outstanding
+		await scheduler.runTick();    // tick 1 must stand down
+		release();
+		await first;
+
+		assert.equal(scheduler.stats.ticksSkipped, 1);
 	});
 });

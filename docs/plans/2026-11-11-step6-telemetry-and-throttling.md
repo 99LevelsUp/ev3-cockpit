@@ -69,7 +69,7 @@ The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decision
 ### U3. The mock serves frames — done 11.11.2026
 3.1.7a per D4: the mock decodes the assembler's bytecode for the opcodes in use and answers from its configured ports, battery and buttons; unknown opcodes are an error, not a zero. Tests run the real `BrickTelemetry` against it.
 
-### U4. A schedule that changes while running; mode ownership; port state
+### U4. A schedule that changes while running; mode ownership; port state — built 11.11.2026 (05f9b93, 29ccfb0, 901df00, 3cf25bc, slow tier); codex review pending
 KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle — 3.1.4b), 3.1.11 (KTD7). **As built (parts 1–3, 11.11.2026):** the scheduler refuses a row set with two modes of one port, when built and on `setRows`, so a frame never meets a conflict; a carried-over row in an old mode is dropped with its set. A mode switch withholds the port's readings until one comes back as a number, at most `SETTLE_LIMIT_MS` (1200 ms, `MAX_DEVICE_BUSY_TIME`, `lms2012.h` 313; U10 tunes it).
 
 ### U5. Subscriptions and the effective interval
