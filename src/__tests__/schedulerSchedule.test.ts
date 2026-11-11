@@ -64,6 +64,18 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		assert.deepEqual(seen, [['a', 'fw'], ['a']]);
 	});
 
+	it('reads a one-shot added after the first tick on the next tick, once', async () => {
+		const { scheduler, seen } = world([row('a')]);
+		await scheduler.runTick();
+		await scheduler.runTick();
+
+		scheduler.setRows([row('a'), row('fw', { kind: 'oneShot' })]);
+		await scheduler.runTick();
+		await scheduler.runTick();
+
+		assert.deepEqual(seen.slice(2), [['a', 'fw'], ['a']]);
+	});
+
 	it('keeps the occupancy gate when the rows are replaced', async () => {
 		const occupancy = row('p1.occupancy', { kind: 'repeating', divider: 5 }, { port: '1', reportsOccupancy: true });
 		const value = row('p1.value', { kind: 'repeating', divider: 1 }, { port: '1' });
