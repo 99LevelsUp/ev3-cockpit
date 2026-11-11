@@ -131,6 +131,18 @@ Both in edges of the round-1 rework, not in its approach. A third round finding 
 
 Convergence gate met: no blocker or major survives. U4 is closed in code; U10 measures the settle time, the read stall and the slow tier's frame costs.
 
+## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
+
+**Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
+
+**What the source says** (`lms2012.c` 1777–1786, 2397–2412; `lms2012.h`): the VM is one thread and takes its slots in turn, each for up to `PRG_PRIORITY` instructions or 2 ms. A telemetry frame is a direct command in `CMD_SLOT` of some 20–40 instructions; while it runs, the program in `USER_SLOT` waits. The expectation is a loss of a few milliseconds a second, not a half — but that is an argument, and the owner asked for it confirmed or refuted.
+
+**Method.** `scripts/bench/Bench.lms` (assembled with the firmware's `lmsasm`) counts passes of a tight loop for 10 s and writes the count to a file; it draws nothing. `scripts/program-load-probe.js` uploads it through the filesystem layer, runs it, runs `BrickTelemetry` beside it at a given period over USB, reads the count back; telemetry off, 500, 100 and 20 ms, interleaved, three rounds.
+
+**Rule, written before the run.** At the foreground cadences (USB 100 ms, Bluetooth 500 ms) the program loses at most **2 %**; at 20 ms at most **10 %**. More than that confirms the concern, and telemetry slows down while a user program runs (a fourth preset beside foreground, subscribed and minimal).
+
+**Result.** (pending)
+
 ## Open, decided later
 
 - ~~Two consumers want two modes of one sensor~~ — decided as D6/D7.
