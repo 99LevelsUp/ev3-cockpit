@@ -225,6 +225,8 @@ export class BrickManager implements vscode.Disposable {
 	private readonly oneSidedPending = new Map<BrickId, number>();
 	/** Bricks whose one-sided pairing is being repaired now. */
 	private readonly repairing = new Set<BrickId>();
+	/** Bluetooth joins waiting for the one-sided check, by brick (step-4 U10). */
+	private readonly bluetoothWaiters = new Map<BrickId, Set<() => void>>();
 	/**
 	 * Bricks repaired since the user last ran "Connect a Brick" on them. A brick that stores this
 	 * computer under a name that is not byte-exact looks one-sided after every repair; a second
@@ -805,6 +807,10 @@ export class BrickManager implements vscode.Disposable {
 		const transport = this.transportOf(key);
 		signIn.pending.add(key);
 		try {
+			// Only where the check can run: anywhere else a Bluetooth join starts as it always did.
+			if (transport === Transport.BT && this.windowsPairing && this.pairDevice) {
+				await this.awaitOneSidedCheck(brickId, signIn);
+			}
 			// A connect from an earlier sign-in can still be inside the provider, a Bluetooth one
 			// for seconds in the connection queue; the session manager makes this one wait its
 			// turn, and rejects it if the brick is signed out meanwhile.
@@ -828,7 +834,61 @@ export class BrickManager implements vscode.Disposable {
 			throw error;
 		} finally {
 			signIn.pending.delete(key);
+			// A USB or TCP join that ends may have been what held Bluetooth back.
+			if (transport !== Transport.BT) { this.wakeBluetooth(brickId); }
 		}
+	}
+
+	/**
+	 * Hold a Bluetooth join until the one-sided check has run (step-4 U10), so every way into a join
+	 * — sign-in, "Connect a Brick", a rejoin — waits at this one place. A connect over a pairing
+	 * broken on the brick's side only fails, after holding the radio for 15 s and arming the queue's
+	 * recovery pause, which on hardware starved the repair's own pairing.
+	 *
+	 * One microtask first, so USB and TCP joins started in the same pass are counted and a check
+	 * released in the same pass is seen. Woken ({@link wakeBluetooth}) after each read of the list,
+	 * whether it was read or failed (a USB channel that goes fails the read in flight), by a USB or
+	 * TCP join that ends, by a repair that ends, and by a sign-out; a wake only makes the join look
+	 * again.
+	 *
+	 * A join whose sign-in ended, whose brick is being forgotten or cleared, or whose pairing the
+	 * repair removed (KD4) is abandoned and not retried: the pairing that follows makes the channel
+	 * a candidate again.
+	 */
+	private async awaitOneSidedCheck(brickId: BrickId, signIn: SignIn): Promise<void> {
+		await Promise.resolve();
+		while (this.holdsBluetooth(brickId) && this.signedIn.get(brickId) === signIn && !this.disposed) {
+			await new Promise<void>((resolve) => {
+				const waiters = this.bluetoothWaiters.get(brickId) ?? new Set<() => void>();
+				waiters.add(resolve);
+				this.bluetoothWaiters.set(brickId, waiters);
+			});
+		}
+		if (this.signedIn.get(brickId) !== signIn || this.disposed || this.forgetting.has(brickId)
+			|| this.aggregator.getBrick(brickId)?.paired !== true) {
+			throw new ConnectionAbandonedError(`Bluetooth of ${brickId} is no longer wanted after the pairing check.`);
+		}
+	}
+
+	/**
+	 * Whether the brick's Bluetooth joins wait for the one-sided check (step-4 U10): a USB or TCP
+	 * channel is joining, is connected and waits to be checked, or a repair is removing a half. A
+	 * USB or TCP join that is a retry after a failure holds nothing: a cable that keeps failing
+	 * would otherwise keep Bluetooth out for good.
+	 */
+	private holdsBluetooth(brickId: BrickId): boolean {
+		if (this.oneSidedPending.has(brickId) || this.repairing.has(brickId)) { return true; }
+		const signIn = this.signedIn.get(brickId);
+		return signIn !== undefined && [...signIn.pending]
+			.some((key) => this.transportOf(key) !== Transport.BT && !signIn.backoff.has(key));
+	}
+
+	/** Let the Bluetooth joins held for this brick look again; spurious wakes cost nothing. */
+	private wakeBluetooth(brickId: BrickId): void {
+		const waiters = this.bluetoothWaiters.get(brickId);
+		if (!waiters) { return; }
+		this.bluetoothWaiters.delete(brickId);
+		for (const wake of waiters) { wake(); }
 	}
 
 	private scheduleRejoin(brickId: BrickId, signIn: SignIn, key: BrickKey, transport: Transport): void {
@@ -871,6 +931,8 @@ export class BrickManager implements vscode.Disposable {
 		for (const timer of signIn.retryTimers.values()) { clearTimeout(timer); }
 		this.signedIn.delete(brickId);
 		this.oneSidedPending.delete(brickId);
+		// A Bluetooth join held for the check belongs to the sign-in that just ended: it gives up.
+		this.wakeBluetooth(brickId);
 	}
 
 	// ── Internal: forgetting ────────────────────────────────────────
@@ -1049,12 +1111,16 @@ export class BrickManager implements vscode.Disposable {
 	 */
 	private readPeerListAfter(brickId: BrickId, what: string): void {
 		if (this.disposed || this.peerListBusy(brickId) || !this.connectedPeerListChannel(brickId)) { return; }
-		this.refreshPeerList(brickId).then(() => { this.checkOneSided(brickId); }, (error: unknown) => {
+		this.refreshPeerList(brickId).then(() => {
+			this.checkOneSided(brickId);
+			this.wakeBluetooth(brickId);
+		}, (error: unknown) => {
 			this.log?.warn(`Reading the list of paired computers of ${brickLabel(this.aggregator, brickId)} after `
 				+ `${what} failed: ${messageOf(error)}`);
-			// Nothing to check against: automatic pairing goes on rather than wait for a read that
-			// may never come.
+			// Nothing to check against: automatic pairing and Bluetooth go on rather than wait for a
+			// read that may never come.
 			if (this.oneSidedPending.delete(brickId)) { this.pairSighting(brickId); }
+			this.wakeBluetooth(brickId);
 		});
 	}
 
@@ -1067,7 +1133,9 @@ export class BrickManager implements vscode.Disposable {
 		if (state === ConnectionState.Connected && this.signedIn.has(brickId) && !this.peerListBusy(brickId)) {
 			this.oneSidedPending.set(brickId, this.peerReadsKept);
 		} else if (state === ConnectionState.Disconnected && !this.checkableChannelConnected(brickId)) {
-			// Over Bluetooth alone the check does not run (KTD6); the brick pairs as before.
+			// Over Bluetooth alone the check does not run (KTD6); the brick pairs as before. A held
+			// Bluetooth join is woken by the read in flight, which the disconnect fails; with no read
+			// in flight the check has already run.
 			this.oneSidedPending.delete(brickId);
 		}
 	}
@@ -1169,6 +1237,9 @@ export class BrickManager implements vscode.Disposable {
 			this.log?.warn(`Repairing the pairing of ${brickLabel(this.aggregator, brickId)} failed: ${messageOf(error)}`);
 		} finally {
 			this.repairing.delete(brickId);
+			// A Bluetooth join held for the repair looks again: a pairing that fails or is cancelled,
+			// or a removal that did not take, reads no list afterwards to wake it.
+			this.wakeBluetooth(brickId);
 		}
 	}
 
