@@ -41,8 +41,9 @@ Errors are `CockpitError`s with a stable `code`: `not_connected`, `access_denied
 start was sent), `protocol_failed`, `transport_failed`, `timeout`, …
 
 A brick id the cockpit does not know is refused with `not_connected`. Program, shell and
-brick-info answers name the brick by id; file answers are just the file data, so a consumer that
-passed `'active'` and needs the id asks `getActiveBrickId()`.
+brick-info answers name the brick by id; file answers are just the file data. A consumer that
+needs to know which brick answered takes `getActiveBrickId()` first and passes that id, not
+`'active'`: asked afterwards, the active brick may already be another one.
 
 ## Safe and full mode
 
