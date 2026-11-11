@@ -145,9 +145,16 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 |---|---|---|---|---|
 | 1 | major | a background brick that lost its link and was then signed out kept its claims for good: no route left to lose, so sign-out fired no event | CONFIRMED (`recomputeRoute` returns when best === previous) | `BrickManager` fires a sign-in-ended event from `forgetSignIn`; the telemetry host passes it on; production-shaped test in `brickManager.test.ts` |
 | 2 | major | a claim on a brick nobody read since a route change was granted against the old link's floor | CONFIRMED | `claim` sets the current transport's cadence before the grant is fixed |
-| 3 | major | a loop restarted on a transport change can leave the old loop's frame outstanding beside the new loop's first | CONFIRMED as a fact, **minor** in effect | the two frames go over different links into different queues, so each queue still holds at most one; the old loop is disposed and drops its reply; the new loop settles every port afresh anyway. Cost: one extra command on the brick, once per route change (~2 ms of a running program). Recorded, not fixed; revisit with U7 if per-brick latency shows it |
+| 3 | major | a loop restarted on a transport change can leave the old loop's frame outstanding beside the new loop's first | CONFIRMED as a fact, **minor** in effect | the two frames go over different links into different queues, so each queue still holds at most one; the old loop is disposed and drops its reply; the new loop settles every port afresh anyway. Cost: one extra command on the brick, once per route change (~2 ms of a running program). **Superseded in round 2:** the old frame can also command a sensor mode; fixed by chaining |
 | 4 | minor | `modeOf` reported a disconnected session as minimal | CONFIRMED | `none` |
 | 5 | minor | a re-planned loop clamped the probes' tick override to the transport floor while its plan used the override | CONFIRMED | the loop clamps to the floor the plan used (`floorMs` option) |
+
+### U5, round 2 — confirmation of round 1 (codex, `.review-out/step6-u5-r2-packet.md`, 11.11.2026) — NOT-READY → fixed (80400be)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | disposing the brick layer left a connected brick's claims and loop alive: the sign-in ended, but the host reported the brick Connected from its route, which is removed only after | CONFIRMED | the host's `getSession` reports no session for a brick that is not signed in, whatever its routes; test disposes `BrickManager` with a claimed brick |
+| 2 | major | the retired loop's frame, still outstanding after a transport change, can command a sensor mode after the new loop set another, switching the device behind its back (NaN readings not withheld) | CONFIRMED (`opINPUT_READSI` with a mode sets the mode) | round 1's row 3 came back in the same area, so the approach changed instead of the verdict being argued: all loops of a brick send through one chain in the service, and a new loop's first frame waits for the retired one's to settle |
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
