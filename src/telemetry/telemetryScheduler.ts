@@ -235,28 +235,45 @@ export class TelemetryScheduler {
 			this.ticksEmpty += 1;
 			return;
 		}
+		// The slow tier keeps its own command (DESIGN §9.1b, step-6 KTD3): every-tick rows go
+		// first, the rest after, each truncated and carried over within its own class.
+		const fast = candidates.filter(isEveryTick);
+		const slow = candidates.filter((row) => !isEveryTick(row));
 
+		// One frame in flight covers both commands of the tick.
+		this.inFlight = true;
+		try {
+			const carried: TelemetryRow[] = [];
+			const fastSent = fast.length === 0 || await this.sendFrame(fast, currentTick, carried);
+			// A failed fast frame says the link is in trouble: the slow command waits for another tick.
+			if (fastSent && slow.length > 0) { await this.sendFrame(slow, currentTick, carried); }
+			this.carriedOver = carried;
+		} finally {
+			this.inFlight = false;
+		}
+	}
+
+	/** Composes and sends one frame; what did not fit goes into `carried`. Resolves whether it went. */
+	private async sendFrame(rows: readonly TelemetryRow[], tick: number, carried: TelemetryRow[]): Promise<boolean> {
 		let frame: AssembledFrame;
 		try {
-			// Resolved per tick, not per scheduler: see `SchedulerOptions.limits`.
-			frame = assembleFrame(candidates, this.resolveLimits());
+			// Resolved per frame, not per scheduler: see `SchedulerOptions.limits`.
+			frame = assembleFrame(rows, this.resolveLimits());
 		} catch (error) {
 			this.framesFailed += 1;
 			this.options.onError?.(error);
-			return;
+			return false;
 		}
-
-		this.carriedOver = [...frame.deferred];
-		this.inFlight = true;
+		carried.push(...frame.deferred);
 		try {
 			const payload = await this.options.send(buildTelemetryFrame(frame));
 			this.framesSent += 1;
-			this.consume(frame, payload, currentTick);
+			this.consume(frame, payload, tick);
+			return true;
 		} catch (error) {
 			this.framesFailed += 1;
 			this.options.onError?.(error);
-		} finally {
-			this.inFlight = false;
+			return false;
 		}
 	}
 
@@ -350,6 +367,11 @@ export class TelemetryScheduler {
 			return false;
 		});
 	}
+}
+
+/** A row on every tick goes in the fast command; anything else — a slower divider, a one-shot — in the slow one. */
+function isEveryTick(row: TelemetryRow): boolean {
+	return row.lifetime.kind === 'repeating' && row.lifetime.divider === 1;
 }
 
 /** The mode each port is read in, over rows that select one. */
