@@ -8,6 +8,7 @@ import { TransportError, ConnectionError } from '../errors';
 import { MockConfig, MockBrickConfig, MockPortConfig } from './mockConfig';
 import { evaluateDynamic } from './dynamics';
 import { MockFilesystem } from './mockFilesystem';
+import { PROGRAM_STATUS } from '../protocol/ev3Packet';
 
 /** The one handle the mock hands out; it stores whole files and has no handle table. */
 const MOCK_FILE_HANDLE = 1;
@@ -26,6 +27,29 @@ interface MockBrickState {
 	renamedTo?: string;
 	/** The brick's Bluetooth peer list, which `brick:removeBluetoothPeer` changes at run time. */
 	readonly bluetoothPeers: string[];
+	/** The program running in the user slot, by its resolved path (step-5 plan, U2). */
+	runningProgram?: string;
+	/** Shell commands run on the brick, in order. */
+	readonly shellCommands: string[];
+	/** How many times every motor was stopped (`INPUT_DEVICE STOP_ALL`). */
+	motorsStopped: number;
+}
+
+/** The VM's working folder, which a relative program path starts from (`../prjs/…`). */
+const MOCK_VM_FOLDER = '/home/root/lms2012/sys';
+
+/**
+ * A program path as `LOAD_IMAGE` resolves it (`c_memory.c` 3070–3080): absolute as given,
+ * relative from the VM's folder, no folder means `ui`, no extension means `.rbf`.
+ */
+function resolveProgramPath(path: string): string {
+	let full = path.startsWith('/') ? path : `${MOCK_VM_FOLDER}/${path.includes('/') ? path : `ui/${path}`}`;
+	if (!/\.[A-Za-z0-9]+$/.test(full.split('/').pop() ?? '')) { full += '.rbf'; }
+	const parts: string[] = [];
+	for (const part of full.split('/')) {
+		if (part === '..') { parts.pop(); } else if (part !== '.' && part !== '') { parts.push(part); }
+	}
+	return `/${parts.join('/')}`;
 }
 
 /** `ICON_UNKNOWN` (`bytecodes.h` 1304): the mock keeps names only, not device classes. */
@@ -68,6 +92,8 @@ export class MockTransportProvider implements TransportProvider {
 				filesystem: new MockFilesystem(brickCfg.filesystem),
 				connected: false,
 				bluetoothPeers: [...(brickCfg.bluetoothPeers ?? [])],
+				shellCommands: [],
+				motorsStopped: 0,
 			});
 		}
 	}
@@ -205,6 +231,35 @@ export class MockTransportProvider implements TransportProvider {
 			// by contract, so the override lives beside it.
 			state.renamedTo = command.name;
 			return { kind: command.kind };
+
+		case 'program:run': {
+			// The firmware refuses a load and a start into a running slot in silence: the load
+			// writes no size, the start does nothing (`c_memory.c` 3065, `lms2012.c` 3002–3030).
+			if (state.runningProgram !== undefined) { return { kind: 'program:run', imageBytes: 0 }; }
+			const path = resolveProgramPath(command.path);
+			const image = state.filesystem.read(path);
+			if (image === undefined) { return { kind: 'program:run', imageBytes: 0 }; }
+			state.runningProgram = path;
+			return { kind: 'program:run', imageBytes: Buffer.byteLength(image, 'utf8') };
+		}
+
+		case 'program:stop':
+			state.runningProgram = undefined;
+			return { kind: command.kind };
+
+		case 'program:status': {
+			const running = state.runningProgram !== undefined;
+			return { kind: 'program:status', running, status: running ? PROGRAM_STATUS.RUNNING : PROGRAM_STATUS.STOPPED };
+		}
+
+		case 'program:emergencyStop':
+			state.runningProgram = undefined;
+			state.motorsStopped += 1;
+			return { kind: command.kind };
+
+		case 'system:run':
+			state.shellCommands.push(command.command);
+			return { kind: 'system:run', status: 0 };
 
 		case 'brick:setBluetooth':
 		case 'brick:setBluetoothVisible':
@@ -365,6 +420,22 @@ export class MockTransportProvider implements TransportProvider {
 	/** Get the filesystem for a mock brick (for test assertions). */
 	getFilesystem(brickKey: BrickKey): MockFilesystem | undefined {
 		return this.bricks.get(brickKey)?.filesystem;
+	}
+
+	/** The shell commands a mock brick ran, in order (for test assertions). */
+	shellCommands(brickKey: BrickKey): readonly string[] {
+		return [...(this.bricks.get(brickKey)?.shellCommands ?? [])];
+	}
+
+	/** How many times a mock brick stopped every motor (for test assertions). */
+	motorsStoppedCount(brickKey: BrickKey): number {
+		return this.bricks.get(brickKey)?.motorsStopped ?? 0;
+	}
+
+	/** End the program a mock brick runs, as a program on a real brick ends by itself. */
+	endProgram(brickKey: BrickKey): void {
+		const state = this.bricks.get(brickKey);
+		if (state) { state.runningProgram = undefined; }
 	}
 
 	// ── Lifecycle ───────────────────────────────────────────────────

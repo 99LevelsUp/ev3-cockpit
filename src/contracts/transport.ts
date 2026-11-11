@@ -143,6 +143,31 @@ export type BrickCommand =
 	 * only that the brick answered — read the list back to know the entry went.
 	 */
 	| { readonly kind: 'brick:removeBluetoothPeer'; readonly name: string }
+	/**
+	 * Load an `.rbf` into the user slot and start it there, in one direct command (step-5 plan,
+	 * U1): the slot the brick's own file browser runs programs in, and the only one whose end
+	 * makes the brick stop its motors (`ui.lms` 180–189, 640, 1488–1489).
+	 *
+	 * **The firmware refuses a start into a slot that is running, and says nothing**
+	 * (`lms2012.c` 3002–3030): check `program:status` first, and again afterwards. A path
+	 * without a folder means the brick's `ui` folder, one without an extension `.rbf`.
+	 */
+	| { readonly kind: 'program:run'; readonly path: string }
+	/** Stop the user slot. Never slot 0: that stops every slot, the brick's UI too, and the VM exits. */
+	| { readonly kind: 'program:stop' }
+	/** The user slot's status: running (0x10) or stopped (0x40) (`bytecodes.h` 1593–1596). */
+	| { readonly kind: 'program:status' }
+	/**
+	 * The brick's own power-off sequence (`ui.lms` 1887–1889): stop the user and the debug slot,
+	 * then every motor on every brick in a chain (`INPUT_DEVICE STOP_ALL -1`). The VM does not
+	 * stop motors when a program ends; the brick's UI does, and only for the user slot.
+	 */
+	| { readonly kind: 'program:emergencyStop' }
+	/**
+	 * Run a shell command on the brick (`opSYSTEM`, `lms2012.c` 4622–4635). The VM waits for it
+	 * to end, so a long command needs `&`. Only in the cockpit's full mode (step-5 plan, KD3).
+	 */
+	| { readonly kind: 'system:run'; readonly command: string }
 	| { readonly kind: 'fs:list'; readonly path: string }
 	| { readonly kind: 'fs:read'; readonly path: string }
 	| { readonly kind: 'fs:write'; readonly path: string; readonly content: string }
@@ -239,7 +264,26 @@ export interface FsWriteResponse { readonly kind: 'fs:write' }
  */
 export interface BrickSettingResponse {
 	readonly kind: 'brick:setName' | 'brick:setBluetooth' | 'brick:setBluetoothVisible'
-		| 'brick:removeBluetoothPeer';
+		| 'brick:removeBluetoothPeer' | 'program:stop' | 'program:emergencyStop';
+}
+
+/** A program load-and-start: the loaded image's size, 0 when the file is not on the brick. */
+export interface ProgramRunResponse {
+	readonly kind: 'program:run';
+	readonly imageBytes: number;
+}
+
+/** The user slot's status byte, and whether it means running. */
+export interface ProgramStatusResponse {
+	readonly kind: 'program:status';
+	readonly running: boolean;
+	readonly status: number;
+}
+
+/** A shell command's return value from `system()`. */
+export interface SystemRunResponse {
+	readonly kind: 'system:run';
+	readonly status: number;
 }
 
 export interface BluetoothPeerCountResponse {
@@ -345,6 +389,9 @@ export type BrickResponse =
 	| FsReadResponse
 	| FsWriteResponse
 	| BrickSettingResponse
+	| ProgramRunResponse
+	| ProgramStatusResponse
+	| SystemRunResponse
 	| BluetoothPeerCountResponse
 	| BluetoothPeerResponse
 	| FsExistsResponse
