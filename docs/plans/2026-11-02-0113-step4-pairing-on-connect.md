@@ -524,23 +524,55 @@ paired on both sides (its list `HOSTA`, `HOSTB`), AAA and CCC paired on neither.
 | Criterion 2 (CCC): signed in over USB with Bluetooth off, switching it on brings the dialog without any action on the computer | **holds on the second run**; first run no dialog | 21:49:33 automatic pairing started on the sighting, `AuthenticationTimeout` at +31 s, the owner watched the display for 60 s and saw no dialog; rerun 21:58:35, dialog about 10 s after the start, paired. Cause of the first run not found (1 of 2) |
 | R7 (BBB, one-sided "Windows paired", Bluetooth alone) | **holds** | "BBB did not answer. Check that it is switched on and in range, then try again. If it keeps failing while it is in range, its pairing may be one-sided: connect it over USB or TCP and run "Connect a Brick" again, which repairs it." |
 | Winsock code of a connect on a one-sided pairing | **10060** (timeout) | 22:10:57; the same code as an out-of-range brick and as CCC's first join after a fresh pairing, so no code tells them apart and the hint stays hedged (KTD7 holds) |
-| Criterion 3 (BBB, repair over USB) | **failed, fixed, to be rerun** | 22:14:03 the sign-in started a Bluetooth connect beside USB; the repair removed Windows' pairing (Windows then offered its own "Add device" for BBB) and queued its pairing; the connect failed after 23 s, the queue's 30 s recovery pause followed, and the pairing failed at 45 s "(0/1 in use) … busy" without running. Fixed by KTD6's addendum (Bluetooth joins after the check) and KTD13 |
-| `fRemembered` against the helper's bonded lookup | **agree** so far | the probe read both for BBB (paired: both true) and AAA, CCC (unpaired: both false); a one-sided state is still to be read |
+| Criterion 3 (BBB, repair over USB), session 1 | **failed, fixed** | 22:14:03 the sign-in started a Bluetooth connect beside USB; the repair removed Windows' pairing (Windows then offered its own "Add device" for BBB) and queued its pairing; the connect failed after 23 s, the queue's 30 s recovery pause followed, and the pairing failed at 45 s "(0/1 in use) … busy" without running. Fixed by KTD6's addendum (Bluetooth joins after the check) and KTD13 |
+| `fRemembered` against the helper's bonded lookup | **agree** | every state the probe read over three sessions: paired on both sides, on neither, Windows-only (BBB) and brick-only (AAA, after `BluetoothRemoveDevice` both false); the one-sided check keeps discovery's tracked item (Definition of Done) |
 | Phase times | three pairings | from the start: slot 8.8 s / 9.9 s / 5.1 s, found +0.2–0.7 s, the brick's dialog about 4–8 s after found; `pairingRequested` comes after the person accepts on the brick, not when the dialog shows; paired 0.2–4.3 s after it |
+
+Session 2, 11.11.2026, 08:29–09:27 (bundle from `6da34f2`, after a PC restart), and session 3,
+09:59–10:41 (after a second restart: another session had held the CPU at 100 %). Same bench and
+routine.
+
+| Criterion / measurement | Verdict | Evidence |
+|---|---|---|
+| Criterion 3 (BBB, Windows paired, the brick without this computer; repair over USB) | **holds** | 08:39:27 USB joined and Bluetooth was not tried; 08:39:35 the check found it, the report was shown, Windows' pairing removed; the pairing got the queue's slot in 0.4 s; accepted, paired 08:39:56 |
+| One-sided the other way (AAA, the brick lists this computer, Windows not paired; repair over USB) | **holds** | 08:45:14, 0.1 s after USB joined: this computer's entry removed over USB, paired 08:45:45, Bluetooth joined at the first try 08:46:19 |
+| A pairing with a stale entry on the brick, over Bluetooth alone (AAA) | **not reached** | the cockpit tried a Bluetooth connect instead of a pairing (its list still said paired, see below); the brick showed a dialog and Windows its own pairing toast, the connect timed out and R7's hint was shown |
+| A brick linked as a slave to another brick refuses a pairing from this computer (CCC linked from BBB's menu) | **yes: not found** | both inquiry windows missed CCC, `NotFound` at +65 s, no dialog, the link stayed; unlinked, the next "Connect a Brick" paired it |
+| The same, linked to a phone app | **yes: found, then `AuthenticationTimeout`** | the second window found CCC; 23 s later `AuthenticationTimeout`, no dialog; with the phone gone it paired |
+| The cockpit's own presence check against a one-sided "Windows paired" brick | **raises the brick's pairing dialog** | `c_bt.c`: an incoming authenticated link the brick has no key for is an `EVT_PIN_CODE_REQ` (2947), which ends in `Events = 1` (3243) and the UI dialog (`c_ui.c` 2538); only an address the brick itself connected to gets the PIN automatically (2960–2966). On the bench the uncached SDP query to BBB (08:35:53) raised it at once; one earlier query did not (1 of 2) |
+| R8's data against the brick's own menu | **matches** | Bluetooth > Favorites lists the same names; its check box is the connected mark and its icons the types (6 unknown, 5 brick, 4 phone) |
+| Phase times, sessions 2–3 | six pairings | slot 0.4–9.7 s; found +0.1 s to +2 inquiry windows (window 1 missed the brick 4 times); dialog 4–8 s after found when it came |
 
 Found, not acted on yet:
 
-- Every pairing started by "Connect a Brick" waited 7–10 s for the queue's slot; one started by a
-  sighting 3.9–5.1 s. Something holds the queue right after a Connect.
-- The first Bluetooth join after a fresh pairing failed with 10060 twice of three (CCC, BBB) and
-  joined by itself 40–50 s later.
-- Unpaired Bluetooth rows (AAA, CCC) turn unavailable and removed and come back every 3–4 minutes
-  while the bricks stay visible; after a forget AAA and CCC were both gone for 2–4 minutes.
-- Forget reported this computer's entry on AAA "sent, not confirmed" and "may still be there"
-  because the reply took over 1000 ms; the probe read the list empty.
-- `AuthenticationTimeout` is reported as "The brick asked for confirmation and nobody accepted in
-  time", which was false on CCC's first run.
+- **Presence check raises the dialog** of a one-sided "Windows paired" brick, about once a minute.
+  Owner: try a check that does not authenticate (path a); if none works, report the fault state
+  instead (path c).
+- **The list's `paired` flag is sticky for the session.** A brick unpaired in Windows outside the
+  cockpit (Settings) is still joined as paired: "Connect a Brick" over Bluetooth alone connects
+  instead of pairing, which raises the brick's dialog and Windows' pairing toast and fails; with
+  USB plugged in only after the Connect, the stale connect held the queue for 60 s and the pairing
+  ran out of its 120 s under load.
+- **A sign-in reports failure while a channel that joined after it started is connected**
+  (session 2, 09:24: "AAA did not answer" with USB connected).
+- **The helper's 120 s budget** includes process start and both inquiry windows; under load
+  (09:25: 14 s to start, window 1 missed) too little was left for the person at the brick.
+- **The queue hold after "Connect a Brick"** (5–10 s) is the presence round: the slot came free
+  exactly when a presence check ended (10:20:42).
+- The first Bluetooth join after a fresh pairing failed with 10060 in 4 of 7 pairings and joined
+  by itself 40–90 s later.
+- Two pairings of CCC ended `AuthenticationTimeout` 23 s after found with no dialog, both started
+  by a fresh sighting right after CCC's Bluetooth changed state (switched on; a link just
+  dropped); the forced retry 1.5–2 min later showed the dialog both times. HOSTB, the other entry
+  on CCC's list, is a computer that was switched off, so it was not a link. Unexplained, one
+  brick.
+- `NotFound` says "check that Bluetooth and visibility are enabled"; a brick held by another device
+  fails the same way with both on. `AuthenticationTimeout` says "the brick asked for confirmation",
+  false when no dialog came.
+- Forget reported "sent, not confirmed" twice (a reply over 1000 ms; once `LIBUSB_TRANSFER_TIMED_OUT`
+  while a phone was linked); the first time the probe read the list empty.
+- Unpaired Bluetooth rows flicker unavailable/removed/new every 3–4 minutes while the bricks stay
+  visible.
 - In the first cancel run AAA showed the dialog twice; not reproduced.
-
-Remaining: criterion 3 rerun, the one-sided pairing in the other direction (AAA), and the brick
-linked to another device (brick to brick, phone).
+- Owner decision 11.11.2026: a channel that is there and will not join gets a **blocked** state,
+  red (IMPLEMENTATION_PLAN 5.3.8).
