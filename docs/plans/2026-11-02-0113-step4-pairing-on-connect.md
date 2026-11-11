@@ -106,12 +106,16 @@ The step-3 hardware session (U7, 01.11.2026) added two gaps: the long wait befor
   - The pairing is forced, since the brick's dialog is the consent (KD5). The repair lifts a suspension only inside "Connect a Brick", which lifts it anyway (KTD4); outside it, a suspended brick gets neither a removal nor a pairing, and the one-sided state waits in the log for the next "Connect a Brick" (KD2).
   - The check does not run without a known radio name, over Bluetooth alone, before a Bluetooth scan has completed since start, while a pairing of the brick is in flight, or on the lists a forget or a clear reads.
   Implements KD5 (R6).
+  - A brick is repaired automatically once until its next "Connect a Brick". If the next join over USB or TCP still finds it one-sided, the repair did not help, and repeating it would show the brick's dialog on every join. The cockpit then leaves the pairing alone and warns each time, naming "Forget a Brick" and then "Connect a Brick". The warning repeats on purpose: a one-sided pairing is a fault, and a user who keeps seeing it fixes it sooner. (Owner decision, 09.11.2026: „pokud je kostka jednostranně odpárovaná, pak je to chybový stav a čím víc budeme uživatele otravovat, tím dřív tento stav napraví“.)
+  - Bluetooth waits for the check as pairing does (KTD3), joins too: while a USB or TCP channel is joining, connected and not yet checked, or a repair removes a half, the brick's Bluetooth channel is held, and joined once the check ends, whichever way it ends (both halves, no radio name, a read that fails, the USB or TCP channel gone, its join failed). A held channel the repair unpaired is not joined; the pairing makes it a candidate again. A sign-in or "Connect a Brick" whose USB and TCP joins all fail tries the held Bluetooth at once. The wait sits inside the Bluetooth join itself, so sign-in, "Connect a Brick" and a rejoin share one gate; a USB or TCP join that is a retry after a failure holds nothing. (A first design held Bluetooth at each call site and kept the held keys aside; two review rounds found three defects in it, one made by the fix before, and it was replaced rather than patched again, 10.11.2026.) (Found in U10, 09.11.2026: a Bluetooth connect started 20 ms after USB, failed after 23 s on the one-sided pairing, and the queue's 30 s recovery pause after it ran the repair's pairing past its 45 s wait.)
 - KTD7. **Over Bluetooth alone, a failed connect to a paired brick adds a hedged hint, and the Winsock code travels with the error.** No code path today tells an authentication failure from a timeout (`src/transports/btWinsockAdapter.ts` maps only 10060/10064/10065), and the code a one-sided pairing produces is unmeasured. The error carries the numeric code so U10 can measure it and a later step can sharpen the rule. Implements KD5 (R7).
 - KTD8. **The peer list lives in `BrickManager` per `BrickId`, with an event.** The entry holds the names, connected marks, the channel it was read over, and when. It is filled after a join (beside `readNameOverSession`), after a pairing, from the forget and clear reports, and by a request method, and it goes when the brick is forgotten. Reading over Bluetooth is allowed; reading never opens a channel by itself. Implements KD6 (R8).
 - KTD9. **The "heard" flip is logged where the list sees it.** `PresenceAggregator.applyHeard` reports the flip and the aggregator fires an event that `createRuntime` logs at info, since that is the change the picker shows ("BT not heard"). Pairing phases (queued, slot acquired, helper started, each helper event, result) are logged at info with their times through an `onEvent` wired in `createRuntime`, because pairing is rare and human-paced. Implements R9.
 - KTD10. **Step-3 KTD12 keeps its rule and loses one sentence.** "A connection goes only to a paired brick" stands (KD4); "pairing is always the user's own act, through Connect a Brick" is replaced by this plan: pairing also starts by itself for a signed-in brick, with the brick's dialog as consent. U11 rewrites the step-3 entry and the `joinCandidates` doc comment.
 - KTD11. **Automatic pairing shows the same progress notification as "Connect a Brick".** The brick layer has no `vscode`, so it fires a pairing-started event with a way to report progress, and `extension.ts` shows "pairing <brick> — confirm on the brick's display" until the run settles. Implements R4.
 - KTD12. **One background pairing may hold the radio while a person decides; that cost is accepted.** The pairing runs inside the Bluetooth connection queue for up to 120 s, longer than the 45 s a connect waits for a slot, so another brick's Bluetooth join can fail meanwhile. It rejoins on the next evidence (`rejoinOnEvidenceOnly`), and the queue already serialises pairings. Splitting the human wait out of the queue is deferred until U10 shows where the time goes.
+- KTD13. **The Bluetooth queue never fails a wait for its own recovery pause.** A waiter's 45 s run out only while another operation holds the slot; when they end with the slot free and only the pause after a release left, the wait goes on until the grant. The message "(0/1 in use) … Bluetooth is busy" described an idle radio (U10, 09.11.2026).
+- KTD14. **Every notification is written to the log too**, prefixed "Shown:", progress titles included (owner, 09.11.2026): the person at the bench watches the brick, not the screen, and the log has to say what they were told.
 
 ### High-Level Technical Design
 
@@ -477,7 +481,7 @@ fixes".
 | 3 | No test of "Connect a Brick" joining a USB channel waiting out a backoff (R2) | P2 | testing | test added in `96f2c5f` |
 | 4 | `BrickPeer` and `BrickPeerList` indented with spaces | P3 | project-standards | left: the whole of `src/contracts/models.ts` is space-indented; a reformat belongs in its own change |
 | 5 | `connectAgain` left a channel's old retry timer running, so a failed forced join retried twice as often (KTD4 says it clears the rejoin state) | P3 | correctness | fixed in `96f2c5f` |
-| 6 | Not in the plan: one automatic repair per brick until the next "Connect a Brick", then only a "still one-sided" notice | P3 | report | **owner decision open**: keep the rule? The notice now comes on every USB or TCP reconnect of such a brick; once per repair may be enough |
+| 6 | Not in the plan: one automatic repair per brick until the next "Connect a Brick", then only a "still one-sided" notice | P3 | report | owner decision 09.11.2026: the rule stays and the warning comes on every USB or TCP join of such a brick; written into KTD6 |
 
 Every fix has a test that fails without it (mutation-checked, 4 of 4). A confirmation round on
 `96f2c5f` (codex) found nothing: READY. Residual risks the review named, not acted on: a pairing
@@ -486,6 +490,57 @@ cooldown; the helper may report a cancel for a pairing Windows completed as it c
 `brickManager.ts` grew to about 1,600 lines, and extracting the peer list and the one-sided check
 is worth doing after U10.
 
+### Review of the U10 fixes (09.–10.11.2026)
+
+Codex on the diffs of KTD6's addendum, KTD13 and KTD14, after each fix: tests RED first, every key
+assertion mutation-checked.
+
+| Round | Finding | Severity | Outcome |
+|---|---|---|---|
+| 1 | `reconcile` decided the hold before starting USB joins | major | confirmed in code, not reachable with today's transports; superseded by the rewrite |
+| 1 | held Bluetooth lost while the repair's pairing waits | major | rejected: a successful pairing marks the channel available (`markPaired`), so it is a candidate again |
+| 1 | progress messages and the modal confirmation were not logged | minor | fixed |
+| 2 | a key both held and a candidate was joined twice | minor | confirmed, a regression from round 1; superseded by the rewrite |
+| 2 | "Connect a Brick" failed at once while a USB join was in flight | major | confirmed; superseded by the rewrite |
+| 2 | a held candidate that turns lost is never tried | major | rejected: a lost channel joins only through "Connect a Brick" (KD3), as before |
+| — | hold at each call site | — | **replaced**: three defects in two rounds, one made by the fix before, is the owner's signal to change the approach; the wait moved into the Bluetooth join itself |
+| 3 | a repair whose pairing fails or is cancelled woke no held join; "Connect a Brick" hung | major | confirmed: the wake had been removed because no test told it apart; restored with a test that fails without it |
+
+Mutation check of the final state: 14 of 14 killed. `npm run test:ci` 758/758. Round 4 not run:
+the owner decides between another round and the hardware rerun.
+
 ### Hardware results
 
-Filled in by U10.
+Session 1, 09.11.2026, 20:59–22:18, with the owner at the bench (AAA `001653F00A0A`, BBB
+`001653F00B0B`, CCC `001653F00C0C`), in the Extension Development Host with mock bricks off,
+bundle from `a9a684e`. Beep before each step at a brick; no hung helper or probe process before
+or after any Bluetooth step. Starting state from `scripts/pairing-state-probe.js` over USB: BBB
+paired on both sides (its list `HOSTA`, `HOSTB`), AAA and CCC paired on neither.
+
+| Criterion / measurement | Verdict | Evidence |
+|---|---|---|
+| Criterion 1 (AAA): USB at once, the brick's dialog, a cancel keeps USB and no dialog returns, a forced connect shows it again, accepting joins Bluetooth | **holds** | 21:29:41 Connect, cancelled → `AuthenticationNotAllowed`; no pairing from 21:30:06 to 21:33:21 while AAA's sighting stayed and the list changed; 21:35:20 Connect → dialog → accepted, Bluetooth joined 21:36:08 |
+| Windows status of a cancel on the brick | **`AuthenticationNotAllowed`** | twice (21:21:47, 21:30:06) |
+| Criterion 2 (CCC): signed in over USB with Bluetooth off, switching it on brings the dialog without any action on the computer | **holds on the second run**; first run no dialog | 21:49:33 automatic pairing started on the sighting, `AuthenticationTimeout` at +31 s, the owner watched the display for 60 s and saw no dialog; rerun 21:58:35, dialog about 10 s after the start, paired. Cause of the first run not found (1 of 2) |
+| R7 (BBB, one-sided "Windows paired", Bluetooth alone) | **holds** | "BBB did not answer. Check that it is switched on and in range, then try again. If it keeps failing while it is in range, its pairing may be one-sided: connect it over USB or TCP and run "Connect a Brick" again, which repairs it." |
+| Winsock code of a connect on a one-sided pairing | **10060** (timeout) | 22:10:57; the same code as an out-of-range brick and as CCC's first join after a fresh pairing, so no code tells them apart and the hint stays hedged (KTD7 holds) |
+| Criterion 3 (BBB, repair over USB) | **failed, fixed, to be rerun** | 22:14:03 the sign-in started a Bluetooth connect beside USB; the repair removed Windows' pairing (Windows then offered its own "Add device" for BBB) and queued its pairing; the connect failed after 23 s, the queue's 30 s recovery pause followed, and the pairing failed at 45 s "(0/1 in use) … busy" without running. Fixed by KTD6's addendum (Bluetooth joins after the check) and KTD13 |
+| `fRemembered` against the helper's bonded lookup | **agree** so far | the probe read both for BBB (paired: both true) and AAA, CCC (unpaired: both false); a one-sided state is still to be read |
+| Phase times | three pairings | from the start: slot 8.8 s / 9.9 s / 5.1 s, found +0.2–0.7 s, the brick's dialog about 4–8 s after found; `pairingRequested` comes after the person accepts on the brick, not when the dialog shows; paired 0.2–4.3 s after it |
+
+Found, not acted on yet:
+
+- Every pairing started by "Connect a Brick" waited 7–10 s for the queue's slot; one started by a
+  sighting 3.9–5.1 s. Something holds the queue right after a Connect.
+- The first Bluetooth join after a fresh pairing failed with 10060 twice of three (CCC, BBB) and
+  joined by itself 40–50 s later.
+- Unpaired Bluetooth rows (AAA, CCC) turn unavailable and removed and come back every 3–4 minutes
+  while the bricks stay visible; after a forget AAA and CCC were both gone for 2–4 minutes.
+- Forget reported this computer's entry on AAA "sent, not confirmed" and "may still be there"
+  because the reply took over 1000 ms; the probe read the list empty.
+- `AuthenticationTimeout` is reported as "The brick asked for confirmation and nobody accepted in
+  time", which was false on CCC's first run.
+- In the first cancel run AAA showed the dialog twice; not reproduced.
+
+Remaining: criterion 3 rerun, the one-sided pairing in the other direction (AAA), and the brick
+linked to another device (brick to brick, phone).
