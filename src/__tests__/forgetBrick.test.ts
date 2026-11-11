@@ -1591,6 +1591,22 @@ describe('Connect a Brick connects every channel', () => {
 		w.done();
 	});
 
+	it('pairs, rather than connects to, a brick Windows unpaired outside the cockpit, over Bluetooth alone', async () => {
+		const w = world({ paired: true, cabled: false, peers: ['Office PC'] });
+		await w.scheduler.scanOnce();
+		assert.equal(w.aggregator.getBrick(CCC)?.paired, true, 'the brick was not paired to begin with');
+		w.bt.paired = false;   // removed in Windows' Settings ...
+		w.bt.cachedAfterUnpair = true;   // ... and Windows' cache lists it, unpaired
+		await w.scheduler.scanOnce();
+		const c = command(w);
+
+		await c.connect();
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+
+		assert.equal(w.pairing.calls, 1, 'connected to a brick Windows no longer has paired (KD4)');
+		w.done();
+	});
+
 	it('makes a brick connected on every channel the active one and starts nothing', async () => {
 		const w = world({ paired: true });
 		await signedInOver(w, Transport.USB, Transport.BT);
@@ -1900,7 +1916,24 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		w.done();
 	});
 
-	it('judges Windows\' side by what discovery lists now, not by the list\'s sticky paired flag', async () => {
+	it('pairs by itself a brick signed in over Bluetooth alone once Windows unpaired it: nothing to check over (U13)', async () => {
+		const w = world({ checkOneSided: true, cabled: false });
+		await signedIn(w);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 2000);
+		// Windows unpaired it: its link is gone and will not open again, and Windows' cache lists it unpaired.
+		w.bt.off = true;
+		w.bt.paired = false;
+		w.bt.cachedAfterUnpair = true;
+		await w.sessionManager.disconnect(btKey);
+		await settle();
+
+		await w.scheduler.scanOnce();
+
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		w.done();
+	});
+
+	it('checks again as soon as Windows unpairs a brick signed in over USB, and repairs before it pairs (U13)', async () => {
 		const w = world({ checkOneSided: true });
 		w.bt.off = true;   // its Bluetooth link plays no part here
 		const repairs = repairsOf(w);
@@ -1909,16 +1942,16 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		await peerReadsDone(w);
 		await settle();
 		assert.equal(repairs.length, 0, 'both halves were there');
-		// Removed in Windows' Settings: Windows' cache lists it unpaired, the list still says paired.
+		// Removed in Windows' Settings: Windows' cache lists it unpaired, while the brick still lists this computer.
 		w.bt.paired = false;
 		w.bt.cachedAfterUnpair = true;
-		await w.scheduler.scanOnce();
 
-		await w.sessionManager.disconnect(usbKey);
+		await w.scheduler.scanOnce();
 		await waitFor(() => repairs.length === 1, 3000);
 
 		assert.equal(repairs[0].found, 'brick-only');
 		assert.deepEqual(w.removals(), [THIS_PC]);
+		assert.deepEqual(w.pairing.peersAtStart, [['Office PC']], 'paired beside the entry the brick still held');
 		w.done();
 	});
 

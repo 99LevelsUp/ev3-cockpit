@@ -285,7 +285,17 @@ export class PresenceAggregator implements vscode.Disposable {
 
 	private observe(record: BrickRecord, channel: BrickChannel, item: DiscoveryItem): void {
 		channel.observe(item.lastSeenAt, item.signalInfo, item.heardAt);
-		record.paired ||= item.paired ?? false;
+		// Windows' Bluetooth list says whether the brick is paired, now (step-4 U13): a brick
+		// unpaired in Windows' Settings, outside the cockpit, was still joined as paired for the
+		// rest of the session — a connect where a pairing was needed (KD4), which on hardware
+		// raised the brick's dialog and Windows' own pairing toast and failed. The scheduler fences
+		// a scan older than a pairing the cockpit made (`notePaired`), so a stale listing cannot
+		// take a fresh pairing back. Other sources (USB, persistence) only ever add it.
+		if (item.transport === Transport.BT && item.paired !== undefined) {
+			record.paired = item.paired;
+		} else {
+			record.paired ||= item.paired ?? false;
+		}
 		this.noteName(record, item, item.lastSeenAt);
 	}
 
