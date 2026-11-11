@@ -357,6 +357,14 @@ export class BrickManager implements vscode.Disposable {
 			// Signed out meanwhile, whatever the other channels failed with before that; a newer
 			// sign-in is not this one's to end.
 			if (this.signedIn.get(brickId) !== signIn) { throw abandoned(); }
+			// A channel found after the sign-in started has joined meanwhile (step-4 U14): the brick
+			// is connected, so the sign-in stands. On hardware a cable plugged in just after "Connect a
+			// Brick" joined while the only first candidate, Bluetooth, failed: the user was told the
+			// brick did not answer, and the brick was signed out with its USB session still open.
+			if (this.hasConnectedChannel(brickId)) {
+				this.setActiveBrick(brickId);
+				return;
+			}
 			this.forgetSignIn(brickId);
 			const first: unknown = error instanceof AggregateError ? error.errors[0] : error;
 			throw first instanceof Error ? first : new Error(String(first));
@@ -1166,6 +1174,12 @@ export class BrickManager implements vscode.Disposable {
 	}
 
 	/** Whether a USB or TCP channel of the brick is connected: the only ones its list is checked over. */
+	/** Whether any channel of the brick is connected. */
+	private hasConnectedChannel(brickId: BrickId): boolean {
+		return this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
+			&& s.connectionState === ConnectionState.Connected);
+	}
+
 	private checkableChannelConnected(brickId: BrickId): boolean {
 		return this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
 			&& s.connectionState === ConnectionState.Connected && this.transportOf(s.brickKey) !== Transport.BT);
