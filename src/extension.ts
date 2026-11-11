@@ -8,6 +8,7 @@ import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
+import { createNotifier } from './ui/notify';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -42,9 +43,18 @@ export function activate(context: vscode.ExtensionContext): void {
 	const { bricks, aggregator, btPresence } = runtime;
 	/** What a user calls a brick: its name, or its id until it has one. */
 	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
-	const notificationProgress: ShowProgress = (title, task) => vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
-		(progress) => task((message) => progress.report({ message })));
+	// Every notification is written to the log too (owner, 09.11.2026), so the log alone says
+	// what the person was told while they watched the brick.
+	const notify = createNotifier(logger, vscode.window);
+	const notificationProgress: ShowProgress = (title, task) => {
+		notify.progressShown(title);
+		return vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
+			(progress) => task((message) => {
+				notify.progressShown(`${title} — ${message}`);
+				progress.report({ message });
+			}));
+	};
 
 	// ── Filesystem ──────────────────────────────────────────────
 	// Palette commands are diagnostics, not the primary UX (DESIGN §14). They exist here
@@ -56,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	): Promise<void> => {
 		const brickId = bricks.getActiveBrickId();
 		if (!brickId) {
-			void vscode.window.showWarningMessage(
+			void notify.warn(
 				`EVƎ Cockpit: no active brick, so ${what} has nothing to talk to.`);
 			return;
 		}
@@ -65,7 +75,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
 			logger.error(`${what} failed on ${brickLabel(aggregator, brickId)}:`, err);
-			void vscode.window.showErrorMessage(`EVƎ Cockpit: ${what} on ${nameOf(brickId)} failed — ${err.message}`);
+			void notify.error(`EVƎ Cockpit: ${what} on ${nameOf(brickId)} failed — ${err.message}`);
 		}
 	};
 
@@ -84,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		withActiveFilesystem('reading storage', async (fs, brickId) => {
 			const usage = await fs.files.storage();
 			const used = usage.totalKb - usage.freeKb;
-			void vscode.window.showInformationMessage(
+			void notify.info(
 				`EVƎ Cockpit: ${nameOf(brickId)} — ${usage.freeKb} KB free of ${usage.totalKb} KB `
 				+ `(${used} KB used).`);
 		})));
@@ -113,8 +123,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
 		await connectPickedBrick(picked, {
 			aggregator, bricks, log: logger, progress: notificationProgress,
-			showInfo: (message) => { void vscode.window.showInformationMessage(message); },
-			showError: (message) => { void vscode.window.showErrorMessage(message); },
+			showInfo: (message) => { void notify.info(message); },
+			showError: (message) => { void notify.error(message); },
 		});
 	}));
 
@@ -123,14 +133,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	services.add(bricks.onPairingStarted((event) => {
 		void followPairing(event, {
 			aggregator, progress: notificationProgress,
-			showError: (message) => { void vscode.window.showErrorMessage(message); },
+			showError: (message) => { void notify.error(message); },
 		});
 	}));
 
 	// A pairing broken on one side, found over USB or TCP: what was found and done (step-4 R6).
 	services.add(bricks.onOneSidedRepair((repair) => {
 		const { message, warning } = describeRepair(repair, nameOf(repair.brickId));
-		void (warning ? vscode.window.showWarningMessage(message) : vscode.window.showInformationMessage(message));
+		void (warning ? notify.warn(message) : notify.info(message));
 	}));
 
 	// ── Disconnect a brick ──────────────────────────────────────
@@ -139,7 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	services.add(vscode.commands.registerCommand('ev3-cockpit.disconnectBrick', async () => {
 		const signedIn = bricks.signedInBricks();
 		if (signedIn.length === 0) {
-			void vscode.window.showInformationMessage('EVƎ Cockpit: no brick is connected.');
+			void notify.info('EVƎ Cockpit: no brick is connected.');
 			return;
 		}
 		const picked = await vscode.window.showQuickPick(
@@ -162,17 +172,24 @@ export function activate(context: vscode.ExtensionContext): void {
 	const brickCommandUi = (title: string, placeHolder: string): BrickCommandDeps<typeof bricks> => ({
 		aggregator, bricks, log: logger,
 		pick: (rows) => vscode.window.showQuickPick(rows, { title, placeHolder }),
-		confirm: async (message, detail, action) =>
-			(await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
-		progress: (progressTitle, task) => vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false }, task),
-		showInfo: (message) => { void vscode.window.showInformationMessage(message); },
+		confirm: async (message, detail, action) => {
+			logger.info(`Asked: ${message} ${detail}`);
+			const confirmed = (await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action;
+			logger.info(`Answered: ${confirmed ? action : 'cancelled'}`);
+			return confirmed;
+		},
+		progress: (progressTitle, task) => {
+			notify.progressShown(progressTitle);
+			return vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false }, task);
+		},
+		showInfo: (message) => { void notify.info(message); },
 		showResult: (message) => {
-			void vscode.window.showInformationMessage(message, 'Show details').then((choice) => {
+			void notify.info(message, 'Show details').then((choice) => {
 				if (choice) { logger.show(true); }
 			});
 		},
-		showError: (message) => { void vscode.window.showErrorMessage(message); },
+		showError: (message) => { void notify.error(message); },
 	});
 
 	// ── Forget a brick ──────────────────────────────────────────
