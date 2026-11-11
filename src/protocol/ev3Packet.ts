@@ -218,6 +218,14 @@ export const UI_READ_SUB = {
  */
 export const COM_GET_SUB = {
 	/**
+	 * Whether a radio is on (`bytecodes.h` 636). Takes the hardware selector, answers one DATA8.
+	 * **Never ask it of USB:** that case leaves the dispatch status at FAILBREAK (`c_com.c`
+	 * 4296–4330), which ends the whole direct command (`lms2012.c` 2496–2510).
+	 */
+	GET_ON_OFF: 0x01,
+	/** Whether Bluetooth is visible (`bytecodes.h` 637); answers the Bluetooth flag whatever radio is named (`c_com.c` 4334–4347). */
+	GET_VISIBLE: 0x02,
+	/**
 	 * How many peers the brick remembers on one radio (`bytecodes.h` 642). Takes the hardware
 	 * selector, answers one DATA8 (`c_com.c` 4585–4612).
 	 */
@@ -233,6 +241,8 @@ export const COM_GET_SUB = {
 	GET_ID: 0x0c,
 	/** The brick's user-visible name. */
 	GET_BRICKNAME: 0x0d,
+	/** Whether a radio's hardware is there (`bytecodes.h` 647): USB and Bluetooth always, Wi-Fi when a known dongle is in (`c_com.c` 4860–4885). Never fails. */
+	GET_PRESENT: 0x0f,
 } as const;
 
 /** Subcodes for opCOM_SET (`COM_SET_SUBCODE` in the firmware). */

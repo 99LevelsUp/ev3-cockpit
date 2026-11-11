@@ -19,6 +19,7 @@ import {
 	UI_READ_SUB,
 	UI_BUTTON_SUB,
 	COM_GET_SUB,
+	COM_HARDWARE,
 } from '../protocol/ev3Packet';
 import {
 	lc0,
@@ -261,6 +262,63 @@ export function brickNameRow(divider = DEFAULT_DIVIDERS.event): TelemetryRow {
 }
 
 /**
+ * One `opCOM_GET` byte about a radio: on, visible, present, or how many peers it remembers
+ * (3.1.3, 3.1.4k).
+ *
+ * The radio is typed as Bluetooth or Wi-Fi on purpose. `GET_ON_OFF` asked of USB leaves the
+ * firmware's dispatch status at FAILBREAK (`c_com.c` 4296–4330), and that ends the whole direct
+ * command (`lms2012.c` 2496–2510): every row in the frame would be lost, not just this one. The
+ * subcodes used here all answer NOBREAK for the radios they are asked about.
+ */
+function radioRow(
+	id: string,
+	subcode: number,
+	hardware: typeof COM_HARDWARE.BT | typeof COM_HARDWARE.WIFI,
+	asNumber: boolean,
+	divider: number,
+): TelemetryRow {
+	return {
+		id,
+		tier: 'event',
+		lifetime: repeating(divider),
+		result: { bytes: 1, alignment: 1 },
+		emit: (slot: RowSlot) => concatBytes(
+			new Uint8Array([EV3_OPCODE.COM_GET, subcode]),
+			lc0(hardware),
+			globalRef(slot),
+		),
+		parse: (payload, slot, sampledAt) =>
+			value(id, asNumber ? payload[slot] : payload[slot] !== 0, sampledAt),
+	};
+}
+
+/** Bluetooth switched on in the brick's settings. */
+export const bluetoothOnRow = (divider: number = DEFAULT_DIVIDERS.event): TelemetryRow =>
+	radioRow('system.bluetooth.on', COM_GET_SUB.GET_ON_OFF, COM_HARDWARE.BT, false, divider);
+
+/** Bluetooth visible to a search. */
+export const bluetoothVisibleRow = (divider: number = DEFAULT_DIVIDERS.event): TelemetryRow =>
+	radioRow('system.bluetooth.visible', COM_GET_SUB.GET_VISIBLE, COM_HARDWARE.BT, false, divider);
+
+/**
+ * How many peers the brick remembers on Bluetooth (`FAVOUR_ITEMS`, 3.1.4k).
+ *
+ * The count only. The entries themselves stay a command (`bluetooth:peer`): the list has a
+ * variable length, and the firmware does not bounds-check the index (`c_bt.c` 3561–3567), so
+ * each entry may be asked only after this count is known.
+ */
+export const bluetoothPeersRow = (divider: number = DEFAULT_DIVIDERS.event): TelemetryRow =>
+	radioRow('system.bluetooth.peers', COM_GET_SUB.FAVOUR_ITEMS, COM_HARDWARE.BT, true, divider);
+
+/** Wi-Fi switched on. */
+export const wifiOnRow = (divider: number = DEFAULT_DIVIDERS.event): TelemetryRow =>
+	radioRow('system.wifi.on', COM_GET_SUB.GET_ON_OFF, COM_HARDWARE.WIFI, false, divider);
+
+/** A Wi-Fi dongle the firmware knows is plugged in. */
+export const wifiPresentRow = (divider: number = DEFAULT_DIVIDERS.event): TelemetryRow =>
+	radioRow('system.wifi.present', COM_GET_SUB.GET_PRESENT, COM_HARDWARE.WIFI, false, divider);
+
+/**
  * Firmware version: read once, then retired.
  *
  * One-shot rather than divider 0, which can only say never. LEGO's own Device Manager
@@ -302,6 +360,11 @@ export function allEv3Rows(): TelemetryRow[] {
 		batteryVoltageRow(),
 		batteryLevelRow(),
 		brickNameRow(),
+		bluetoothOnRow(),
+		bluetoothVisibleRow(),
+		bluetoothPeersRow(),
+		wifiOnRow(),
+		wifiPresentRow(),
 		firmwareVersionRow(),
 		...SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i)),
 		...MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i)),
