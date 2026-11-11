@@ -96,6 +96,7 @@ export class TelemetryClaims {
 		if (!(Number.isFinite(request.intervalMs) && request.intervalMs > 0)) {
 			throw new Error(`A claim's interval must be a positive number of milliseconds, not ${request.intervalMs}.`);
 		}
+		if (request.rowIds.length === 0) { throw new Error('A claim names at least one row.'); }
 		for (const id of request.rowIds) {
 			if (!this.registry.get(id)) { throw new Error(`There is no telemetry row '${id}'; list the rows for their ids.`); }
 		}
