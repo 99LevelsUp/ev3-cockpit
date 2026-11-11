@@ -12,8 +12,9 @@
  * sequence, never `PROGRAM_STOP(0)`, which stops the brick's UI and ends its VM (KTD3).
  *
  * The brick does not say when a program ends, so the state is polled — only while someone
- * listens or a program this service started runs (KTD4). Step 6 moves the poll into the
- * telemetry scheduler's command budget.
+ * listens (KTD4, owner decision D5 of the step-6 plan, 11.11.2026). Nothing reads a poll nobody
+ * listens to, and keeping one alive for a started program was where review rounds 2 and 3 kept
+ * finding defects. Step 6 moves the poll into the telemetry scheduler as a row.
  */
 
 import { BrickCommand, BrickResponse } from '../contracts';
@@ -40,8 +41,6 @@ export interface RunOptions {
 const POLL_MS = 1000;
 const CONFIRM_TIMEOUT_MS = 1500;
 const CONFIRM_STEP_MS = 100;
-/** Polls failed in a row before a started program is no longer followed. */
-const MAX_POLL_FAILURES = 3;
 
 export class ProgramService {
 	private readonly pollMs: number;
@@ -50,8 +49,6 @@ export class ProgramService {
 	private readonly listeners = new Set<(running: boolean) => void>();
 	/** The last state seen, or undefined before the first answer. */
 	private known: boolean | undefined;
-	/** A program this service started is running: follow it even with nobody listening. */
-	private following = false;
 	private timer: NodeJS.Timeout | undefined;
 	private polling = false;
 	private disposed = false;
@@ -59,8 +56,6 @@ export class ProgramService {
 	private queue: Promise<void> = Promise.resolve();
 	/** Emergency stops asked so far: a run asked before one of them must not send its start. */
 	private emergencies = 0;
-	/** Polls that failed in a row; following ends at `MAX_POLL_FAILURES`. */
-	private pollFailures = 0;
 
 	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}) {
 		this.pollMs = options.pollMs ?? POLL_MS;
@@ -107,8 +102,6 @@ export class ProgramService {
 				if (Date.now() >= deadline) { return false; }
 				await delay(this.confirmStepMs);
 			}
-			this.following = true;
-			this.schedulePoll();
 			return true;
 		});
 	}
@@ -154,7 +147,13 @@ export class ProgramService {
 	onStateChange(listener: (running: boolean) => void): { dispose(): void } {
 		this.listeners.add(listener);
 		this.schedulePoll();
-		return { dispose: () => { this.listeners.delete(listener); } };
+		return {
+			dispose: () => {
+				this.listeners.delete(listener);
+				// The last listener gone: the poll already scheduled would ask for nobody.
+				if (this.listeners.size === 0 && this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+			},
+		};
 	}
 
 	dispose(): void {
@@ -164,12 +163,6 @@ export class ProgramService {
 	}
 
 	private note(running: boolean): void {
-		if (!running) { this.following = false; }
-		// Nothing left to follow: a poll already scheduled would only ask the brick for nothing.
-		if (this.listeners.size === 0 && !this.following && this.timer) {
-			clearTimeout(this.timer);
-			this.timer = undefined;
-		}
 		const first = this.known === undefined;
 		if (this.known === running) { return; }
 		this.known = running;
@@ -184,19 +177,14 @@ export class ProgramService {
 	/** One poll at a time, and only while there is a reason to ask (KTD4). */
 	private schedulePoll(): void {
 		if (this.disposed || this.timer || this.polling) { return; }
-		if (this.listeners.size === 0 && !this.following) { return; }
+		if (this.listeners.size === 0) { return; }
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			this.polling = true;
 			this.isRunning()
-				.then(() => { this.pollFailures = 0; })
-				// One lost reply is not a brick that is gone: follow on. A brick that does not answer
-				// several times in a row: stop following what it ran; listeners, who asked to hear about
-				// this brick, keep their poll (review 11.11.2026, round 2).
-				.catch(() => {
-					this.pollFailures += 1;
-					if (this.pollFailures >= MAX_POLL_FAILURES) { this.following = false; this.pollFailures = 0; }
-				})
+				// A lost reply: the listeners asked to hear about this brick, so the poll goes on
+				// until they leave; the brick's disconnect is the session's to report.
+				.catch(() => undefined)
 				.finally(() => {
 					this.polling = false;
 					this.schedulePoll();

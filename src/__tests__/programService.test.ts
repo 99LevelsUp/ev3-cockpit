@@ -96,54 +96,32 @@ describe('Program control service (step-5 U3)', () => {
 		w.done();
 	});
 
-	it('stops following a started program once the brick no longer answers, three times in a row', async () => {
+	it('keeps polling for a listener through lost replies', async () => {
 		const w = await world();
-		await w.service.run(PRG);
+		w.service.onStateChange(() => { /* listening */ });
 		let lost = 0;
-		w.setOverride(() => { lost += 1; throw new Error('brick gone'); });
+		w.setOverride((command) => {
+			if (command.kind === 'program:status' && lost < 3) { lost += 1; throw new Error('a lost reply'); }
+			return undefined;
+		});
 		await waitFor(() => lost >= 3, 2000);
-		await settle(30);
-		const after = w.sent.length;
+		const before = w.sent.length;
 
+		await waitFor(() => w.sent.length > before, 2000);
+
+		w.done();
+	});
+
+	it('stops polling as soon as the last listener leaves', async () => {
+		const w = await world();
+		const listening = w.service.onStateChange(() => { /* listening */ });
+		await waitFor(() => w.sent.includes('program:status'), 1000);
+
+		listening.dispose();
+		const after = w.sent.length;
 		await settle(100);
 
-		assert.equal(w.sent.length, after, 'kept asking a brick that is gone, with nobody listening');
-		w.done();
-	});
-
-	it('keeps following a started program through one failed poll', async () => {
-		const w = await world();
-		await w.service.run(PRG);
-		let failures = 1;
-		w.setOverride((command) => {
-			if (command.kind === 'program:status' && failures > 0) { failures -= 1; throw new Error('one lost reply'); }
-			return undefined;
-		});
-		await settle(60);
-		const before = w.sent.filter((kind) => kind === 'program:status').length;
-
-		await settle(80);
-
-		assert.ok(w.sent.filter((kind) => kind === 'program:status').length > before, 'gave up after one lost reply');
-		w.done();
-	});
-
-	it('counts only failures in a row: an answer in between starts the count again', async () => {
-		const w = await world();
-		await w.service.run(PRG);
-		// Two lost replies, one answer, two lost replies: never three in a row.
-		const script = [false, false, true, false, false];
-		w.setOverride((command) => {
-			if (command.kind === 'program:status' && script.length > 0 && !script.shift()) { throw new Error('a lost reply'); }
-			return undefined;
-		});
-		await waitFor(() => script.length === 0, 1000);
-		await settle(40);
-		const before = w.sent.filter((kind) => kind === 'program:status').length;
-
-		await settle(80);
-
-		assert.ok(w.sent.filter((kind) => kind === 'program:status').length > before, 'added up failures an answer had ended');
+		assert.equal(w.sent.length, after, 'kept polling with nobody listening');
 		w.done();
 	});
 
@@ -220,30 +198,38 @@ describe('Program control service (step-5 U3)', () => {
 		w.done();
 	});
 
-	it('does not poll the brick when nobody listens and no program it started runs', async () => {
+	it('does not poll again after a poll that was on its way when the last listener left', async () => {
+		const w = await world();
+		let release: () => void = () => { /* replaced below */ };
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		let holding = true;
+		const service = new ProgramService(async (command) => {
+			w.sent.push(command.kind);
+			if (command.kind === 'program:status' && holding) { holding = false; await held; }
+			return w.mock.executeCommand(KEY, command);
+		}, { pollMs: 20, confirmTimeoutMs: 200, confirmStepMs: 10 });
+		const listening = service.onStateChange(() => { /* listening */ });
+		await waitFor(() => !holding, 1000);   // the first poll is on its way
+
+		listening.dispose();
+		release();
+		await settle(30);
+		const after = w.sent.length;
+		await settle(100);
+
+		assert.equal(w.sent.length, after, 'the poll on its way scheduled another one for nobody');
+		service.dispose();
+		w.done();
+	});
+
+	it('does not poll the brick when nobody listens, even while a program it started runs', async () => {
 		const w = await world();
 		await w.service.run(PRG);
-		await w.service.stop();
 		const before = w.sent.length;
 
 		await settle(100);
 
-		assert.equal(w.sent.length, before, 'kept polling a brick nobody asked about');
-		w.done();
-	});
-
-	it('polls while a program it started runs, and stops once it ended', async () => {
-		const w = await world();
-		await w.service.run(PRG);
-		await settle(60);
-		assert.ok(w.sent.filter((kind) => kind === 'program:status').length >= 3, 'did not follow the running program');
-
-		w.mock.endProgram(KEY);
-		await settle(60);
-		const after = w.sent.length;
-		await settle(80);
-
-		assert.equal(w.sent.length, after);
+		assert.equal(w.sent.length, before, 'polled a brick nobody asked about (step-6 plan D5)');
 		w.done();
 	});
 });
