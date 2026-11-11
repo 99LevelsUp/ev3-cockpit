@@ -1,11 +1,12 @@
 /**
  * Session entry — the runtime representation of a single connected brick session.
  *
- * Encapsulates connection state machine, heartbeat state, error tracking,
- * and activity mode for one brick. The {@link SessionManager} owns session entries.
+ * Encapsulates connection state machine, heartbeat state and error tracking for one brick.
+ * The {@link SessionManager} owns session entries. What telemetry a brick runs is not a session
+ * property: `TelemetryService.modeOf` is its one source (step-6 plan U5, drift 3).
  */
 
-import { ConnectionState, ActivityMode, TelemetryCategory, Transport } from '../contracts/enums';
+import { ConnectionState, Transport } from '../contracts/enums';
 import { BrickKey, describeChannel } from '../contracts/brickKey';
 import { HeartbeatState, ConnectedSession } from '../contracts/models';
 import { SessionHandle } from '../contracts/transport';
@@ -24,12 +25,10 @@ export class SessionEntry {
 	readonly transport: Transport;
 
 	private _connectionState: ConnectionState = ConnectionState.Connecting;
-	private _activeMode: ActivityMode = ActivityMode.Minimal;
 	private _heartbeatState: HeartbeatState = 'unknown';
 	private _lastError?: string;
 	private _displayName: string;
 	private _handle?: SessionHandle;
-	private _subscribedCategories = new Set<TelemetryCategory>();
 	private _explicitlyDisconnected = false;
 
 	constructor(brickKey: BrickKey, transport: Transport, displayName: string) {
@@ -41,12 +40,10 @@ export class SessionEntry {
 	// ── Getters ─────────────────────────────────────────────────────
 
 	get connectionState(): ConnectionState { return this._connectionState; }
-	get activeMode(): ActivityMode { return this._activeMode; }
 	get heartbeatState(): HeartbeatState { return this._heartbeatState; }
 	get lastError(): string | undefined { return this._lastError; }
 	get displayName(): string { return this._displayName; }
 	get handle(): SessionHandle | undefined { return this._handle; }
-	get subscribedCategories(): TelemetryCategory[] { return [...this._subscribedCategories]; }
 	get explicitlyDisconnected(): boolean { return this._explicitlyDisconnected; }
 
 	// ── State machine ───────────────────────────────────────────────
@@ -76,12 +73,6 @@ export class SessionEntry {
 
 	setHandle(handle: SessionHandle): void {
 		this._handle = handle;
-	}
-
-	// ── Activity mode ───────────────────────────────────────────────
-
-	setActiveMode(mode: ActivityMode): void {
-		this._activeMode = mode;
 	}
 
 	// ── Heartbeat ───────────────────────────────────────────────────
@@ -116,20 +107,6 @@ export class SessionEntry {
 		this._explicitlyDisconnected = false;
 	}
 
-	// ── Telemetry subscriptions ─────────────────────────────────────
-
-	subscribe(category: TelemetryCategory): void {
-		this._subscribedCategories.add(category);
-	}
-
-	unsubscribe(category: TelemetryCategory): void {
-		this._subscribedCategories.delete(category);
-	}
-
-	clearSubscriptions(): void {
-		this._subscribedCategories.clear();
-	}
-
 	// ── Snapshot ────────────────────────────────────────────────────
 
 	/** Create a read-only snapshot of the session state. */
@@ -139,9 +116,7 @@ export class SessionEntry {
 			displayName: this._displayName,
 			transport: this.transport,
 			connectionState: this._connectionState,
-			activeMode: this._activeMode,
 			lastError: this._lastError,
-			subscribedCategories: [...this._subscribedCategories],
 			heartbeatState: this._heartbeatState,
 		};
 	}

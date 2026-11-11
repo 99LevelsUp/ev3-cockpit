@@ -634,10 +634,12 @@ Model of a connected session:
 - `displayName`,
 - `transport`,
 - `connectionState`,
-- `activeMode`,
 - `lastError?`,
-- `subscribedCategories`,
 - `heartbeatState`.
+
+What telemetry a brick runs (foreground, subscribed, minimal) is not part of the session: the
+telemetry service is its one source (`TelemetryService.modeOf`), and claims are on rows, not
+categories (§9.3). The session once carried both and the two disagreed (step-6 plan, drift 3).
 
 ### 5.3 Active Brick View Model
 

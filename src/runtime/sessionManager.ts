@@ -7,7 +7,7 @@
  */
 
 import * as vscode from 'vscode';
-import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
+import { ConnectionState, Transport } from '../contracts/enums';
 import { BrickKey, brickIdOf, describeChannel } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
 import { BrickCommand, BrickResponse, SendCommandOptions, SessionHandle, TransportProvider } from '../contracts/transport';
@@ -213,17 +213,7 @@ export class SessionManager implements vscode.Disposable {
 			return;
 		}
 
-		// Demote previous foreground brick
-		if (previous) {
-			const prevResources = this.sessions.get(previous);
-			if (prevResources) {
-				this.demote(prevResources);
-			}
-		}
-
-		// Promote new brick
 		this.activeBrickKey = brickKey;
-		resources.entry.setActiveMode(ActivityMode.Foreground);
 
 		this._onActiveBrickChange.fire({ previousBrickKey: previous, newBrickKey: brickKey });
 	}
@@ -235,28 +225,8 @@ export class SessionManager implements vscode.Disposable {
 			return;
 		}
 
-		const prevResources = this.sessions.get(previous);
-		if (prevResources) {
-			this.demote(prevResources);
-		}
-
 		this.activeBrickKey = undefined;
 		this._onActiveBrickChange.fire({ previousBrickKey: previous, newBrickKey: undefined });
-	}
-
-	/**
-	 * Drop a brick out of foreground into whichever background mode it has earned.
-	 *
-	 * DESIGN 9.3 scopes subscribed telemetry to bricks with a live API subscription
-	 * and 9.4 makes minimal the base mode, so demoting straight to subscribed put
-	 * every backgrounded brick into a mode that schedules telemetry nobody asked for.
-	 */
-	private demote(resources: SessionResources): void {
-		resources.entry.setActiveMode(
-			resources.entry.subscribedCategories.length > 0
-				? ActivityMode.Subscribed
-				: ActivityMode.Minimal
-		);
 	}
 
 	/** Get the current foreground brick key. */
@@ -626,7 +596,6 @@ export class SessionManager implements vscode.Disposable {
 		resources.heartbeat.stop();
 		resources.commandQueue.drainWith(new Error('Session disconnected.'));
 		resources.commandQueue.dispose();
-		resources.entry.clearSubscriptions();
 
 		if (resources.reconnectTimer) {
 			clearTimeout(resources.reconnectTimer);
