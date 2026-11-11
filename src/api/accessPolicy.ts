@@ -5,6 +5,10 @@
  * in the user areas — the brick's projects folder and the SD card — and reads everywhere; the
  * shell needs full mode. The cockpit enforces it in its API, so no consumer (ev3-explorer's
  * `ev3://` included) can route around it.
+ *
+ * A guardrail against mistakes, not a sandbox (review 11.11.2026): a program run in safe mode can
+ * do anything on the brick through `opSYSTEM`, and paths are checked as written — a symbolic link
+ * inside a user area that points outside it is not resolved.
  */
 
 import { AccessDeniedError } from '../errors/CockpitError';

@@ -51,7 +51,7 @@ describe('Program control service (step-5 U3)', () => {
 	it('runs a program and says it runs', async () => {
 		const w = await world();
 
-		await w.service.run(PRG);
+		assert.equal(await w.service.run(PRG), true);
 
 		assert.equal(await w.service.isRunning(), true);
 		w.done();
@@ -77,11 +77,47 @@ describe('Program control service (step-5 U3)', () => {
 		w.done();
 	});
 
-	it('says the brick refused the start when the slot never shows running', async () => {
+	it('does not claim a refusal when the slot never shows running: a short program may have ended already', async () => {
 		const w = await world();
 		w.setOverride((command) => command.kind === 'program:run' ? { kind: 'program:run', imageBytes: 14 } : undefined);
 
-		await assert.rejects(w.service.run(PRG), (error) => codeOf(error) === ErrorCode.ProgramStartRefused);
+		assert.equal(await w.service.run(PRG), false, 'said it was seen running');
+		w.done();
+	});
+
+	it('runs one program at a time when two callers ask at once: the second is told one runs', async () => {
+		const w = await world();
+
+		const results = await Promise.allSettled([w.service.run(PRG), w.service.run(PRG)]);
+
+		assert.deepEqual(results.map((r) => r.status).sort(), ['fulfilled', 'rejected']);
+		const rejected = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+		assert.equal(codeOf(rejected?.reason), ErrorCode.ProgramRunning);
+		w.done();
+	});
+
+	it('stops following a started program once the brick no longer answers', async () => {
+		const w = await world();
+		await w.service.run(PRG);
+		w.setOverride(() => { throw new Error('brick gone'); });
+		await settle(60);
+		const after = w.sent.length;
+
+		await settle(100);
+
+		assert.equal(w.sent.length, after, 'kept asking a brick that is gone, with nobody listening');
+		w.done();
+	});
+
+	it('tells every listener even when one of them throws, and the run still succeeds', async () => {
+		const w = await world();
+		const seen: boolean[] = [];
+		w.service.onStateChange(() => { throw new Error('a consumer bug'); });
+		w.service.onStateChange((running) => { seen.push(running); });
+
+		assert.equal(await w.service.run(PRG), true);
+
+		assert.deepEqual(seen, [true]);
 		w.done();
 	});
 

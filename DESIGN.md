@@ -1447,7 +1447,7 @@ A dependent extension:
 Everything that crosses the API is plain data and promises — no `vscode` types, apart from the
 `dispose` handles of subscriptions — so it serialises and an MCP wrapper needs no translation.
 Every error is a `CockpitError` with a stable `code` (`not_connected`, `access_denied`,
-`program_running`, `program_not_found`, `program_start_refused`, …).
+`program_running`, `program_not_found`, …).
 
 ### 10.2 What the API Exports
 
@@ -1463,7 +1463,8 @@ event names it by id (owner, 11.11.2026; both sibling designs use `'active'`).
   progress and cancellation), `makeDirectory`, `remove` (`recursive` for a folder with content),
   `move` (a copy then a removal on the brick, not atomic).
 - **Programs:** `runProgram` (an `.rbf` in the user slot; refused while a program runs unless
-  `replace`), `stopProgram`, `emergencyStop` (the brick's own power-off sequence: user and debug
+  `replace`; answers `running: false` when the brick never showed it running — a short program
+  may have ended already, or the brick refused it; the slot's state cannot tell which), `stopProgram`, `emergencyStop` (the brick's own power-off sequence: user and debug
   slots, then every motor), `isProgramRunning`, `onProgramStateChanged` (polled while anyone
   listens). A native program runs through a launcher `.rbf` its consumer puts beside it.
 - **Shell:** `runShell` — a command on the brick through `opSYSTEM`, only in full mode, logged.
@@ -1476,7 +1477,7 @@ The setting `ev3-cockpit.accessMode` (owner, 11.11.2026). **safe**, the default:
 writes, deletes and runs only under `/home/root/lms2012/prjs` and `/media/card`, and reads
 everywhere; paths are resolved as the brick resolves them, so `..` cannot climb out, and a user
 area itself cannot be removed. **full**: the whole brick, shell included. The cockpit enforces it
-in the API, so no consumer — ev3-explorer's `ev3://` included — routes around it.
+in the API, so no consumer — ev3-explorer's `ev3://` included — routes around it. **It is a guardrail against mistakes, not a sandbox:** a program run in safe mode can do anything on the brick (`opSYSTEM` is open to every `.rbf`), and the check reads paths as written, so a symbolic link inside a user area that points outside it is not caught.
 
 ### 10.4 Connecting Through the API
 
