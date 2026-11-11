@@ -178,6 +178,11 @@ flowchart TB
 | U9 | Logging the heard flip | `src/runtime/presenceAggregator.ts`, `src/runtime/createRuntime.ts` | — |
 | U10 | Hardware session | `docs/plans/2026-11-02-0113-step4-pairing-on-connect.md` | U1–U9 |
 | U11 | Documents | `docs/plans/2026-10-31-2133-step3-forget-a-brick.md`, `IMPLEMENTATION_PLAN.md`, `DESIGN.md`, `REQUIREMENTS.md`, `src/runtime/brickManager.ts` | U4 |
+| U12 | Presence check over Winsock SDP | `native/bt-pairing-helper/Program.cs`, `src/transports/btPairingHelper.ts` | U10 |
+| U13 | Pairing follows Windows, not the list's sticky flag | `src/runtime/brickManager.ts`, `src/ui/connectBrick.ts` | U10 |
+| U14 | A sign-in that ends connected is not reported as failed | `src/runtime/brickManager.ts` | U10 |
+| U15 | Messages that claim no more than is known | `src/transports/btPairingHelper.ts`, `src/ui/connectBrick.ts` | U10 |
+| U16 | The first Bluetooth join after a fresh pairing | to be found | U10 |
 
 ### U1. Pairing result, cancel and phase log
 
@@ -432,6 +437,36 @@ flowchart TB
 - **Test expectation:** none — documentation.
 - **Verification:** a grep for "user's own act" finds nothing outside history, and the deferred item reads on its own.
 
+### U12. Presence check over Winsock SDP
+
+- **Goal:** the presence check stops raising the pairing dialog of a brick paired only in Windows (R4: the brick's dialog is the consent, and only a pairing may raise it).
+- **Requirements:** R4; keeps step 2's KD10.
+- **Approach:** replace the body of the helper's `--sdp` with the Winsock SDP query the path-(a) runs measured (`WSALookupServiceBegin`, `NS_BTH`, SerialPort UUID, `LUP_FLUSHCACHE`), not a new flag: an old binary would treat an unknown flag as a pairing request. The event gains `method: "winsock"` and `records`; the Node judgment counts an answer only from that shape and logs once that the helper is out of date when the old shape arrives. KD10's hysteresis stays.
+- **Test scenarios:** the judgment on the new shape answered and not; on the old shape (not answered, one log line); the helper's argument parsing unchanged for `--sdp`.
+- **Hardware:** `npm run build:helper` before the host (`build:dev` does not rebuild it). The cockpit's own presence monitor against a one-sided brick raises no dialog; a connect right after a query opens; a query does not stall a live Bluetooth session to another brick.
+
+### U13. Pairing follows Windows, not the list's sticky flag
+
+- **Goal:** a brick unpaired in Windows outside the cockpit is paired, not connected to (KD4), and joins without a scan after a pairing the cockpit made (step-3 KTD11).
+- **Approach:** decide "paired" as `checkOneSided` does, from discovery's tracked Bluetooth item, paired and available, fenced by `notePaired` and `forget`; the aggregator's sticky `paired` stays as it is. Every reader of `.paired` is decided explicitly: `joinCandidates`, `pairSighting`, `unheardBluetooth`, the KD4 recheck in `awaitOneSidedCheck`, `connectPickedBrick`, `bluetoothAlone`, forget's lost-channel path.
+- **Test scenarios:** Windows stops listing a paired brick; "Connect a Brick" over Bluetooth alone pairs it. A fresh pairing joins Bluetooth with no scan in between. A paired brick the checks lost is still tried by "Connect a Brick" (KD3).
+
+### U14. A sign-in that ends connected is not reported as failed
+
+- **Goal:** "Connect a Brick" does not say "did not answer" while a channel of the brick that joined during the sign-in is connected (U10 session 2, 09:24).
+- **Approach:** before a sign-in rejects, it resolves when any channel of the brick is connected; the log of 09:24 is read first for what happened to USB afterwards.
+- **Test scenarios:** the only candidate fails while USB, discovered meanwhile, joins: the sign-in resolves and the brick stays signed in. Every channel fails: it rejects with the first failure, as before.
+
+### U15. Messages that claim no more than is known
+
+- **Goal:** `NotFound` names a brick held by another Bluetooth device besides Bluetooth or visibility off; `AuthenticationTimeout` does not claim the brick asked when no dialog may have come.
+- **Test scenarios:** the reason text of each status.
+
+### U16. The first Bluetooth join after a fresh pairing
+
+- **Goal:** find why the first Bluetooth join after a pairing failed with WSA 10060 in 5 of 8 pairings (U10) and joined by itself 40–90 s later, and remove the wait if the cause allows it.
+- **Approach:** find the cause first (the time from `Paired` to the join, the cooldown, the queue, what the brick does right after a pairing), then decide; this unit may end with a finding only.
+
 ---
 
 ## Verification Contract
@@ -442,7 +477,8 @@ flowchart TB
 | One test file | `node --require ./scripts/test-setup.cjs --test <compiled test>` | while iterating |
 | Mutation check | the scratchpad `mutate.py` pattern, one mutation per key assertion | U1–U9 |
 | Extension Development Host | launched with a workspace whose settings turn `ev3-cockpit.mockBricks` off | U10 |
-| Hardware | U10 session with the owner | U10 |
+| Hardware | U10 session with the owner | U10, and the U12–U16 rerun |
+| Helper | `npm run build:helper` before the host | U12 |
 
 ---
 
