@@ -356,6 +356,46 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 		}
 	});
 
+	it('sends nothing for a loop that was retired, or a service disposed, while its frame waited in the chain', async () => {
+		const { bricks, service } = world();
+		const settle = () => new Promise((resolve) => setImmediate(resolve));
+		const errors: unknown[] = [];
+		service.onError((event) => errors.push(event.error));
+		try {
+			bricks.connect(B);
+			service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			bricks.holdSends();
+			void service.loopFor(B)?.runTick();
+			bricks.moveRoute(B, Transport.BT);
+			void service.loopFor(B)?.runTick();          // waits behind the first frame
+			bricks.moveRoute(B, Transport.USB);          // ...and its loop is retired meanwhile
+			void service.loopFor(B)?.runTick();
+			await settle();
+
+			bricks.releaseSends();
+			await settle();
+			await settle();
+			assert.equal(bricks.sent.length, 2, 'the first frame and the current loop\'s, not the retired one\'s');
+			assert.deepEqual(errors, [], 'a retired loop\'s refused frame is nobody\'s failure');
+
+			bricks.holdSends();
+			void service.loopFor(B)?.runTick();
+			await settle();
+			assert.equal(bricks.sent.length, 3);
+			bricks.moveRoute(B, Transport.BT);
+			void service.loopFor(B)?.runTick();          // waits behind the held frame
+			await settle();
+			service.dispose();
+			bricks.releaseSends();
+			await settle();
+			await settle();
+			assert.equal(bricks.sent.length, 3, 'nothing goes out for a disposed service');
+		} finally {
+			bricks.releaseSends();
+			service.dispose();
+		}
+	});
+
 	it('refuses a claim that could never be read, and adds nothing', () => {
 		const { bricks, service } = world();
 		try {
