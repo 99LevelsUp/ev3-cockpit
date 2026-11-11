@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.209",
+  "version": "0.2.210",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -60,6 +60,19 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Show simulated bricks, for development. Left unset, they appear only while the extension runs from source (F5) and never in an installed build. Takes effect after reloading the window."
+        },
+        "ev3-cockpit.accessMode": {
+          "type": "string",
+          "enum": [
+            "safe",
+            "full"
+          ],
+          "enumDescriptions": [
+            "Extensions using the cockpit write, delete and run only in the brick's projects folder (/home/root/lms2012/prjs) and on its SD card (/media/card); they read everywhere.",
+            "Extensions using the cockpit may change any file on the brick and run shell commands on it."
+          ],
+          "default": "safe",
+          "markdownDescription": "What other extensions may do on a brick through the cockpit. **safe** keeps them to the user areas; **full** opens the whole brick, shell included."
         }
       }
     }
