@@ -1,7 +1,7 @@
 ---
 title: Step 6 — telemetry, adaptive throttling, telemetry on the API
 date: 2026-11-11
-status: draft — decisions D1–D5 wait for the owner
+status: active — decisions D1–D5 taken 11.11.2026
 origin: owner, 11.11.2026 — finish Phases 1–4 so only the visuals remain; adaptive throttling 3.4 built now, not gated
 ---
 
@@ -38,7 +38,7 @@ Not wired: `new TelemetryService` appears only in tests and in `scripts/arena-sc
 
 Also closed in U1 as done or absorbed: 3.1.9 (rotating truncation, test `telemetryScheduler.test.ts` 227), 3.1.4e (DESIGN §4.5), 3.1.4h (`RowResult.alignment`).
 
-## Decisions for the owner
+## Decisions (owner, 11.11.2026 — each as recommended; D3 taken as the default)
 
 - **D1. Row id format — the contract consumers name rows by.** The code uses `ports.sensor.1.value` / `ports.motor.A.tacho`; DESIGN §9.3 writes `ports.1.value`. *Recommendation:* the code's form. The EV3 names inputs 1–4 and outputs A–D, so `ports.1` is unambiguous today, but `sensor`/`motor` also says what kind of reading it is and leaves room for a layer (`ports.sensor.1` → later `layer.2.ports.sensor.1`).
 - **D2. Granted interval under throttling.** Subscribe returns the interval the rows got (clamped to the transport's floor). The throttler then moves the tick. *Recommendation:* the grant stays what was negotiated; the snapshot and each event carry `effectiveIntervalMs`, and a consumer that cares listens to it. No re-negotiation events.
@@ -85,7 +85,7 @@ KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle �
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
 ### U9. The program run-state poll
-Per D5. If (b): the program status becomes a row the program service claims while someone listens; the service's own timer, `following` and its failure count go. If (a): the failure count is reset by every answer and every transition, with the regression test from the step-5 review.
+D5 (b). Done in step 5 already: the service polls only while someone listens; `following` and its failure count are gone. What is left here: the program status becomes a row the program service claims while someone listens, and the service's own timer goes.
 
 ### U10. Hardware session (owner)
 3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. Results go into this plan with a verdict against the rule written beforehand.
