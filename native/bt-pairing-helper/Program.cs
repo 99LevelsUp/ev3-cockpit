@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -280,52 +281,103 @@ internal static class Program
     }
 
     /// <summary>
-    /// Asks one device for its RFCOMM services, bypassing Windows' cache, and reports whether
-    /// it answered -- a candidate presence check for a paired brick (step-2 plan, U6).
+    /// Asks one device, bypassing Windows' cache, for its SerialPort service over Winsock SDP,
+    /// and reports whether it answered -- the presence check for a paired brick (step-2 plan, U6;
+    /// step-4 plan, U12).
     ///
-    /// Windows lists a paired brick whether it is switched on or not. An uncached service query
-    /// has to reach the device itself, so an answer means the brick is there. Microsoft does not
-    /// document what it does toward a device that is off; that is what the measurement is for.
-    /// Exit code 0 answered, 1 no answer or timeout, 3 Windows does not know the address.
+    /// Windows lists a paired brick whether it is switched on or not; an uncached query has to
+    /// reach the device itself. It used to be WinRT's <c>GetRfcommServicesAsync(Uncached)</c>,
+    /// which on a brick paired only in Windows raised the brick's pairing dialog (2 of 3 queries,
+    /// 11.11.2026): Windows answers a missing key with a new pairing. Through Winsock the link just
+    /// fails (0 of 3), an on brick answered 3 of 4 times (WinRT 1 of 4) and an off brick never.
+    /// The event says <c>method = "winsock"</c>, so the extension can tell an old helper apart.
+    /// Exit code 0 answered, 1 no answer or timeout.
     /// </summary>
     private static async Task<int> SdpAsync(string mac, TimeSpan timeout)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        using var cts = new CancellationTokenSource(timeout);
-        try
+        // WSALookupServiceBegin blocks until the device answers or the page times out (about
+        // 5.2 s for an off brick) and cannot be cancelled; the process ends after this anyway.
+        var lookup = Task.Run(() => WinsockSdp.CountSerialPortRecords(mac));
+        if (await Task.WhenAny(lookup, Task.Delay(timeout)) != lookup)
         {
-            var device = await BluetoothDevice.FromBluetoothAddressAsync(MacToAddress(mac)).AsTask(cts.Token);
-            if (device is null)
+            Emit(new { type = "sdp", mac, method = "winsock", answered = false, records = 0, reason = "timeout", elapsedMs = sw.ElapsedMilliseconds });
+            return 1;
+        }
+        var (records, error) = lookup.Result;
+        var answered = records > 0;
+        Emit(new { type = "sdp", mac, method = "winsock", answered, records, error, elapsedMs = sw.ElapsedMilliseconds });
+        return answered ? 0 : 1;
+    }
+
+    /// <summary>A Winsock SDP service search (<c>NS_BTH</c>, <c>LUP_FLUSHCACHE</c>) for the SerialPort UUID.</summary>
+    private static class WinsockSdp
+    {
+        private const int NsBth = 16;
+        private const int LupFlushCache = 0x1000;
+        private const int LupReturnAll = 0x0FF0;
+        private const int BufferBytes = 4096;
+        private static readonly Guid SerialPort = new Guid("00001101-0000-1000-8000-00805F9B34FB");
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WsaQuerySetW
+        {
+            public int dwSize; public IntPtr lpszServiceInstanceName; public IntPtr lpServiceClassId; public IntPtr lpVersion;
+            public IntPtr lpszComment; public int dwNameSpace; public IntPtr lpNSProviderId; public IntPtr lpszContext;
+            public int dwNumberOfProtocols; public IntPtr lpafpProtocols; public IntPtr lpszQueryString;
+            public int dwNumberOfCsAddrs; public IntPtr lpcsaBuffer; public int dwOutputFlags; public IntPtr lpBlob;
+        }
+
+        [DllImport("ws2_32.dll")] private static extern int WSAStartup(ushort version, byte[] data);
+        [DllImport("ws2_32.dll")] private static extern int WSAGetLastError();
+        [DllImport("ws2_32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WSALookupServiceBeginW(ref WsaQuerySetW restrictions, int flags, out IntPtr lookup);
+        [DllImport("ws2_32.dll", CharSet = CharSet.Unicode)]
+        private static extern int WSALookupServiceNextW(IntPtr lookup, int flags, ref int bufferLength, IntPtr results);
+        [DllImport("ws2_32.dll")] private static extern int WSALookupServiceEnd(IntPtr lookup);
+
+        /// <returns>The records found, and the Winsock error that ended the search (null when none).</returns>
+        public static (int Records, string? Error) CountSerialPortRecords(string mac)
+        {
+            if (WSAStartup(0x0202, new byte[512]) != 0) { return (0, "WSAStartup failed"); }
+            IntPtr guid = Marshal.AllocHGlobal(16);
+            IntPtr context = Marshal.StringToHGlobalUni("(" + mac + ")");
+            IntPtr results = Marshal.AllocHGlobal(BufferBytes);
+            try
             {
-                Emit(new { type = "sdp", mac, answered = false, reason = "unknown address", elapsedMs = sw.ElapsedMilliseconds });
-                return 3;
-            }
-            using (device)
-            {
-                var result = await device.GetRfcommServicesAsync(BluetoothCacheMode.Uncached).AsTask(cts.Token);
-                var answered = result.Error == BluetoothError.Success;
-                Emit(new
+                Marshal.Copy(SerialPort.ToByteArray(), 0, guid, 16);
+                var query = new WsaQuerySetW
                 {
-                    type = "sdp",
-                    mac,
-                    answered,
-                    error = result.Error.ToString(),
-                    services = result.Services.Count,
-                    connectionStatus = device.ConnectionStatus.ToString(),
-                    elapsedMs = sw.ElapsedMilliseconds,
-                });
-                return answered ? 0 : 1;
+                    dwSize = Marshal.SizeOf(typeof(WsaQuerySetW)),
+                    lpServiceClassId = guid,
+                    dwNameSpace = NsBth,
+                    lpszContext = context,
+                };
+                if (WSALookupServiceBeginW(ref query, LupFlushCache, out IntPtr lookup) != 0)
+                {
+                    return (0, "WSA " + WSAGetLastError());
+                }
+                try
+                {
+                    int records = 0;
+                    while (true)
+                    {
+                        int length = BufferBytes;
+                        if (WSALookupServiceNextW(lookup, LupReturnAll, ref length, results) != 0)
+                        {
+                            return (records, records > 0 ? null : "WSA " + WSAGetLastError());
+                        }
+                        records++;
+                    }
+                }
+                finally { WSALookupServiceEnd(lookup); }
             }
-        }
-        catch (OperationCanceledException)
-        {
-            Emit(new { type = "sdp", mac, answered = false, reason = "timeout", elapsedMs = sw.ElapsedMilliseconds });
-            return 1;
-        }
-        catch (Exception ex)
-        {
-            Emit(new { type = "sdp", mac, answered = false, reason = $"{ex.GetType().Name}: {ex.Message}", elapsedMs = sw.ElapsedMilliseconds });
-            return 1;
+            finally
+            {
+                Marshal.FreeHGlobal(guid);
+                Marshal.FreeHGlobal(context);
+                Marshal.FreeHGlobal(results);
+            }
         }
     }
 

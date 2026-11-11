@@ -356,28 +356,41 @@ export function scanForBricks(options: BrickScanOptions): BrickScan {
 export interface PresenceCheckOptions extends Pick<BtPairingHelperOptions, 'helperPath' | 'spawn' | 'killAfterMs'> {
 	/** The helper's own deadline for one query. An off brick takes about 5.3 s to give up. */
 	timeoutSeconds?: number;
+	/** Told once when the helper answers in the old WinRT shape: it predates step-4 U12. */
+	log?: { warn(message: string): void };
 }
 
 /**
  * Builds a check that answers whether a paired brick is switched on, without connecting.
  *
- * Runs the helper's uncached RFCOMM service query (`--sdp`). Measured 30.10.2026 (step-2 plan,
- * U6): the query itself reports success even for a brick that is off, so what counts is the
- * device's link status and service count — Connected with a service came only from bricks
- * that were on, visibility off included. The opposite does not hold: a brick that is on can
- * go unanswered when this host's adapter misses the page, so a single `false` means "off, or
- * missed", and the caller decides how many misses make "not heard".
+ * Runs the helper's `--sdp`: since step-4 U12 a Winsock SDP query for the SerialPort service,
+ * bypassing Windows' cache. An answer with a record proves the brick is on; silence means "off,
+ * or missed", and the caller decides how many misses make "not heard" (step-2 KD10).
+ *
+ * The WinRT query it replaced raised the pairing dialog of a brick paired only in Windows (2 of 3
+ * queries, 11.11.2026): Windows answered the brick's missing key with a new pairing. Winsock
+ * raised it 0 of 3 times, heard an on brick 3 of 4 times against WinRT's 1 of 4, and an off brick
+ * never. So an answer in the old shape, from a helper built before the change, counts as not
+ * heard rather than keep that query alive, and says once that the helper needs rebuilding.
  */
 export function createHelperPresenceCheck(options: PresenceCheckOptions): (mac: string) => Promise<boolean> {
 	const timeoutSeconds = options.timeoutSeconds ?? 10;
+	let outdatedSaid = false;
 	return (mac: string) => {
 		let answered = false;
 		const run = runHelper(['--sdp', '--mac', mac, '--timeout-seconds', String(timeoutSeconds)],
 			{ ...options, timeoutSeconds },
 			(event) => {
 				if (event.type !== 'sdp') { return; }
-				answered = readString(event, 'connectionStatus') === 'Connected'
-					&& (readNumber(event, 'services') ?? 0) > 0;
+				if (readString(event, 'method') !== 'winsock') {
+					if (!outdatedSaid) {
+						outdatedSaid = true;
+						options.log?.warn('The Bluetooth helper answers presence checks the old way, which can show a pairing '
+							+ 'dialog on a brick; rebuild it with "npm run build:helper". Until then no paired brick counts as heard.');
+					}
+					return;
+				}
+				answered = readBoolean(event, 'answered') === true && (readNumber(event, 'records') ?? 0) > 0;
 			});
 		return run.done.then(() => answered);
 	};
