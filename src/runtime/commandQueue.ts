@@ -2,7 +2,8 @@
  * Per-brick FIFO command queue.
  *
  * Serializes commands to a single brick to ensure firmware safety.
- * Tracks queue depth for telemetry throttling in Phase 3.
+ * Reports its depth for diagnostics; throttling does not read it — measured, depth stays at 0 or 1
+ * with one telemetry frame in flight (DESIGN §4.5).
  */
 
 import { BrickCommand, BrickResponse, SendCommandOptions } from '../contracts/transport';

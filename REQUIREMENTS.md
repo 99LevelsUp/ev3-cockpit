@@ -231,7 +231,9 @@ Requirements:
 - the foreground brick must have the fastest telemetry,
 - subscription telemetry must not degrade the foreground experience,
 - the system must remain responsive even with concurrent subscriptions on multiple bricks,
-- telemetry frequency must adapt to actual transport latency and queue depth.
+- telemetry frequency must adapt to each brick's measured response latency — its tail, not its
+  average; queue depth was measured and has no range with one frame in flight (DESIGN §4.5,
+  changed 11.11.2026).
 
 ## 9. Public API
 

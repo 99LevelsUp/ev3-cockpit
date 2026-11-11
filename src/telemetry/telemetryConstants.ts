@@ -19,9 +19,10 @@
  * period and nothing else (§9.5), and it must not be free to move it below the point where
  * the heartbeat stops fitting.
  *
- * Deliberately **not** seeded from `MAX_COMMANDS_PER_SEC` or `COMMAND_RTT_MS` in
- * `transportConstants.ts`: the first was retracted in §9.2, and the second was pessimistic
- * by ~50x on USB. Neither was ever read by any code, which is why nobody noticed.
+ * `MAX_COMMANDS_PER_SEC` and `COMMAND_RTT_MS` in `transportConstants.ts` now hold these
+ * measurements, rounded (they once held guesses, retracted in §9.2). The cadence is still written
+ * out here rather than derived from them: it is a share of the link chosen on purpose, and the
+ * share is what the table above documents.
  */
 
 import { Transport } from '../contracts/enums';

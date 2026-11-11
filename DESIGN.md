@@ -460,9 +460,10 @@ Two consequences worth stating, because both were found by building it:
   libusb's 1024. The firmware answers a truncated request rather than complaining, so the
   failure would be silent.
 
-A transport that simulates command *semantics* rather than framing — the mock — cannot
-execute a composed frame at all, and says so through `TransportCapabilities`. A brick on such
-a transport runs in `minimal` regardless of whether it is the active one.
+A transport that cannot execute a composed frame says so through `TransportCapabilities`, and a
+brick on it runs in `minimal` regardless of whether it is the active one. The mock is not such a
+transport: it decodes the opcodes the assembler emits and answers from its own ports, so
+telemetry runs on it as on a brick (owner, 11.11.2026, step-6 plan D4).
 
 ### 4.5 Adaptive Throttling
 
@@ -1342,7 +1343,7 @@ each needs more than a value:
 
 | | Why a consumer needs it |
 |---|---|
-| stable **row id** in a namespace | to name a row across versions; `ports.1.value`, not an index into an array |
+| stable **row id** in a namespace | to name a row across versions; `ports.sensor.1.value`, not an index into an array (format: owner, 11.11.2026) |
 | **`apiVersion`** on the subscription call | to detect that the row vocabulary changed |
 | **`sampledAt`** per row value | rows in one snapshot come from different ticks; without this a consumer cannot tell fresh from carried-over |
 | the **granted interval** | what the consumer asked for is a request, not a guarantee — see below |
@@ -1355,6 +1356,11 @@ actually got. Without that, one extension asking for 10 Hz on Bluetooth would co
 brick's entire measured capacity of 10.7 commands/second and every other consumer — and the
 heartbeat — would pay for it silently.
 
+The grant stays what was negotiated. When throttling moves the tick (§4.5), the snapshot and
+every event carry `effectiveIntervalMs`, the interval the rows really run at; nothing is
+re-negotiated (owner, 11.11.2026). Every port carries `layer`, 0 until a daisy chain is
+supported, so adding layers does not change the shape (owner, 11.11.2026).
+
 Subscribers are identified by an opaque handle returned from subscribe, so unsubscribing
 releases exactly one claim on a row and the effective interval is recomputed from those that
 remain. This is what makes §9.1a's promise real: switching a row off in the panel drops the
@@ -1362,7 +1368,7 @@ cockpit's claim, never anyone else's.
 
 **Registering a row rejects, rather than documents, what will not fit.** A third party adding
 a row does not need to know about 4-byte alignment for `opINPUT_READSI`, the 1019-byte reply
-ceiling, or 57 bytes of declared globals on HID (§9.1b). Registration validates against them
+ceiling, or 59 bytes of declared globals on HID (64 less the 5-byte reply header; the request's bytecode gets 57) (§9.1b). Registration validates against them
 and fails there — the alternative is a constraint published as API and breached at runtime as
 a corrupt frame.
 
