@@ -63,7 +63,7 @@ Each unit: tests first (RED), a mutation check of the key assertions, `npm run t
 ### U1. Documents settle the drift — done 11.11.2026
 The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decisions D1–D5 written into DESIGN and IMPLEMENTATION_PLAN. No code. Drift 3 (one `ActivityMode`) waits for U5 and drift 8 (`validateRow` at registration) for U2; drift 1 (the slow tier's own command) is DESIGN already and is built in U4.
 
-### U2. Row registry and vocabulary
+### U2. Row registry and vocabulary — done 11.11.2026 (f939eca and the radio rows)
 3.1.6, 3.1.4 (`PeripheralType`), 3.2.5, 3.1.1–3.1.3 as row bundles. A registry object validates on registration (`validateRow`, mode conflicts with rows already registered), keeps the raw type code beside the resolved name (the occupancy parse keeps the mode), and lists rows with id, unit, tier. `ev3Rows.ts` gets its own tests. New rows: transports and Bluetooth visibility (3.1.3), the pairing list `FAVOUR_ITEMS` (3.1.4k) — encodings verified on hardware in U10.
 
 ### U3. The mock serves frames
@@ -91,6 +91,8 @@ D5 (b). Done in step 5 already: the service polls only while someone listens; `f
 3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. Results go into this plan with a verdict against the rule written beforehand.
 
 ## Open, decided later
+
+- 3.1.2 filesystem state as a row: `storage()` answers it today; a row when a consumer needs to follow it.
 
 - Daisy chain beyond layer 0 (D3).
 - The diagnostic display itself (Phase 5).

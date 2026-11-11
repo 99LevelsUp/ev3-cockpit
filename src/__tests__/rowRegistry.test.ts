@@ -10,7 +10,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { EV3_OPCODE, INPUT_DEVICE_SUB } from '../protocol/ev3Packet';
+import { COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB } from '../protocol/ev3Packet';
 import { RowRegistry, createEv3RowRegistry } from '../telemetry/rowRegistry';
 import { allEv3Rows, motorOccupancyRow, sensorOccupancyRow } from '../telemetry/ev3Rows';
 import type { TelemetryRow } from '../telemetry/telemetryRow';
@@ -126,6 +126,42 @@ describe('EV3 row catalogue (step-6 U2)', () => {
 		assert.deepEqual([occupancy[0], occupancy[1]], [EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]);
 		assert.equal(occupancy[3], 18);   // LC0(18): layer, then the port
 		assert.equal(tacho?.[2], 2);
+	});
+
+	it('reads the radios and the pairing count with opCOM_GET on the right hardware (3.1.3, 3.1.4k)', () => {
+		const rows = new Map(allEv3Rows().map((r) => [r.id, r]));
+		const expect = (id: string, subcode: number, hardware: number): void => {
+			const bytes = rows.get(id)?.emit(5);
+			assert.ok(bytes, `${id} is missing`);
+			assert.deepEqual([...bytes], [EV3_OPCODE.COM_GET, subcode, hardware, 0x65], id);   // GV0(5) = 0x60 | 5
+		};
+
+		expect('system.bluetooth.on', COM_GET_SUB.GET_ON_OFF, COM_HARDWARE.BT);
+		expect('system.bluetooth.visible', COM_GET_SUB.GET_VISIBLE, COM_HARDWARE.BT);
+		expect('system.bluetooth.peers', COM_GET_SUB.FAVOUR_ITEMS, COM_HARDWARE.BT);
+		expect('system.wifi.on', COM_GET_SUB.GET_ON_OFF, COM_HARDWARE.WIFI);
+		expect('system.wifi.present', COM_GET_SUB.GET_PRESENT, COM_HARDWARE.WIFI);
+		assert.deepEqual([COM_GET_SUB.GET_ON_OFF, COM_GET_SUB.GET_VISIBLE, COM_GET_SUB.GET_PRESENT], [1, 2, 15], 'bytecodes.h 636, 637, 647');
+	});
+
+	it('parses a radio flag as a boolean and the pairing count as a number', () => {
+		const rows = new Map(allEv3Rows().map((r) => [r.id, r]));
+		const payload = new Uint8Array([1, 0, 3]);
+
+		assert.equal(rows.get('system.bluetooth.on')?.parse(payload, 0, 1).value, true);
+		assert.equal(rows.get('system.wifi.on')?.parse(payload, 1, 1).value, false);
+		assert.equal(rows.get('system.bluetooth.peers')?.parse(payload, 2, 1).value, 3);
+	});
+
+	it('never asks GET_ON_OFF of the USB hardware: the firmware answers FAILBREAK and ends the whole frame', () => {
+		// c_com.c 4296–4330: the HW_USB case leaves DspStat at FAILBREAK; lms2012.c 2496–2510 then
+		// ends the direct command, so every row in that frame would be lost.
+		const forbidden = [EV3_OPCODE.COM_GET, COM_GET_SUB.GET_ON_OFF, COM_HARDWARE.USB];
+		for (const r of allEv3Rows()) {
+			const bytes = [...r.emit(0)];
+			const hit = bytes.some((_, i) => forbidden.every((b, k) => bytes[i + k] === b));
+			assert.equal(hit, false, `${r.id} asks GET_ON_OFF of USB`);
+		}
 	});
 
 	it('keeps the mode an occupancy row reads, beside the type code', () => {

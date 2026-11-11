@@ -1218,7 +1218,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     why — in the review notes at `.notes/zápisky/2026-08-27 Multi-oponentní review
     telemetrického návrhu.md`.
 
-  - [ ] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values
+  - [x] 3.1.1 `ports` category — sensor types, motor types, port mapping, measured values — **done as rows** (`ports.sensor.N.occupancy|value`, `ports.motor.X.occupancy|tacho`, step 6 U2)
   - [x] 3.1.4a Device-type codes corrected against the firmware, and the `ports` command
     made to read a value at all. Four defects, none of which any test could see:
     - **Two type codes were misnamed.** 16 was `color` and 29 was `color-v2`; 16 is the EV3
@@ -1411,7 +1411,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     touch it.** **Step 3:** "Forget a Brick" now removes this computer's entry when the brick
     is reachable (`opCOM_REMOVE`, matched on this computer's radio name), and "Clear a Brick's
     Bluetooth List" removes every entry, whatever its name. The list is read with
-    `FAVOUR_ITEMS`/`FAVOUR_ITEM`; wiring it into the `system` telemetry category stays open. After every trace of the bricks was removed from Windows — PnP nodes, the
+    `FAVOUR_ITEMS`/`FAVOUR_ITEM`; the count is the row `system.bluetooth.peers` (step 6 U2); the entries stay the `bluetooth:peer` command, since the index is not bounds-checked. After every trace of the bricks was removed from Windows — PnP nodes, the
     `BTHPORT` pairing keys, the COM reservations — the master still listed the PC in its own
     paired devices. Whatever 6.6.x implements as "forget" has to clear **both sides**, or a
     brick keeps offering a stale peer that the host no longer knows.
@@ -1462,8 +1462,8 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     needs a settling policy, and 3.1.5's batching cannot span modes of one device
   - [x] 3.1.4 **Done 11.11.2026 (step 6 U2)** in `src/protocol/peripheralTypes.ts` (codes from `bytecodes.h`; `identifying` for 125, `unrecognised` for an unknown code, `third-party` for 50–98), not in contracts, so the protocol layer can use it. `PeripheralType` enum in `src/contracts/` — the EV3 device-type codes the brick actually reports, plus explicit `none` and `unknown`. `PortState.peripheralType` is a bare `string` today while every other domain concept is an enum, and Phase 4 exports it to third parties as a de-facto contract. Measured scope of the divergence: **motors already agree** (both sides say `large-motor`, confirmed on hardware), it is the **sensors** that differ — the protocol maps device codes to `touch`/`color`/`ultrasonic` while the mock config uses `touch-sensor`/`color-sensor`/`ultrasonic-sensor`
   - [x] 3.1.5 Batch the foreground frame into one multi-opcode command. All three transports are now measured (USB 9 ms, TCP 58 ms, BT 121 ms worst case), which retires the original premise that the *transport* makes the frame rate unusable — but promotes this task rather than closing it. The binding constraint is the brick's own sustained rate, measured in §9.2: 176 commands/second on USB, 62 on TCP, **10.7 on Bluetooth**. At four commands per frame Bluetooth gives under 3 Hz with nothing left for the heartbeat, and batching is what buys that back. The earlier version of this task cited a `MAX_COMMANDS_PER_SEC = 10` guard in §4.1 as the binding constraint; §4.1 now specifies a ≤200/s backstop that is deliberately not a meter on normal traffic, and §9.2 retracted the 10 as a figure that came from nowhere and is 17x low on USB. The open question that followed from that guard — whether its budget counted the heartbeat — is moot under a backstop and is withdrawn.
-  - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers
-  - [ ] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility
+  - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers — **not built as a row (11.11.2026):** free space is answered by the API's `storage()`; a row comes when a consumer needs to follow it
+  - [x] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility — **done as rows** (step 6 U2): `system.bluetooth.on|visible|peers`, `system.wifi.on|present`; USB needs no row (it is present whenever the brick answers over it) and must never be asked `GET_ON_OFF` (FAILBREAK ends the frame, `c_com.c` 4296–4330); encodings verified on hardware in U10
 - [ ] **3.2 Telemetry data models**
   - [ ] 3.2.1 `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
     a set of row values, each carrying its own `sampledAt`, because rows in one snapshot come
