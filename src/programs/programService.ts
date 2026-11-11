@@ -40,6 +40,8 @@ export interface RunOptions {
 const POLL_MS = 1000;
 const CONFIRM_TIMEOUT_MS = 1500;
 const CONFIRM_STEP_MS = 100;
+/** Polls failed in a row before a started program is no longer followed. */
+const MAX_POLL_FAILURES = 3;
 
 export class ProgramService {
 	private readonly pollMs: number;
@@ -55,6 +57,10 @@ export class ProgramService {
 	private disposed = false;
 	/** The tail of the run/stop operations, so they take turns. */
 	private queue: Promise<void> = Promise.resolve();
+	/** Emergency stops asked so far: a run asked before one of them must not send its start. */
+	private emergencies = 0;
+	/** Polls that failed in a row; following ends at `MAX_POLL_FAILURES`. */
+	private pollFailures = 0;
 
 	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}) {
 		this.pollMs = options.pollMs ?? POLL_MS;
@@ -68,11 +74,20 @@ export class ProgramService {
 	 * ended already, or the brick refused the start — the slot's state cannot tell the two apart,
 	 * so this does not claim either (review 11.11.2026).
 	 *
-	 * Run, stop and emergency stop take turns per brick, so two callers cannot both pass the
-	 * check and race their starts, the second refused in silence (review 11.11.2026).
+	 * Run and stop take turns per brick, so two callers cannot both pass the check and race their
+	 * starts, the second refused in silence (review 11.11.2026). Emergency stop does not wait its
+	 * turn; instead it cancels every run asked before it whose start is not sent yet, so no
+	 * program starts after the emergency stop was asked (review round 2, 11.11.2026).
 	 */
 	run(path: string, options: RunOptions = {}): Promise<boolean> {
+		const asked = this.emergencies;
+		const cancelled = (): void => {
+			if (this.emergencies !== asked) {
+				throw new ProgramError(ErrorCode.ProgramCancelled, 'An emergency stop came first: the program was not started.');
+			}
+		};
 		return this.inTurn(async () => {
+			cancelled();
 			if (await this.isRunning()) {
 				if (!options.replace) {
 					throw new ProgramError(ErrorCode.ProgramRunning,
@@ -80,6 +95,8 @@ export class ProgramService {
 				}
 				await this.stopNow();
 			}
+			// Checked right before the start is sent: nothing awaits between this and the send.
+			cancelled();
 			const reply = await this.send({ kind: 'program:run', path });
 			if (reply.kind !== 'program:run') { throw new ProtocolError(`Expected program:run, got ${reply.kind}.`); }
 			if (reply.imageBytes <= 0) {
@@ -103,7 +120,10 @@ export class ProgramService {
 
 	/** The brick's own power-off sequence: the user and debug slots, then every motor. */
 	emergencyStop(): Promise<void> {
-		// Not behind a run in progress: an emergency does not wait its turn.
+		// Not behind a run in progress: an emergency does not wait its turn. A run asked before it
+		// and not yet sent sees the count change and does not send its start. A start already
+		// sent is ahead of this stop on the brick's session, so this stop ends it.
+		this.emergencies += 1;
 		return (async () => {
 			await this.send({ kind: 'program:emergencyStop' });
 			await this.isRunning();
@@ -169,9 +189,14 @@ export class ProgramService {
 			this.timer = undefined;
 			this.polling = true;
 			this.isRunning()
-				// A brick that does not answer any more: stop following what it ran; listeners, who
-				// asked to hear about this brick, keep their poll (review 11.11.2026).
-				.catch(() => { this.following = false; })
+				.then(() => { this.pollFailures = 0; })
+				// One lost reply is not a brick that is gone: follow on. A brick that does not answer
+				// several times in a row: stop following what it ran; listeners, who asked to hear about
+				// this brick, keep their poll (review 11.11.2026, round 2).
+				.catch(() => {
+					this.pollFailures += 1;
+					if (this.pollFailures >= MAX_POLL_FAILURES) { this.following = false; this.pollFailures = 0; }
+				})
 				.finally(() => {
 					this.polling = false;
 					this.schedulePoll();

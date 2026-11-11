@@ -25,7 +25,7 @@ origin: owner, 11.11.2026 — users have robots nearly built and want to program
 - R4. A consumer in full mode runs a shell command on the brick and gets its exit status; in safe mode it is refused.
 - R5. Safe mode lets a consumer write, delete and run only in the user areas; reading is allowed everywhere. The cockpit enforces it, not the consumer.
 - R6. A consumer lists every brick the cockpit knows with its channels' states, asks for the active brick, sets it, connects a brick and disconnects it.
-- R7. Every call names a brick by its id or by `'active'`; every answer and event names the brick by its id.
+- R7. Every call names a brick by its id or by `'active'`; program, shell and brick-info answers and every event name the brick by its id (file answers carry only the file data — narrowed after review round 2).
 - R8. The API is versioned, and a consumer's subscriptions end when it unregisters or its extension deactivates.
 
 ### Key Decisions (owner, 11.11.2026)

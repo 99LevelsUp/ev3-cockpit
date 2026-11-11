@@ -166,6 +166,13 @@ describe('Public API (step-5 U6)', () => {
 		assert.equal(f.listListenerCount(), 0);
 	});
 
+	it('refuses a brick id the cockpit does not know, before any command', async () => {
+		const f = fakes();
+
+		await assert.rejects(f.api.registerConsumer('test').isProgramRunning('no-such-brick'), (e) => codeOf(e) === ErrorCode.NotConnected);
+		assert.deepEqual(f.sent, []);
+	});
+
 	it('reports an unexpected reply as a protocol error, not as a lost connection', async () => {
 		const f = fakes('full');
 		const c = f.api.registerConsumer('test');
