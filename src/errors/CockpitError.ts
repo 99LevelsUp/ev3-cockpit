@@ -24,8 +24,6 @@ export const ErrorCode = {
 	ProgramRunning: 'program_running',
 	/** The `.rbf` is not on the brick: its image loaded as size 0. */
 	ProgramNotFound: 'program_not_found',
-	/** The brick never showed the program running after the start. */
-	ProgramStartRefused: 'program_start_refused',
 	/** The cockpit's access mode does not allow the operation on that path (step-5 KD2). */
 	AccessDenied: 'access_denied',
 } as const;
@@ -218,10 +216,10 @@ export class SubscriptionError extends CockpitError {
 	}
 }
 
-/** A program could not be run as asked: it runs already, is not on the brick, or did not start. */
+/** A program could not be run as asked: one runs already, or it is not on the brick. */
 export class ProgramError extends CockpitError {
 	constructor(
-		code: typeof ErrorCode.ProgramRunning | typeof ErrorCode.ProgramNotFound | typeof ErrorCode.ProgramStartRefused,
+		code: typeof ErrorCode.ProgramRunning | typeof ErrorCode.ProgramNotFound,
 		message: string,
 		cause?: unknown,
 	) {

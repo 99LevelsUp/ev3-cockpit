@@ -30,21 +30,23 @@ carry the id. With no active brick, `'active'` fails with `code: 'not_connected'
 | connect / disconnect | `connect(brick)` — "Connect a Brick", pairing included; `disconnect(brick)` |
 | firmware version | `getBrickInfo(brick)` → name, firmware, OS |
 | files | `list`, `exists`, `size`, `storage`, `readFile`, `writeFile` (progress, `AbortSignal`), `makeDirectory`, `remove` (`recursive`), `move` |
-| run an `.rbf` | `runProgram(brick, path, { replace })` — the user slot, as the brick's own browser |
+| run an `.rbf` | `runProgram(brick, path, { replace })` — the user slot, as the brick's own browser; `running: false` means it was never seen running (ended already, or refused) |
 | stop / emergency stop / state | `stopProgram`, `emergencyStop` (also stops every motor), `isProgramRunning`, `onProgramStateChanged` |
 | a shell command | `runShell(brick, command)` — only in full mode |
 | the access mode | `getAccessMode()`, `onAccessModeChanged` |
 | telemetry | step 6 |
 
 Errors are `CockpitError`s with a stable `code`: `not_connected`, `access_denied`,
-`program_running`, `program_not_found`, `program_start_refused`, `transport_failed`, `timeout`, …
+`program_running`, `program_not_found`, `protocol_failed`, `transport_failed`, `timeout`, …
 
 ## Safe and full mode
 
 The user chooses it in the cockpit's settings (`ev3-cockpit.accessMode`); the cockpit enforces
 it. **safe** (default): writing, deleting and running only under `/home/root/lms2012/prjs` and
 `/media/card`; reading everywhere; no shell. **full**: everything, shell included. A consumer
-reads the mode to grey out what it cannot do; it does not enforce it itself.
+reads the mode to grey out what it cannot do; it does not enforce it itself. Safe mode is a
+guardrail against mistakes, not a sandbox: a program it runs can do anything on the brick, and a
+symbolic link inside a user area that points outside is not caught.
 
 ## Running a native program (ev3-c)
 

@@ -40,6 +40,8 @@ function fakes(mode: AccessMode = 'safe') {
 		case 'program:status': return { kind: 'program:status', running: false, status: 0x40 };
 		case 'system:run': return { kind: 'system:run', status: 0 };
 		case 'fs:makeDirectory': return { kind: 'fs:makeDirectory' } as BrickResponse;
+		// A reply of the wrong kind, as a confused channel would hand back.
+		case 'info': return { kind: 'battery', level: 0 };
 		default: return { kind: command.kind } as BrickResponse;
 		}
 	};
@@ -153,6 +155,22 @@ describe('Public API (step-5 U6)', () => {
 
 		assert.deepEqual(f.connected, ['B1']);
 		assert.deepEqual(f.signedOut, ['A1']);
+	});
+
+	it('refuses a new subscription from a consumer that has unregistered, and leaves nothing installed', () => {
+		const f = fakes();
+		const c = f.api.registerConsumer('test');
+		c.dispose();
+
+		assert.throws(() => c.onBricksChanged(() => { /* never */ }), (e: unknown) => codeOf(e) === ErrorCode.ConsumerFailed);
+		assert.equal(f.listListenerCount(), 0);
+	});
+
+	it('reports an unexpected reply as a protocol error, not as a lost connection', async () => {
+		const f = fakes('full');
+		const c = f.api.registerConsumer('test');
+
+		await assert.rejects(c.getBrickInfo('active'), (e) => codeOf(e) === ErrorCode.ProtocolFailed);
 	});
 
 	it('ends a consumer\'s subscriptions when it unregisters', () => {

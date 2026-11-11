@@ -53,6 +53,8 @@ export class ProgramService {
 	private timer: NodeJS.Timeout | undefined;
 	private polling = false;
 	private disposed = false;
+	/** The tail of the run/stop operations, so they take turns. */
+	private queue: Promise<void> = Promise.resolve();
 
 	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}) {
 		this.pollMs = options.pollMs ?? POLL_MS;
@@ -60,42 +62,64 @@ export class ProgramService {
 		this.confirmStepMs = options.confirmStepMs ?? CONFIRM_STEP_MS;
 	}
 
-	/** Load an `.rbf` into the user slot and start it; resolves once the brick shows it running. */
-	async run(path: string, options: RunOptions = {}): Promise<void> {
-		if (await this.isRunning()) {
-			if (!options.replace) {
-				throw new ProgramError(ErrorCode.ProgramRunning,
-					'A program is running on the brick. Stop it first, or ask to replace it.');
+	/**
+	 * Load an `.rbf` into the user slot and start it. Resolves `true` once the brick shows it
+	 * running, `false` when it never did within the confirmation window: a short program may have
+	 * ended already, or the brick refused the start — the slot's state cannot tell the two apart,
+	 * so this does not claim either (review 11.11.2026).
+	 *
+	 * Run, stop and emergency stop take turns per brick, so two callers cannot both pass the
+	 * check and race their starts, the second refused in silence (review 11.11.2026).
+	 */
+	run(path: string, options: RunOptions = {}): Promise<boolean> {
+		return this.inTurn(async () => {
+			if (await this.isRunning()) {
+				if (!options.replace) {
+					throw new ProgramError(ErrorCode.ProgramRunning,
+						'A program is running on the brick. Stop it first, or ask to replace it.');
+				}
+				await this.stopNow();
 			}
-			await this.stop();
-		}
-		const reply = await this.send({ kind: 'program:run', path });
-		if (reply.kind !== 'program:run') { throw new ProtocolError(`Expected program:run, got ${reply.kind}.`); }
-		if (reply.imageBytes <= 0) {
-			throw new ProgramError(ErrorCode.ProgramNotFound, `No program at ${path} on the brick.`);
-		}
-		const deadline = Date.now() + this.confirmTimeoutMs;
-		while (!(await this.isRunning())) {
-			if (Date.now() >= deadline) {
-				throw new ProgramError(ErrorCode.ProgramStartRefused,
-					`The brick did not start ${path}: it never showed it running.`);
+			const reply = await this.send({ kind: 'program:run', path });
+			if (reply.kind !== 'program:run') { throw new ProtocolError(`Expected program:run, got ${reply.kind}.`); }
+			if (reply.imageBytes <= 0) {
+				throw new ProgramError(ErrorCode.ProgramNotFound, `No program at ${path} on the brick.`);
 			}
-			await delay(this.confirmStepMs);
-		}
-		this.following = true;
-		this.schedulePoll();
+			const deadline = Date.now() + this.confirmTimeoutMs;
+			while (!(await this.isRunning())) {
+				if (Date.now() >= deadline) { return false; }
+				await delay(this.confirmStepMs);
+			}
+			this.following = true;
+			this.schedulePoll();
+			return true;
+		});
 	}
 
 	/** Stop the program in the user slot. */
-	async stop(): Promise<void> {
+	stop(): Promise<void> {
+		return this.inTurn(() => this.stopNow());
+	}
+
+	/** The brick's own power-off sequence: the user and debug slots, then every motor. */
+	emergencyStop(): Promise<void> {
+		// Not behind a run in progress: an emergency does not wait its turn.
+		return (async () => {
+			await this.send({ kind: 'program:emergencyStop' });
+			await this.isRunning();
+		})();
+	}
+
+	private async stopNow(): Promise<void> {
 		await this.send({ kind: 'program:stop' });
 		await this.isRunning();
 	}
 
-	/** The brick's own power-off sequence: the user and debug slots, then every motor. */
-	async emergencyStop(): Promise<void> {
-		await this.send({ kind: 'program:emergencyStop' });
-		await this.isRunning();
+	/** Runs `work` after every operation queued before it; a failure does not block the next. */
+	private inTurn<T>(work: () => Promise<T>): Promise<T> {
+		const result = this.queue.then(work, work);
+		this.queue = result.then(() => undefined, () => undefined);
+		return result;
 	}
 
 	/** Whether a program runs in the user slot; tells the listeners when that changed. */
@@ -131,7 +155,10 @@ export class ProgramService {
 		this.known = running;
 		// The first answer is where things stand, not a change; `isRunning` tells it.
 		if (first) { return; }
-		for (const listener of [...this.listeners]) { listener(running); }
+		// One consumer's failing listener must not cost the others the change, or the caller its answer.
+		for (const listener of [...this.listeners]) {
+			try { listener(running); } catch { /* the consumer's own error; the others still hear */ }
+		}
 	}
 
 	/** One poll at a time, and only while there is a reason to ask (KTD4). */
@@ -142,7 +169,9 @@ export class ProgramService {
 			this.timer = undefined;
 			this.polling = true;
 			this.isRunning()
-				.catch(() => { /* a failed poll is tried again at the next tick */ })
+				// A brick that does not answer any more: stop following what it ran; listeners, who
+				// asked to hear about this brick, keep their poll (review 11.11.2026).
+				.catch(() => { this.following = false; })
 				.finally(() => {
 					this.polling = false;
 					this.schedulePoll();

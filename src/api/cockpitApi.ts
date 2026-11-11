@@ -19,7 +19,7 @@
 import {
 	BrickCommand, BrickEntry, BrickId, BrickResponse, ChannelState, FsEntry, SendCommandOptions,
 } from '../contracts';
-import { NotConnectedError } from '../errors/CockpitError';
+import { ConsumerError, NotConnectedError, ProtocolError } from '../errors/CockpitError';
 import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
@@ -168,7 +168,13 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 
 	const registerConsumer = (name: string): CockpitConsumer => {
 		const subscriptions = new Set<Subscription>();
+		let closed = false;
+		/** Refused once the consumer is gone: nothing could dispose it any more (review 11.11.2026). */
+		const open = (): void => {
+			if (closed) { throw new ConsumerError(`Consumer ${name} has unregistered; register again.`); }
+		};
 		const keep = (subscription: Subscription): Subscription => {
+			if (closed) { subscription.dispose(); open(); }
 			subscriptions.add(subscription);
 			return { dispose: () => { subscription.dispose(); subscriptions.delete(subscription); } };
 		};
@@ -183,7 +189,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			disconnect: (brick) => on(brick, (brickId) => deps.bricks.signOut(brickId)),
 			getBrickInfo: (brick) => on(brick, async (brickId) => {
 				const reply = await deps.bricks.send(brickId, { kind: 'info' });
-				if (reply.kind !== 'info') { throw new NotConnectedError(`Brick ${brickId} did not answer its information.`); }
+				if (reply.kind !== 'info') { throw new ProtocolError(`Expected info from brick ${brickId}, got ${reply.kind}.`); }
 				return {
 					brickId, name: reply.displayName,
 					...(reply.firmwareVersion ? { firmwareVersion: reply.firmwareVersion } : {}),
@@ -220,8 +226,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 
 			runProgram: (brick, path, options) => on(brick, async (brickId) => {
 				allowed('run', path);
-				await programsOf(brickId).run(path, options);
-				return programState(brickId, true);
+				return programState(brickId, await programsOf(brickId).run(path, options));
 			}),
 			stopProgram: (brick) => on(brick, async (brickId) => {
 				await programsOf(brickId).stop();
@@ -240,7 +245,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			runShell: (brick, command) => on(brick, async (brickId) => {
 				allowed('shell');
 				const reply = await deps.bricks.send(brickId, { kind: 'system:run', command });
-				if (reply.kind !== 'system:run') { throw new NotConnectedError(`Brick ${brickId} did not answer the shell command.`); }
+				if (reply.kind !== 'system:run') { throw new ProtocolError(`Expected system:run from brick ${brickId}, got ${reply.kind}.`); }
 				deps.log?.info(`Shell on ${brickId} for ${name}: ${command} → ${reply.status}`);
 				return { brickId, status: reply.status };
 			}),
@@ -248,6 +253,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			onAccessModeChanged: (listener) => keep(deps.onAccessModeChange(listener)),
 
 			dispose: () => {
+				closed = true;
 				for (const subscription of [...subscriptions]) { subscription.dispose(); }
 				subscriptions.clear();
 				consumers.delete(consumer);
