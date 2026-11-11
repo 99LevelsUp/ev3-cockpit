@@ -12,7 +12,7 @@
  */
 
 import { bytecodeBudgetFor, FrameAssemblyError, validateRow } from './frameAssembler';
-import { allEv3Rows } from './ev3Rows';
+import { allEv3Rows, sensorValueRow, SENSOR_PORT_NAMES } from './ev3Rows';
 import type { TelemetryRow, TelemetryTier } from './telemetryRow';
 
 /** One row as a consumer sees it: plain data. */
@@ -34,6 +34,29 @@ const ROW_ID = /^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$/;
 
 export class RowRegistry {
 	private readonly rows = new Map<string, TelemetryRow>();
+	/** Rows that can be read in another mode: the row in a given mode, under the same id (D6). */
+	private readonly variants = new Map<string, (mode: number) => TelemetryRow>();
+
+	/** Lets a registered row be read in other modes; the row a mode gives keeps the id. */
+	registerModes(id: string, inMode: (mode: number) => TelemetryRow): void {
+		if (!this.rows.has(id)) { throw new FrameAssemblyError(`Row '${id}' is not registered.`); }
+		this.variants.set(id, inMode);
+	}
+
+	/** The row in the given mode, or undefined when the row has no modes. */
+	inMode(id: string, mode: number): TelemetryRow | undefined {
+		return this.variants.get(id)?.(mode);
+	}
+
+	/** The port whose mode a row selects, for rows that can be read in other modes. */
+	modePorts(): Set<string> {
+		const ports = new Set<string>();
+		for (const id of this.variants.keys()) {
+			const port = this.rows.get(id)?.port;
+			if (port !== undefined) { ports.add(port); }
+		}
+		return ports;
+	}
 
 	/** Adds a row, or throws `FrameAssemblyError` and adds nothing. */
 	register(row: TelemetryRow): void {
@@ -80,5 +103,9 @@ export class RowRegistry {
 export function createEv3RowRegistry(): RowRegistry {
 	const registry = new RowRegistry();
 	for (const row of allEv3Rows()) { registry.register(row); }
+	// A sensor is read in the mode its claim asks for (D6); motors' tacho has no mode.
+	SENSOR_PORT_NAMES.forEach((port, index) => {
+		registry.registerModes(`ports.sensor.${port}.value`, (mode) => sensorValueRow(index, mode));
+	});
 	return registry;
 }

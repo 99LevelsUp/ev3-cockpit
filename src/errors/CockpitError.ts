@@ -26,6 +26,8 @@ export const ErrorCode = {
 	ProgramNotFound: 'program_not_found',
 	/** An emergency stop came before the start was sent: the program was not started. */
 	ProgramCancelled: 'program_cancelled',
+	/** A sensor port is held in another mode by an earlier claim (step-6 plan D7). */
+	ModeConflict: 'mode_conflict',
 	/** The cockpit's access mode does not allow the operation on that path (step-5 KD2). */
 	AccessDenied: 'access_denied',
 } as const;
@@ -215,6 +217,14 @@ export class SubscriptionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.SubscriptionFailed, message, cause);
 		this.name = 'SubscriptionError';
+	}
+}
+
+/** A claim asked a sensor port in another mode than the one an earlier claim holds (step-6 plan D7). */
+export class ModeConflictError extends CockpitError {
+	constructor(message: string, cause?: unknown) {
+		super(ErrorCode.ModeConflict, message, cause);
+		this.name = 'ModeConflictError';
 	}
 }
 
