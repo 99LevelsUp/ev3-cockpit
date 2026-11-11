@@ -250,7 +250,7 @@ function registerRealProviders(
 	// instead of looking available because Windows still lists it.
 	const btPresence: BtPresenceMonitor = new BtPresenceMonitor({
 		queue: btQueue,
-		check: createHelperPresenceCheck({ helperPath: btHelperPath }),
+		check: createHelperPresenceCheck({ helperPath: btHelperPath, log }),
 		inquire: () => scanForBricks({
 			helperPath: btHelperPath,
 			ouiFilter: BT.LEGO_OUI,

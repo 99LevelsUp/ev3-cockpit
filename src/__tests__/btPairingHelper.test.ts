@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import {
-	createHelperPairing, scanForBricks, BtPairingEvent, ScannedBrick,
+	createHelperPairing, createHelperPresenceCheck, scanForBricks, BtPairingEvent, ScannedBrick,
 } from '../transports/btPairingHelper';
 import { BackendUnavailableError } from '../errors/CockpitError';
 
@@ -500,5 +500,44 @@ describe('scanForBricks', () => {
 		const enoent = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
 		const { scan } = scanWith({ errorAfterSpawn: enoent });
 		await assert.rejects(() => scan.done, BackendUnavailableError);
+	});
+});
+
+describe('createHelperPresenceCheck — the Winsock SDP query (step-4 U12)', () => {
+	function checkWith(run: FakeRun) {
+		const fake = fakeSpawn(run);
+		const warnings: string[] = [];
+		const check = createHelperPresenceCheck({
+			helperPath: HELPER, spawn: fake.spawn, log: { warn: (message) => { warnings.push(message); } },
+		});
+		return { fake, check, warnings };
+	}
+	const sdp = (fields: Record<string, unknown>) => JSON.stringify({ type: 'sdp', mac: MAC, ...fields });
+
+	it('counts a brick heard when the Winsock query returns a record', async () => {
+		const { check, fake } = checkWith({ lines: [sdp({ method: 'winsock', answered: true, records: 1, elapsedMs: 900 })] });
+
+		assert.equal(await check(MAC), true);
+		assert.deepEqual(fake.lastArgs()?.slice(0, 3), ['--sdp', '--mac', MAC]);
+	});
+
+	it('counts a brick not heard when the Winsock query finds no record', async () => {
+		const { check } = checkWith({ lines: [sdp({ method: 'winsock', answered: false, records: 0, error: 'WSA 10108', elapsedMs: 5200 })] });
+
+		assert.equal(await check(MAC), false);
+	});
+
+	it('counts the WinRT answer of an out-of-date helper as not heard, and says so once', async () => {
+		const old = sdp({ answered: true, error: 'Success', services: 1, connectionStatus: 'Connected', elapsedMs: 750 });
+		const fake = fakeSpawn({ lines: [old] });
+		const warnings: string[] = [];
+		const check = createHelperPresenceCheck({
+			helperPath: HELPER, spawn: fake.spawn, log: { warn: (message) => { warnings.push(message); } },
+		});
+
+		assert.equal(await check(MAC), false, 'the WinRT query raises the pairing dialog of a one-sided brick');
+		assert.equal(await check(MAC), false);
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0], /build:helper/);
 	});
 });
