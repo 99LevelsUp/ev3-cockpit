@@ -250,23 +250,12 @@ export class TelemetryScheduler {
 			this.ticksEmpty += 1;
 			return;
 		}
-		// The slow tier keeps its own command (DESIGN §9.1b, step-6 KTD3): sampled rows go first,
-		// event and static rows after, each truncated and carried over within its own class.
-		const fast = candidates.filter(isEveryTick);
-		const slow = candidates.filter((row) => !isEveryTick(row));
-
-		// One frame in flight covers both commands of the tick.
+		// One command a tick (owner decision D8): every command costs a running program about 2 ms
+		// of the brick's VM whatever it carries, so event and static rows ride with the sampled ones.
 		this.inFlight = true;
 		try {
 			const carried: TelemetryRow[] = [];
-			const fastSent = fast.length === 0 || await this.sendFrame(fast, carried);
-			if (slow.length > 0) {
-				// A failed fast frame says the link is in trouble, and a row set given meanwhile says
-				// these rows may be obsolete: either way the slow command waits for another tick, and
-				// its rows wait with it rather than lose their turn — the new set, applied below, keeps
-				// only those still wanted, in their new version (review of U4).
-				if (fastSent && !this.pendingRows) { await this.sendFrame(slow, carried); } else { carried.push(...slow); }
-			}
+			await this.sendFrame(candidates, carried);
 			this.carriedOver = carried;
 		} finally {
 			this.inFlight = false;
@@ -298,6 +287,9 @@ export class TelemetryScheduler {
 			// The command may never have reached the brick: the mode it carried is not known to be
 			// set, so the next read of those ports settles afresh (review of U4, round 2).
 			this.forgetModes(frame);
+			// Its rows go to the front of the next tick: a slow row would otherwise wait for its next
+			// turn, a divider-100 row a hundred ticks (review of U4, round 1).
+			carried.push(...frame.placed.map(({ row }) => row));
 			this.framesFailed += 1;
 			this.options.onError?.(error);
 			return false;
@@ -434,17 +426,6 @@ export class TelemetryScheduler {
 			return false;
 		});
 	}
-}
-
-/**
- * The sampled tier goes in the fast command; the event and static tiers — LEGO's slow tier — in
- * the slow one. By tier, not by divider: once a subscriber speeds the tick, the foreground's
- * sampled rows go to divider 2, and classed by divider they would ride in the slow command every
- * other tick — on Bluetooth about 6 commands a second instead of 4.4 (measured in
- * `schedulerSchedule.test.ts`, step-6 U5).
- */
-function isEveryTick(row: TelemetryRow): boolean {
-	return row.tier === 'sampled';
 }
 
 /**

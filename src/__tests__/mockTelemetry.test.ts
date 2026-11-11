@@ -127,8 +127,8 @@ describe('Mock telemetry (step-6 U3)', () => {
 		assert.equal(seen.get('ports.sensor.1.value')?.value, 42.5);
 		assert.equal(seen.get('ports.motor.B.tacho')?.value, -90);
 		assert.equal(seen.get('system.firmwareVersion')?.value, 'V1.09D');
-		// Six fast frames, plus the slow command on ticks 0 and 5 (divider-5 rows, the one-shot): KTD3.
-		assert.equal(telemetry.stats.framesSent, 8);
+		// One command a tick, the event rows riding with the sampled ones (D8).
+		assert.equal(telemetry.stats.framesSent, 6);
 		telemetry.dispose();
 		mock.dispose();
 	});

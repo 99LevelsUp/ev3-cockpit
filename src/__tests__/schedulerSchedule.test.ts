@@ -50,8 +50,7 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		await scheduler.runTick();   // tick 2: b (divider 3) does not come up
 		await scheduler.runTick();   // tick 3: it does
 
-		// b is a divider-3 row, so it rides in the slow command of tick 3 (KTD3).
-		assert.deepEqual(seen.slice(2), [['a'], ['a'], ['b']]);
+		assert.deepEqual(seen.slice(2), [['a'], ['a', 'b']]);
 	});
 
 	it('does not read a retired one-shot again when the rows are replaced', async () => {
@@ -62,8 +61,7 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		scheduler.setRows([row('a'), once]);
 		await scheduler.runTick();
 
-		// The one-shot goes in tick 0's slow command (KTD3), and not again.
-		assert.deepEqual(seen, [['a'], ['fw'], ['a']]);
+		assert.deepEqual(seen, [['a', 'fw'], ['a']]);
 	});
 
 	it('reads a one-shot added after the first tick on the next tick, once', async () => {
@@ -75,15 +73,14 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		await scheduler.runTick();
 		await scheduler.runTick();
 
-		// Read in the next tick's slow command (KTD3), then retired.
-		assert.deepEqual(seen.slice(2), [['a'], ['fw'], ['a']]);
+		assert.deepEqual(seen.slice(2), [['a', 'fw'], ['a']]);
 	});
 
 	it('keeps the occupancy gate when the rows are replaced', async () => {
 		const occupancy = row('p1.occupancy', { kind: 'repeating', divider: 5 }, { port: '1', reportsOccupancy: true });
 		const value = row('p1.value', { kind: 'repeating', divider: 1 }, { port: '1' });
 		const { scheduler, seen } = world([occupancy, value], LIBUSB, () => new Uint8Array(64).fill(126));
-		await scheduler.runTick();   // the port reports empty (126), in tick 0's slow command
+		await scheduler.runTick();   // the port reports empty (126)
 		const before = seen.length;
 
 		scheduler.setRows([occupancy, value]);
@@ -215,29 +212,31 @@ describe('scheduler — one mode per port, and a settle after a switch (step-6 U
 	});
 });
 
-describe('scheduler — the slow tier in its own command (step-6 U4, KTD3, DESIGN §9.1b)', () => {
-	function recording(rows: TelemetryRow[], limits = LIBUSB, fail: (n: number) => boolean = () => false) {
+describe('scheduler — one command per tick (step-6 D8, owner 11.11.2026)', () => {
+	// Every command costs a running program about 2 ms of VM time whatever it carries (measured
+	// on three bricks), so the event and static rows ride in the same frame as the sampled ones.
+	function recording(rows: TelemetryRow[], limits = LIBUSB) {
 		const frames: string[][] = [];
-		let n = 0;
+		let sends = 0;
 		const scheduler = new TelemetryScheduler({
 			rows, limits, tickPeriodMs: 10,
-			send: () => { n += 1; return fail(n) ? Promise.reject(new Error('lost')) : Promise.resolve(new Uint8Array(64)); },
+			send: () => { sends += 1; return Promise.resolve(new Uint8Array(64)); },
 			onValues: (values) => { frames.push(values.map((v) => v.rowId).sort()); },
 		});
-		return { scheduler, frames };
+		return { scheduler, frames, sends: () => sends };
 	}
 
-	it('sends sampled rows in one command and event and static rows in a second, on the ticks they come up', async () => {
-		const { scheduler, frames } = recording([row('fast'), row('slow', { kind: 'repeating', divider: 2 }, { tier: 'event' }), row('fw', { kind: 'oneShot' }, { tier: 'static' })]);
+	it('sends every row coming up on a tick in one command', async () => {
+		const { scheduler, frames, sends } = recording([row('fast'), row('slow', { kind: 'repeating', divider: 2 }, { tier: 'event' }), row('fw', { kind: 'oneShot' }, { tier: 'static' })]);
 
-		await scheduler.runTick();   // tick 0: fast, then slow + fw
-		await scheduler.runTick();   // tick 1: fast only
+		await scheduler.runTick();
+		await scheduler.runTick();
 
-		assert.deepEqual(frames, [['fast'], ['fw', 'slow'], ['fast']]);
-		assert.equal(scheduler.stats.framesSent, 3);
+		assert.deepEqual(frames, [['fast', 'fw', 'slow'], ['fast']]);
+		assert.equal(sends(), 2);
 	});
 
-	it('sends only the slow command on a tick with no fast row', async () => {
+	it('sends one command on a tick with only event rows, and none on an empty tick', async () => {
 		const { scheduler, frames } = recording([row('slow', { kind: 'repeating', divider: 2 }, { tier: 'event' })]);
 
 		await scheduler.runTick();
@@ -247,55 +246,27 @@ describe('scheduler — the slow tier in its own command (step-6 U4, KTD3, DESIG
 		assert.equal(scheduler.stats.ticksEmpty, 1);
 	});
 
-	it('classifies by tier, so a sampled row slowed by setRows stays in the fast command (U5)', async () => {
-		const { scheduler, frames } = recording([row('a'), row('b')]);
-		await scheduler.runTick();
+	it('sends one command a tick on Bluetooth cadence, whatever the dividers', async () => {
+		const sampled = (id: string, divider: number) => row(id, { kind: 'repeating', divider }, { tier: 'sampled' });
+		const { scheduler, sends } = recording([sampled('s1', 1), sampled('s2', 2), sampled('s3', 2), sampled('m1', 2),
+			row('battery', { kind: 'repeating', divider: 10 }, { tier: 'event' })]);
 
-		scheduler.setRows([row('a'), withLifetime(row('b'), { kind: 'repeating', divider: 2 })]);
-		await scheduler.runTick();   // tick 1: b does not come up
-		await scheduler.runTick();   // tick 2: it does, still in the fast command
+		for (let i = 0; i < 20; i += 1) { await scheduler.runTick(); }
 
-		assert.deepEqual(frames, [['a', 'b'], ['a'], ['a', 'b']]);
+		assert.equal(sends(), 20);
 	});
 
-	it('does not send the slow command when the fast one failed that tick', async () => {
-		const { scheduler, frames } = recording([row('fast'), row('slow', { kind: 'repeating', divider: 1 }, { tier: 'event' }), row('fw', { kind: 'oneShot' }, { tier: 'static' })], LIBUSB, (n) => n === 1);
-
-		await scheduler.runTick();
-
-		assert.deepEqual(frames, []);
-		assert.equal(scheduler.stats.framesFailed, 1);
-		assert.equal(scheduler.stats.framesSent, 0);
-	});
-
-	it('carries a slow row truncated on HID into the next slow command, not into the fast frame', async () => {
+	it('carries a row truncated on HID to the front of the next tick', async () => {
 		const wide = (id: string, lifetime: RowLifetime) => row(id, lifetime, { result: { bytes: 20, alignment: 1 }, tier: lifetime.kind === 'oneShot' ? 'static' : 'sampled' });
 		const { scheduler, frames } = recording([
 			wide('f1', { kind: 'repeating', divider: 1 }),
-			wide('s1', { kind: 'oneShot' }), wide('s2', { kind: 'oneShot' }), wide('s3', { kind: 'oneShot' }),
+			wide('s1', { kind: 'oneShot' }), wide('s2', { kind: 'oneShot' }),
 		], HID);
 
-		await scheduler.runTick();   // fast: f1; slow: s1, s2 (s3 deferred)
-		await scheduler.runTick();   // fast: f1; slow: s3
+		await scheduler.runTick();   // f1, s1 (s2 deferred: 60 > 59)
+		await scheduler.runTick();   // s2 first, then f1
 
-		assert.deepEqual(frames, [['f1'], ['s1', 's2'], ['f1'], ['s3']]);
-	});
-
-	it('holds one frame in flight across both commands of a tick', async () => {
-		let release: () => void = () => undefined;
-		let calls = 0;
-		const scheduler = new TelemetryScheduler({
-			rows: [row('fast'), row('fw', { kind: 'oneShot' }, { tier: 'static' })], limits: LIBUSB, tickPeriodMs: 10,
-			send: () => { calls += 1; return calls === 2 ? new Promise((resolve) => { release = () => resolve(new Uint8Array(64)); }) : Promise.resolve(new Uint8Array(64)); },
-		});
-
-		const first = scheduler.runTick();
-		await settle(5);              // the slow command of tick 0 is outstanding
-		await scheduler.runTick();    // tick 1 must stand down
-		release();
-		await first;
-
-		assert.equal(scheduler.stats.ticksSkipped, 1);
+		assert.deepEqual(frames, [['f1', 's1'], ['f1', 's2']]);
 	});
 });
 
@@ -332,7 +303,7 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 	});
 	const flush = () => settle(5);
 
-	it('applies a row set given during a tick in flight only after that tick: no obsolete slow command', async () => {
+	it('applies a row set given during a tick in flight only after that tick', async () => {
 		const d = driver([row('f'), row('s', { kind: 'oneShot' }, { tier: 'static' })], { hold: [1] });
 		const tick = d.scheduler.runTick();
 		await flush();
@@ -341,7 +312,7 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		await tick;
 		await d.scheduler.runTick();
 
-		assert.equal(d.calls(), 2, 'sent the slow command of a row set that was replaced');
+		assert.equal(d.calls(), 2, 'tick 1 read a row the new set no longer wants');
 	});
 
 	it('does not resurrect a carried-over row removed while its tick was in flight', async () => {
@@ -414,12 +385,12 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		assert.equal(d.delivered.flat().some((v) => v.startsWith('w3')), false);
 	});
 
-	it('keeps a carried-over slow row when the fast command fails', async () => {
+	it('keeps a carried-over row when the command carrying it fails', async () => {
 		const wide = (id: string) => row(id, { kind: 'repeating', divider: 100 }, { result: { bytes: 20, alignment: 1 }, tier: 'event' });
-		const d = driver([row('f'), wide('s1'), wide('s2'), wide('s3')], { limits: HID, fail: [3] });
-		await d.scheduler.runTick();                     // fast; slow s1, s2 (s3 carried)
-		await d.scheduler.runTick();                     // fast fails: s3 must wait, not vanish
-		await d.scheduler.runTick();                     // fast; slow s3
+		const d = driver([row('f'), wide('s1'), wide('s2'), wide('s3')], { limits: HID, fail: [2] });
+		await d.scheduler.runTick();                     // f, s1, s2 (s3 carried)
+		await d.scheduler.runTick();                     // s3 and f: the command fails, s3 must wait, not vanish
+		await d.scheduler.runTick();                     // s3 and f
 
 		assert.ok(d.delivered.flat().some((v) => v.startsWith('s3')), 's3 vanished until tick 100');
 	});
@@ -461,7 +432,7 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		assert.deepEqual(delivered, ['1', 'NaN']);
 	});
 
-	it('sends nothing more when disposed from the fast frame\'s own listener (round 2)', async () => {
+	it('sends nothing more when disposed from a listener (round 2)', async () => {
 		let calls = 0;
 		const scheduler: TelemetryScheduler = new TelemetryScheduler({
 			rows: [row('f'), row('s', { kind: 'oneShot' }, { tier: 'static' })], limits: LIBUSB, tickPeriodMs: 10,
@@ -471,7 +442,9 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 
 		await scheduler.runTick();
 
-		assert.equal(calls, 1, 'sent the slow command after a listener disposed the loop');
+		await scheduler.runTick();
+
+		assert.equal(calls, 1, 'sent a command after a listener disposed the loop');
 	});
 
 	it('settles afresh after a switch command that failed before reaching the brick (round 2)', async () => {
@@ -518,25 +491,5 @@ describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
 		await d.scheduler.runTick();                     // the device switches now: NaN withheld
 
 		assert.equal(d.delivered.flat().includes('b=NaN'), false);
-	});
-});
-
-describe('scheduler — what goes in the fast command once a subscriber speeds the tick (step-6 U5)', () => {
-	it('keeps the command rate down on Bluetooth: sampled rows ride in the fast command whatever their divider', async () => {
-		// Bluetooth: foreground 500 ms; one subscriber asks a sensor at the 250 ms floor, so the
-		// tick drops to 250 ms and the other sampled rows go to divider 2. Classified by divider
-		// they would ride in the slow command every other tick (~6 commands/s); by tier, 4.4/s.
-		let sends = 0;
-		const sampled = (id: string, divider: number) => row(id, { kind: 'repeating', divider }, { tier: 'sampled' });
-		const scheduler = new TelemetryScheduler({
-			rows: [sampled('s1', 1), sampled('s2', 2), sampled('s3', 2), sampled('m1', 2),
-				row('battery', { kind: 'repeating', divider: 10 }, { tier: 'event' })],
-			limits: LIBUSB, tickPeriodMs: 250,
-			send: () => { sends += 1; return Promise.resolve(new Uint8Array(64)); },
-		});
-
-		for (let i = 0; i < 20; i += 1) { await scheduler.runTick(); }
-
-		assert.equal(sends, 22, 'twenty fast commands and the slow tier on two ticks');
 	});
 });
