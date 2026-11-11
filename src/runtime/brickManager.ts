@@ -1173,13 +1173,13 @@ export class BrickManager implements vscode.Disposable {
 		}
 	}
 
-	/** Whether a USB or TCP channel of the brick is connected: the only ones its list is checked over. */
 	/** Whether any channel of the brick is connected. */
 	private hasConnectedChannel(brickId: BrickId): boolean {
 		return this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
 			&& s.connectionState === ConnectionState.Connected);
 	}
 
+	/** Whether a USB or TCP channel of the brick is connected: the only ones its list is checked over. */
 	private checkableChannelConnected(brickId: BrickId): boolean {
 		return this.sessionManager.getAllSessions().some((s) => brickIdOf(s.brickKey) === brickId
 			&& s.connectionState === ConnectionState.Connected && this.transportOf(s.brickKey) !== Transport.BT);

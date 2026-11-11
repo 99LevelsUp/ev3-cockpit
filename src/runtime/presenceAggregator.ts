@@ -192,8 +192,9 @@ export class PresenceAggregator implements vscode.Disposable {
 	/**
 	 * Forget a brick: drop its record, so the list holds nothing about it (step-3 plan, KTD7).
 	 *
-	 * Deleting the record is the only way to clear `paired`, which every sighting sets with
-	 * `||=`. A scan that lists one of its channels again builds a fresh record, unpaired and not
+	 * Deleting the record clears `paired` at once; a Bluetooth listing would clear it only at the
+	 * next scan (step-4 U13), and USB and persistence only ever add it. A scan that lists one of
+	 * its channels again builds a fresh record, unpaired and not
 	 * remembered unless that sighting says so, so a brick still in reach returns as a stranger
 	 * (R4). The scheduler forgets the channel keys separately; until it has, the next scan
 	 * rebuilds the record from what it still tracks.
@@ -206,9 +207,9 @@ export class PresenceAggregator implements vscode.Disposable {
 	 * Forget one channel of a brick and keep the brick (step-3 plan, KTD10): its other channels
 	 * and their sessions stay as they are.
 	 *
-	 * Forgetting the Bluetooth channel also clears `paired`, which only Bluetooth discovery sets
-	 * and only a deleted record could clear otherwise; a later scan that lists the brick as paired
-	 * sets it again. A record left with no channel goes too, unless it is remembered: it would be a
+	 * Forgetting the Bluetooth channel also clears `paired` at once, rather than at the next scan
+	 * that lists the brick unpaired (step-4 U13); a later scan that lists it as paired sets it
+	 * again. A record left with no channel goes too, unless it is remembered: it would be a
 	 * row nothing can reach.
 	 */
 	forgetChannel(brickKey: BrickKey): void {
