@@ -96,16 +96,79 @@ describe('Program control service (step-5 U3)', () => {
 		w.done();
 	});
 
-	it('stops following a started program once the brick no longer answers', async () => {
+	it('stops following a started program once the brick no longer answers, three times in a row', async () => {
 		const w = await world();
 		await w.service.run(PRG);
-		w.setOverride(() => { throw new Error('brick gone'); });
-		await settle(60);
+		let lost = 0;
+		w.setOverride(() => { lost += 1; throw new Error('brick gone'); });
+		await waitFor(() => lost >= 3, 2000);
+		await settle(30);
 		const after = w.sent.length;
 
 		await settle(100);
 
 		assert.equal(w.sent.length, after, 'kept asking a brick that is gone, with nobody listening');
+		w.done();
+	});
+
+	it('keeps following a started program through one failed poll', async () => {
+		const w = await world();
+		await w.service.run(PRG);
+		let failures = 1;
+		w.setOverride((command) => {
+			if (command.kind === 'program:status' && failures > 0) { failures -= 1; throw new Error('one lost reply'); }
+			return undefined;
+		});
+		await settle(60);
+		const before = w.sent.filter((kind) => kind === 'program:status').length;
+
+		await settle(80);
+
+		assert.ok(w.sent.filter((kind) => kind === 'program:status').length > before, 'gave up after one lost reply');
+		w.done();
+	});
+
+	it('counts only failures in a row: an answer in between starts the count again', async () => {
+		const w = await world();
+		await w.service.run(PRG);
+		// Two lost replies, one answer, two lost replies: never three in a row.
+		const script = [false, false, true, false, false];
+		w.setOverride((command) => {
+			if (command.kind === 'program:status' && script.length > 0 && !script.shift()) { throw new Error('a lost reply'); }
+			return undefined;
+		});
+		await waitFor(() => script.length === 0, 1000);
+		await settle(40);
+		const before = w.sent.filter((kind) => kind === 'program:status').length;
+
+		await settle(80);
+
+		assert.ok(w.sent.filter((kind) => kind === 'program:status').length > before, 'added up failures an answer had ended');
+		w.done();
+	});
+
+	it('never starts a program after an emergency stop asked while the start was on its way', async () => {
+		const w = await world();
+		let release: () => void = () => { /* replaced below */ };
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		let firstStatus = true;
+		const statusGate = async (command: BrickCommand): Promise<BrickResponse> => {
+			if (command.kind === 'program:status' && firstStatus) { firstStatus = false; await held; }
+			return w.mock.executeCommand(KEY, command);
+		};
+		const service = new ProgramService(async (command) => { w.sent.push(command.kind); return statusGate(command); },
+			{ pollMs: 20, confirmTimeoutMs: 200, confirmStepMs: 10 });
+
+		const running = service.run(PRG);   // waits on its first status question
+		await settle(10);
+		const stopped = service.emergencyStop();
+		release();
+
+		await assert.rejects(running, (error) => codeOf(error) === ErrorCode.ProgramCancelled);
+		await stopped;
+		assert.equal(await service.isRunning(), false, 'the program started after the emergency stop');
+		assert.equal(w.sent.includes('program:run'), false);
+		service.dispose();
 		w.done();
 	});
 

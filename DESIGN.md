@@ -1447,12 +1447,14 @@ A dependent extension:
 Everything that crosses the API is plain data and promises — no `vscode` types, apart from the
 `dispose` handles of subscriptions — so it serialises and an MCP wrapper needs no translation.
 Every error is a `CockpitError` with a stable `code` (`not_connected`, `access_denied`,
-`program_running`, `program_not_found`, …).
+`program_running`, `program_not_found`, `program_cancelled`, …).
 
 ### 10.2 What the API Exports
 
-A brick is named by its id or by `'active'`, resolved when the call is made; every answer and
-event names it by id (owner, 11.11.2026; both sibling designs use `'active'`).
+A brick is named by its id or by `'active'`, resolved when the call is made; an id the cockpit
+does not know is refused. Program, shell and brick-info answers and every event name the brick
+by id; file answers carry only the file data (owner, 11.11.2026; both sibling designs use
+`'active'`; narrowed after review round 2).
 
 - **Bricks:** `listBricks` (every brick the cockpit knows, with its channels and their states,
   signed in, active, paired), `getActiveBrickId`, `setActiveBrick`, `connect` ("Connect a Brick":
@@ -1465,7 +1467,8 @@ event names it by id (owner, 11.11.2026; both sibling designs use `'active'`).
 - **Programs:** `runProgram` (an `.rbf` in the user slot; refused while a program runs unless
   `replace`; answers `running: false` when the brick never showed it running — a short program
   may have ended already, or the brick refused it; the slot's state cannot tell which), `stopProgram`, `emergencyStop` (the brick's own power-off sequence: user and debug
-  slots, then every motor), `isProgramRunning`, `onProgramStateChanged` (polled while anyone
+  slots, then every motor; it does not wait its turn, and cancels a run asked before it whose
+  start is not sent yet), `isProgramRunning`, `onProgramStateChanged` (polled while anyone
   listens). A native program runs through a launcher `.rbf` its consumer puts beside it.
 - **Shell:** `runShell` — a command on the brick through `opSYSTEM`, only in full mode, logged.
 - **Access mode:** `getAccessMode`, `onAccessModeChanged`.

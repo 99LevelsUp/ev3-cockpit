@@ -31,13 +31,18 @@ carry the id. With no active brick, `'active'` fails with `code: 'not_connected'
 | firmware version | `getBrickInfo(brick)` → name, firmware, OS |
 | files | `list`, `exists`, `size`, `storage`, `readFile`, `writeFile` (progress, `AbortSignal`), `makeDirectory`, `remove` (`recursive`), `move` |
 | run an `.rbf` | `runProgram(brick, path, { replace })` — the user slot, as the brick's own browser; `running: false` means it was never seen running (ended already, or refused) |
-| stop / emergency stop / state | `stopProgram`, `emergencyStop` (also stops every motor), `isProgramRunning`, `onProgramStateChanged` |
+| stop / emergency stop / state | `stopProgram`, `emergencyStop` (also stops every motor; a `runProgram` asked before it and not yet sent is cancelled), `isProgramRunning`, `onProgramStateChanged` |
 | a shell command | `runShell(brick, command)` — only in full mode |
 | the access mode | `getAccessMode()`, `onAccessModeChanged` |
 | telemetry | step 6 |
 
 Errors are `CockpitError`s with a stable `code`: `not_connected`, `access_denied`,
-`program_running`, `program_not_found`, `protocol_failed`, `transport_failed`, `timeout`, …
+`program_running`, `program_not_found`, `program_cancelled` (an emergency stop came before the
+start was sent), `protocol_failed`, `transport_failed`, `timeout`, …
+
+A brick id the cockpit does not know is refused with `not_connected`. Program, shell and
+brick-info answers name the brick by id; file answers are just the file data, so a consumer that
+passed `'active'` and needs the id asks `getActiveBrickId()`.
 
 ## Safe and full mode
 

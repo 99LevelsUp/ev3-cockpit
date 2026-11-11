@@ -7,8 +7,10 @@
  * serialisable data and promises, apart from the `dispose` handles of subscriptions (KTD6), and
  * every error carries a stable `code`.
  *
- * - A brick is named by its id or by `'active'`, resolved when the call is made; every answer and
- *   event names it by id (KD1).
+ * - A brick is named by its id or by `'active'`, resolved when the call is made; an id the cockpit
+ *   does not know is refused. Program, shell and brick-info answers and every event name the brick
+ *   by id; file answers are the file data asked for, so a consumer that passed `'active'` and needs
+ *   the id asks `getActiveBrickId()` (KD1).
  * - The access mode is checked here, for every write, removal, run and shell command (KD2, KD3),
  *   so no consumer routes around it.
  * - Connecting and disconnecting go through the brick layer's own paths — sign-in with pairing and
@@ -134,7 +136,14 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const consumers = new Set<CockpitConsumer>();
 
 	const resolve = (brick: BrickTarget): BrickId => {
-		if (brick !== 'active') { return brick as BrickId; }
+		if (brick !== 'active') {
+			// An id the cockpit never saw is refused before any command, and gets no program service
+			// of its own, so the services stay one per known brick (review round 2, 11.11.2026).
+			if (!deps.aggregator.getDiscoveryList().some((entry) => entry.brickId === brick)) {
+				throw new NotConnectedError(`The cockpit does not know a brick ${brick}: list the bricks for their ids.`);
+			}
+			return brick as BrickId;
+		}
 		const active = deps.bricks.getActiveBrickId();
 		if (!active) { throw new NotConnectedError('No brick is active: connect one, or name a brick by its id.'); }
 		return active;
