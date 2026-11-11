@@ -4,8 +4,8 @@
  *
  * KTD2: the firmware refuses a start into a running slot in silence, so the service checks
  * first (refused unless `replace`) and confirms afterwards. KTD3: emergency stop is the brick's
- * own power-off sequence. KTD4: run state is polled while someone listens or a program the
- * service started runs, and not otherwise.
+ * own power-off sequence. KTD4: run state is polled while someone listens, and not otherwise —
+ * not even for a program the service started (owner decision D5 of the step-6 plan).
  */
 
 import assert from 'assert/strict';
@@ -212,10 +212,9 @@ describe('Program control service (step-5 U3)', () => {
 		await waitFor(() => !holding, 1000);   // the first poll is on its way
 
 		listening.dispose();
+		const after = w.sent.length;   // counted before the reply comes back: no poll may follow it
 		release();
-		await settle(30);
-		const after = w.sent.length;
-		await settle(100);
+		await settle(130);
 
 		assert.equal(w.sent.length, after, 'the poll on its way scheduled another one for nobody');
 		service.dispose();
