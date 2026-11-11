@@ -19,6 +19,15 @@ export const ErrorCode = {
 	// API
 	ConsumerFailed: 'consumer_failed',
 	SubscriptionFailed: 'subscription_failed',
+	// Programs (step-5 plan)
+	/** A program runs in the user slot; the firmware would refuse the start in silence. */
+	ProgramRunning: 'program_running',
+	/** The `.rbf` is not on the brick: its image loaded as size 0. */
+	ProgramNotFound: 'program_not_found',
+	/** The brick never showed the program running after the start. */
+	ProgramStartRefused: 'program_start_refused',
+	/** The cockpit's access mode does not allow the operation on that path (step-5 KD2). */
+	AccessDenied: 'access_denied',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -206,5 +215,25 @@ export class SubscriptionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.SubscriptionFailed, message, cause);
 		this.name = 'SubscriptionError';
+	}
+}
+
+/** A program could not be run as asked: it runs already, is not on the brick, or did not start. */
+export class ProgramError extends CockpitError {
+	constructor(
+		code: typeof ErrorCode.ProgramRunning | typeof ErrorCode.ProgramNotFound | typeof ErrorCode.ProgramStartRefused,
+		message: string,
+		cause?: unknown,
+	) {
+		super(code, message, cause);
+		this.name = 'ProgramError';
+	}
+}
+
+/** The cockpit's access mode does not allow this (step-5 KD2): safe mode outside the user areas, or the shell. */
+export class AccessDeniedError extends CockpitError {
+	constructor(message: string, cause?: unknown) {
+		super(ErrorCode.AccessDenied, message, cause);
+		this.name = 'AccessDeniedError';
 	}
 }
