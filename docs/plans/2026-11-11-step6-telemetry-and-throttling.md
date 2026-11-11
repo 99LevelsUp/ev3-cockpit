@@ -111,6 +111,15 @@ Three roots, fixed as approaches rather than one patch each: a row set changed u
 
 Mutations on the rework exposed three redundant guards (removed) and one missing test (an unplugged and replugged device settles again, added).
 
+### U4, round 2 — confirmation of round 1 (11.11.2026), NOT-READY → fixed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | `dispose()` from the fast frame's own `onValues` still lets the slow command go | CONFIRMED | `sendFrame` refuses once disposed |
+| 2 | major | a switch command that failed before the brick leaves the mode recorded and its deadline running; the retry after the deadline publishes NaN | CONFIRMED | a failed send forgets the modes and settles it carried |
+
+Both in edges of the round-1 rework, not in its approach. A third round finding majors here stops the patching and questions the approach (owner's rule).
+
 ## Open, decided later
 
 - **Two consumers want two modes of one sensor** (from U4): the scheduler takes one mode per port; who wins is U5's arbitration, and may be the owner's decision.
