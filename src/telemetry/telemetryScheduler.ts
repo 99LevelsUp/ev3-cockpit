@@ -20,6 +20,7 @@
  */
 
 import { TelemetryRow, RowValue, comesUpOnTick } from './telemetryRow';
+import { portStateOf, PortState } from './portState';
 import {
 	AssembledFrame,
 	FrameLimits,
@@ -30,9 +31,6 @@ import {
 
 /** Sends one composed frame and returns the reply payload. */
 export type FrameSender = (payload: Uint8Array) => Promise<Uint8Array>;
-
-/** Port states in which a value row is safe to read. Anything else is gated out. */
-const TYPE_TERMINAL = 124;
 
 export interface SchedulerOptions {
 	readonly rows: readonly TelemetryRow[];
@@ -128,6 +126,11 @@ export class TelemetryScheduler {
 	/** Occupancy code last reported for a port, if any frame has carried it yet. */
 	occupancyOf(port: string): number | undefined {
 		return this.occupancy.get(port);
+	}
+
+	/** What the port is doing, from its last reported occupancy (3.1.11). */
+	portState(port: string): PortState {
+		return portStateOf(this.occupancy.get(port));
 	}
 
 	start(): void {
@@ -234,9 +237,8 @@ export class TelemetryScheduler {
 	 * Is this row safe to include?
 	 *
 	 * Only value rows are gated, and only on their port's last reported occupancy. A row with
-	 * no port, or a port nothing has reported yet, is readable: the gate exists to avoid the
-	 * 1.2-second stall a still-*identifying* device causes, not to withhold readings until
-	 * permission arrives.
+	 * no port, or a port nothing has reported yet, is readable: the gate saves the bytes of a
+	 * read with nothing to learn, it does not withhold readings until permission arrives.
 	 */
 	private isReadable(row: TelemetryRow): boolean {
 		if (row.port === undefined) { return true; }
@@ -269,14 +271,9 @@ export class TelemetryScheduler {
 }
 
 /**
- * Is a port type code one whose value can be read?
- *
- * 125 `TYPE_UNKNOWN` is a device still identifying — readable-looking but the one code that
- * must be skipped, because the read takes the device-present path and blocks. 126 and 127 are
- * absent and faulty; the firmware answers NAN for both, which is a correct answer rather than
- * an error, but there is nothing to learn from asking. 124 `TYPE_TERMINAL` is a console, not a
- * peripheral.
+ * Is a port type code one whose value is read? Only a known device's (`portState.ts` says why:
+ * nothing to learn otherwise, and the bytes are scarce — not a stall, per `c_input.c`).
  */
 export function isReadableType(code: number): boolean {
-	return code < TYPE_TERMINAL;
+	return portStateOf(code) === 'known';
 }
