@@ -23,6 +23,7 @@ import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { BrickManager } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
+import { logOnChange } from './logOnChange';
 import { PresenceAggregator } from './presenceAggregator';
 import { SessionManager } from './sessionManager';
 
@@ -140,8 +141,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	log.info('Discovery scheduler started');
 	refreshDiscovery = () => { void scheduler.scanOnce().catch(() => { /* reported by onScanFailed */ }); };
 	if (btPresence && options.startPresence) {
-		btPresence.start();
-		log.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
+		if (process.platform === 'win32') {
+			btPresence.start();
+			log.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
+		} else {
+			// Both jobs run the Windows Bluetooth helper; started here they would only report that (HOSTC, 11.11.2026).
+			log.info(`Bluetooth presence not started: it needs the Windows Bluetooth helper; this host is ${process.platform}`);
+		}
 	}
 	void scheduler.scanOnce().then(() => {
 		log.info('Initial discovery scan complete');
@@ -235,9 +241,11 @@ function registerRealProviders(
 	const btHelperPath = path.join(options.extensionPath, 'native', 'bin', 'bt-pairing-helper.exe');
 	const btDiscovery = new BtClassicDiscovery({
 		portScan: btBackend.discover,
-		onCacheUnavailable: (reason) => log.warn(
-			`BT device cache unavailable, falling back to the COM port scan: ${reason}`
-		),
+		// Asked on every scan; logged once, and again only if the reason changes (HOSTC, 11.11.2026).
+		onCacheUnavailable: (() => {
+			const warn = logOnChange((message) => log.warn(message));
+			return (reason: string) => warn(`BT device cache unavailable, falling back to the COM port scan: ${reason}`);
+		})(),
 		connectionQueue: btQueue,
 		pairDevice: createHelperPairing({ helperPath: btHelperPath }),
 		// At info, with the time since the pairing began: pairing is rare and paced by a person,
@@ -274,7 +282,10 @@ function registerRealProviders(
 		connectionQueue: btQueue,
 	}));
 	registry.register(btProvider);
-	log.info('BT transport registered (Winsock RFCOMM, SPP fallback; bthprops discovery)');
+	log.info(process.platform === 'win32'
+		? 'BT transport registered (Winsock RFCOMM, SPP fallback; bthprops discovery)'
+		// Its Winsock, bthprops and helper paths are Windows-only; only the serial-port fallback can run here.
+		: `BT transport registered (Windows backends unavailable on ${process.platform}; serial-port fallback only)`);
 
 	return { btDiscovery, btPresence };
 }
