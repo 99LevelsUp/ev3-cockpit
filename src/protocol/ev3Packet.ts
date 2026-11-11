@@ -55,6 +55,8 @@ export const EV3_SYSTEM = {
 
 /** `opFILE` subcodes. Only the ones this layer uses; there are 32. */
 export const FILE_SUB = {
+	/** Load an `.rbf` into a slot's image memory (`bytecodes.h` 817, `c_memory.c` 3057–3127). */
+	LOAD_IMAGE: 8,
 	MAKE_FOLDER: 10,
 	/**
 	 * Recursive delete by name.
@@ -117,6 +119,29 @@ export const EV3_OPCODE = {
 	FILE: 0xc0,
 	FILENAME: 0xc6,
 	PROGRAM_STOP: 0x02,
+	/** `opPROGRAM_START` (`bytecodes.h` 170): slot, size (read and ignored), image address, debug. */
+	PROGRAM_START: 0x03,
+	/** `opPROGRAM_INFO` (`bytecodes.h` 179): subcode, slot, then the subcode's parameters. */
+	PROGRAM_INFO: 0x0c,
+	/** `opSYSTEM` (`bytecodes.h` 302): a shell command string, out a 32-bit status. */
+	SYSTEM: 0x60,
+} as const;
+
+/** Program slots (`bytecodes.h` 1037–1046). User programs run in USER, as the brick's own browser runs them. */
+export const PROGRAM_SLOT = {
+	USER: 1,
+	DEBUG: 4,
+} as const;
+
+/** Subcodes of `opPROGRAM_INFO` (`bytecodes.h` 740). */
+export const PROGRAM_INFO_SUB = {
+	GET_STATUS: 22,
+} as const;
+
+/** A program's status (`bytecodes.h` 1593–1596); a whole program is only ever one of these two. */
+export const PROGRAM_STATUS = {
+	RUNNING: 0x10,
+	STOPPED: 0x40,
 } as const;
 
 /** Subcodes for opUI_READ. Values marked (verified) were read off a real brick. */
@@ -221,6 +246,8 @@ export const UI_BUTTON_SUB = {
 export const INPUT_DEVICE_SUB = {
 	SET_TYPEMODE: 0x01,
 	GET_TYPEMODE: 0x05,
+	/** Stop every motor (`bytecodes.h` 708, `c_input.c` 4798–4860); layer -1 = every brick in a chain. */
+	STOP_ALL: 0x0d,
 } as const;
 
 // ── System command status codes ─────────────────────────────────────

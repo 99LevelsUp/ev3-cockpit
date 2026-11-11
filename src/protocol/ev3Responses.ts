@@ -18,7 +18,7 @@ import {
 } from '../contracts';
 import { readFloat32le, readInt32le, readUint32le, readFixedCString } from './ev3Bytecode';
 import {
-	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS,
+	Ev3Packet, EV3_REPLY, EV3_SYSTEM_STATUS, PROGRAM_STATUS,
 } from './ev3Packet';
 import { INFO_LAYOUT, BT_PEER_LAYOUT } from './ev3Commands';
 import { ProtocolError } from '../errors/CockpitError';
@@ -133,11 +133,25 @@ export function parseResponse(command: BrickCommand, reply: Ev3Packet): BrickRes
 	case 'brick:setBluetooth':
 	case 'brick:setBluetoothVisible':
 	case 'brick:removeBluetoothPeer':
+	case 'program:stop':
+	case 'program:emergencyStop':
 		// Nothing to parse: validateReply above has already rejected an error status, and a
 		// successful settings write carries no payload. Whether the setting actually took is
 		// only observable on the brick afterwards. opCOM_REMOVE never even sets a dispatch
-		// status (c_com.c 5567-5606), so its reply says only that the brick answered.
+		// status (c_com.c 5567-5606), so its reply says only that the brick answered. A stop
+		// is the same: `program:status` shows whether the slot stopped.
 		return { kind: command.kind };
+	case 'program:run':
+		if (reply.payload.length < 8) { throw new ProtocolError('Malformed program:run reply: expected 8 bytes.'); }
+		return { kind: 'program:run', imageBytes: readInt32le(reply.payload, 0) };
+	case 'program:status': {
+		if (reply.payload.length < 1) { throw new ProtocolError('Malformed program:status reply: no status byte.'); }
+		const status = reply.payload[0];
+		return { kind: 'program:status', running: status === PROGRAM_STATUS.RUNNING, status };
+	}
+	case 'system:run':
+		if (reply.payload.length < 4) { throw new ProtocolError('Malformed system:run reply: expected 4 bytes.'); }
+		return { kind: 'system:run', status: readInt32le(reply.payload, 0) };
 	case 'brick:bluetoothPeerCount':
 		return parseBluetoothPeerCount(reply.payload);
 	case 'brick:bluetoothPeer':

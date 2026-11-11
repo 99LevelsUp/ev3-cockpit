@@ -12,7 +12,7 @@ import { concatBytes, uint16le, uint32le, lc0, lc1, lcs, cString, gv0, gv1 } fro
 import {
 	EV3_COMMAND, EV3_SYSTEM, EV3_OPCODE, UI_READ_SUB, UI_BUTTON_SUB, COM_GET_SUB,
 	COM_SET_SUB, COM_HARDWARE, MAX_BRICK_NAME_LENGTH, BRICK_NAME_PATTERN,
-	INPUT_DEVICE_SUB, FILE_SUB, FILENAME_SUB,
+	INPUT_DEVICE_SUB, FILE_SUB, FILENAME_SUB, PROGRAM_SLOT, PROGRAM_INFO_SUB,
 } from './ev3Packet';
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -139,6 +139,23 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 		return buildBluetoothPeerCommand(command.index);
 	case 'brick:removeBluetoothPeer':
 		return buildRemoveBluetoothPeerCommand(command.name);
+	case 'program:run':
+		return buildProgramRunCommand(command.path);
+	case 'program:stop':
+		return directCommand(0, new Uint8Array([EV3_OPCODE.PROGRAM_STOP]), lc0(PROGRAM_SLOT.USER));
+	case 'program:status':
+		return directCommand(1, new Uint8Array([EV3_OPCODE.PROGRAM_INFO]), lc0(PROGRAM_INFO_SUB.GET_STATUS),
+			lc0(PROGRAM_SLOT.USER), gv0(0));
+	case 'program:emergencyStop':
+		// The brick's own power-off sequence (`ui.lms` 1887–1889). Never PROGRAM_STOP(0): slot 0
+		// means every slot, the brick's UI too, and the VM exits (`lms2012.c` 2943–2951).
+		return directCommand(0,
+			new Uint8Array([EV3_OPCODE.PROGRAM_STOP]), lc0(PROGRAM_SLOT.USER),
+			new Uint8Array([EV3_OPCODE.PROGRAM_STOP]), lc0(PROGRAM_SLOT.DEBUG),
+			new Uint8Array([EV3_OPCODE.INPUT_DEVICE]), lc0(INPUT_DEVICE_SUB.STOP_ALL), lc0(-1));
+	case 'system:run':
+		if (command.command.trim() === '') { throw new ProtocolError('Refusing an empty shell command.'); }
+		return directCommand(4, new Uint8Array([EV3_OPCODE.SYSTEM]), lcs(command.command), gv0(0));
 	case 'fs:list':
 		return buildFsListCommand(command.path);
 	case 'fs:read':
@@ -430,6 +447,27 @@ function buildRemoveBluetoothPeerCommand(name: string): EncodedCommand {
 			lcs(name),
 		),
 	};
+}
+
+// ── Programs and the shell (step-5 plan, U1) ────────────────────────
+
+/** A direct command that wants a reply, with `globals` bytes of global variables for it. */
+function directCommand(globals: number, ...bytecode: Uint8Array[]): EncodedCommand {
+	return { type: EV3_COMMAND.DIRECT_COMMAND_REPLY, payload: concatBytes(uint16le(globals), ...bytecode) };
+}
+
+/**
+ * Load an `.rbf` into the user slot and start it, as the firmware's own example does (`c_com.h`
+ * 820–843) but with globals instead of locals, so the reply carries the image's size: 0 means
+ * the file is not on the brick, and the start that followed found no image (`lms2012.c` 1427).
+ * Globals: [0..3] size, [4..7] image address. PROGRAM_START reads the size and ignores it
+ * ("Dummy", `lms2012.c` 2995–2998); debug 0 runs it normally.
+ */
+function buildProgramRunCommand(path: string): EncodedCommand {
+	if (path.trim() === '') { throw new ProtocolError('Refusing to run a program with an empty path.'); }
+	return directCommand(8,
+		new Uint8Array([EV3_OPCODE.FILE]), lc0(FILE_SUB.LOAD_IMAGE), lc0(PROGRAM_SLOT.USER), lcs(path), gv0(0), gv0(4),
+		new Uint8Array([EV3_OPCODE.PROGRAM_START]), lc0(PROGRAM_SLOT.USER), gv0(0), gv0(4), lc0(0));
 }
 
 // ── System commands (filesystem) ────────────────────────────────────
