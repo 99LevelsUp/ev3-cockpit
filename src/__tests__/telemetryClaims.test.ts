@@ -79,12 +79,27 @@ describe('Telemetry claims (step-6 U5)', () => {
 		assert.equal(c.grantOf(grant.handle)?.['ports.motor.A.tacho'], 50);
 	});
 
-	it('rounds an interval between ticks down to the faster one: 150 ms on a 100 ms tick is 100 ms', () => {
+	it('reads an interval between ticks on the faster one, and grants what was asked: 150 ms on a 100 ms tick', () => {
 		const c = claims(true);
 
 		const grant = c.claim({ rowIds: ['system.battery.level'], intervalMs: 150 }, 'battery-watch');
 
-		assert.equal(c.grantOf(grant.handle)?.['system.battery.level'], 100);
+		assert.equal(dividerOf(c.plan().rows, 'system.battery.level'), 1, 'read every 100 ms tick');
+		assert.equal(c.grantOf(grant.handle)?.['system.battery.level'], 150,
+			'the grant is a promise of at least this often; what the row runs at travels in the data (D2)');
+	});
+
+	it('keeps a grant as negotiated when the foreground leaves or the transport changes (D2)', () => {
+		const c = claims(true);
+		const grant = c.claim({ rowIds: ['ports.motor.A.tacho'], intervalMs: 100 }, 'tacho-watch');
+
+		c.setForeground(false);
+		assert.deepEqual(c.grantOf(grant.handle), { 'ports.motor.A.tacho': 100 });
+
+		c.setCadence({ floorMs: 250, foregroundMs: 500 });
+		assert.equal(c.plan().periodMs, 250, 'the tick follows the new floor');
+		assert.deepEqual(c.grantOf(grant.handle), { 'ports.motor.A.tacho': 100 },
+			'the grant does not move; effectiveIntervalMs says the row now runs at 250 ms');
 	});
 
 	it('says a static row is read once', () => {
