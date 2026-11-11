@@ -200,21 +200,6 @@ describe('scheduler — one mode per port, and a settle after a switch (step-6 U
 		assert.deepEqual(valuesOf(seen), [[1], [7], [8]]);
 	});
 
-	it('gives up withholding after the settle limit, so a mode that reads NaN is not muted for ever', async () => {
-		const seen: { rowId: string; value: unknown }[][] = [];
-		const scheduler = new TelemetryScheduler({
-			rows: [sensor('a', 0)], limits: LIBUSB, tickPeriodMs: SETTLE_LIMIT_MS / 2,
-			send: ((r) => () => Promise.resolve(r()))(floats(1, NaN)),
-			onValues: (values) => { seen.push(values.map((v) => ({ rowId: v.rowId, value: v.value }))); },
-		});
-		await scheduler.runTick();
-		scheduler.setRows([sensor('b', 1)]);
-		for (let i = 0; i < 4; i += 1) { await scheduler.runTick(); }
-
-		assert.ok(seen.length >= 3, `still muted after ${4} ticks of ${SETTLE_LIMIT_MS / 2} ms`);
-		assert.ok(Number.isNaN(seen[seen.length - 1][0].value as number));
-	});
-
 	it('does not settle a port whose mode did not change', async () => {
 		const seen: { rowId: string; value: unknown }[][] = [];
 		const scheduler = new TelemetryScheduler({
@@ -266,11 +251,11 @@ describe('scheduler — the slow tier in its own command (step-6 U4, KTD3, DESIG
 		const { scheduler, frames } = recording([row('a'), row('b')]);
 		await scheduler.runTick();
 
-		scheduler.setRows([row('a'), withLifetime(row('b'), { kind: 'repeating', divider: 1 }), withLifetime(row('c'), { kind: 'repeating', divider: 2 })]);
-		await scheduler.runTick();   // tick 1: c does not come up
-		await scheduler.runTick();   // tick 2: it does, in its own command
+		scheduler.setRows([row('a'), withLifetime(row('b'), { kind: 'repeating', divider: 2 })]);
+		await scheduler.runTick();   // tick 1: b does not come up
+		await scheduler.runTick();   // tick 2: it does, in the slow command
 
-		assert.deepEqual(frames, [['a', 'b'], ['a', 'b'], ['a', 'b'], ['c']]);
+		assert.deepEqual(frames, [['a', 'b'], ['a'], ['a'], ['b']]);
 	});
 
 	it('does not send the slow command when the fast one failed that tick', async () => {
@@ -311,5 +296,179 @@ describe('scheduler — the slow tier in its own command (step-6 U4, KTD3, DESIG
 		await first;
 
 		assert.equal(scheduler.stats.ticksSkipped, 1);
+	});
+});
+
+describe('scheduler — review of U4, round 1 (codex, 11.11.2026)', () => {
+	type Held = { release: () => void };
+	/** A sender whose n-th call can be held, failed or answered with a float at offset 0. */
+	function driver(rows: TelemetryRow[], options: { limits?: { maxPacketBytes: number }; hold?: number[]; fail?: number[]; floats?: number[]; period?: number } = {}) {
+		let clock = 0;
+		let calls = 0;
+		const held: Held[] = [];
+		const delivered: string[][] = [];
+		const floats = options.floats ?? [];
+		const answer = (): Uint8Array => {
+			const b = new Uint8Array(64);
+			new DataView(b.buffer).setFloat32(0, floats.length ? floats[Math.min(calls - 1, floats.length - 1)] : 0, true);
+			return b;
+		};
+		const scheduler = new TelemetryScheduler({
+			rows, limits: options.limits ?? LIBUSB, tickPeriodMs: options.period ?? 10, now: () => clock,
+			send: () => {
+				calls += 1;
+				if (options.fail?.includes(calls)) { return Promise.reject(new Error('lost')); }
+				const reply = answer();
+				if (options.hold?.includes(calls)) { return new Promise((resolve) => { held.push({ release: () => resolve(reply) }); }); }
+				return Promise.resolve(reply);
+			},
+			onValues: (values) => { delivered.push(values.map((v) => `${v.rowId}=${String(v.value)}`).sort()); },
+		});
+		return { scheduler, held, delivered, calls: () => calls, setClock: (ms: number) => { clock = ms; } };
+	}
+	const sensor = (id: string, mode: number, lifetime: RowLifetime = { kind: 'repeating', divider: 1 }) => row(id, lifetime, {
+		port: '1', mode, result: { bytes: 4, alignment: 4 },
+		parse: (payload, slot, sampledAt) => ({ rowId: id, value: new DataView(payload.buffer).getFloat32(slot, true), sampledAt }),
+	});
+	const flush = () => settle(5);
+
+	it('applies a row set given during a tick in flight only after that tick: no obsolete slow command', async () => {
+		const d = driver([row('f'), row('s', { kind: 'oneShot' })], { hold: [1] });
+		const tick = d.scheduler.runTick();
+		await flush();
+		d.scheduler.setRows([row('f')]);   // s no longer wanted
+		d.held[0].release();
+		await tick;
+		await d.scheduler.runTick();
+
+		assert.equal(d.calls(), 2, 'sent the slow command of a row set that was replaced');
+	});
+
+	it('does not resurrect a carried-over row removed while its tick was in flight', async () => {
+		const wide = (id: string) => row(id, { kind: 'repeating', divider: 1 }, { result: { bytes: 20, alignment: 1 } });
+		const d = driver([wide('w1'), wide('w2'), wide('w3')], { limits: HID, hold: [1] });
+		const tick = d.scheduler.runTick();
+		await flush();
+		d.scheduler.setRows([wide('w1'), wide('w2')]);
+		d.held[0].release();
+		await tick;
+
+		assert.equal(d.scheduler.stats.carriedOver, 0);
+	});
+
+	it('starts the settle when a command really switches the mode, and times it by the clock', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, NaN], period: 1000 });
+		await d.scheduler.runTick();                     // mode 0, reads 1
+		d.scheduler.setRows([sensor('b', 1, { kind: 'repeating', divider: 3 })]);
+		d.setClock(5000);
+		await d.scheduler.runTick(); await d.scheduler.runTick();   // b not due
+		await d.scheduler.runTick();                     // tick 3: mode 1 goes out now, reads NaN
+
+		assert.deepEqual(d.delivered, [['a=1']], 'published the NaN of a switch that had only just happened');
+	});
+
+	it('ends the settle by elapsed time, whatever the period does meanwhile', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, NaN] });
+		await d.scheduler.runTick();
+		d.scheduler.setRows([sensor('b', 1)]);
+		await d.scheduler.runTick();                     // NaN, withheld
+		d.scheduler.setPeriod(1000);
+		d.setClock(SETTLE_LIMIT_MS + 1);
+		await d.scheduler.runTick();                     // the limit has passed: NaN is published
+
+		assert.deepEqual(d.delivered, [['a=1'], ['b=NaN']]);
+	});
+
+	it('does not let a reply in the old mode end the new mode\'s settle', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, 2, NaN], hold: [2] });
+		await d.scheduler.runTick();                     // mode 0: 1
+		const tick = d.scheduler.runTick();              // mode 0 again, held
+		await flush();
+		d.scheduler.setRows([sensor('b', 1)]);
+		d.held[0].release();                             // mode 0: 2 comes back
+		await tick;
+		await d.scheduler.runTick();                     // mode 1: NaN must be withheld
+
+		assert.deepEqual(d.delivered, [['a=1'], ['a=2']]);
+	});
+
+	it('retires a one-shot only once its reading was delivered, not when the settle withheld it', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, NaN, 5] });
+		await d.scheduler.runTick();
+		d.scheduler.setRows([sensor('b', 1, { kind: 'oneShot' })]);
+		await d.scheduler.runTick();                     // NaN, withheld: not retired
+		await d.scheduler.runTick();                     // 5: delivered and retired
+		await d.scheduler.runTick();                     // nothing
+
+		assert.deepEqual(d.delivered, [['a=1'], ['b=5']]);
+		assert.equal(d.calls(), 3);
+	});
+
+	it('never sends a row switched off, even one carried over', async () => {
+		const wide = (id: string, lifetime: RowLifetime = { kind: 'repeating', divider: 1 }) => row(id, lifetime, { result: { bytes: 20, alignment: 1 } });
+		const d = driver([wide('w1'), wide('w2'), wide('w3')], { limits: HID });
+		await d.scheduler.runTick();                     // w3 carried over
+		d.scheduler.setRows([wide('w1'), wide('w2'), wide('w3', { kind: 'off' })]);
+		await d.scheduler.runTick();
+
+		assert.equal(d.delivered.flat().some((v) => v.startsWith('w3')), false);
+	});
+
+	it('keeps a carried-over slow row when the fast command fails', async () => {
+		const wide = (id: string) => row(id, { kind: 'repeating', divider: 100 }, { result: { bytes: 20, alignment: 1 } });
+		const d = driver([row('f'), wide('s1'), wide('s2'), wide('s3')], { limits: HID, fail: [3] });
+		await d.scheduler.runTick();                     // fast; slow s1, s2 (s3 carried)
+		await d.scheduler.runTick();                     // fast fails: s3 must wait, not vanish
+		await d.scheduler.runTick();                     // fast; slow s3
+
+		assert.ok(d.delivered.flat().some((v) => v.startsWith('s3')), 's3 vanished until tick 100');
+	});
+
+	it('neither delivers nor sends anything after dispose during a tick in flight', async () => {
+		const d = driver([row('f'), row('s', { kind: 'oneShot' })], { hold: [1] });
+		const tick = d.scheduler.runTick();
+		await flush();
+		d.scheduler.dispose();
+		d.held[0].release();
+		await tick;
+
+		assert.deepEqual(d.delivered, []);
+		assert.equal(d.calls(), 1);
+	});
+
+	it('settles a port again after its device was unplugged and plugged back in', async () => {
+		const occupancy = row('p1.occupancy', { kind: 'repeating', divider: 1 }, { port: '1', reportsOccupancy: true, result: { bytes: 2, alignment: 1 } });
+		const value = sensor('p1.value', 1);
+		// [type, float]: known and 1; empty; known again (value gated); known and NaN after the replug.
+		const replies: [number, number][] = [[30, 1], [126, NaN], [30, NaN], [30, NaN]];
+		let call = 0;
+		const delivered: string[] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: [occupancy, value], limits: LIBUSB, tickPeriodMs: 10, now: () => 0,
+			send: () => {
+				const [type, reading] = replies[Math.min(call++, replies.length - 1)];
+				const b = new Uint8Array(64);
+				new DataView(b.buffer).setFloat32(0, reading, true);   // the 4-byte value lays out first
+				b[4] = type;
+				return Promise.resolve(b);
+			},
+			onValues: (values) => { for (const v of values) { if (v.rowId === 'p1.value') { delivered.push(String(v.value)); } } },
+		});
+		for (let i = 0; i < 4; i += 1) { await scheduler.runTick(); }
+
+		// Tick 1 reads the value of a port still known from tick 0 and delivers its NaN (no switch);
+		// tick 2 is gated (empty); tick 3 reads a replugged device, which must settle again.
+		assert.deepEqual(delivered, ['1', 'NaN']);
+	});
+
+	it('remembers the mode a port was left in when its rows are removed and come back in another mode', async () => {
+		const d = driver([sensor('a', 0)], { floats: [1, 1, NaN] });
+		await d.scheduler.runTick();
+		d.scheduler.setRows([row('x')]);
+		await d.scheduler.runTick();
+		d.scheduler.setRows([sensor('b', 1)]);
+		await d.scheduler.runTick();                     // the device switches now: NaN withheld
+
+		assert.equal(d.delivered.flat().includes('b=NaN'), false);
 	});
 });

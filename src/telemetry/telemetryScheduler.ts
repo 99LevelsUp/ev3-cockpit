@@ -10,8 +10,8 @@
  *    `Interlocked` counter, and LEGOev3 gets it structurally by awaiting each reply before its
  *    delay. Without it a stalled brick lets frames pile up behind a serial queue until the
  *    heartbeat misses its window and trips reconnect on a brick that is merely busy. Not a
- *    corner case: one unsettled sensor can hold a frame for 1.2 s while Bluetooth sustains
- *    10.7 commands a second.
+ *    corner case: a brick drawing its own port screen stalls the channel several times a
+ *    second (DESIGN §4.5), and Bluetooth sustains 10.7 commands a second.
  *  - **The tick is the only clock.** Phase comes from the tick counter, so no row drifts and
  *    none can be pulled forward. "Nearly due" needed a bound nobody could state; a divider
  *    needs none.
@@ -96,8 +96,21 @@ export class TelemetryScheduler {
 	/** Rows truncation deferred, which go to the front of the next tick. */
 	private carriedOver: TelemetryRow[] = [];
 
-	/** Ports whose mode was switched, with the tick their withholding ends at the latest. */
-	private readonly settling = new Map<string, number>();
+	/**
+	 * The mode last sent to each port, whatever rows are in the set now: the device stays in it
+	 * until a command changes it. Forgotten when the port stops being known (a replugged device
+	 * starts afresh).
+	 */
+	private readonly commandedMode = new Map<string, number>();
+
+	/**
+	 * Ports settling after a command switched their mode, with the clock time it ends at the latest.
+	 * One frame in flight and one mode per port mean a reply always reads the mode being settled.
+	 */
+	private readonly settling = new Map<string, { readonly until: number }>();
+
+	/** A row set given while a tick was in flight; applied when that tick ends. */
+	private pendingRows: readonly TelemetryRow[] | undefined;
 
 	/** One-shot rows already read. Retired rather than asked twice. */
 	private readonly retired = new Set<string>();
@@ -137,7 +150,9 @@ export class TelemetryScheduler {
 	/**
 	 * Replaces the rows while running. Keeps the tick counter (phase), the occupancy gate and the
 	 * retired one-shots; a carried-over row stays only if still wanted, in its new version. A
-	 * refused set leaves the old one in place.
+	 * refused set leaves the old one in place. Given while a tick is in flight, the set is
+	 * checked now and takes effect when that tick ends, so the tick finishes the work it began
+	 * and nothing it collected outlives the new set (review of U4, 11.11.2026).
 	 */
 	setRows(rows: readonly TelemetryRow[]): void {
 		const ids = new Set<string>();
@@ -149,17 +164,17 @@ export class TelemetryScheduler {
 		// One mode per port at any time (DESIGN §9.1c): alternating frames would switch the mode
 		// every frame and both rows would read NaN for ever.
 		assertNoModeConflict(rows);
+		if (this.inFlight) { this.pendingRows = [...rows]; return; }
+		this.applyRows(rows);
+	}
+
+	private applyRows(rows: readonly TelemetryRow[]): void {
 		const byId = new Map(rows.map((row) => [row.id, row] as const));
-		const before = modesByPort(this.rows);
-		for (const [port, mode] of modesByPort(rows)) {
-			const old = before.get(port);
-			// A switch: the next reads of the port are NaN until the device settles (§9.1c).
-			if (old !== undefined && old !== mode) {
-				this.settling.set(port, this.tick + Math.ceil(SETTLE_LIMIT_MS / this.period));
-			}
-		}
 		this.rows = [...rows];
-		this.carriedOver = this.carriedOver.flatMap((row) => { const next = byId.get(row.id); return next ? [next] : []; });
+		this.carriedOver = this.carriedOver.flatMap((row) => {
+			const next = byId.get(row.id);
+			return next && next.lifetime.kind !== 'off' ? [next] : [];
+		});
 	}
 
 	/**
@@ -244,17 +259,25 @@ export class TelemetryScheduler {
 		this.inFlight = true;
 		try {
 			const carried: TelemetryRow[] = [];
-			const fastSent = fast.length === 0 || await this.sendFrame(fast, currentTick, carried);
-			// A failed fast frame says the link is in trouble: the slow command waits for another tick.
-			if (fastSent && slow.length > 0) { await this.sendFrame(slow, currentTick, carried); }
+			const fastSent = fast.length === 0 || await this.sendFrame(fast, carried);
+			if (slow.length > 0) {
+				// A failed fast frame says the link is in trouble, and a row set given meanwhile says
+				// these rows may be obsolete: either way the slow command waits for another tick, and
+				// its rows wait with it rather than lose their turn — the new set, applied below, keeps
+				// only those still wanted, in their new version (review of U4).
+				if (fastSent && !this.pendingRows) { await this.sendFrame(slow, carried); } else { carried.push(...slow); }
+			}
 			this.carriedOver = carried;
 		} finally {
 			this.inFlight = false;
+			const pending = this.pendingRows;
+			this.pendingRows = undefined;
+			if (pending) { this.applyRows(pending); }
 		}
 	}
 
 	/** Composes and sends one frame; what did not fit goes into `carried`. Resolves whether it went. */
-	private async sendFrame(rows: readonly TelemetryRow[], tick: number, carried: TelemetryRow[]): Promise<boolean> {
+	private async sendFrame(rows: readonly TelemetryRow[], carried: TelemetryRow[]): Promise<boolean> {
 		let frame: AssembledFrame;
 		try {
 			// Resolved per frame, not per scheduler: see `SchedulerOptions.limits`.
@@ -265,10 +288,13 @@ export class TelemetryScheduler {
 			return false;
 		}
 		carried.push(...frame.deferred);
+		this.noteModes(frame);
 		try {
 			const payload = await this.options.send(buildTelemetryFrame(frame));
 			this.framesSent += 1;
-			this.consume(frame, payload, tick);
+			// Disposed while the reply was on its way: nobody is to hear from this loop again.
+			if (this.disposed) { return false; }
+			this.consume(frame, payload);
 			return true;
 		} catch (error) {
 			this.framesFailed += 1;
@@ -330,18 +356,41 @@ export class TelemetryScheduler {
 		return isReadableType(code);
 	}
 
-	/** Reads a reply, updates the occupancy gate, and retires any one-shot rows it carried. */
-	private consume(frame: AssembledFrame, payload: Uint8Array, tick: number): void {
-		const values = this.settled(frame, parseFrame(frame, payload, this.now()), tick);
+	/**
+	 * Records the mode each read in the frame selects. A read in a mode other than the one last
+	 * sent to the port — or to a port whose mode is not known — switches the device, and its
+	 * readings are NaN until it settles: the settle starts now, when the command goes out, and is
+	 * timed by the clock, so neither a late divider nor a period change moves it (review of U4).
+	 */
+	private noteModes(frame: AssembledFrame): void {
+		for (const { row } of frame.placed) {
+			if (row.port === undefined || row.mode === undefined || row.reportsOccupancy) { continue; }
+			if (this.commandedMode.get(row.port) !== row.mode) {
+				this.settling.set(row.port, { until: this.now() + SETTLE_LIMIT_MS });
+				this.commandedMode.set(row.port, row.mode);
+			}
+		}
+	}
+
+	/** Reads a reply, updates the occupancy gate, and retires the one-shots whose reading was delivered. */
+	private consume(frame: AssembledFrame, payload: Uint8Array): void {
+		const values = this.settled(frame, parseFrame(frame, payload, this.now()));
+		const delivered = new Set(values.map((value) => value.rowId));
 
 		for (const { row } of frame.placed) {
-			if (row.lifetime.kind === 'oneShot') { this.retired.add(row.id); }
+			// A reading the settle withheld was not delivered: the one-shot is asked again.
+			if (row.lifetime.kind === 'oneShot' && delivered.has(row.id)) { this.retired.add(row.id); }
 		}
 
 		// Occupancy rows carry a type code, and the value rows read it next tick.
 		for (const { row, slot } of frame.placed) {
 			if (row.reportsOccupancy && row.port !== undefined) {
 				this.occupancy.set(row.port, payload[slot]);
+				// Not known any more: whatever is plugged in next starts in its own default mode.
+				if (portStateOf(payload[slot]) !== 'known') {
+					this.commandedMode.delete(row.port);
+					this.settling.delete(row.port);
+				}
 			}
 		}
 
@@ -353,14 +402,15 @@ export class TelemetryScheduler {
 	 * a number or the settle limit passes — a mode that legitimately reads NaN, or a port emptied
 	 * mid-settle, must not stay muted.
 	 */
-	private settled(frame: AssembledFrame, values: RowValue[], tick: number): RowValue[] {
+	private settled(frame: AssembledFrame, values: RowValue[]): RowValue[] {
 		if (this.settling.size === 0) { return values; }
+		const now = this.now();
 		return values.filter((value, index) => {
 			const { row } = frame.placed[index];
 			if (row.port === undefined || row.reportsOccupancy) { return true; }
-			const until = this.settling.get(row.port);
-			if (until === undefined) { return true; }
-			if ((typeof value.value === 'number' && Number.isFinite(value.value)) || tick >= until) {
+			const entry = this.settling.get(row.port);
+			if (entry === undefined) { return true; }
+			if ((typeof value.value === 'number' && Number.isFinite(value.value)) || now >= entry.until) {
 				this.settling.delete(row.port);
 				return true;
 			}
@@ -372,15 +422,6 @@ export class TelemetryScheduler {
 /** A row on every tick goes in the fast command; anything else — a slower divider, a one-shot — in the slow one. */
 function isEveryTick(row: TelemetryRow): boolean {
 	return row.lifetime.kind === 'repeating' && row.lifetime.divider === 1;
-}
-
-/** The mode each port is read in, over rows that select one. */
-function modesByPort(rows: readonly TelemetryRow[]): Map<string, number> {
-	const modes = new Map<string, number>();
-	for (const row of rows) {
-		if (row.port !== undefined && row.mode !== undefined && !modes.has(row.port)) { modes.set(row.port, row.mode); }
-	}
-	return modes;
 }
 
 /**
