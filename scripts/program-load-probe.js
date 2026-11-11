@@ -14,6 +14,8 @@
  *
  *   node scripts/program-load-probe.js [repeats=3] [periods=0,500,100,20]
  *
+ * Runs on every brick found on USB, one after another.
+ *
  * Needs `npm run compile` first and Bench.rbf beside Bench.lms (built with the firmware's
  * assembler: java -jar assembler.jar <path to Bench without extension>).
  */
@@ -54,7 +56,17 @@ async function main() {
 	registry.register(usb);
 	const scan = await usb.discover();
 	if (scan.items.length === 0) { console.error('No USB brick found.'); process.exit(1); }
-	const brick = scan.items[0];
+	try {
+		for (const brick of scan.items) {
+			console.log(`\n═══ ${brick.displayName ?? '(unnamed)'} ═══`);
+			await measure(registry, brick, image);
+		}
+	} finally {
+		registry.dispose();
+	}
+}
+
+async function measure(registry, brick, image) {
 	const sessions = new SessionManager({ providerRegistry: registry });
 	const results = new Map(periods.map((p) => [p, []]));
 
@@ -104,7 +116,6 @@ async function main() {
 	} finally {
 		await sessions.disconnect(brick.brickKey).catch(() => {});
 		sessions.dispose();
-		registry.dispose();
 	}
 }
 

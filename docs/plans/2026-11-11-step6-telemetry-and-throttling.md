@@ -141,7 +141,23 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 
 **Rule, written before the run.** At the foreground cadences (USB 100 ms, Bluetooth 500 ms) the program loses at most **2 %**; at 20 ms at most **10 %**. More than that confirms the concern, and telemetry slows down while a user program runs (a fourth preset beside foreground, subscribed and minimal).
 
-**Result.** (pending)
+**Result (11.11.2026, three bricks over USB, three interleaved rounds each; loop passes in 10 s, firmware 1.09d).**
+
+| Brick | Telemetry off | 500 ms | 100 ms | 20 ms |
+|---|---|---|---|---|
+| AAA | 307 435 | −0.44 % | −2.64 % | −9.45 % |
+| BBB | 328 714 | −0.84 % | −2.27 % | −8.60 % |
+| CCC | 334 984 | −0.76 % | −2.09 % | −8.26 % |
+
+Rounds of one setting agree within about 1 %. **Verdict against the rule:** 500 ms (the Bluetooth cadence) and 20 ms pass; **100 ms (the USB foreground cadence) fails**, at 2.1–2.6 % against 2 %. The owner's concern is confirmed in part: not a half, but more than allowed at the USB cadence.
+
+**What the numbers say beyond the rule.** The loss grows linearly with the commands sent: each telemetry command costs the program about **2 ms** (BBB: 234 ms over 114 frames at 100 ms, 886 ms over 406 at 20 ms), nearly whatever it carries — in line with the VM's 2 ms slice (`PreemptMilliSeconds < 2`). Two consequences:
+
+1. **While a user program runs, telemetry slows down**, as the rule decided beforehand: a fourth preset, USB and TCP at 200 ms (about 1.2 % by this measurement), Bluetooth unchanged at 500 ms. It needs to know a program runs — the program-status row of U9 — so it is built with U9 and U7.
+2. **The slow tier's own command (KTD3) costs the program about 2 ms on every slow tick**, which merging it into the fast frame would save. That contradicts DESIGN §9.1b's reason for the split, so it goes to the owner (D8, open).
+
+Not measured yet: Bluetooth and TCP carry their commands through other paths in the VM's communication handling; U10 repeats this over both.
+
 
 ## Open, decided later
 

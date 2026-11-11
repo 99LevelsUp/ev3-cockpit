@@ -38,3 +38,5 @@ CLAUDE.md
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+# Built from Bench.lms with the firmware's assembler
+scripts/bench/*.rbf
