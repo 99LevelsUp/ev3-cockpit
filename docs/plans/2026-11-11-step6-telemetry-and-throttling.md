@@ -86,6 +86,11 @@ KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle �
 ### U7. Adaptive throttling
 3.4.1 (a per-brick round-trip window with p95 and stall count), 3.4.3 (KTD5), 3.4.4 (per brick), 3.4.5 (the numbers for the diagnostic display, exposed for Phase 5), 3.7.2. Tests drive a fake clock and a brick whose latency tail grows and falls; one slow brick does not slow another.
 
+Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room the fast ones leave, the rest on the following ticks). That is already how truncation works, and it only bites on the 64-byte HID fallback; libusb, Bluetooth and TCP carry 1024 bytes and the whole set fits. Two refinements for the HID case:
+- **Order by relative lateness**, not "carried over first": a row's lateness is the share of its own interval it is overdue (a fast row one tick late is 100 %, a divider-5 row one tick late 20 %). Fast rows keep their cadence while there is room; a slow row still gets in, because its lateness grows. "Fast first, slow fills the rest" was rejected: a full packet would starve the slow rows for good. A change in `candidatesFor`, with a test on the HID budget.
+- **Phase offsets** for rows with the same divider, so they do not all come due on one tick and burst the packet.
+"Fast / slow" stays a setting the cockpit offers; underneath, each row keeps its own divider, since what costs a running program is the number of commands (D8), not the rows in one.
+
 ### U8. Telemetry on the public API
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
