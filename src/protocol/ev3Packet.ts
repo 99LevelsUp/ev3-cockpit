@@ -46,18 +46,60 @@ export const EV3_SYSTEM = {
 	CONTINUE_DOWNLOAD: 0x93,
 	BEGIN_UPLOAD: 0x94,
 	CONTINUE_UPLOAD: 0x95,
+	/** Read bytes from a file a program is still writing — the way to tail a log (4.6.13). */
+	BEGIN_GETFILE: 0x96,
+	CONTINUE_GETFILE: 0x97,
 	CLOSE_FILEHANDLE: 0x98,
 	LIST_FILES: 0x99,
 	CONTINUE_LIST_FILES: 0x9a,
 	CREATE_DIR: 0x9b,
 	DELETE_FILE: 0x9c,
+	LIST_OPEN_HANDLES: 0x9d,
+	WRITEMAILBOX: 0x9e,
+	/** Hands the brick a trusted Bluetooth PIN (`c_bt.c` 2960–2966: a trusted address pairs without asking). */
+	BLUETOOTHPIN: 0x9f,
+	/** Restarts the brick in firmware-update mode. Declared so it is never sent by accident. */
+	ENTERFWUPDATE: 0xa0,
+	SETBUNDLEID: 0xa1,
+	SETBUNDLESEEDID: 0xa2,
 } as const;
 
-/** `opFILE` subcodes. Only the ones this layer uses; there are 32. */
+/**
+ * `opFILE` subcodes, every one firmware 1.09d has (`bytecodes.h`; 26 is unused). Only some have
+ * a code path here; the rest are declared so the capability is known (4.6.13).
+ */
 export const FILE_SUB = {
+	OPEN_APPEND: 0,
+	OPEN_READ: 1,
+	OPEN_WRITE: 2,
+	READ_VALUE: 3,
+	WRITE_VALUE: 4,
+	READ_TEXT: 5,
+	WRITE_TEXT: 6,
+	CLOSE: 7,
 	/** Load an `.rbf` into a slot's image memory (`bytecodes.h` 817, `c_memory.c` 3057–3127). */
 	LOAD_IMAGE: 8,
+	GET_HANDLE: 9,
 	MAKE_FOLDER: 10,
+	/** Allocates an image pool; reports nothing about storage (see `MEMORY_USAGE`). */
+	GET_POOL: 11,
+	SET_LOG_SYNC_TIME: 12,
+	GET_FOLDERS: 13,
+	GET_LOG_SYNC_TIME: 14,
+	GET_SUBFOLDER_NAME: 15,
+	WRITE_LOG: 16,
+	CLOSE_LOG: 17,
+	GET_IMAGE: 18,
+	GET_ITEM: 19,
+	GET_CACHE_FILES: 20,
+	PUT_CACHE_FILE: 21,
+	GET_CACHE_FILE: 22,
+	DEL_CACHE_FILE: 23,
+	DEL_SUBFOLDER: 24,
+	GET_LOG_NAME: 25,
+	OPEN_LOG: 27,
+	READ_BYTES: 28,
+	WRITE_BYTES: 29,
 	/**
 	 * Recursive delete by name.
 	 *
@@ -74,10 +116,16 @@ export const FILE_SUB = {
 	MOVE: 31,
 } as const;
 
-/** `opFILENAME` subcodes. */
+/** `opFILENAME` subcodes, every one firmware 1.09d has (`bytecodes.h`). */
 export const FILENAME_SUB = {
 	EXIST: 16,
 	TOTALSIZE: 17,
+	SPLIT: 18,
+	MERGE: 19,
+	CHECK: 20,
+	PACK: 21,
+	UNPACK: 22,
+	GET_FOLDERNAME: 23,
 } as const;
 
 // ── Direct command opcodes ──────────────────────────────────────────
