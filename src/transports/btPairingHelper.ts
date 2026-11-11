@@ -583,19 +583,23 @@ function interpret(run: {
 /**
  * Wording for the statuses a user can do something about.
  *
- * `AuthenticationTimeout` is the one that matters: it means the brick asked and nobody
- * pressed. Reporting it like any other failure sends the user to check the radio instead of
- * the brick in front of them — measured twice on hardware before the STA fix, and it will
- * keep happening whenever someone looks away.
+ * `AuthenticationTimeout` usually means nobody pressed on the brick: reporting it like any
+ * other failure sends the user to check the radio instead of the brick in front of them. It
+ * does not prove the brick asked, though: one linked to a phone app timed out with no dialog,
+ * as did two pairings on the bench nobody could explain (step-4 U10). And a brick held by
+ * another Bluetooth device fails as `NotFound` with Bluetooth and visibility both on. So both
+ * name that cause too, and neither claims more than the status says (step-4 U15).
  */
 function describeStatus(status: string): string {
 	switch (status) {
 	case 'NotFound':
-		return 'Could not find the brick over Bluetooth. Check that it is switched on and '
-				+ 'that Bluetooth and visibility are enabled on the brick itself.';
+		return 'Could not find the brick over Bluetooth. Check that it is switched on, that '
+				+ 'Bluetooth and visibility are enabled on the brick itself, and that it is not '
+				+ 'connected to another Bluetooth device, such as another brick or a phone.';
 	case 'AuthenticationTimeout':
-		return 'The brick asked for confirmation and nobody accepted in time. Watch the '
-				+ 'brick\'s display and confirm there, then try again.';
+		return 'Nobody confirmed the pairing on the brick in time. Watch the brick\'s display and '
+				+ 'confirm there, then try again; if no question appeared on it, the brick may be '
+				+ 'connected to another Bluetooth device, such as another brick or a phone.';
 	case 'RejectedByHandler':
 	case 'AccessDenied':
 		return `Windows refused the pairing (${status}).`;
