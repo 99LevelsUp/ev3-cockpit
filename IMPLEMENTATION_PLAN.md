@@ -1111,7 +1111,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     `TransportCapabilities.supportsTelemetryFrames`, so the service skips a mock session
     instead of throwing once per tick. A mock brick still shows no telemetry, which is what
     blocks the panel from being developed against it
-  - [ ] 3.1.8 Frame assembler — owns global-buffer offsets. Lays out 32-bit results 4-byte
+  - [x] 3.1.8 **Done 11.11.2026 (step 6 U4 part 3):** mode ownership spans ticks — the scheduler refuses two modes of one port when built and on `setRows`; a switch withholds the port's readings until a number comes back, at most `SETTLE_LIMIT_MS`. Frame assembler — owns global-buffer offsets. Lays out 32-bit results 4-byte
     aligned, because `opINPUT_READSI` (the opcode we use) rejects an unaligned one and answers
     `DIRECT_REPLY_ERROR` carrying the previous buffer. The constraint is per opcode, not
     global: `opINPUT_DEVICE`/`READY_SI` accepts the same unaligned offset, which is how
@@ -1456,7 +1456,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     visible — where `FAVOUR_ITEM` takes four. Passing the four-output form to both returns
     plausible-looking rubbish (a truncated name and wrong flags) rather than an error.
 
-  - [ ] 3.1.4b **A UART sensor cannot be read in two modes in one command.** Asking for a
+  - [x] 3.1.4b **Built 11.11.2026 (step 6 U4 part 3); the settle time is measured in U10.** **A UART sensor cannot be read in two modes in one command.** Asking for a
     mode other than the current one returns `DATAF_NAN` and the sensor stays NaN while it
     settles — including in the mode that worked a moment earlier. Mode switching therefore
     needs a settling policy, and 3.1.5's batching cannot span modes of one device

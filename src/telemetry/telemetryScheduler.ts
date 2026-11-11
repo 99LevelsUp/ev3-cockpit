@@ -25,9 +25,17 @@ import {
 	AssembledFrame,
 	FrameLimits,
 	assembleFrame,
+	assertNoModeConflict,
 	buildTelemetryFrame,
 	parseFrame,
 } from './frameAssembler';
+
+/**
+ * How long a port's readings are withheld after its mode was switched, at most: the firmware's
+ * `MAX_DEVICE_BUSY_TIME`, 1200 ms (`lms2012.h` 313), the longest a device may stay busy after a
+ * mode change. U10 measures the real settle on a brick and may tune it.
+ */
+export const SETTLE_LIMIT_MS = 1200;
 
 /** Sends one composed frame and returns the reply payload. */
 export type FrameSender = (payload: Uint8Array) => Promise<Uint8Array>;
@@ -88,6 +96,9 @@ export class TelemetryScheduler {
 	/** Rows truncation deferred, which go to the front of the next tick. */
 	private carriedOver: TelemetryRow[] = [];
 
+	/** Ports whose mode was switched, with the tick their withholding ends at the latest. */
+	private readonly settling = new Map<string, number>();
+
 	/** One-shot rows already read. Retired rather than asked twice. */
 	private readonly retired = new Set<string>();
 
@@ -113,6 +124,7 @@ export class TelemetryScheduler {
 
 	constructor(private readonly options: SchedulerOptions) {
 		this.now = options.now ?? (() => Date.now());
+		assertNoModeConflict(options.rows);
 		this.rows = options.rows;
 		this.period = options.tickPeriodMs;
 	}
@@ -134,7 +146,18 @@ export class TelemetryScheduler {
 			if (ids.has(row.id)) { throw new Error(`Row '${row.id}' is in the set twice.`); }
 			ids.add(row.id);
 		}
+		// One mode per port at any time (DESIGN §9.1c): alternating frames would switch the mode
+		// every frame and both rows would read NaN for ever.
+		assertNoModeConflict(rows);
 		const byId = new Map(rows.map((row) => [row.id, row] as const));
+		const before = modesByPort(this.rows);
+		for (const [port, mode] of modesByPort(rows)) {
+			const old = before.get(port);
+			// A switch: the next reads of the port are NaN until the device settles (§9.1c).
+			if (old !== undefined && old !== mode) {
+				this.settling.set(port, this.tick + Math.ceil(SETTLE_LIMIT_MS / this.period));
+			}
+		}
 		this.rows = [...rows];
 		this.carriedOver = this.carriedOver.flatMap((row) => { const next = byId.get(row.id); return next ? [next] : []; });
 	}
@@ -228,7 +251,7 @@ export class TelemetryScheduler {
 		try {
 			const payload = await this.options.send(buildTelemetryFrame(frame));
 			this.framesSent += 1;
-			this.consume(frame, payload);
+			this.consume(frame, payload, currentTick);
 		} catch (error) {
 			this.framesFailed += 1;
 			this.options.onError?.(error);
@@ -291,8 +314,8 @@ export class TelemetryScheduler {
 	}
 
 	/** Reads a reply, updates the occupancy gate, and retires any one-shot rows it carried. */
-	private consume(frame: AssembledFrame, payload: Uint8Array): void {
-		const values = parseFrame(frame, payload, this.now());
+	private consume(frame: AssembledFrame, payload: Uint8Array, tick: number): void {
+		const values = this.settled(frame, parseFrame(frame, payload, this.now()), tick);
 
 		for (const { row } of frame.placed) {
 			if (row.lifetime.kind === 'oneShot') { this.retired.add(row.id); }
@@ -305,8 +328,37 @@ export class TelemetryScheduler {
 			}
 		}
 
-		this.options.onValues?.(values);
+		if (values.length > 0) { this.options.onValues?.(values); }
 	}
+
+	/**
+	 * Drops the readings of a port that is settling after a mode switch, until one comes back as
+	 * a number or the settle limit passes — a mode that legitimately reads NaN, or a port emptied
+	 * mid-settle, must not stay muted.
+	 */
+	private settled(frame: AssembledFrame, values: RowValue[], tick: number): RowValue[] {
+		if (this.settling.size === 0) { return values; }
+		return values.filter((value, index) => {
+			const { row } = frame.placed[index];
+			if (row.port === undefined || row.reportsOccupancy) { return true; }
+			const until = this.settling.get(row.port);
+			if (until === undefined) { return true; }
+			if ((typeof value.value === 'number' && Number.isFinite(value.value)) || tick >= until) {
+				this.settling.delete(row.port);
+				return true;
+			}
+			return false;
+		});
+	}
+}
+
+/** The mode each port is read in, over rows that select one. */
+function modesByPort(rows: readonly TelemetryRow[]): Map<string, number> {
+	const modes = new Map<string, number>();
+	for (const row of rows) {
+		if (row.port !== undefined && row.mode !== undefined && !modes.has(row.port)) { modes.set(row.port, row.mode); }
+	}
+	return modes;
 }
 
 /**
