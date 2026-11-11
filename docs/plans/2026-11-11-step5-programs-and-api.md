@@ -53,7 +53,7 @@ Research 11.11.2026; paths under `ev3-resources/11_Firmware/ev3_firmware_109d_de
 - KTD1. **Programs run in `USER_SLOT`,** as the brick's own browser runs them, so the brick's motor and sound clean-up apply. The API exposes no slot.
 - KTD2. **`runProgram` checks before it starts:** `GET_STATUS(USER_SLOT)`; if a program runs, it is refused with a typed error unless the caller passes `replace: true`, which stops it first. Then `LOAD_IMAGE` (size 0 → file not found), `PROGRAM_START`, and `GET_STATUS` until RUNNING within a short limit; never seen running answers `false` rather than an error, since a short program may have ended already (review 11.11.2026). Run and stop take turns per brick. This turns the firmware's silent refusal into an answer and avoids the stranded image.
 - KTD3. **Emergency stop is the brick's power-off sequence** (facts above), never `PROGRAM_STOP(0)`.
-- KTD4. **Run state is polled** with `GET_STATUS(USER_SLOT)` at about 1 s while a program the cockpit knows of runs or while anyone subscribes to it, and fires `onProgramStateChanged`. Step 6 moves the poll into the telemetry scheduler's command budget.
+- KTD4. **Run state is polled** with `GET_STATUS(USER_SLOT)` at about 1 s while anyone subscribes to it, and only then, and fires `onProgramStateChanged` (owner, step-6 plan D5, 11.11.2026: following a started program with nobody listening was dropped after review rounds 2 and 3). Step 6 moves the poll into the telemetry scheduler's command budget.
 - KTD5. **The access mode is checked in the API layer** for every write, delete, run and shell call, against the brick path normalised (no `..` escape). Cockpit commands go through the same check.
 - KTD6. **The API object is plain data and promises:** no `vscode` types in arguments or answers except `Disposable`/`Event` for subscriptions; errors carry a stable `code`. `apiVersion` starts at 1.
 - KTD7. **The mock brick answers the new commands** (program start/stop/info, `opSYSTEM`), so the API is testable without hardware and works in the development host.
@@ -130,7 +130,7 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 | # | Sev | Finding | Verdict | Outcome |
 |---|---|---|---|---|
 | 1 | major | `emergencyStop` is not queued, so a waiting `run` can start the program after it | CONFIRMED | an emergency stop cancels every run asked before it whose start is not sent (`program_cancelled`); test + 2 mutations |
-| 2 | major | one failed poll ends following of a started program | CONFIRMED | three failures in a row; **the fix itself is round 3's finding 1 — not closed** |
+| 2 | major | one failed poll ends following of a started program | CONFIRMED | three failures in a row; the fix itself was round 3's finding 1 — superseded by the D5 rework |
 | 3 | minor | program services pile up, also for invalid ids | CONFIRMED | an id the cockpit does not know is refused before any command |
 | 4 | minor | file answers carry no brick id though the module says every answer does | CONFIRMED | the claim narrowed (R7, DESIGN 10.2) |
 
@@ -138,7 +138,7 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 
 | # | Sev | Finding | Verdict | Outcome |
 |---|---|---|---|---|
-| 1 | major | the failure count survives a stop and a new run: two failures on program A, stop, run B, one failure ends following of B | CONFIRMED (`stopNow` and `run`'s confirmation call `isRunning` directly; only the poll path resets the count) | **escalated to the owner** — third round in the same area, a defect in the previous round's fix |
+| 1 | major | the failure count survives a stop and a new run: two failures on program A, stop, run B, one failure ends following of B | CONFIRMED (`stopNow` and `run`'s confirmation call `isRunning` directly; only the poll path resets the count) | escalated to the owner — third round in the same area, a defect in the previous round's fix; **the owner chose (b)**: the rework removes `following` and the count |
 | 2 | minor | "ask `getActiveBrickId()` afterwards" is itself racy | CONFIRMED | docs: take the id first and pass it |
 
 Why escalated, not patched: rounds 2 and 3 both found majors in keeping the poll alive while nobody listens (`following`). Nothing outside the service reads a poll that has no listener: the API's `onProgramStateChanged` is the only reader of the state changes, and `isProgramRunning` asks the brick itself. Options put to the owner:

@@ -1716,7 +1716,7 @@ Export a stable API for other extensions without giving them direct access to th
     argument order against `bytecodes.c`: `PAR16,PAR32,PAR32,PAR8`
   - [x] 4.7a.2 `stopProgram` — `opPROGRAM_STOP(slot)`
   - [x] 4.7a.3 `isProgramRunning` — `opPROGRAM_INFO` with `GET_STATUS` (subcode 22) per slot
-  - [x] 4.7a.4 Run-state change events — needs polling, so decide the interval against the — **done:** polled at about 1 s while anyone listens or a started program runs; step 6 moves it into the telemetry budget
+  - [x] 4.7a.4 Run-state change events — needs polling, so decide the interval against the — **done:** polled at about 1 s while anyone listens, and only then (owner, step-6 plan D5, 11.11.2026); step 6 moves it into the telemetry budget as a row
     same per-transport command budget telemetry uses, and whether polling stops when nobody
     subscribes
   - [x] 4.7a.5 `emergencyStop` — decide whether it is `opPROGRAM_STOP` on every slot or the — **done:** the brick's own power-off sequence: PROGRAM_STOP user and debug slot, INPUT_DEVICE STOP_ALL -1 — never PROGRAM_STOP(0), which ends the VM
