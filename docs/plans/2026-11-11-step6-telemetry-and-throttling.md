@@ -90,6 +90,27 @@ D5 (b). Done in step 5 already: the service polls only while someone listens; `f
 ### U10. Hardware session (owner)
 3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. **Does a value read stall?** Per `c_input.c`, `opINPUT_READSI` never re-executes (U4 finding): plug a sensor in during a session with the value row ungated, and switch a UART sensor's mode, and measure the frame's round trip — a 1.2 s frame would mean the source reading is wrong. Re-measure the frame costs of 3.1.12 with the slow tier in its own command. **Real bricks against the mock** (owner, 11.11.2026; must not be skipped): the same composed frames from the full row catalogue go to each of the three bricks over USB and over Bluetooth and to the mock, with the same devices configured on the mock as plugged into the brick; compare type codes, modes, value layouts and the bytes a brick leaves unwritten, and every difference is either a mock fix or a recorded firmware variant. Results go into this plan with a verdict against the rule written beforehand.
 
+## Review
+
+### U4, round 1 (codex, inline packet, 11.11.2026) — NOT-READY → fixed
+
+Three roots, fixed as approaches rather than one patch each: a row set changed under a tick in flight; a settle tied to the row set and to ticks instead of to what the brick was sent and to time; lifecycle edges.
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | `setRows` during a tick: the captured slow rows still go out and the tick's carry-over resurrects removed rows | CONFIRMED | a set given in flight is checked now and applied when the tick ends; the slow command waits if a set is pending |
+| 2 | major | a reply in the old mode ends the new mode's settle | CONFIRMED | settle starts when a command sends the new mode; with one frame in flight a reply always reads the mode being settled |
+| 3 | major | the settle deadline counts ticks from `setRows`: expires before a late divider sends the mode, or outlives a period change | CONFIRMED | timed by the clock from the send |
+| 4 | major | a one-shot withheld by the settle is retired undelivered | CONFIRMED | retired only when delivered |
+| 5 | major | a carried-over row switched off is still sent | CONFIRMED | not carried |
+| 6 | major | a failed fast command drops carried-over slow rows | CONFIRMED | unsent slow rows are carried |
+| 7 | major | dispose during the fast command: values delivered and the slow command sent | CONFIRMED | nothing consumed or sent after dispose |
+| 8 | major | removing a port's rows loses the mode the device was left in | CONFIRMED | the mode sent to each port is tracked apart from the rows, forgotten when the port stops being known |
+| 9 | minor | the class-migration test never slowed an existing row | CONFIRMED | test fixed |
+| 10 | nit | the scheduler header still claimed a 1.2 s sensor stall | CONFIRMED | rewritten |
+
+Mutations on the rework exposed three redundant guards (removed) and one missing test (an unplugged and replugged device settles again, added).
+
 ## Open, decided later
 
 - **Two consumers want two modes of one sensor** (from U4): the scheduler takes one mode per port; who wins is U5's arbitration, and may be the owner's decision.
