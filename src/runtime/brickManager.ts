@@ -223,6 +223,8 @@ export class BrickManager implements vscode.Disposable {
 	 * waits for the check (KTD3), so a stale half is removed before any dialog.
 	 */
 	private readonly oneSidedPending = new Map<BrickId, number>();
+	/** Whether Windows had each signed-in brick paired at the last list change (step-4 U13). */
+	private readonly pairedBefore = new Map<BrickId, boolean>();
 	/** Bricks whose one-sided pairing is being repaired now. */
 	private readonly repairing = new Set<BrickId>();
 	/** Bluetooth joins waiting for the one-sided check, by brick (step-4 U10). */
@@ -307,6 +309,8 @@ export class BrickManager implements vscode.Disposable {
 			this.aggregator.onListChanged(() => {
 				for (const brickId of this.signedIn.keys()) {
 					this.takeAnswersAsEvidence(brickId);
+					// Before reconcile: it would pair the brick on the stale check (step-4 U13).
+					this.checkAgainWhenUnpaired(brickId);
 					this.reconcile(brickId);
 				}
 			}),
@@ -931,6 +935,7 @@ export class BrickManager implements vscode.Disposable {
 		for (const timer of signIn.retryTimers.values()) { clearTimeout(timer); }
 		this.signedIn.delete(brickId);
 		this.oneSidedPending.delete(brickId);
+		this.pairedBefore.delete(brickId);
 		// A Bluetooth join held for the check belongs to the sign-in that just ended: it gives up.
 		this.wakeBluetooth(brickId);
 	}
@@ -1125,6 +1130,26 @@ export class BrickManager implements vscode.Disposable {
 	}
 
 	// ── Internal: a pairing broken on one side ──────────────────────
+
+	/**
+	 * Windows stopped listing a signed-in brick as paired, outside the cockpit (Settings), while
+	 * USB or TCP is connected: read the brick's list and check again before anything pairs it
+	 * (KTD6: the check runs before any pairing). The check that ran when the channel joined saw
+	 * both halves; the brick still lists this computer, so pairing beside that entry would leave
+	 * it to the brick, where the repair removes it first. Not during a repair, a forget or a clear:
+	 * they unpair Windows themselves.
+	 */
+	private checkAgainWhenUnpaired(brickId: BrickId): void {
+		const paired = this.aggregator.getBrick(brickId)?.paired === true;
+		const before = this.pairedBefore.get(brickId);
+		this.pairedBefore.set(brickId, paired);
+		if (before !== true || paired || !this.windowsPairing || this.repairing.has(brickId) || this.peerListBusy(brickId)
+			|| !this.checkableChannelConnected(brickId)) {
+			return;
+		}
+		this.oneSidedPending.set(brickId, this.peerReadsKept);
+		this.readPeerListAfter(brickId, 'Windows unpaired it');
+	}
 
 	/** A USB or TCP channel of a signed-in brick joined or ended: the brick waits for the check, or no longer can. */
 	private noteCheckableChannel(key: BrickKey, state: ConnectionState): void {
