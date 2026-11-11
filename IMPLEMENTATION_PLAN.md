@@ -1135,7 +1135,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Occupancy is now a row (3.1.11), which frees the budget, but a user with eight populated
     ports on HID can still overrun a tick, so the rule holds regardless. A test must fill a
     tick past the HID budget and assert every row is eventually served
-  - [ ] 3.1.10 Effective interval = the fastest any subscriber asks for, **clamped to the
+  - [~] 3.1.10 (service side done in step 6 U5: the grant is the request clamped to the floor, fixed at claim time; the API returning it is U8) Effective interval = the fastest any subscriber asks for, **clamped to the
     transport floor** and reported back: `subscribeTelemetry` returns the interval each row was
     actually granted, because a request is not a guarantee — 10 Hz on Bluetooth would eat the
     brick's whole measured 10.7 commands/second. Subscribers hold an opaque handle, so
@@ -1527,13 +1527,15 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   wiring it earlier would run a loop whose output goes nowhere. Wire it when 3.5 lands.
 
   - [x] 3.3.1 Foreground loop — the active brick, at its transport's measured cadence
-  - [ ] 3.3.2 Subscribed loop — per-row, reduced frequency. **Blocked on 3.3.5**: deliberately
-    absent rather than stubbed, since a mode nothing can subscribe to is a branch no test reaches
+  - [x] 3.3.2 Subscribed loop — a connected brick that is not active runs a loop for the rows
+    claimed of it, at the granted interval; one loop per brick, re-planned rather than restarted
+    when the active brick changes (step 6 U5, adc826c)
   - [x] 3.3.3 Minimal loop — every other connected brick: heartbeat and reconnect only, no
     telemetry at all
   - [x] 3.3.4 Mode switching on foreground/background transitions, and on the active brick
     leaving or re-entering `Connected`
-  - [ ] 3.3.5 Subscription registry — **rewrite against rows before implementing**
+  - [x] 3.3.5 Subscription registry — `TelemetryClaims` (6243cbd, f85a939) in `TelemetryService`
+    (adc826c); claims wait out a lost link and end with the session. As written:
     (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
     so releasing one claim recomputes the effective interval from those that remain. A registry
     keyed on categories cannot honour 3.1.10
@@ -1558,10 +1560,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [x] 3.7.1 Telemetry scheduler mode switching tests — `brickTelemetry.test.ts`: foreground
     vs minimal, hand-over on an active-brick change, stop when the brick disconnects
   - [ ] 3.7.2 Adaptive throttling response to latency changes
-  - [ ] 3.7.3 Category subscription add/remove tests
+  - [x] 3.7.3 ~~Category~~ Row-claim add/remove tests — `telemetryClaims.test.ts`, `telemetryServiceClaims.test.ts` (claims are on rows, not categories)
   - [ ] 3.7.4 Stale snapshot expiry tests
   - [ ] 3.7.5 Read model aggregation tests
-  - [ ] 3.7.6 Multi-brick concurrent telemetry tests
+  - [x] 3.7.6 Multi-brick concurrent telemetry tests — `telemetryServiceClaims.test.ts` (foreground and subscribed loops side by side, handles unique across bricks)
 - [ ] **3.8 Per-mode timing constants** — partially landed as `src/telemetry/telemetryConstants.ts`.
 
   Done: the **per-transport foreground target and floor**, derived from §9.2's sustained rates
