@@ -139,6 +139,16 @@ Both in edges of the round-1 rework, not in its approach. A third round finding 
 
 Convergence gate met: no blocker or major survives. U4 is closed in code; U10 measures the settle time, the read stall and the slow tier's frame costs.
 
+### U5, round 1 (codex, inline packet `.review-out/step6-u5-packet.md`, 11.11.2026) — NOT-READY → fixed (80c04e1)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a background brick that lost its link and was then signed out kept its claims for good: no route left to lose, so sign-out fired no event | CONFIRMED (`recomputeRoute` returns when best === previous) | `BrickManager` fires a sign-in-ended event from `forgetSignIn`; the telemetry host passes it on; production-shaped test in `brickManager.test.ts` |
+| 2 | major | a claim on a brick nobody read since a route change was granted against the old link's floor | CONFIRMED | `claim` sets the current transport's cadence before the grant is fixed |
+| 3 | major | a loop restarted on a transport change can leave the old loop's frame outstanding beside the new loop's first | CONFIRMED as a fact, **minor** in effect | the two frames go over different links into different queues, so each queue still holds at most one; the old loop is disposed and drops its reply; the new loop settles every port afresh anyway. Cost: one extra command on the brick, once per route change (~2 ms of a running program). Recorded, not fixed; revisit with U7 if per-brick latency shows it |
+| 4 | minor | `modeOf` reported a disconnected session as minimal | CONFIRMED | `none` |
+| 5 | minor | a re-planned loop clamped the probes' tick override to the transport floor while its plan used the override | CONFIRMED | the loop clamps to the floor the plan used (`floorMs` option) |
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
