@@ -2003,6 +2003,19 @@ See `REQUIREMENTS.md §4`. During implementation, consider these areas only to t
   beside `ev3-c` (formerly `ev3-native`) and the cockpit's other sidekick projects, in which case
   it would be a consumer of the public API (Phase 4) rather than a part of the cockpit. Nothing in
   Phases 1–5 is built for it now; the API should simply not close the door on it.
+- **Firmware defects are not final** (owner, 11.11.2026). A defect found in the firmware can be
+  fixed, and the firmware improved, sped up or optimised beyond that. Users will mostly run the
+  original firmware, so the cockpit always reckons with several firmware variants that behave
+  differently: a workaround must work on the original *and* on a fixed firmware (best by not
+  sending what fails, rather than relying on it failing), and every defect is recorded with its
+  source lines and the version it was read from (1.09d). Candidates collected so far:
+  - `opCOM_GET`/`GET_ON_OFF` asked of USB leaves the dispatch status at FAILBREAK (`c_com.c`
+    4296–4330), which ends the whole direct command (`lms2012.c` 2496–2510); the cockpit never
+    sends it (step 6 U2).
+  - `FAVOUR_ITEM` does not bounds-check its index (`c_bt.c` 3561–3567); the cockpit asks only below
+    the count `FAVOUR_ITEMS` gave.
+  - After a pairing, page scan stays off until the pairing link drops (`c_bt.c` 3011–3016,
+    3268–3276; step-4 plan U16).
 
 ## 14. Maybe Someday
 
