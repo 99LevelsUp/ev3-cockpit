@@ -278,6 +278,8 @@ export class TelemetryScheduler {
 
 	/** Composes and sends one frame; what did not fit goes into `carried`. Resolves whether it went. */
 	private async sendFrame(rows: readonly TelemetryRow[], carried: TelemetryRow[]): Promise<boolean> {
+		// Disposed meanwhile — also from a listener of the tick's first frame: nothing more goes out.
+		if (this.disposed) { return false; }
 		let frame: AssembledFrame;
 		try {
 			// Resolved per frame, not per scheduler: see `SchedulerOptions.limits`.
@@ -297,9 +299,20 @@ export class TelemetryScheduler {
 			this.consume(frame, payload);
 			return true;
 		} catch (error) {
+			// The command may never have reached the brick: the mode it carried is not known to be
+			// set, so the next read of those ports settles afresh (review of U4, round 2).
+			this.forgetModes(frame);
 			this.framesFailed += 1;
 			this.options.onError?.(error);
 			return false;
+		}
+	}
+
+	private forgetModes(frame: AssembledFrame): void {
+		for (const { row } of frame.placed) {
+			if (row.port === undefined || row.mode === undefined || row.reportsOccupancy) { continue; }
+			this.commandedMode.delete(row.port);
+			this.settling.delete(row.port);
 		}
 	}
 
