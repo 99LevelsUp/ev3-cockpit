@@ -501,6 +501,31 @@ describe('BrickManager — telemetry claims end with the sign-in (step-6 U5, rev
 	});
 });
 
+describe('BrickManager — telemetry claims end with the brick layer (step-6 U5, review round 2)', () => {
+	it('ends the claims of a connected brick when the brick layer is disposed', async () => {
+		const w = world(true);
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		w.bricks.clearActiveBrick();
+		const telemetry = new TelemetryService({ host: w.bricks.telemetryHost(), providerRegistry: w.registry });
+		const ended: ClaimsEndedEvent[] = [];
+		telemetry.onClaimsEnded((event) => ended.push(event));
+		try {
+			const ticket = telemetry.claim(CCC, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+
+			// Its routes are still there while the channels close: a brick no longer signed in has no session.
+			w.bricks.dispose();
+
+			assert.deepEqual(ended, [{ brickKey: CCC, handles: [ticket.handle] }]);
+			assert.equal(telemetry.loopFor(CCC), undefined);
+		} finally {
+			telemetry.dispose();
+			w.done();
+		}
+	});
+});
+
 describe('BrickManager — the name the brick reports', () => {
 	const nameOf = (w: ReturnType<typeof world>) => w.aggregator.getBrick(CCC)?.name;
 
