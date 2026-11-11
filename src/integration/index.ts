@@ -49,6 +49,22 @@ const tests: IntegrationTest[] = [
 		},
 	},
 	{
+		name: 'activation returns the public API, versioned, safe by default (step-5 U6)',
+		fn: async () => {
+			const ext = vscode.extensions.getExtension(EXTENSION_ID);
+			assert.ok(ext);
+			const api = await ext.activate() as {
+				apiVersion: number;
+				registerConsumer(name: string): { listBricks(): unknown[]; getAccessMode(): string; dispose(): void };
+			};
+			assert.equal(api.apiVersion, 1);
+			const consumer = api.registerConsumer('integration-test');
+			assert.ok(Array.isArray(consumer.listBricks()));
+			assert.equal(consumer.getAccessMode(), 'safe');
+			consumer.dispose();
+		},
+	},
+	{
 		name: 'filesystem commands are registered and declared',
 		fn: async () => {
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);
