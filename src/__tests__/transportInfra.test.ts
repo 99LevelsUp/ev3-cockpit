@@ -307,6 +307,46 @@ describe('BtConnectionQueue', () => {
 		}
 	});
 
+	it('does not time out a waiter while the slot is free and only the recovery pause after a failure runs', async () => {
+		// U10 hardware session, 09.11.2026: a connect held the slot 23 s and failed; the 30 s pause
+		// after it ran the repair's pairing past 45 s, which then failed "0/1 in use … busy".
+		const queue = new BtConnectionQueue({
+			maxConcurrent: 1,
+			interConnectionCooldownMs: 0,
+			errorRecoveryCooldownMs: 80,
+			acquireTimeoutMs: 50,
+		});
+		try {
+			const release = await queue.acquire('brick1');
+			const pending = queue.acquire('brick2');
+			setTimeout(() => release(new Error('connect failed')), 20);
+			const secondRelease = await pending;   // granted at about 100 ms, after the pause
+			assert.equal(queue.active, 1);
+			secondRelease();
+		} finally {
+			queue.dispose();
+		}
+	});
+
+	it('still times out a waiter whose slot another operation takes after a recovery pause', async () => {
+		const queue = new BtConnectionQueue({
+			maxConcurrent: 1,
+			interConnectionCooldownMs: 0,
+			errorRecoveryCooldownMs: 40,
+			acquireTimeoutMs: 30,
+		});
+		try {
+			const release = await queue.acquire('brick1');
+			const first = queue.acquire('brick2');   // granted after the pause, and holds the slot
+			const second = queue.acquire('brick3');
+			release(new Error('connect failed'));
+			await first;
+			await assert.rejects(second, /\(1\/1 in use\)/);
+		} finally {
+			queue.dispose();
+		}
+	});
+
 	it('grants a slot to a queued acquire before its ceiling timeout, without failing it', async () => {
 		const queue = new BtConnectionQueue({
 			maxConcurrent: 1,

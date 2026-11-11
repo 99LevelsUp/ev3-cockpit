@@ -60,11 +60,11 @@ export class BtConnectionQueue {
 	 * Acquire a slot. Returns a release callback that MUST be called once the operation the
 	 * slot was for (an open, a pairing) has finished, passing the error if it failed.
 	 *
-	 * @throws {TransportError} When no slot opens up within `acquireTimeoutMs`. A cooldown
-	 *   wait never takes that long (the backoff caps at `backoffMax`), so this fires when
-	 *   another open or pairing holds the slot for longer — a pairing can, since it waits for
-	 *   a person at the brick. Per DESIGN §3.3: fail with a stated reason rather than queue
-	 *   indefinitely.
+	 * @throws {TransportError} When another open or pairing holds the slot for longer than
+	 *   `acquireTimeoutMs` — a pairing can, since it waits for a person at the brick. The pause
+	 *   after a release never fails the wait: a slot held 23 s and released with an error is
+	 *   followed by a 30 s pause, and the waiter is granted after it (U10 hardware session).
+	 *   Per DESIGN §3.3: fail with a stated reason rather than queue indefinitely.
 	 */
 	async acquire(
 		brickId: string,
@@ -84,18 +84,29 @@ export class BtConnectionQueue {
 	): Promise<(error?: unknown) => void> {
 		return new Promise<() => void>((resolve, reject) => {
 			const entry: QueueEntry = { brickId, resolve, reject, holdOnly: options?.holdOnly };
-			entry.timeoutTimer = setTimeout(() => {
-				const idx = this.queue.indexOf(entry);
-				if (idx < 0) { return; }
-				this.queue.splice(idx, 1);
-				reject(new TransportError(
-					`BT connection queue timed out after ${this.acquireTimeoutMs} ms waiting for `
-					+ `a slot for ${brickId} (${this.activeCount}/${this.maxConcurrent} in use). `
-					+ 'Bluetooth is busy opening another connection or pairing a brick; try '
-					+ 'again once that has finished.'
-				));
-			}, this.acquireTimeoutMs);
-			entry.timeoutTimer.unref?.();
+			const arm = (ms: number): void => {
+				entry.timeoutTimer = setTimeout(() => {
+					const idx = this.queue.indexOf(entry);
+					if (idx < 0) { return; }
+					// The slot is free and only the pause after a release keeps it closed: the grant
+					// follows when the pause ends, which `backoffMax` caps. Failing here would blame a
+					// busy radio that is idle (U10 hardware session, 09.11.2026). The wait goes on, and
+					// fails only if another operation takes the slot and keeps it.
+					if (this.activeCount < this.maxConcurrent) {
+						arm(this.computeDelay() + this.acquireTimeoutMs);
+						return;
+					}
+					this.queue.splice(idx, 1);
+					reject(new TransportError(
+						`BT connection queue timed out after ${this.acquireTimeoutMs} ms waiting for `
+						+ `a slot for ${brickId} (${this.activeCount}/${this.maxConcurrent} in use). `
+						+ 'Bluetooth is busy opening another connection or pairing a brick; try '
+						+ 'again once that has finished.'
+					));
+				}, ms);
+				entry.timeoutTimer.unref?.();
+			};
+			arm(this.acquireTimeoutMs);
 			this.queue.push(entry);
 			this.scheduleDrain();
 		});
