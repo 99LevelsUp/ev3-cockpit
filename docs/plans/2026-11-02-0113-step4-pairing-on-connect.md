@@ -543,6 +543,30 @@ routine.
 | R8's data against the brick's own menu | **matches** | Bluetooth > Favorites lists the same names; its check box is the connected mark and its icons the types (6 unknown, 5 brick, 4 phone) |
 | Phase times, sessions 2–3 | six pairings | slot 0.4–9.7 s; found +0.1 s to +2 inquiry windows (window 1 missed the brick 4 times); dialog 4–8 s after found when it came |
 
+### A presence check that raises no dialog (path a, 11.11.2026)
+
+The owner chose to look for a presence check that does not raise the pairing dialog of a
+one-sided brick (path a), and to fall back to reporting the fault state (path c) if none exists.
+`scripts/presence-auth-probe.ps1` runs three candidates against one brick, the cockpit closed:
+
+- C1, WinRT `GetRfcommServicesAsync(Uncached)` — the shipped check (helper `--sdp`),
+- C2, a Winsock SDP query, `WSALookupServiceBegin` on `NS_BTH` with the SerialPort UUID and
+  `LUP_FLUSHCACHE`,
+- C3, a Winsock RFCOMM connect to the SerialPort service, authentication not requested.
+
+| Run | Brick | C1 (WinRT SDP) | C2 (Winsock SDP) | C3 (Winsock connect) |
+|---|---|---|---|---|
+| 1, a beep before each trial, the owner blind to the order | BBB one-sided (Windows paired, the brick without this computer) | **dialog 2 of 3**; Disconnected/0, 3.6–5.6 s | **dialog 0 of 3**; no record (WSA 10108), 5.2 s | **dialog 0 of 3**; WSA 10060, 5.2 s |
+| 2 | AAA on, paired | heard 1 of 4 (Connected/1, 1.1 s; otherwise Disconnected/0, 5.2–5.3 s) | **heard 3 of 4**, 0.8–1.2 s | not run |
+| 2 | CCC off (from its menu) | heard 0 of 4 | heard 0 of 4, 5.2 s | not run |
+
+**Verdict:** the API decides, not the radio contact: through WinRT, Windows answers the brick's
+missing key with a new pairing, which the brick shows as its dialog; through Winsock the link
+simply fails. Winsock SDP keeps step 2's one-sided rule (an answer only from a brick that is on),
+heard the on brick more often and faster in this sample, and raised no dialog. It replaces the
+WinRT check (next change). All three read the one-sided brick as not answering. After the runs
+BBB was repaired over USB by "Connect a Brick" (11:53, paired 11:55).
+
 Found, not acted on yet:
 
 - **Presence check raises the dialog** of a one-sided "Windows paired" brick, about once a minute.
