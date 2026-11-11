@@ -66,7 +66,7 @@ The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decision
 ### U2. Row registry and vocabulary — done 11.11.2026 (f939eca and the radio rows)
 3.1.6, 3.1.4 (`PeripheralType`), 3.2.5, 3.1.1–3.1.3 as row bundles. A registry object validates on registration (`validateRow`, mode conflicts with rows already registered), keeps the raw type code beside the resolved name (the occupancy parse keeps the mode), and lists rows with id, unit, tier. `ev3Rows.ts` gets its own tests. New rows: transports and Bluetooth visibility (3.1.3), the pairing list `FAVOUR_ITEMS` (3.1.4k) — encodings verified on hardware in U10.
 
-### U3. The mock serves frames
+### U3. The mock serves frames — done 11.11.2026
 3.1.7a per D4: the mock decodes the assembler's bytecode for the opcodes in use and answers from its configured ports, battery and buttons; unknown opcodes are an error, not a zero. Tests run the real `BrickTelemetry` against it.
 
 ### U4. A schedule that changes while running; mode ownership; port state

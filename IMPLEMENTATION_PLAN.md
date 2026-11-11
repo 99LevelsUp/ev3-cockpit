@@ -1101,7 +1101,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 
     Closed by 3.3: the scheduler took a `FrameSender` directly and now gets one that goes
     through the per-brick `commandQueue`. See 3.3 for what that changed and what it measured.
-  - [ ] 3.1.7a **Mock telemetry has no answer.** `MockTransportProvider` refuses a
+  - [x] 3.1.7a **Done 11.11.2026 (step 6 U3, owner decision D4):** `src/mock/mockFrameInterpreter.ts` runs the opcodes the rows emit against the mock's ports, battery and radios; unknown opcodes, writes past the declared globals, an unaligned `opINPUT_READSI` and `GET_ON_OFF` of USB fail as on a brick, and unwritten globals hold a pattern, not zeros. **Mock telemetry has no answer.** `MockTransportProvider` refuses a
     `telemetry:frame` because it dispatches typed commands and a composed frame is bytecode.
     Refusing is right — a plausible-looking buffer would be parsed into numbers that came from
     nowhere — but it leaves the mock unable to serve the panel. Either give the mock a small
