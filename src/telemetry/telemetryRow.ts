@@ -26,7 +26,7 @@ export type RowLifetime =
 	| { readonly kind: 'off' }
 	/** Included on every `divider`-th tick. Divider 1 is every tick. */
 	| { readonly kind: 'repeating'; readonly divider: number }
-	/** Included on the first tick after connect, then retired. */
+	/** Included on the next tick it can go on — the first after connect, or after it was added — then retired. */
 	| { readonly kind: 'oneShot' };
 
 /** What a row's result occupies in the global buffer. */

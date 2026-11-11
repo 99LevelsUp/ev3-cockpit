@@ -265,7 +265,9 @@ export class TelemetryScheduler {
 
 		for (const row of this.carriedOver) { consider(row); }
 		for (const row of this.rows) {
-			if (comesUpOnTick(row.lifetime, tick)) { consider(row); }
+			// A one-shot comes up on every tick until it has been read, not only on tick 0: a row
+			// set replaced later may add one, and it must still be read once (step-6 U4).
+			if (row.lifetime.kind === 'oneShot' || comesUpOnTick(row.lifetime, tick)) { consider(row); }
 		}
 		return chosen;
 	}
