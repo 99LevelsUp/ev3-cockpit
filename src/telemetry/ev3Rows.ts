@@ -123,11 +123,10 @@ export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.even
 /**
  * One sensor reading in SI units.
  *
- * Only comes up while its port's last known occupancy was a real device type. Reading an
- * *identifying* port is what the scheduler must avoid: the port is not absent, so the read
- * takes the device-present path, and a still-settling device makes the firmware re-execute
- * the instruction — `SetObjectIp(TmpIp - 1); SetDispatchStatus(BUSYBREAK)` — for up to
- * `MAX_DEVICE_BUSY_TIME`, 1200 ms, holding the whole frame and everything behind it.
+ * Only comes up while its port's last known occupancy was a real device type. `opINPUT_READSI`
+ * never changes the dispatch status (`c_input.c` `cInputReadSi`): an empty, faulty or still
+ * busy port answers NaN at once. The re-execution for up to `MAX_DEVICE_BUSY_TIME` belongs to
+ * `opINPUT_DEVICE`'s `READY_*` subcodes, which no row uses (step 6, 11.11.2026; U10 measures it).
  */
 export function sensorValueRow(
 	index: number,

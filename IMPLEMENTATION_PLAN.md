@@ -1142,7 +1142,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     unsubscribing releases one claim and the effective interval is recomputed from the rest.
     That is what makes the promise real: the panel's switches are the cockpit's own
     subscription, so switching a row off must not take it from a dependent extension
-  - [ ] 3.1.11 Port state in the read model and the panel: empty (126), identifying (125),
+  - [~] 3.1.11 **Model done 11.11.2026 (step 6 U4):** `src/telemetry/portState.ts`, `TelemetryScheduler.portState(port)`; the read model (U6) and the panel (Phase 5) remain. Port state in the read model and the panel: empty (126), identifying (125),
     known, error (127), terminal (124); anything else ≥124 shows as not-readable. The value is
     read only in the *known* state. **Occupancy is a row with its own divider, not a mandatory
     header on every frame** — it is what gates the value rows, so their inclusion decision uses

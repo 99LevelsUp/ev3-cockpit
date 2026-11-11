@@ -14,7 +14,9 @@ export type PeripheralType =
 	| 'nxt-ultrasonic-sensor' | 'nxt-temperature-sensor'
 	| 'large-motor' | 'medium-motor' | 'new-tacho-motor'
 	| 'touch-sensor' | 'color-sensor' | 'ultrasonic-sensor' | 'gyro-sensor' | 'infrared-sensor'
-	| 'energy-meter' | 'iic-identifying' | 'nxt-test-sensor' | 'nxt-iic-sensor'
+	| 'energy-meter' | 'nxt-test-sensor' | 'nxt-iic-sensor'
+	/** `TYPE_IIC_UNKNOWN` 100: an IIC device the firmware's type list does not name; it stays so (`c_input.c` 3029–3047). */
+	| 'iic-unlisted'
 	| 'third-party'
 	/** `TYPE_TERMINAL`: the port has a console on it, not a peripheral. */
 	| 'terminal'
@@ -44,7 +46,7 @@ const BY_CODE: ReadonlyMap<number, PeripheralType> = new Map<number, PeripheralT
 	[32, 'gyro-sensor'],
 	[33, 'infrared-sensor'],
 	[99, 'energy-meter'],
-	[100, 'iic-identifying'],  // TYPE_IIC_UNKNOWN, "type is not known yet"
+	[100, 'iic-unlisted'],     // TYPE_IIC_UNKNOWN: not in the firmware's IIC list, not "still identifying"
 	[101, 'nxt-test-sensor'],
 	[123, 'nxt-iic-sensor'],
 	[124, 'terminal'],

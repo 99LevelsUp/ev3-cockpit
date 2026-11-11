@@ -1192,6 +1192,15 @@ parameters and writes the type-appropriate NAN into each — `DATA8_NAN`, `DATA3
 `DATAF_NAN` — so an absent or faulty port reports its own absence, and that NAN is the
 authoritative answer rather than something to be second-guessed host-side.
 
+> **Correction (11.11.2026, from `c_input.c` of firmware 1.09d; U10 measures it on a brick).**
+> The stall described in the next paragraph does not apply to the instruction the value rows
+> use. `opINPUT_READSI` (`cInputReadSi`) sets the type and mode and returns
+> `cInputReadDeviceSi`; it never changes the dispatch status, so a busy or identifying device
+> answers NaN at once. The `SetObjectIp(TmpIp - 1); SetDispatchStatus(BUSYBREAK)` re-execution
+> is in `opINPUT_DEVICE`'s `READY_SI`/`READY_IIC` cases and in `opINPUT_READY`. The gate stays,
+> for a smaller reason: a read of a port that is not known has nothing to learn and costs scarce
+> bytes. A mode switch likewise makes the next reads NaN rather than holding the frame.
+
 The real reason is that an *identifying* port is not absent. Its connection is a live value,
 so the read takes the device-present path, and if the device is still settling the firmware
 does `SetObjectIp(TmpIp - 1); SetDispatchStatus(BUSYBREAK)` — it re-executes the instruction,
