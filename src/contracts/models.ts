@@ -130,7 +130,10 @@ export interface BatteryState {
 
 export interface PortState {
     port: string;
+    /** A name from the one vocabulary (`protocol/peripheralTypes.ts`); absent for an empty port. */
     peripheralType?: string;
+    /** The firmware's raw type code beside the name, so an unrecognised device stays recognisable (3.2.3). */
+    typeCode?: number;
     value?: number | string;
     unit?: string;
     timestamp?: number;

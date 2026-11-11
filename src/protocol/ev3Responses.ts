@@ -22,48 +22,13 @@ import {
 } from './ev3Packet';
 import { INFO_LAYOUT, BT_PEER_LAYOUT } from './ev3Commands';
 import { ProtocolError } from '../errors/CockpitError';
+import { peripheralTypeOf } from './peripheralTypes';
 
 // ── Sensor/motor type names ─────────────────────────────────────────
 
-/**
- * Device type codes as the brick reports them.
- *
- * Two of these were wrong, and the mistake was invisible: 16 was named `color` and 29
- * `color-v2`, so a touch sensor was reported as a colour sensor and the real colour sensor
- * as a second-generation one. A brick with a touch sensor plugged in read as having none.
- *
- * Sources, since guessing is what produced the error:
- * - 1 and 16 from the firmware's own `typedata.rcf` (`1 0 NXT-TOUCH`, `16 0 TOUCH`)
- * - 29, 30, 32, 33 are UART sensors, which supply their own type data, so they are absent
- *   from that file; the codes come from `lego-linux-drivers/sensors/ev3_uart_sensor.h`
- *   (`LEGO_EV3_COLOR_TYPE_ID 29`, `..._ULTRASONIC 30`, `..._GYRO 32`, `..._INFRARED 33`)
- */
-const SENSOR_TYPE_NAMES: Record<number, string> = {
-	1: 'nxt-touch',
-	16: 'touch',
-	29: 'color',
-	30: 'ultrasonic',
-	32: 'gyro',
-	33: 'infrared',
-	125: 'unknown',
-	126: 'none',
-	127: 'error',
-};
-
-/**
- * From `typedata.rcf`: `7 0 L-MOTOR-DEG`, `8 0 M-MOTOR-DEG`.
- *
- * The port-status codes belong here too: a motor plugged in while running passes through
- * `TYPE_UNKNOWN` exactly as a sensor does, and without these it would surface as
- * `motor-125` — the sensor table got the fix first and this one nearly missed it.
- */
-const MOTOR_TYPE_NAMES: Record<number, string> = {
-	7: 'large-motor',
-	8: 'medium-motor',
-	125: 'unknown',
-	126: 'none',
-	127: 'error',
-};
+// Names come from the one vocabulary (`peripheralTypes.ts`, codes from `bytecodes.h`), shared
+// with the mock and the telemetry rows (3.2.5). Two codes were once wrong here — 16 named
+// `color`, 29 `color-v2` — so a touch sensor read as a colour sensor; the tests pin the codes.
 
 /**
  * The three type codes that are a port status rather than a device.
@@ -237,9 +202,8 @@ function parsePorts(payload: Uint8Array): PortsResponse {
 			: undefined;
 		sensorPorts.push({
 			port: SENSOR_PORT_LABELS[i],
-			peripheralType: present
-				? SENSOR_TYPE_NAMES[typeCode] ?? `sensor-${typeCode}`
-				: undefined,
+			peripheralType: present ? peripheralTypeOf(typeCode) : undefined,
+			typeCode: present ? typeCode : undefined,
 			// DATAF_NAN is a real NaN, so a device with no reading yet is reported as
 			// having none rather than as holding a nonsense number.
 			value: raw !== undefined && Number.isFinite(raw) ? raw : undefined,
@@ -257,9 +221,8 @@ function parsePorts(payload: Uint8Array): PortsResponse {
 		const tachoValue = raw === DATA32_NAN ? undefined : raw;
 		motorPorts.push({
 			port: MOTOR_PORT_LABELS[i],
-			peripheralType: present
-				? MOTOR_TYPE_NAMES[typeCode] ?? `motor-${typeCode}`
-				: undefined,
+			peripheralType: present ? peripheralTypeOf(typeCode) : undefined,
+			typeCode: present ? typeCode : undefined,
 			value: tachoValue,
 			unit: tachoValue !== undefined ? 'deg' : undefined,
 			timestamp: Date.now(),

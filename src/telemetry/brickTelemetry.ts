@@ -19,7 +19,7 @@ import { brickKeyTransport } from '../contracts/brickKey';
 import { maxPacketBytesFor } from '../fs/brickFilesystem';
 import { FIRMWARE_BUFFER_BYTES } from '../protocol/ev3Commands';
 import { FrameLimits } from './frameAssembler';
-import { allEv3Rows } from './ev3Rows';
+import { createEv3RowRegistry } from './rowRegistry';
 import { RowValue, TelemetryRow } from './telemetryRow';
 import { SchedulerStats, TelemetryScheduler } from './telemetryScheduler';
 import { cadenceFor } from './telemetryConstants';
@@ -108,7 +108,8 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 	const tickPeriodMs = options.tickPeriodMs ?? cadenceFor(transport).foregroundMs;
 
 	const scheduler = new TelemetryScheduler({
-		rows: options.rows ?? allEv3Rows(),
+		// Through the registry, so every row was validated against the tightest link (3.1.6).
+		rows: options.rows ?? createEv3RowRegistry().all(),
 		limits: () => frameLimitsFor(sender, brickKey),
 		send: async (payload) => {
 			const response = await sender.send(brickKey, { kind: 'telemetry:frame', payload });
