@@ -1688,7 +1688,7 @@ Export a stable API for other extensions without giving them direct access to th
     and sizes, tracks directories explicitly so an empty one is representable, and
     refuses to delete a populated directory. — partial-transfer failure, cancellation, populated-directory refusal,
     and over-length path rejection all reproducible against the mock (R15)
-  - [ ] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
+  - [x] 4.6.13 Declare the remaining system commands and `opFILE` / `opFILENAME` subcodes the
     survey found, including `BEGIN_GETFILE` / `CONTINUE_GETFILE`. Log tailing itself is deferred
     until a consumer wants it, but the opcodes are recorded so the capability is not lost again
 - [ ] **4.9 Consumer requirements from the sibling projects** — `ev3-native` and
