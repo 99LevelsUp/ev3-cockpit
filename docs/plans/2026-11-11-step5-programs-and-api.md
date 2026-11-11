@@ -146,6 +146,17 @@ Why escalated, not patched: rounds 2 and 3 both found majors in keeping the poll
 - **(a)** keep KTD4's following and rework the accounting: failures count against the brick's answers, any answer and every transition reset the count; regression test two failures → stop → run B → one failure, B still followed.
 - **(b)** poll only while someone listens: drop `following` and the counter; step 6's telemetry scheduler takes the poll over, as KTD4 already says. Removes the class of rounds 2–3 instead of closing one more instance. Recommended, since no reader exists.
 
+### Audit of the D5 rework (b809450, 11.11.2026) — READY
+
+The owner chose (b). The rework removed `following` and the failure count; the poll runs only while someone listens, the last listener leaving cancels it, a poll on its way then schedules no other, a lost reply does not end a listener's poll. Mutations: 4/4 killed.
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | the in-flight unsubscribe test counts commands after the release, so one forbidden poll could slip through | CONFIRMED | counted before the release |
+| 2 | nit | the test header still describes polling a started program with nobody listening | CONFIRMED | rewritten |
+
+Convergence gate: no blocker or major left. Step 5 is closed in code; U9 (hardware) remains.
+
 ## Open, decided later
 
 - 4.7a.4's poll joins the telemetry scheduler (step 6).
