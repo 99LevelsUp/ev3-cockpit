@@ -544,7 +544,10 @@ assertion mutation-checked.
 | — | hold at each call site | — | **replaced**: three defects in two rounds, one made by the fix before, is the owner's signal to change the approach; the wait moved into the Bluetooth join itself |
 | 3 | a repair whose pairing fails or is cancelled woke no held join; "Connect a Brick" hung | major | confirmed: the wake had been removed because no test told it apart; restored with a test that fails without it |
 
-Mutation check of the final state: 14 of 14 killed. `npm run test:ci` 758/758. Round 4 not run:
+| 4 (U13, U14, 11.11.2026, codex on an inline packet: the first run could not read files) | comments in `presenceAggregator.ts` still called `paired` sticky; a doc comment left above the wrong helper | nit ×2 | fixed in `3ac7bee`; verdict READY |
+
+U12–U15 were each built test-first and mutation-checked (U12 3 of 3, U13 4 of 4, U14 and U15 by
+their RED runs). Mutation check of the U10-fix state: 14 of 14 killed. `npm run test:ci` 758/758. Round 4 not run:
 the owner decides between another round and the hardware rerun.
 
 ### Hardware results
