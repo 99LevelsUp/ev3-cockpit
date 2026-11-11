@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { TelemetryScheduler } from '../telemetry/telemetryScheduler';
+import { TelemetryScheduler, SETTLE_LIMIT_MS } from '../telemetry/telemetryScheduler';
 import { RowLifetime, TelemetryRow, withLifetime } from '../telemetry/telemetryRow';
 import { createBrickTelemetry } from '../telemetry/brickTelemetry';
 import { makeBrickKey, Transport } from '../contracts';
@@ -156,5 +156,72 @@ describe('scheduler — a schedule that changes while running (step-6 U4)', () =
 		assert.equal(telemetry.tickPeriodMs, granted);
 		assert.equal(telemetry.setPeriod(400), 400);
 		telemetry.dispose();
+	});
+});
+
+describe('scheduler — one mode per port, and a settle after a switch (step-6 U4, 3.1.4b)', () => {
+	const sensor = (id: string, mode: number) => row(id, { kind: 'repeating', divider: 1 }, {
+		port: '1', mode, result: { bytes: 4, alignment: 4 },
+		parse: (payload, slot, sampledAt) => ({ rowId: id, value: new DataView(payload.buffer).getFloat32(slot, true), sampledAt }),
+	});
+	const floats = (...values: number[]) => {
+		let i = 0;
+		return () => { const b = new Uint8Array(64); new DataView(b.buffer).setFloat32(0, values[Math.min(i++, values.length - 1)], true); return b; };
+	};
+	const valuesOf = (seen: { rowId: string; value: unknown }[][]) => seen.map((vs) => vs.map((v) => v.value));
+
+	it('refuses two modes of one port in the active rows, and keeps the old set', () => {
+		const { scheduler } = world([sensor('a', 0)]);
+
+		assert.throws(() => scheduler.setRows([sensor('a', 0), sensor('b', 1)]), /mode/);
+		assert.doesNotThrow(() => scheduler.setRows([sensor('a', 0), sensor('c', 0)]), 'two reads of one mode are fine');
+	});
+
+	it('refuses two modes of one port when built', () => {
+		assert.throws(() => new TelemetryScheduler({ rows: [sensor('a', 0), sensor('b', 1)], limits: LIBUSB, tickPeriodMs: 10, send: () => Promise.resolve(new Uint8Array(64)) }), /mode/);
+	});
+
+	it('withholds a port\'s readings after a mode switch until one comes back as a number', async () => {
+		const seen: { rowId: string; value: unknown }[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: [sensor('a', 0)], limits: LIBUSB, tickPeriodMs: 10,
+			send: ((r) => () => Promise.resolve(r()))(floats(1, NaN, NaN, 7, 8)),
+			onValues: (values) => { seen.push(values.map((v) => ({ rowId: v.rowId, value: v.value }))); },
+		});
+		await scheduler.runTick();                  // 1, mode 0
+
+		scheduler.setRows([sensor('b', 1)]);         // switch to mode 1
+		for (let i = 0; i < 4; i += 1) { await scheduler.runTick(); }   // NaN, NaN, 7, 8
+
+		assert.deepEqual(valuesOf(seen), [[1], [7], [8]]);
+	});
+
+	it('gives up withholding after the settle limit, so a mode that reads NaN is not muted for ever', async () => {
+		const seen: { rowId: string; value: unknown }[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: [sensor('a', 0)], limits: LIBUSB, tickPeriodMs: SETTLE_LIMIT_MS / 2,
+			send: ((r) => () => Promise.resolve(r()))(floats(1, NaN)),
+			onValues: (values) => { seen.push(values.map((v) => ({ rowId: v.rowId, value: v.value }))); },
+		});
+		await scheduler.runTick();
+		scheduler.setRows([sensor('b', 1)]);
+		for (let i = 0; i < 4; i += 1) { await scheduler.runTick(); }
+
+		assert.ok(seen.length >= 3, `still muted after ${4} ticks of ${SETTLE_LIMIT_MS / 2} ms`);
+		assert.ok(Number.isNaN(seen[seen.length - 1][0].value as number));
+	});
+
+	it('does not settle a port whose mode did not change', async () => {
+		const seen: { rowId: string; value: unknown }[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: [sensor('a', 0)], limits: LIBUSB, tickPeriodMs: 10,
+			send: ((r) => () => Promise.resolve(r()))(floats(1, NaN, 3)),
+			onValues: (values) => { seen.push(values.map((v) => ({ rowId: v.rowId, value: v.value }))); },
+		});
+		await scheduler.runTick();
+		scheduler.setRows([sensor('a', 0)]);   // the same mode: the next reading, NaN, passes as it is
+		await scheduler.runTick();
+
+		assert.equal(seen.length, 2, 'withheld a reading although the mode stayed');
 	});
 });
