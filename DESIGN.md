@@ -802,7 +802,14 @@ Pairing is part of connecting (step 4, `docs/plans/2026-11-02-0113-step4-pairing
   paired again. A suspended brick is not repaired until "Connect a Brick", and a brick is
   repaired once until the next "Connect a Brick", so a name that does not match exactly cannot
   loop. Over Bluetooth alone nothing is checked; a failed connect says that USB or TCP repairs a
-  one-sided pairing, without claiming that the pairing is broken.
+  one-sided pairing, without claiming that the pairing is broken,
+- when USB or TCP is there, the brick's Bluetooth channel joins only after that check: USB and
+  TCP join first, Bluetooth once the list has been read and compared. A connect over a pairing
+  broken on the brick's side only fails, after holding the radio for 15 s and arming the queue's
+  recovery pause, which starved the repair's own pairing on hardware (step-4 U10). When every
+  USB and TCP join fails, Bluetooth is tried at once: there is nothing left to check over. A
+  brick that still looks one-sided after its one repair is reported on every USB or TCP join,
+  on purpose: it is a fault, and a reminder each time gets it fixed sooner.
 
 After sign-out:
 
