@@ -24,7 +24,7 @@ import { ProviderRegistry } from '../transports/providerRegistry';
 import { TransportGuard } from '../transports/transportGuard';
 import { SessionHandle, TransportProvider } from '../contracts/transport';
 import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { ConnectionState, ActivityMode, Transport } from '../contracts/enums';
+import { ConnectionState, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
 
 import { waitFor } from './waitFor';
@@ -92,14 +92,12 @@ describe('SessionEntry', () => {
 		const key = makeBrickKey(Transport.Mock, 'a');
 		const entry = new SessionEntry(key, Transport.Mock, 'TestBrick');
 		entry.transition(ConnectionState.Connected);
-		entry.setActiveMode(ActivityMode.Foreground);
 
 		const snapshot = entry.toConnectedSession();
 		assert.equal(snapshot.brickKey, key);
 		assert.equal(snapshot.displayName, 'TestBrick');
 		assert.equal(snapshot.transport, Transport.Mock);
 		assert.equal(snapshot.connectionState, ConnectionState.Connected);
-		assert.equal(snapshot.activeMode, ActivityMode.Foreground);
 		assert.equal(snapshot.heartbeatState, 'ok');
 	});
 
@@ -624,21 +622,14 @@ describe('SessionManager', () => {
 
 		manager.setActiveBrick(keyA);
 		assert.equal(manager.getActiveBrickKey(), keyA);
-		assert.equal(manager.getSession(keyA)?.activeMode, ActivityMode.Foreground);
 
-		// A brick nobody subscribed to falls to Minimal, not Subscribed. This test used
-		// to assert Subscribed, which locked in the bug: DESIGN 9.3 scopes that mode to
-		// bricks with a live API subscription and 9.4 makes Minimal the base mode.
-		// The Subscribed branch of demote() becomes testable once the subscription API
-		// lands (plan 3.3.5 registry, 4.5 API); there is no way to create one today.
+		// The mode each brick runs telemetry in is TelemetryService.modeOf's to say
+		// (telemetryServiceClaims.test.ts), not the session's (step-6 U5).
 		manager.setActiveBrick(keyB);
 		assert.equal(manager.getActiveBrickKey(), keyB);
-		assert.equal(manager.getSession(keyA)?.activeMode, ActivityMode.Minimal);
-		assert.equal(manager.getSession(keyB)?.activeMode, ActivityMode.Foreground);
 
 		manager.clearActiveBrick();
 		assert.equal(manager.getActiveBrickKey(), undefined);
-		assert.equal(manager.getSession(keyB)?.activeMode, ActivityMode.Minimal);
 	});
 
 	it('fires active brick change event', async () => {

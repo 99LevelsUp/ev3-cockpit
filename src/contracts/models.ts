@@ -1,4 +1,4 @@
-import { ActivityMode, ChannelState, ConnectionState, PresenceState, TelemetryCategory, Transport } from './enums';
+import { ChannelState, ConnectionState, PresenceState, Transport } from './enums';
 import { BrickId, BrickKey } from './brickKey';
 
 export interface SignalInfo {
@@ -115,9 +115,7 @@ export interface ConnectedSession {
     displayName: string;
     transport: Transport;
     connectionState: ConnectionState;
-    activeMode: ActivityMode;
     lastError?: string;
-    subscribedCategories: TelemetryCategory[];
     heartbeatState: HeartbeatState;
 }
 
