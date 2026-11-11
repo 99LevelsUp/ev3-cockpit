@@ -95,7 +95,7 @@ export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.eve
 			lc0(LAYER_SELF), lc0(SENSOR_PORTS[index]),
 			globalRef(slot), globalRef(slot + 1),
 		),
-		parse: (payload, slot, sampledAt) => value(id, payload[slot], sampledAt),
+		parse: (payload, slot, sampledAt) => ({ ...value(id, payload[slot], sampledAt), mode: payload[slot + 1] }),
 	};
 }
 
@@ -115,7 +115,7 @@ export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.even
 			lc0(LAYER_SELF), lc0(MOTOR_INPUT_PORTS[index]),
 			globalRef(slot), globalRef(slot + 1),
 		),
-		parse: (payload, slot, sampledAt) => value(id, payload[slot], sampledAt),
+		parse: (payload, slot, sampledAt) => ({ ...value(id, payload[slot], sampledAt), mode: payload[slot + 1] }),
 	};
 }
 

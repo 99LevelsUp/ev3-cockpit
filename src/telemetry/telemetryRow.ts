@@ -50,6 +50,11 @@ export interface RowValue {
 	readonly value: number | string | boolean | undefined;
 	readonly unit?: string;
 	/**
+	 * For an occupancy row: the mode the device reports, beside its type code in `value`.
+	 * `GET_TYPEMODE` answers both, and a consumer needs the mode to read the value right.
+	 */
+	readonly mode?: number;
+	/**
 	 * When the reply carrying this value arrived.
 	 *
 	 * Per row rather than per snapshot: rows in one snapshot come from different ticks, and

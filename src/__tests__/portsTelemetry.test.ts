@@ -68,7 +68,7 @@ describe('ports response — device types', () => {
 		const result = parsePorts(portsPayload({ sensorTypes: [16, 29, 30, 32] }));
 		assert.deepEqual(
 			result.sensorPorts.map((p: PortState) => p.peripheralType),
-			['touch', 'color', 'ultrasonic', 'gyro']
+			['touch-sensor', 'color-sensor', 'ultrasonic-sensor', 'gyro-sensor']
 		);
 	});
 
@@ -76,8 +76,8 @@ describe('ports response — device types', () => {
 		// Both exist and they are different codes; calling code 1 plain 'touch' invited
 		// exactly the confusion above.
 		const result = parsePorts(portsPayload({ sensorTypes: [1, 33, 126, 126] }));
-		assert.equal(result.sensorPorts[0].peripheralType, 'nxt-touch');
-		assert.equal(result.sensorPorts[1].peripheralType, 'infrared');
+		assert.equal(result.sensorPorts[0].peripheralType, 'nxt-touch-sensor');
+		assert.equal(result.sensorPorts[1].peripheralType, 'infrared-sensor');
 	});
 
 	it('names both motor types', () => {
@@ -88,9 +88,17 @@ describe('ports response — device types', () => {
 		);
 	});
 
-	it('reports an unrecognised code rather than hiding it', () => {
+	it('reports an unrecognised code rather than hiding it, with the code beside the name (3.2.3)', () => {
+		const result = parsePorts(portsPayload({ sensorTypes: [42, 126, 126, 126], motorTypes: [7, 126, 126, 126] }));
+		assert.equal(result.sensorPorts[0].peripheralType, 'unrecognised');
+		assert.equal(result.sensorPorts[0].typeCode, 42);
+		assert.equal(result.motorPorts[0].typeCode, 7);
+		assert.equal(result.sensorPorts[1].typeCode, undefined, 'an empty port carries no code');
+	});
+
+	it('speaks the one vocabulary the mock and the telemetry rows speak (3.2.5)', () => {
 		const result = parsePorts(portsPayload({ sensorTypes: [99, 126, 126, 126] }));
-		assert.equal(result.sensorPorts[0].peripheralType, 'sensor-99');
+		assert.equal(result.sensorPorts[0].peripheralType, 'energy-meter');
 	});
 });
 
@@ -106,13 +114,13 @@ describe('ports response — a port status is not a reading', () => {
 			tachos: [42, 42, 42, -66],
 		}));
 
-		assert.equal(result.sensorPorts[0].peripheralType, 'unknown');
+		assert.equal(result.sensorPorts[0].peripheralType, 'identifying');
 		assert.equal(result.sensorPorts[1].peripheralType, undefined, 'empty port has no type');
 		assert.equal(result.sensorPorts[2].peripheralType, 'error');
 
 		// A motor hot-plugged mid-session passes through the same states, and the fix reached
 		// the sensor table first — without this the motor side reports `motor-125`.
-		assert.equal(result.motorPorts[0].peripheralType, 'unknown');
+		assert.equal(result.motorPorts[0].peripheralType, 'identifying');
 		assert.equal(result.motorPorts[0].value, undefined);
 		assert.equal(result.motorPorts[2].peripheralType, 'error');
 		assert.equal(result.motorPorts[2].value, undefined);
@@ -133,7 +141,7 @@ describe('ports response — a port status is not a reading', () => {
 		payload.writeFloatLE(NaN, 16);
 		const result = parsePorts(new Uint8Array(payload));
 
-		assert.equal(result.sensorPorts[0].peripheralType, 'color', 'the device is still there');
+		assert.equal(result.sensorPorts[0].peripheralType, 'color-sensor', 'the device is still there');
 		assert.equal(result.sensorPorts[0].value, undefined);
 	});
 
