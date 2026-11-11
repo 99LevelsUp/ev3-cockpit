@@ -46,6 +46,9 @@ Also closed in U1 as done or absorbed: 3.1.9 (rotating truncation, test `telemet
 - **D4. The mock serves telemetry how?** (a) a small interpreter of the ~7 opcodes the assembler emits, decoding our own frames and answering from the mock's ports; (b) a row-level fake that skips the bytecode. *Recommendation:* (a). The mock must break where the product breaks: (b) would never exercise the encoding, the alignment or the reply layout, which is where telemetry has gone wrong before.
 - **D5. Who owns the program run-state poll** (escalated from step-5 review round 3). (a) keep "follow a started program with nobody listening" and rework its failure accounting; (b) poll only while someone listens, and let the telemetry loop carry it as a row (U9). *Recommendation:* (b) — nothing reads a poll without a listener; rounds 2 and 3 both found majors in keeping it alive.
 
+- **D6. A sensor mode is a parameter of the subscription** (owner, 11.11.2026, during U5): row ids stay `ports.sensor.1.value`; a claim may carry `modes: { '1': 2 }`. One row is one value of a port, so ids do not multiply per mode.
+- **D7. The first claim holds a port's mode; a conflicting claim is refused** with the typed error `mode_conflict`, naming the holder (owner, 11.11.2026). Nobody's mode changes under them. The cockpit's own foreground claim holds no mode: it reads whatever mode is held, the device's default when none is — otherwise no consumer could ever ask for another mode of an active brick.
+
 ## Key Technical Decisions
 
 - KTD1. **One loop per signed-in brick, not only the active one.** Foreground preset for the active brick, subscribed preset for a brick some consumer subscribed to, minimal otherwise (DESIGN §4.4). A brick that is not signed in or has no route runs nothing (2.8.10a).
@@ -130,7 +133,7 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 
 ## Open, decided later
 
-- **Two consumers want two modes of one sensor** (from U4): the scheduler takes one mode per port; who wins is U5's arbitration, and may be the owner's decision.
+- ~~Two consumers want two modes of one sensor~~ — decided as D6/D7.
 
 - 3.1.2 filesystem state as a row: `storage()` answers it today; a row when a consumer needs to follow it.
 
