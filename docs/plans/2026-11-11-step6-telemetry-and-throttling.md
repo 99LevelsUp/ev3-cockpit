@@ -77,7 +77,7 @@ The table above; close 3.1.9, 3.1.4e, 3.1.4h, 3.4.2; un-gate 3.4; owner decision
 ### U4. A schedule that changes while running; mode ownership; port state — done 11.11.2026; review three rounds, converged (see Review)
 KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle — 3.1.4b), 3.1.11 (KTD7). **As built (parts 1–3, 11.11.2026):** the scheduler refuses a row set with two modes of one port, when built and on `setRows`, so a frame never meets a conflict; a carried-over row in an old mode is dropped with its set. A mode switch withholds the port's readings until one comes back as a number, at most `SETTLE_LIMIT_MS` (1200 ms, `MAX_DEVICE_BUSY_TIME`, `lms2012.h` 313; U10 tunes it).
 
-### U5. Subscriptions and the effective interval — code done 11.11.2026; codex review pending
+### U5. Subscriptions and the effective interval — done 11.11.2026; review three rounds, converged (see Review)
 Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floor, fixed when the claim is made (f85a939, D2); part 2 one loop per brick in `TelemetryService`, `modeOf` reports subscribed, claims wait out a lost link and end with the session via `onClaimsEnded` (adc826c, mutations 15/15); the session's own `activeMode` and categories removed (31b83eb, drift 3 closed). A static row claimed after it was read is not read again: its value comes from the read model (U6). Planned:
 3.3.5, 3.1.10, 3.3.2, 3.8 (subscribed interval), KTD4; one source for `ActivityMode` (drift 3); 3.7.3, 3.7.6. The category subscriptions in `sessionEntry` are removed.
 
@@ -155,6 +155,15 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 |---|---|---|---|---|
 | 1 | major | disposing the brick layer left a connected brick's claims and loop alive: the sign-in ended, but the host reported the brick Connected from its route, which is removed only after | CONFIRMED | the host's `getSession` reports no session for a brick that is not signed in, whatever its routes; test disposes `BrickManager` with a claimed brick |
 | 2 | major | the retired loop's frame, still outstanding after a transport change, can command a sensor mode after the new loop set another, switching the device behind its back (NaN readings not withheld) | CONFIRMED (`opINPUT_READSI` with a mode sets the mode) | round 1's row 3 came back in the same area, so the approach changed instead of the verdict being argued: all loops of a brick send through one chain in the service, and a new loop's first frame waits for the retired one's to settle |
+
+### U5, round 3 — confirmation of round 2 (codex, `.review-out/step6-u5-r3-packet.md`, 11.11.2026) — fixed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a retired frame that never settles blocks the chain, and so the new loop, for good | REJECTED with evidence: the packet lacked the adapters; every one times a send out (`SEND_TIMEOUT_MS`, 1–2 s: `usbLibusbAdapter.ts`, `usbHidAdapter.ts`, `btWinsockAdapter.ts`, `btSppAdapter.ts`, `tcpSocketAdapter.ts`) and rejects a pending reply when its link closes | the worst case is a pause of about 2 s; the service's doc states the bound and where it comes from |
+| 2 | minor | a frame waiting in the chain still went out after its loop was retired by a further route change, or the service disposed | CONFIRMED | each loop has an identity; a waiting frame is refused unless its loop is still the brick's; a retired loop's values and errors are not reported; a frame with nothing ahead goes out at once. Mutations 4/5 killed; the fifth showed the `disposed` check dead (dispose stops every loop) and it was removed |
+
+Convergence gate: no blocker or major survives verification. U5 is closed in code; U8 builds the API on `claim`/`release`/`grantOf`/`onClaimsEnded`.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
