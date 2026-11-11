@@ -690,8 +690,8 @@ export class BrickManager implements vscode.Disposable {
 	 * This layer as a telemetry host: the active brick's loop runs over whichever channel
 	 * carries its traffic, at that channel's cadence, and restarts when the route moves.
 	 *
-	 * A brick counts as connected while it has a route and as reconnecting while it is
-	 * signed in without one, which is what the loop needs to know to run or wait.
+	 * A signed-in brick counts as connected while it has a route and as reconnecting without one,
+	 * which is what the loop needs to know to run or wait; a brick not signed in has no session.
 	 */
 	telemetryHost(): TelemetryHost {
 		const asBrick = (key: string): BrickId => key as BrickId;
@@ -701,10 +701,10 @@ export class BrickManager implements vscode.Disposable {
 			transportOf: (key) => this.transportOfBrick(asBrick(key)),
 			getActiveBrickKey: () => this.activeBrickId,
 			getSession: (key) => {
-				if (this.routes.has(asBrick(key))) { return { connectionState: ConnectionState.Connected }; }
-				return this.signedIn.has(asBrick(key))
-					? { connectionState: ConnectionState.Reconnecting }
-					: undefined;
+				// A brick no longer signed in has no session, even while its channels are still closing:
+				// sign-out and dispose end the sign-in first and the routes after (step-6 U5, review round 2).
+				if (!this.signedIn.has(asBrick(key))) { return undefined; }
+				return { connectionState: this.routes.has(asBrick(key)) ? ConnectionState.Connected : ConnectionState.Reconnecting };
 			},
 			onSessionStateChange: (listener, thisArgs, disposables) => {
 				const tell = (brickKey: BrickId, newState: ConnectionState): void => {
@@ -713,7 +713,6 @@ export class BrickManager implements vscode.Disposable {
 				const routes = this.onRouteChange((e) => {
 					tell(e.brickId, e.current ? ConnectionState.Connected : ConnectionState.Reconnecting);
 				});
-				// Its channels may still be closing: the state the host reports settles with the route event.
 				const signIns = this._onSignInEnded.event((brickId) => tell(brickId, ConnectionState.Disconnected));
 				const both = { dispose: () => { routes.dispose(); signIns.dispose(); } };
 				disposables?.push(both);

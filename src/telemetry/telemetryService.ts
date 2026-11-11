@@ -22,6 +22,12 @@
  * stops and its claims wait; when the brick is disconnected or signed out they end, and
  * {@link TelemetryService.onClaimsEnded} names them so the API can tell its consumers (4.5.4).
  *
+ * **One telemetry frame per brick at a time, across loops.** A loop holds one frame in flight, but
+ * a restarted loop is a new loop: the retired one's frame may still be on its way over the old
+ * link, and if it commands a sensor mode it would switch the device behind the new loop's back.
+ * Every loop of a brick sends through one chain, so a new loop's first frame waits until the
+ * retired one's has settled (review of U5, round 2).
+ *
  * **A grant is fixed when the claim is made** (D2): the request clamped to the floor. What a row
  * really runs at — slower after a route change or under throttling — travels in the data.
  */
@@ -32,7 +38,7 @@ import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } 
 import { ActivityMode, ConnectionState } from '../contracts/enums';
 import { NotConnectedError, SubscriptionError } from '../errors/CockpitError';
 import { ProviderRegistry } from '../transports/providerRegistry';
-import { BrickTelemetry, createBrickTelemetry, transportFor } from './brickTelemetry';
+import { BrickTelemetry, TelemetrySender, createBrickTelemetry, transportFor } from './brickTelemetry';
 import { RowRegistry, createEv3RowRegistry } from './rowRegistry';
 import { ClaimCadence, ClaimHandle, ClaimRequest, Grant, TelemetryClaims } from './telemetryClaims';
 import { cadenceFor } from './telemetryConstants';
@@ -123,6 +129,10 @@ export class TelemetryService implements vscode.Disposable {
 	/** The service's handles, unique across bricks: each brick's registry counts its own. */
 	private readonly handles = new Map<string, { readonly brickKey: BrickRef; readonly inner: ClaimHandle }>();
 	private readonly registry: RowRegistry;
+	/** Each brick's last telemetry frame, settled or not: the next one, from any loop, goes after it. */
+	private readonly lastFrame = new Map<BrickRef, Promise<unknown>>();
+	/** The host as the loops see it: sends chained per brick. */
+	private readonly sender: TelemetrySender;
 	private readonly subscriptions: vscode.Disposable[] = [];
 	private nextHandle = 1;
 	private disposed = false;
@@ -140,6 +150,16 @@ export class TelemetryService implements vscode.Disposable {
 	constructor(private readonly options: TelemetryServiceOptions) {
 		const { host } = options;
 		this.registry = options.registry ?? createEv3RowRegistry();
+		this.sender = {
+			send: (brickKey, command, sendOptions) => {
+				const before = this.lastFrame.get(brickKey) ?? Promise.resolve();
+				const frame = before.then(() => host.send(brickKey, command, sendOptions));
+				this.lastFrame.set(brickKey, frame.catch(() => undefined));
+				return frame;
+			},
+			...(host.maxPacketBytes ? { maxPacketBytes: (brickKey: BrickRef) => host.maxPacketBytes?.(brickKey) } : {}),
+			...(host.transportOf ? { transportOf: (brickKey: BrickRef) => host.transportOf?.(brickKey) } : {}),
+		};
 
 		this.subscriptions.push(
 			host.onActiveBrickChange((event) => {
@@ -216,6 +236,7 @@ export class TelemetryService implements vscode.Disposable {
 		for (const brickKey of [...this.loops.keys()]) { this.stopFor(brickKey); }
 		this.claims.clear();
 		this.handles.clear();
+		this.lastFrame.clear();
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.subscriptions.length = 0;
 		this._onValues.dispose();
@@ -255,7 +276,7 @@ export class TelemetryService implements vscode.Disposable {
 		}
 		this.stopFor(brickKey);
 		const loop = createBrickTelemetry({
-			sender: host,
+			sender: this.sender,
 			brickKey,
 			rows: plan.rows,
 			tickPeriodMs: plan.periodMs,

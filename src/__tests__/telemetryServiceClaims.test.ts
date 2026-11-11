@@ -43,6 +43,10 @@ function fakeBricks() {
 	const states = new Map<BrickId, ConnectionState>();
 	const routes = new Map<BrickId, Transport>();
 	let active: BrickId | undefined;
+	/** The transport each frame went out on, in order; held sends wait for `releaseSends`. */
+	const sent: (Transport | undefined)[] = [];
+	const held: (() => void)[] = [];
+	let holding = false;
 	const onState: Listener<{ brickKey: BrickId; newState: ConnectionState }>[] = [];
 	const onActive: Listener<{ previousBrickKey: BrickId | undefined; newBrickKey: BrickId | undefined }>[] = [];
 	const onRoute: Listener<{ brickKey: BrickId }>[] = [];
@@ -51,8 +55,12 @@ function fakeBricks() {
 
 	return {
 		host: {
-			send: (): Promise<BrickResponse> =>
-				Promise.resolve({ kind: 'telemetry:frame', payload: new Uint8Array(1024) }),
+			send: (key: string): Promise<BrickResponse> => {
+				sent.push(routes.get(key as BrickId));
+				const reply: BrickResponse = { kind: 'telemetry:frame', payload: new Uint8Array(1024) };
+				if (!holding) { return Promise.resolve(reply); }
+				return new Promise((resolve) => { held.push(() => resolve(reply)); });
+			},
 			maxPacketBytes: () => 1024,
 			transportOf: (key: string) => routes.get(key as BrickId),
 			getActiveBrickKey: () => active,
@@ -64,6 +72,9 @@ function fakeBricks() {
 			onActiveBrickChange: listen(onActive),
 			onRouteChange: listen(onRoute),
 		},
+		sent,
+		holdSends() { holding = true; },
+		releaseSends() { holding = false; for (const release of held.splice(0)) { release(); } },
 		connect(brick: BrickId, transport = Transport.USB) {
 			routes.set(brick, transport);
 			states.set(brick, ConnectionState.Connected);
@@ -314,6 +325,33 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 
 			assert.deepEqual(ticket.grant, { 'ports.motor.A.tacho': 250 }, 'Bluetooth\'s floor, not USB\'s 50 ms');
 		} finally {
+			service.dispose();
+		}
+	});
+
+	it('sends a restarted loop\'s first frame only after the retired loop\'s frame has settled', async () => {
+		// The retired frame may command a sensor mode; arriving after the new loop's, it would switch the
+		// device behind the new loop's back (review of U5, round 2).
+		const { bricks, service } = world();
+		try {
+			bricks.connect(B);
+			service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			bricks.holdSends();
+			const retired = service.loopFor(B)?.runTick();
+			bricks.moveRoute(B, Transport.BT);
+			const fresh = service.loopFor(B)?.runTick();
+			await new Promise((resolve) => setImmediate(resolve));
+
+			assert.equal(bricks.sent.length, 1, 'one frame outstanding for the brick, not two');
+
+			bricks.releaseSends();
+			await retired;
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.equal(bricks.sent.length, 2, 'the new loop\'s frame goes once the retired one settled');
+			bricks.releaseSends();
+			await fresh;
+		} finally {
+			bricks.releaseSends();
 			service.dispose();
 		}
 	});
