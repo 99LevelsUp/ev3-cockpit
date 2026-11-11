@@ -155,6 +155,8 @@ function world(options: WorldOptions = {}) {
 		scanFails: 0,
 		/** How many reads of the brick's list over USB had begun when each Bluetooth connect started. */
 		usbListReadsAtConnect: [] as number[],
+		/** Holds the next connect until it opens. */
+		connectGate: undefined as Promise<void> | undefined,
 	};
 
 	const answer = async (over: Transport, command: BrickCommand): Promise<BrickResponse> => {
@@ -259,6 +261,9 @@ function world(options: WorldOptions = {}) {
 			bt.connects += 1;
 			bt.usbListReadsAtConnect.push(brick.received
 				.filter((r) => r.over === Transport.USB && r.kind === 'brick:bluetoothPeerCount').length);
+			const held = bt.connectGate;
+			bt.connectGate = undefined;
+			if (held) { await held; }
 			if (bt.off) { throw new TransportError('BT connect failed: no answer'); }
 			if (bt.needsEntry && !brick.peers().includes(radio ?? THIS_PC)) {
 				throw new TransportError('BT connect failed: the brick does not know this computer');
@@ -1913,6 +1918,26 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		await w.scheduler.scanOnce();   // answers, and lists nothing new
 
 		await waitFor(() => w.removals().length === 1, 2000);
+		w.done();
+	});
+
+	it('ends a sign-in signed in when its Bluetooth join fails after USB, found meanwhile, joined (U14)', async () => {
+		const w = world({ checkOneSided: true, cabled: false });
+		await w.scheduler.scanOnce();   // only Bluetooth is there when the sign-in starts
+		const btAnswers = gate();
+		w.bt.connectGate = btAnswers.promise;
+		w.bt.off = true;   // ... and its connect will fail
+		const signing = w.bricks.signIn(CCC);
+		await settle();
+
+		w.usb.cabled = true;
+		await w.scheduler.scanOnce();   // the cable goes in while Bluetooth tries
+		await waitFor(() => w.sessionManager.getSession(usbKey)?.connectionState === ConnectionState.Connected, 2000);
+		btAnswers.open();
+
+		await signing;   // rejects: "did not answer", with USB connected
+		assert.equal(w.bricks.isSignedIn(CCC), true);
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
 		w.done();
 	});
 
