@@ -56,6 +56,8 @@ export interface BrickTelemetryOptions {
 	readonly rows?: readonly TelemetryRow[];
 	/** Tick period in ms. Defaults to the transport's foreground cadence (DESIGN §9.2). */
 	readonly tickPeriodMs?: number;
+	/** The fastest period `setPeriod` grants. Defaults to the transport's floor; probes go below it. */
+	readonly floorMs?: number;
 	readonly onValues?: (values: readonly RowValue[]) => void;
 	readonly onError?: (error: unknown) => void;
 	readonly now?: () => number;
@@ -112,6 +114,7 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 	// Fixed for the loop's life: a route change restarts the loop rather than retiming it.
 	const transport = transportFor(sender, brickKey);
 	const tickPeriodMs = options.tickPeriodMs ?? cadenceFor(transport).foregroundMs;
+	const floorMs = options.floorMs ?? cadenceFor(transport).floorMs;
 
 	const scheduler = new TelemetryScheduler({
 		// Through the registry, so every row was validated against the tightest link (3.1.6).
@@ -145,7 +148,7 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 		get tickPeriodMs() { return scheduler.tickPeriodMs; },
 		get rows() { return scheduler.currentRows; },
 		setPeriod: (ms: number) => {
-			const granted = Math.max(ms, cadenceFor(transport).floorMs);
+			const granted = Math.max(ms, floorMs);
 			scheduler.setPeriod(granted);
 			return granted;
 		},

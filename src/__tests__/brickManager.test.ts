@@ -15,7 +15,7 @@ import {
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
 import { ChannelChangedError, ConnectionAbandonedError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
-import { TelemetryService } from '../telemetry/telemetryService';
+import { ClaimsEndedEvent, TelemetryService } from '../telemetry/telemetryService';
 import { cadenceFor } from '../telemetry/telemetryConstants';
 import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../protocol/ev3Packet';
 import { ProviderRegistry } from '../transports/providerRegistry';
@@ -465,6 +465,36 @@ describe('BrickManager — telemetry follows the route', () => {
 			assert.equal(telemetry.loopFor(CCC)?.tickPeriodMs, cadenceFor(Transport.BT).foregroundMs);
 		} finally {
 			// A running loop holds a timer; left behind, it keeps the test process alive.
+			telemetry.dispose();
+			w.done();
+		}
+	});
+});
+
+describe('BrickManager — telemetry claims end with the sign-in (step-6 U5, review)', () => {
+	it('ends the claims of a background brick signed out after its link was already lost', async () => {
+		const w = world(true);
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		w.bricks.clearActiveBrick();
+		const telemetry = new TelemetryService({ host: w.bricks.telemetryHost(), providerRegistry: w.registry });
+		const ended: ClaimsEndedEvent[] = [];
+		telemetry.onClaimsEnded((event) => ended.push(event));
+		try {
+			const ticket = telemetry.claim(CCC, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			w.usb.failing = true;   // cable out, and it stays out
+			w.usb.connectFailures = 1000;
+			await assert.rejects(w.bricks.send(CCC, battery));
+			await waitFor(() => w.bricks.routeOf(CCC) === undefined, 1000);
+			assert.ok(telemetry.grantOf(ticket.handle), 'a lost link keeps the claim');
+
+			// No route to lose any more: the route event that sign-out used to rely on never comes.
+			await w.bricks.signOut(CCC);
+
+			assert.deepEqual(ended, [{ brickKey: CCC, handles: [ticket.handle] }]);
+			assert.equal(telemetry.grantOf(ticket.handle), undefined);
+		} finally {
 			telemetry.dispose();
 			w.done();
 		}
