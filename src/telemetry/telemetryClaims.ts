@@ -5,8 +5,12 @@
  * A claim names rows and the interval it wants them at. Each row is read as fast as its fastest
  * claim asks, clamped to the transport's floor, so one consumer asking 10 Hz over Bluetooth
  * cannot take the link from everyone else. The tick runs at the fastest interval any claim got;
- * a row's divider is the whole number of ticks that is not slower than its claim asked. The
- * claim is told what each row was granted: a request is not a guarantee.
+ * a row's divider is the whole number of ticks that is not slower than its claim asked.
+ *
+ * The claim is told what each row was granted: its request clamped to the floor, a promise of at
+ * least that often. The grant is fixed when the claim is made and stays as negotiated (D2): when
+ * the foreground leaves, throttling moves the tick or the route changes the floor, what a row
+ * really runs at travels in the data as `effectiveIntervalMs`, and nothing is re-negotiated.
  *
  * The cockpit's own foreground — the active brick's panel — is a claim on every row: sampled
  * rows at the transport's foreground cadence, event rows every fifth of those, static rows once.
@@ -33,7 +37,10 @@ export interface ClaimRequest {
 	readonly modes?: Readonly<Record<string, number>>;
 }
 
-/** What each row of a claim was granted: an interval in milliseconds, or `'once'` for a static row. */
+/**
+ * What each row of a claim was granted: an interval in milliseconds the row is read at least as
+ * often as, or `'once'` for a static row.
+ */
 export type Grant = Readonly<Record<string, number | 'once'>>;
 
 /** The rows to read and the tick to read them on. */
@@ -54,6 +61,7 @@ interface Claim {
 	readonly rowIds: readonly string[];
 	readonly intervalMs: number;
 	readonly modes: ReadonlyMap<string, number>;
+	readonly grant: Grant;
 }
 
 /** Event rows go every fifth foreground tick, as LEGO's Device Manager divides its slow tier. */
@@ -73,7 +81,7 @@ export class TelemetryClaims {
 		this.foreground = active;
 	}
 
-	/** The transport changed: the floor and the foreground's cadence with it. Grants are recomputed (D2). */
+	/** The transport changed: the floor and the foreground's cadence with it. Grants stay as negotiated (D2). */
 	setCadence(cadence: ClaimCadence): void {
 		this.cadence = cadence;
 	}
@@ -103,8 +111,14 @@ export class TelemetryClaims {
 				throw new ModeConflictError(`Port ${port} is read in mode ${holder.mode} for ${holder.owner}; release that claim first.`);
 			}
 		}
+		const grant: Record<string, number | 'once'> = {};
+		for (const id of request.rowIds) {
+			grant[id] = this.registry.get(id)?.tier === 'static'
+				? 'once'
+				: Math.max(request.intervalMs, this.cadence.floorMs);
+		}
 		const handle = `claim-${this.next++}`;
-		this.claims.set(handle, { owner, rowIds: [...request.rowIds], intervalMs: request.intervalMs, modes });
+		this.claims.set(handle, { owner, rowIds: [...request.rowIds], intervalMs: request.intervalMs, modes, grant });
 		return { handle };
 	}
 
@@ -120,17 +134,9 @@ export class TelemetryClaims {
 		return ended;
 	}
 
-	/** What each row of a claim gets now; undefined for a released claim. */
+	/** What each row of a claim was granted when it was made; undefined for a released claim. */
 	grantOf(handle: ClaimHandle): Grant | undefined {
-		const claim = this.claims.get(handle);
-		if (!claim) { return undefined; }
-		const plan = this.plan();
-		const grant: Record<string, number | 'once'> = {};
-		for (const id of claim.rowIds) {
-			const lifetime = plan.rows.find((row) => row.id === id)?.lifetime;
-			grant[id] = lifetime?.kind === 'repeating' ? lifetime.divider * plan.periodMs : 'once';
-		}
-		return grant;
+		return this.claims.get(handle)?.grant;
 	}
 
 	/** The rows to read, with their dividers and modes, and the tick to read them on. */

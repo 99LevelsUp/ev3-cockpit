@@ -1349,7 +1349,10 @@ Rules:
   a per-category property, and an earlier version of this section contradicted it,
 - a snapshot is always delivered before events,
 - after a subscription ends, the runtime may hold the last snapshot briefly as `stale`,
-- subscribed telemetry is slower than foreground.
+- a claim is clamped to the transport's floor like any other (3.1.10), so a subscribed brick
+  can run faster than the foreground cadence; every telemetry command costs a running program
+  about 2 ms of the VM (step-6 plan, measurement), which is what the floor and the program-running
+  preset are for.
 
 **What a row must carry to be a contract.** Rows are the surface third parties build on, so
 each needs more than a value:
@@ -1364,8 +1367,9 @@ each needs more than a value:
 
 **Subscribing is a negotiation, not an assignment.** "Fastest subscriber wins" is the
 reconciliation rule, but not without limits: a request faster than the transport's floor
-(§9.2) is **clamped**, not honoured, and the subscribe call returns the interval the row
-actually got. Without that, one extension asking for 10 Hz on Bluetooth would consume the
+(§9.2) is **clamped**, not honoured, and the subscribe call returns the interval each row was
+granted: the request clamped to the floor, a promise of at least that often, fixed when the
+claim is made. Without that, one extension asking for 10 Hz on Bluetooth would consume the
 brick's entire measured capacity of 10.7 commands/second and every other consumer — and the
 heartbeat — would pay for it silently.
 
