@@ -631,3 +631,18 @@ describe('UsbLibusbAdapter — a close while the open is still clearing (review 
 		await adapter.close();
 	});
 });
+
+describe('UsbLibusbAdapter — a close while the open is still finding the brick (review of 98bd795)', () => {
+	it('opens and claims nothing once closed during the serial lookup', async () => {
+		const { adapter, log } = adapterFor([{ serial: 'aaa' }], 'aaa', 0, 'linux');
+		const opening = adapter.open().then(() => 'opened', (e: unknown) => e);
+		// The lookup has opened the candidate and waits on its string descriptor.
+		await adapter.close();
+		const outcome = await opening;
+		assert.ok(outcome instanceof Error, 'an open overtaken by a close must fail');
+		assert.match((outcome as Error).message, /closed while it was opening/);
+		assert.equal(log.claimed, 0, 'no interface was claimed after the close');
+		assert.equal(log.openedDevices.length, log.closedDevices.length, 'every device opened was closed again');
+		assert.equal(adapter.isOpen, false);
+	});
+});

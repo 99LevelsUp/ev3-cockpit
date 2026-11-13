@@ -458,3 +458,42 @@ describe('USB provider — disposeAsync waits until every device is given back',
 		assert.deepEqual(closedAt.sort(), ['libusb1', 'libusb2']);
 	});
 });
+
+describe('USB provider — disposeAsync waits for links still opening (review of 98bd795)', () => {
+	it('closes a libusb link in the middle of its open, and resolves only once it has', async () => {
+		const events: string[] = [];
+		let land!: () => void;
+		const gate = new Promise<void>((resolve) => { land = resolve; });
+		const provider = new UsbTransportProvider({
+			createLibusbAdapter: () => {
+				let closed = false;
+				return {
+					async open(): Promise<void> {
+						events.push('open-start');
+						await gate;
+						if (closed) { events.push('open-overtaken'); throw new Error('closed while it was opening'); }
+						events.push('open-landed');
+					},
+					close: () => new Promise<void>((resolve) => setTimeout(() => {
+						closed = true; events.push('closed'); resolve();
+					}, 20)),
+					send: () => Promise.resolve(new Uint8Array()),
+					isOpen: false,
+					maxPacketBytes: 1024,
+					deviceLocation: { busNumber: 2, deviceAddress: 10 },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any;
+			},
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: 'no HID here' }) as any,
+		});
+		const connecting = provider.connect(KEY).catch(() => undefined);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(events, ['open-start']);
+		await provider.disposeAsync();
+		assert.ok(events.includes('closed'), 'the link still opening was closed before disposeAsync resolved');
+		land();
+		await connecting;
+		assert.ok(!events.includes('open-landed'), 'and its open did not land afterwards');
+	});
+});

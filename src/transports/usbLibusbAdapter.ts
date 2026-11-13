@@ -394,7 +394,12 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 	private async openInternal(): Promise<void> {
 		const usb = this.moduleLoader();
+		const generation = this.generation;
 		const device = await this.findDevice(usb);
+		if (generation !== this.generation) {
+			// Closed while the lookup ran; the lookup has closed every device it opened.
+			throw new TransportError('USB link closed while it was opening.');
+		}
 
 		try {
 			device.open();
@@ -424,7 +429,6 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.device = device;
 		this.claimed = claimed;
 		this.detachedKernelDriver = detached;
-		const generation = this.generation;
 
 		const inEndpoint = claimed.endpoints.find(
 			(ep) => ep.direction === 'in' && (ep.descriptor.bmAttributes & 0x03) === TRANSFER_TYPE_INTERRUPT
