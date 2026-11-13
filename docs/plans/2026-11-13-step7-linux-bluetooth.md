@@ -104,6 +104,22 @@ KTD5. Tests: PIN answered, confirmation accepted only for the brick being paired
 
 KTD9, D2. Tests: a brick heard / not heard, misses counted by the existing monitor, inquiry filtered to bricks and to unpaired ones, discovery stopped even when it fails. Hardware: switch a brick off and on, watch "heard again" / "not heard".
 
+**U6 results (HOSTC, 13.11.2026, BlueZ 5.82-1.1+rpt2).**
+
+1. *The presence check on the bricks:* AAA, BBB and CCC on, visibility off on AAA and BBB: answered in 4.40, 3.01 and 3.52 s.
+2. *When BlueZ reports an RSSI (source, BlueZ 5.82):* `adapter.c` 7375-7378 sets a found device's RSSI with delta 0 under a filtered discovery and with `RSSI_THRESHOLD` (8 dBm, `device.c` 78) otherwise; with delta 0 a same value is still emitted (`device.c` 6538). A client's filter counts as filtered unless it is empty and its transport equals the adapter's scan type (`adapter.c` 2209-2219); ours, `Transport=bredr` on a dual-mode adapter, is filtered. Every RSSI is cleared when the last discovery stops (`adapter.c` 1692-1696).
+3. *RSSI reports counted per window (CCC visible; AAA and BBB not):*
+
+| Other client | Window | Reports for CCC |
+|---|---|---|
+| none | 10 s | 1 (-52) |
+| `bluetoothctl scan bredr` (filtered) | 10 s | 1 (-52; the same value as the last one) |
+| none | 30 s | 3 (-60, -52, -52) |
+| `bluetoothctl scan bredr` (filtered) | 30 s | 3 (-51, -51, -51) |
+| `bluetoothctl scan on` (unfiltered), 3 runs | 30 s | 0; 3 (-51, -51, -57); 3 (-52, -51, -51) |
+
+Same values are reported beside a filtered or an unfiltered client: the delta stays 0. One run in three beside an unfiltered client had no report at all for 30 s, changed values included, so not the threshold; the inquiry then answers "not heard", and the monitor drops an unpaired sighting only after two windows without it. So the inquiry hears a brick on evidence, a report during its window (`BluezObjectCache.rssiReports`), not on a cached RSSI, which outlives a brick switched off under another client's discovery.
+
 ### U7. Forget and residue
 
 KTD6, KTD7. `RemoveDevice` through the cache; the provider seam with Windows' default; residue as measured in U0. Tests: Windows default unchanged (the existing forget tests stay green untouched), Linux residue listed, a refusal reported. Hardware: forget a brick from the cockpit, then pair it again.
