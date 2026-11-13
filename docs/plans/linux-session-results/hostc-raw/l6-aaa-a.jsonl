@@ -1,0 +1,2 @@
+{"round": 1, "connect_ms": 610, "reply_ms": 71, "reply_hex": "4b00010002414141000000803f08000000c7ffffff4c696e757820322e362e33332d72630056302e3630007e0056312e3130450000313830333035313133320000313830333035313235380000", "close_ms": 0}
+{"round": 2, "error": "OSError: errno=16 Device or resource busy", "after_ms": 0, "close_ms": 0}
