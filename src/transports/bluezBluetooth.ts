@@ -135,6 +135,11 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 	let busRemovers: (() => void)[] = [];
 	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	let reconnectTries = 0;
+	/**
+	 * The open in flight while no bus is held yet, which a start or a retry joins rather than
+	 * opening a second bus. Cleared once the open settles: a bus lost after that is reopened.
+	 */
+	let opening: Promise<void> | undefined;
 	const reconnectFirstMs = options.reconnectMs ?? RECONNECT_FIRST_MS;
 
 	const notConnected = (): Error => new Error('Not connected to the system bus.');
@@ -227,7 +232,7 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		reconnectTries += 1;
 		reconnectTimer = setTimeout(() => {
 			reconnectTimer = undefined;
-			void connect(true);
+			void connect();
 		}, delay);
 	}
 
@@ -250,21 +255,36 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		};
 	}
 
-	async function connect(reconnecting: boolean): Promise<void> {
-		// One bus at a time: a second start while one is held opens nothing (U8 review #1).
-		if (disposed || bus) { return; }
+	/**
+	 * One bus at a time: nothing while one is held, and the open in flight when there is one
+	 * (U8 review #1, confirmation #1).
+	 */
+	function connect(): Promise<void> {
+		if (disposed || bus) { return Promise.resolve(); }
+		if (!opening) {
+			const attempt: Promise<void> = open(() => { if (opening === attempt) { opening = undefined; } });
+			opening = attempt;
+		}
+		return opening;
+	}
+
+	async function open(opened: () => void): Promise<void> {
 		generation += 1;
 		const mine = generation;
 		let connection: BluezBus;
 		try {
-			connection = await openBus();
+			// Never synchronously: `opened` refers to the attempt this call is about to return.
+			connection = await Promise.resolve().then(openBus);
 		} catch (error) {
-			if (disposed || mine !== generation) { return; }
-			log.warn(`Bluetooth unavailable: cannot reach the system bus (${describe(error)}).`);
-			if (reconnecting) { scheduleReconnect(); }
+			opened();
+			if (disposed) { return; }
+			// Whoever asked for the open, a failed one is tried again (confirmation #1).
+			log.warn(`Bluetooth unavailable: cannot reach the system bus (${describe(error)}); trying again.`);
+			scheduleReconnect();
 			return;
 		}
-		if (disposed || mine !== generation || bus) { connection.close(); return; }
+		opened();
+		if (disposed || bus) { connection.close(); return; }
 		reconnectTries = 0;
 		bus = connection;
 		cacheBus = onceEach(connection);
@@ -320,13 +340,13 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		presenceCheck: createBluezPresenceCheck(),
 		inquire: createBluezInquiry({ bus: liveBus, cache: live, windowMs: options.inquiryWindowMs, log: (message) => log.warn(message), discoveryGate: gate }),
 		onChange: (handler) => live.onChange(handler),
-		start: () => connect(false),
+		start: () => connect(),
 		async retry(): Promise<void> {
 			if (disposed) { return; }
 			cancelReconnect();
 			live.replace(undefined);
 			closeBus();
-			await connect(false);
+			await connect();
 		},
 		dispose(): void {
 			if (disposed) { return; }

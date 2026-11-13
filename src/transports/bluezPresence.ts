@@ -168,10 +168,11 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 	const { cache } = options;
 	const windowMs = options.windowMs ?? DEFAULT_INQUIRY_WINDOW_MS;
 	return async () => {
+		// A pairing search's late StopDiscovery would end this window: let it go out first. The
+		// adapter and the connection are read after the wait, together (U8 confirmation #2).
+		await options.discoveryGate?.idle();
 		const adapter = cache.adapter();
 		if (!adapter) { throw new Error('This computer has no Bluetooth adapter BlueZ knows.'); }
-		// A pairing search's late StopDiscovery would end this window: let it go out first.
-		await options.discoveryGate?.idle();
 		const bus = options.bus.pin?.() ?? options.bus;
 		const startedAt = Date.now();
 		const before = new Map(cache.devices().map((d) => [d.path, cache.rssiReports(d.path)]));
