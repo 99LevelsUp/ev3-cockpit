@@ -358,45 +358,58 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
 				}
 				const rows = new Set(request.rows);
-				let live = true;
-				let ready = false;
-				const deliver = (update: TelemetryUpdate): void => {
-					if (!live) { return; }
+				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
+				const emit = (update: TelemetryUpdate): void => {
 					try {
 						listener(update);
 					} catch (error) {
 						deps.log?.warn(`Telemetry listener of ${name} threw: ${error instanceof Error ? error.message : String(error)}`);
 					}
 				};
-				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
+				// The snapshot is the state at the claim; what changes after it is queued until the
+				// snapshot has gone out, then told in order, so nothing in between is lost (D10, review 1).
+				const boundary = snapshot();
+				let state: 'pending' | 'live' | 'done' = 'pending';
+				let claimEnded = false;
+				const queue: TelemetryUpdate[] = [];
+				const record: Subscription = { dispose: () => { finish(!claimEnded); } };
+				/** Ends the subscription before anyone hears of it, so a listener reacting to it cannot release twice. */
+				const finish = (release: boolean): void => {
+					if (state === 'done') { return; }
+					state = 'done';
+					changes.dispose();
+					ended.dispose();
+					subscriptions.delete(record);
+					if (release) { telemetry.release(claim.handle); }
+				};
+				const tell = (update: TelemetryUpdate): void => {
+					if (state === 'pending') { queue.push(update); return; }
+					if (state !== 'live') { return; }
+					if (update.kind === 'ended') { finish(false); }
+					emit(update);
+				};
 				const changes = telemetry.onChange((change) => {
-					// Before the snapshot went out, a change is already in it.
-					if (!ready || change.brickKey !== brickId) { return; }
+					// After `ended` the subscription is done, and a change is dropped in `tell`.
+					if (change.brickKey !== brickId) { return; }
 					const values = change.rows.filter((row) => rows.has(row.rowId)).map(toTelemetryValue);
 					const removed = change.removed.filter((id) => rows.has(id));
-					if (values.length > 0 || removed.length > 0) { deliver({ brickId, kind: 'change', values, removed }); }
+					if (values.length > 0 || removed.length > 0) { tell({ brickId, kind: 'change', values, removed }); }
 				});
 				const ended = telemetry.onClaimsEnded((event) => {
 					if (event.brickKey !== brickId || !event.handles.includes(claim.handle)) { return; }
-					deliver({ brickId, kind: 'ended', values: [], removed: [] });
-					stop(false);
+					// The claim is gone with its brick: releasing it again does nothing, and is not done.
+					claimEnded = true;
+					tell({ brickId, kind: 'ended', values: [], removed: [] });
 				});
-				const stop = (release: boolean): void => {
-					if (!live) { return; }
-					live = false;
-					changes.dispose();
-					ended.dispose();
-					// A claim that ended with its brick is gone already; releasing it again does nothing.
-					if (release) { telemetry.release(claim.handle); }
-				};
-				// The snapshot goes out once this call has returned, before any change (4.5.2).
+				subscriptions.add(record);
+				// The snapshot goes out once this call has returned, before anything else (4.5.2).
 				queueMicrotask(() => {
-					if (!live) { return; }
-					ready = true;
-					deliver({ brickId, kind: 'snapshot', values: snapshot(), removed: [] });
+					if (state !== 'pending') { return; }
+					state = 'live';
+					emit({ brickId, kind: 'snapshot', values: boundary, removed: [] });
+					for (const update of queue.splice(0)) { tell(update); }
 				});
-				const kept = keep({ dispose: () => stop(true) });
-				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => kept.dispose() };
+				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => record.dispose() };
 			},
 
 			dispose: () => {
