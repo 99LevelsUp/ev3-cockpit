@@ -49,8 +49,11 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 		programPreset: readProgramPresetSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 	}));
+	// A changed program status interval: every program followed now is followed again at it (U9 review 1).
+	const programStatusIntervalChanged = services.add(new vscode.EventEmitter<void>());
 	// A changed setting applies at once, no reload.
 	services.add(vscode.workspace.onDidChangeConfiguration((e) => {
+		if (e.affectsConfiguration('ev3-cockpit.programs')) { programStatusIntervalChanged.fire(); }
 		if (!e.affectsConfiguration('ev3-cockpit.telemetry')) { return; }
 		const section = vscode.workspace.getConfiguration('ev3-cockpit');
 		runtime.telemetryView.configure(readTelemetrySettings(section, (m) => logger.warn(m)));
@@ -261,9 +264,10 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 			onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
 			snapshot: (brickId, rowIds) => runtime.telemetryView.snapshot(brickId, rowIds),
 			onChange: (listener) => runtime.telemetryView.onChange(listener),
-			// Read when a follow starts, so a changed setting needs no reload.
+			// Read when a follow starts; a change follows every program again (below), no reload.
 			programStatusIntervalMs: () => readProgramPresetSettings(
 				vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)).programStatusIntervalMs,
+			onProgramStatusIntervalChange: (listener) => programStatusIntervalChanged.event(listener),
 		},
 		connect: async (brickId) => {
 			await connectPickedBrick(brickId, connectUi());

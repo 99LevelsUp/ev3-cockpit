@@ -27,10 +27,13 @@ import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel
 /** Sends one command to this service's brick, through its session. */
 export type ProgramSend = (command: BrickCommand) => Promise<BrickResponse>;
 
-/** Following a brick's program: started for the first listener, ended with the last. */
+/** Following a brick's program: started for the first listener, ended with the last or with the brick. */
 export interface ProgramFollow {
-	/** Starts following; `onState` hears each program state. Throws when the brick cannot be followed. */
-	follow(onState: (running: boolean) => void): { dispose(): void };
+	/**
+	 * Starts following; `onState` hears each program state with the time it was sampled, and
+	 * `onEnded` hears that the brick's session ended the follow. Throws when the brick cannot be followed.
+	 */
+	follow(onState: (running: boolean, at: number) => void, onEnded: () => void): { dispose(): void };
 }
 
 export interface ProgramServiceOptions {
@@ -55,6 +58,8 @@ export class ProgramService {
 	private readonly listeners = new Set<(running: boolean) => void>();
 	/** The last state seen, or undefined before the first answer. */
 	private known: boolean | undefined;
+	/** When the last state taken was observed: an older one is not taken (U9 review, round 1). */
+	private knownAt = Number.NEGATIVE_INFINITY;
 	/** The follow running for the listeners, while there are any. */
 	private following: { dispose(): void } | undefined;
 	private disposed = false;
@@ -148,7 +153,7 @@ export class ProgramService {
 	async isRunning(): Promise<boolean> {
 		const reply = await this.send({ kind: 'program:status' });
 		if (reply.kind !== 'program:status') { throw new ProtocolError(`Expected program:status, got ${reply.kind}.`); }
-		this.note(reply.running);
+		this.note(reply.running, Date.now());
 		return reply.running;
 	}
 
@@ -159,7 +164,7 @@ export class ProgramService {
 	onStateChange(listener: (running: boolean) => void): { dispose(): void } {
 		if (!this.follow) { throw new SubscriptionError('Following a program needs the cockpit\'s telemetry, which is not available.'); }
 		if (this.disposed) { throw new SubscriptionError('This brick\'s program service has been disposed.'); }
-		if (!this.following) { this.following = this.follow.follow((running) => this.note(running)); }
+		if (!this.following) { this.following = this.startFollow(this.follow); }
 		this.listeners.add(listener);
 		let open = true;
 		return {
@@ -173,10 +178,44 @@ export class ProgramService {
 		};
 	}
 
+	/**
+	 * Follows again, as when the user changed how often a program is read: the new follow starts
+	 * before the old one goes, so nothing falls between; the listeners stay. A brick that cannot be
+	 * followed now keeps the old follow.
+	 */
+	followAgain(): void {
+		if (!this.follow || !this.following) { return; }
+		const old = this.following;
+		try {
+			this.following = this.startFollow(this.follow);
+		} catch {
+			return;
+		}
+		old.dispose();
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.listeners.clear();
 		this.stopFollowing();
+	}
+
+	private startFollow(follow: ProgramFollow): { dispose(): void } {
+		const following = follow.follow(
+			(running, at) => { if (this.following === following) { this.note(running, at); } },
+			() => { if (this.following === following) { this.sessionEnded(); } },
+		);
+		return following;
+	}
+
+	/**
+	 * The brick's session ended the follow (U9 review, round 1). Its listeners end with it, as
+	 * telemetry subscriptions do: one that subscribes after a reconnect starts a new follow, and a
+	 * listener of the ended session is not revived by it.
+	 */
+	private sessionEnded(): void {
+		this.following = undefined;
+		this.listeners.clear();
 	}
 
 	private stopFollowing(): void {
@@ -185,7 +224,10 @@ export class ProgramService {
 		following?.dispose();
 	}
 
-	private note(running: boolean): void {
+	/** Takes a state observed `at`, unless a newer one was taken already: a cached reading cannot undo a confirmed start. */
+	private note(running: boolean, at: number): void {
+		if (at < this.knownAt) { return; }
+		this.knownAt = at;
 		const first = this.known === undefined;
 		if (this.known === running) { return; }
 		this.known = running;
@@ -204,6 +246,7 @@ export interface ProgramRowTelemetry {
 	release(handle: string): void;
 	snapshot(brickId: BrickId, rowIds?: readonly string[]): ReadValue[];
 	onChange(listener: (change: ReadModelChange) => void): { dispose(): void };
+	onClaimsEnded(listener: (event: { readonly brickKey: string; readonly handles: readonly string[] }) => void): { dispose(): void };
 }
 
 /**
@@ -215,23 +258,34 @@ export interface ProgramRowTelemetry {
  */
 export function followProgramRow(telemetry: ProgramRowTelemetry, brickId: BrickId, intervalMs: () => number): ProgramFollow {
 	return {
-		follow: (onState) => {
+		follow: (onState, onEnded) => {
 			const { handle } = telemetry.claim(brickId, { rowIds: [PROGRAM_RUNNING_ROW], intervalMs: intervalMs() }, 'cockpit:programs');
 			let open = true;
 			const tell = (value: ReadValue | undefined): void => {
 				if (!value || value.stale || typeof value.value !== 'boolean') { return; }
 				const running = value.value;
-				queueMicrotask(() => { if (open) { onState(running); } });
+				const at = value.sampledAt;
+				queueMicrotask(() => { if (open) { onState(running, at); } });
+			};
+			const close = (): void => {
+				open = false;
+				listening.dispose();
+				ending.dispose();
 			};
 			const listening = telemetry.onChange((change) => {
 				if (change.brickKey === brickId) { tell(change.rows.find((row) => row.rowId === PROGRAM_RUNNING_ROW)); }
+			});
+			// The brick's session ended the claim: the follow ends with it, and says so.
+			const ending = telemetry.onClaimsEnded((event) => {
+				if (!open || event.brickKey !== brickId || !event.handles.includes(handle)) { return; }
+				close();
+				onEnded();
 			});
 			tell(telemetry.snapshot(brickId, [PROGRAM_RUNNING_ROW])[0]);
 			return {
 				dispose: () => {
 					if (!open) { return; }
-					open = false;
-					listening.dispose();
+					close();
 					telemetry.release(handle);
 				},
 			};

@@ -193,6 +193,8 @@ export interface CockpitApiDeps {
 		onChange(listener: (change: ReadModelChange) => void): Subscription;
 		/** How often a followed program's state is read (the user's setting, U9). */
 		programStatusIntervalMs(): number;
+		/** The user changed that setting: every followed program is followed again at it (U9 review 1). */
+		onProgramStatusIntervalChange?(listener: () => void): Subscription;
 	};
 }
 
@@ -232,6 +234,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const delivery = deps.telemetry
 		? new TelemetryDelivery(deps.telemetry, (message) => deps.log?.warn(message))
 		: undefined;
+	// A changed status interval applies to programs already followed, not only the next (U9 review 1).
+	const intervalWatch = deps.telemetry?.onProgramStatusIntervalChange?.(() => {
+		for (const service of programs.values()) { service.followAgain(); }
+	});
 	const telemetryOf = (): { telemetry: NonNullable<CockpitApiDeps['telemetry']>; delivery: TelemetryDelivery } => {
 		if (!deps.telemetry || !delivery) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
 		return { telemetry: deps.telemetry, delivery };
@@ -400,6 +406,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			for (const consumer of [...consumers]) { consumer.dispose(); }
 			for (const service of programs.values()) { service.dispose(); }
 			programs.clear();
+			intervalWatch?.dispose();
 			delivery?.dispose();
 		},
 	};

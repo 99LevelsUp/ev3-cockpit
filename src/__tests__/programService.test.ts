@@ -25,16 +25,25 @@ const PRG = '/home/root/lms2012/prjs/Demo/Demo.rbf';
 
 /** A stand-in for following the program row: counts follows and lets a test say the state. */
 function fakeFollow() {
-	let tell: ((running: boolean) => void) | undefined;
+	let tell: ((running: boolean, at: number) => void) | undefined;
+	let end: (() => void) | undefined;
 	const counts = { follows: 0, disposes: 0 };
 	const follow: ProgramFollow = {
-		follow: (onState) => {
+		follow: (onState, onEnded) => {
 			counts.follows += 1;
 			tell = onState;
-			return { dispose: () => { counts.disposes += 1; tell = undefined; } };
+			end = onEnded;
+			// Only this follow's own callback goes: a newer follow may have taken over already.
+			return { dispose: () => { counts.disposes += 1; if (tell === onState) { tell = undefined; } } };
 		},
 	};
-	return { follow, counts, say: (running: boolean) => tell?.(running) };
+	return {
+		follow, counts,
+		/** The row says a state, sampled `at` (now by default). */
+		say: (running: boolean, at = Date.now()) => tell?.(running, at),
+		/** The brick's session ended, and the claim with it. */
+		endSession: () => { const ended = end; tell = undefined; end = undefined; ended?.(); },
+	};
 }
 
 async function world() {
@@ -132,7 +141,7 @@ describe('Program control service (step-5 U3)', () => {
 		assert.throws(() => bare.onStateChange(() => undefined), (error) => codeOf(error) === ErrorCode.SubscriptionFailed);
 
 		let fail = true;
-		let say: ((running: boolean) => void) | undefined;
+		let say: ((running: boolean, at: number) => void) | undefined;
 		const flaky = new ProgramService(async () => ({ kind: 'program:stop' }) as BrickResponse, {}, {
 			follow: (onState) => {
 				if (fail) { throw new Error('the brick is not connected'); }
@@ -144,8 +153,8 @@ describe('Program control service (step-5 U3)', () => {
 		assert.throws(() => flaky.onStateChange((running) => refused.push(running)), /not connected/);
 		fail = false;
 		const later = flaky.onStateChange(() => undefined);   // a fresh attempt, not a stale listener's
-		say?.(false);
-		say?.(true);
+		say?.(false, Date.now());
+		say?.(true, Date.now());
 		assert.deepEqual(refused, [], 'a listener that was refused hears nothing');
 		later.dispose();
 		w.done();
@@ -232,6 +241,50 @@ describe('Program control service (step-5 U3)', () => {
 
 		assert.equal(w.sent.length, before, 'asked a brick nobody asked about (step-6 plan D5)');
 		assert.equal(w.row.counts.follows, 0);
+		w.done();
+	});
+	it('ends following with the brick\'s session: its listeners end, and a new one starts a new follow (U9 review 1)', async () => {
+		const w = await world();
+		const old: boolean[] = [];
+		w.service.onStateChange((running) => old.push(running));
+
+		w.row.endSession();
+		const fresh: boolean[] = [];
+		w.service.onStateChange((running) => fresh.push(running));
+		w.row.say(true);
+		w.row.say(false);
+
+		assert.equal(w.row.counts.follows, 2, 'a new claim after the session ended');
+		assert.deepEqual(old, [], 'a listener of the ended session is not revived');
+		assert.deepEqual(fresh, [false]);
+		w.done();
+	});
+
+	it('takes no state older than one it already has: a cached reading cannot undo a confirmed start (U9 review 1)', async () => {
+		const w = await world();
+		const states: boolean[] = [];
+		const before = Date.now() - 1000;   // a frame read before the start
+
+		assert.equal(await w.service.run(PRG), true);   // confirmed running, now
+		w.service.onStateChange((running) => states.push(running));
+		w.row.say(false, before);                       // the cached value, replayed
+		w.row.say(true);                                // the next frame
+
+		assert.deepEqual(states, [], 'no end and start that never happened');
+		w.done();
+	});
+
+	it('follows again on asking, keeping its listeners and leaving no gap (U9 review 1)', async () => {
+		const w = await world();
+		const states: boolean[] = [];
+		w.service.onStateChange((running) => states.push(running));
+		w.row.say(false);
+
+		w.service.followAgain();
+		w.row.say(true);
+
+		assert.deepEqual(w.row.counts, { follows: 2, disposes: 1 }, 'the new follow first, then the old one goes');
+		assert.deepEqual(states, [true]);
 		w.done();
 	});
 });
