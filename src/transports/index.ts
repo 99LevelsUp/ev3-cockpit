@@ -10,6 +10,8 @@ export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
 export { BtWinsockAdapter } from './btWinsockAdapter';
 export type { BtWinsockAdapterOptions } from './btWinsockAdapter';
+export { BtBluezAdapter } from './btBluezAdapter';
+export type { BtBluezAdapterOptions } from './btBluezAdapter';
 export { BtSppAdapter } from './btSppAdapter';
 export type { BtSppAdapterOptions } from './btSppAdapter';
 export { BtSppBackend, macFromPnpId, formatMac } from './btSppDiscovery';
