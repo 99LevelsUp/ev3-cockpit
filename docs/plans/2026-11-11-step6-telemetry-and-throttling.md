@@ -199,6 +199,16 @@ Convergence gate: no blocker or major survives verification. U5 is closed in cod
 
 Mutations on the fixes 8/8; unit 957/957.
 
+### U6, round 2 — confirmation of round 1 (codex, `.review-out/step6-u6-r2-packet.md`, 13.11.2026) — NOT-READY → approach changed (5c551a7)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a row that left the plan kept its old effective interval in snapshots and events; one already stale got no event | CONFIRMED | leaving the plan clears the interval, and the change is told |
+| 2 | major | a plan change could still erase an overdue outage or put off a drop (round 1 fixed this for samples only) | CONFIRMED | see below |
+| 3 | major | a late reply after the session ended recreated its values, also when a listener ended the session during the stale news | CONFIRMED | a brick whose session ended takes no reply until a new plan says it is read again |
+
+Same area two rounds running, each finding an input that forgot a case: **the approach changed instead of a third patch.** Every input — sample, plan, session end, settings, timer — goes through one `run()`: time is brought up to now under the old state (stale told first, then what expired goes), the input applies, then time again under the new state. Events are no longer picked by hand: they are the difference between what readers were last told and what holds now. Mutations on the rebuilt model 19/19; unit 961/961.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
