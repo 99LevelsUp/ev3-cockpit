@@ -1539,12 +1539,12 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
     so releasing one claim recomputes the effective interval from those that remain. A registry
     keyed on categories cannot honour 3.1.10
-- [ ] **3.4 Adaptive Throttling** — **un-gated by the owner 11.11.2026; built in step 6 U7.** The degradation is recorded and reproduced in DESIGN §4.5 (Wi-Fi 4×, Port View stalls); the input is each brick's latency tail (p95, stalls), not queue depth. The gate as first written: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
-  - [ ] 3.4.1 Response latency measurement per command
+- [x] **3.4 Adaptive Throttling** — **done 13.11.2026 in step 6 U7** (08b110d, ab5cf5d, c9590e4; review converged 78a5896); thresholds re-checked on hardware in U10. **un-gated by the owner 11.11.2026; built in step 6 U7.** The degradation is recorded and reproduced in DESIGN §4.5 (Wi-Fi 4×, Port View stalls); the input is each brick's latency tail (p95, stalls), not queue depth. The gate as first written: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
+  - [x] 3.4.1 Response latency measurement per command — each telemetry frame's round trip, queue wait included, into a per-brick window (p95, stalls)
   - [~] 3.4.2 ~~Queue depth monitoring from the command queue~~ **Retired:** measured pinned at 0–1 with one frame in flight (DESIGN §4.5)
-  - [ ] 3.4.3 Frequency scaling algorithm (increase the tick period when the latency tail grows)
-  - [ ] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
-  - [ ] 3.4.5 Diagnostic output — current telemetry speed observable for the UI
+  - [x] 3.4.3 (`TickThrottle`: p95 against tailFactor × the link's round trip; step up to maxSlowdown, back after calmWindows; all user settings) Frequency scaling algorithm (increase the tick period when the latency tail grows)
+  - [x] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
+  - [x] 3.4.5 Diagnostic output — current telemetry speed observable for the UI (`throttleOf()`, `onThrottleChange`: period, factor, p95, limit, stalls; the display itself is Phase 5)
 - [x] **3.5 Read model for the active brick** — done 13.11.2026 in step 6 U6; the panel that draws it is Phase 5
   - [x] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots (step 6 U6, ccb1ce1, `activeBrickView.ts`)
   - [x] 3.5.2 Port state (A–D motors, 1–4 sensors), layer 0 (D3) (step 6 U6, ccb1ce1, `activeBrickView.ts`)
@@ -1559,7 +1559,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 - [ ] **3.7 Unit tests**
   - [x] 3.7.1 Telemetry scheduler mode switching tests — `brickTelemetry.test.ts`: foreground
     vs minimal, hand-over on an active-brick change, stop when the brick disconnects
-  - [ ] 3.7.2 Adaptive throttling response to latency changes
+  - [x] 3.7.2 Adaptive throttling response to latency changes — `tickThrottle.test.ts`, `telemetryThrottle.test.ts`
   - [x] 3.7.3 ~~Category~~ Row-claim add/remove tests — `telemetryClaims.test.ts`, `telemetryServiceClaims.test.ts` (claims are on rows, not categories)
   - [x] 3.7.4 Stale snapshot expiry tests — `telemetryReadModel.test.ts`, mutations 17/17
   - [x] 3.7.5 Read model aggregation tests — `telemetryReadModel.test.ts`, `activeBrickView.test.ts`, end to end in `createRuntime.test.ts`
