@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DisposableStore } from './events';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
+import { setSweepConfirmation } from './fs/transferLedger';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
@@ -61,6 +62,17 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	// Every notification is written to the log too (owner, 09.11.2026), so the log alone says
 	// what the person was told while they watched the brick.
 	const notify = createNotifier(logger, vscode.window);
+	// A transfer whose first reply was lost may have left a slot, and its file's space, taken on the
+	// brick until a reboot. Releasing it means closing every open file there, another computer's
+	// live transfer included, so it is the user's call (4.6.17; owner decision 13.11.2026).
+	setSweepConfirmation(bricks, async () => {
+		const release = 'Release';
+		const pick = await notify.info(
+			'A file transfer to the brick was cut off before the brick said which file it opened, '
+			+ 'so its space may stay taken until the brick restarts. Release it now? This closes every '
+			+ 'file the brick has open, including a transfer another computer may be running.', release);
+		return pick === release;
+	});
 	const notificationProgress: ShowProgress = (title, task) => {
 		notify.progressShown(title);
 		return vscode.window.withProgress(

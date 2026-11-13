@@ -169,13 +169,13 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 	case 'fs:beginWrite':
 		return buildFsBeginWriteCommand(command.path, command.totalBytes, command.chunk);
 	case 'fs:continueWrite':
-		return buildFsContinueWriteCommand(command.handle, command.chunk);
+		return buildFsContinueWriteCommand(assertFileHandle(command.handle), command.chunk);
 	case 'fs:beginRead':
 		return buildFsBeginReadCommand(command.path, command.wantBytes);
 	case 'fs:continueRead':
-		return buildFsContinueReadCommand(command.handle, command.wantBytes);
+		return buildFsContinueReadCommand(assertFileHandle(command.handle), command.wantBytes);
 	case 'fs:closeHandle':
-		return buildFsCloseHandleCommand(command.handle);
+		return buildFsCloseHandleCommand(assertFileHandle(command.handle));
 	case 'fs:size':
 		return buildFsSizeCommand(command.path);
 	case 'fs:freeSpace':
@@ -187,8 +187,23 @@ export function buildCommand(command: BrickCommand): EncodedCommand {
 	case 'fs:removeTree':
 		return buildFsRemoveTreeCommand(command.path);
 	case 'fs:listContinue':
-		return buildFsListContinueCommand(command.handle, command.wantBytes);
+		return buildFsListContinueCommand(assertFileHandle(command.handle), command.wantBytes);
 	}
+}
+
+/** The firmware's file-handle table has this many slots (`lms2012.h` 363, `MAX_FILE_HANDLES`). */
+export const FILE_HANDLE_SLOTS = 64;
+
+/**
+ * Refuses a file handle outside the firmware's table. The firmware reads `Files[handle]` before it
+ * checks the bound, and a byte of 128 or more becomes a negative index (`c_com.c` 529–531, `DATA8`):
+ * a number past the table is a read of someone else's memory, not an error (4.6.17).
+ */
+function assertFileHandle(handle: number): number {
+	if (!(Number.isInteger(handle) && handle >= 0 && handle < FILE_HANDLE_SLOTS)) {
+		throw new ProtocolError(`A file handle is 0..${FILE_HANDLE_SLOTS - 1}, not ${handle}.`);
+	}
+	return handle;
 }
 
 // ── Direct commands ─────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import { brickKeyTransport } from '../contracts/brickKey';
 import { USB } from '../transports/transportConstants';
 import { FilesystemService } from './filesystemService';
 import { FileTransferService, PinnedLink } from './fileTransferService';
+import { ledgerFor } from './transferLedger';
 
 /** What this module needs of a session manager. Narrow, so a test can stand in for one. */
 export interface BrickSender {
@@ -79,13 +80,15 @@ export function createBrickFilesystem(
 
 	// A sender that routes over several channels hands each transfer one to keep.
 	const pin = sender.pin?.bind(sender);
+	// What an interrupted transfer owes this brick outlives this call (4.6.17).
+	const ledger = ledgerFor(sender, brickKey);
 	return {
 		files: new FilesystemService(send),
 		transfer: new FileTransferService(
 			send,
 			pin
-				? { pin: () => pin(brickKey) }
-				: maxPacketBytes === undefined ? undefined : { maxPacketBytes },
+				? { pin: () => pin(brickKey), ledger }
+				: maxPacketBytes === undefined ? { ledger } : { maxPacketBytes, ledger },
 		),
 	};
 }
