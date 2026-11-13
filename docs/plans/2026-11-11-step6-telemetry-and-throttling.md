@@ -123,7 +123,8 @@ Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room t
 ### U8. Telemetry on the public API — done 13.11.2026; review five rounds, converged (see Review)
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
-### U9. The program run-state row and the program-running preset — planned in detail 13.11.2026
+### U9. The program run-state row and the program-running preset — code done 13.11.2026; codex review pending
+Part 1 the row (fbb2e4e, mutations 6/6); part 2 the preset in the service (e84cd8a, 8/8); parts 3–4 the program service follows the row, wiring, consumer guide (eb6bec2, 11/12, one caught by the compiler; end to end over the shipped wiring and the mock). Planned:
 D5 (b). Done in step 5 already: the service polls only while someone listens; `following` and its failure count are gone. What is left: the program status becomes a telemetry row, the program service follows it instead of its own timer, and telemetry slows down while a program runs (the measurement's consequence 1).
 
 **Owner decision D11 (13.11.2026): while a user program runs, the whole loop of that brick slows down — the panel's reads and every consumer's alike.** Each telemetry command costs the program about 2 ms whoever asked for it, and the program comes first. A consumer's grant does not change; what its rows really run at travels as `effectiveIntervalMs` (D2). The floor is a user setting, `ev3-cockpit.telemetry.programRunningTickMs` (default 200, as the rule decided; 0 turns the preset off), declared only in `package.json`.
