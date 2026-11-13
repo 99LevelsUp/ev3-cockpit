@@ -505,6 +505,7 @@ export class MockTransportProvider implements TransportProvider {
 			// The mock's radios: Bluetooth on and visible, no Wi-Fi dongle.
 			bluetoothOn: true,
 			bluetoothVisible: true,
+			programRunning: state.runningProgram !== undefined,
 			bluetoothPeers: state.bluetoothPeers.length,
 			wifiOn: false,
 			wifiPresent: false,

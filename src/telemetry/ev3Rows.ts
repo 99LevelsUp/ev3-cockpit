@@ -20,6 +20,9 @@ import {
 	UI_BUTTON_SUB,
 	COM_GET_SUB,
 	COM_HARDWARE,
+	PROGRAM_INFO_SUB,
+	PROGRAM_SLOT,
+	PROGRAM_STATUS,
 } from '../protocol/ev3Packet';
 import {
 	lc0,
@@ -343,6 +346,31 @@ export function firmwareVersionRow(): TelemetryRow {
 }
 
 /**
+ * Whether a program runs in the user slot (step-6 plan U9).
+ *
+ * The `program:status` command's encoding, as a row: it rides in the frame a read brick sends
+ * anyway (D8) instead of a command of its own, and the telemetry service slows the loop while it
+ * says running (D11). Event tier: a program starting or ending is an event, and the foreground
+ * reads it every fifth tick. Only `RUNNING` is a running program; a halted or unknown slot is not.
+ */
+export function programRunningRow(divider = DEFAULT_DIVIDERS.event): TelemetryRow {
+	const id = 'program.user.running';
+	return {
+		id,
+		tier: 'event',
+		lifetime: repeating(divider),
+		result: { bytes: 1, alignment: 1 },
+		emit: (slot: RowSlot) => concatBytes(
+			new Uint8Array([EV3_OPCODE.PROGRAM_INFO]),
+			lc0(PROGRAM_INFO_SUB.GET_STATUS),
+			lc0(PROGRAM_SLOT.USER),
+			globalRef(slot),
+		),
+		parse: (payload, slot, sampledAt) => value(id, payload[slot] === PROGRAM_STATUS.RUNNING, sampledAt),
+	};
+}
+
+/**
  * Every row a brick offers, in truncation priority order.
  *
  * The order is the answer to "what survives a tight tick", so it puts what a user watches
@@ -356,6 +384,8 @@ export function allEv3Rows(): TelemetryRow[] {
 		...SENSOR_PORTS.map((_, i) => sensorValueRow(i)),
 		...MOTOR_PORT_NAMES.map((_, i) => motorTachoRow(i)),
 		...BUTTON_NAMES.map((_, i) => buttonRow(i)),
+		// Before the system rows: it decides how fast the whole loop may run (D11).
+		programRunningRow(),
 		batteryVoltageRow(),
 		batteryLevelRow(),
 		brickNameRow(),
