@@ -185,6 +185,20 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 
 Convergence gate: no blocker or major survives verification. U5 is closed in code; U8 builds the API on `claim`/`release`/`grantOf`/`onClaimsEnded`.
 
+### U6, round 1 (codex, inline packet `.review-out/step6-u6-packet.md`, 13.11.2026) — NOT-READY → fixed (f44b7d5)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a late reply for a row that left the plan revived it as fresh with its old interval, and put off its drop | CONFIRMED (a re-plan waits for the frame in flight) | a sample for a row not in the plan keeps it stale, with no interval, and keeps its drop time |
+| 2 | major | an unchanged sample processed before an overdue timer erased the outage without an event (D10) | CONFIRMED | each sample first runs the deadlines that have passed: stale is announced, then the recovery |
+| 3 | major | a value's stale time counted from when the timer ran, not from when it went stale; a lowered `staleFactor` granted extra time | CONFIRMED | stale from the deadline (`sampledAt + staleFactor × interval`); dropped against it in the same pass |
+| 4 | major | with `staleTimeoutMs` 0 the stale event was swallowed and only the removal told | CONFIRMED | stale and gone are two events, in that order |
+| 5 | major | a delay past Node's timer limit (2³¹−1 ms) fires after 1 ms, so a huge setting made the timer spin | CONFIRMED | the delay is capped at the platform's limit and the deadline checked again on waking; a huge `staleFactor` simply never stales by age |
+| 6 | major | a read model attached to a service already reading a brick never learned its plan | CONFIRMED as a contract gap (not reachable in today's wiring: no brick is active when the runtime is built) | `TelemetryService.currentPlans()`; the read model starts from it |
+| 7 | minor | the view gives no freshness for battery, buttons and Bluetooth visibility | CONFIRMED | recorded for Phase 5: the panel decides how stale system values show; the read model has the flag for each row |
+
+Mutations on the fixes 8/8; unit 957/957.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
