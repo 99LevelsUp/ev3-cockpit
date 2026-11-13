@@ -380,3 +380,18 @@ describe('BluezObjectCache — the RSSI reports go with everything else (U6 roun
 		assert.equal(cache.rssiReports(AAA), 2);
 	});
 });
+
+describe('BluezObjectCache — fail closed once BlueZ\'s owner is tracked (U4 review #10, U8)', () => {
+	it('drops every signal while the owner is unknown', async () => {
+		let owner: string | undefined = ':1.2';
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus, { bluezOwner: () => owner });
+		await cache.start();
+		owner = undefined;
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Connected', new Variant('b', true)]]), []]);
+		assert.equal(cache.devices()[0].connected, false);
+		owner = ':1.2';
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Connected', new Variant('b', true)]]), []]);
+		assert.equal(cache.devices()[0].connected, true);
+	});
+});

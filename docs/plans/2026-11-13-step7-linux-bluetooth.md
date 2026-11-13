@@ -128,6 +128,37 @@ KTD6, KTD7. `RemoveDevice` through the cache; the provider seam with Windows' de
 
 KTD8. Tests: what the factory returns on `linux`; nothing loaded on `win32`. The factory also wires BlueZ's unique bus name: `GetNameOwner(org.bluez)` at start and `NameOwnerChanged` after, passed as `bluezOwner` both to `BluezObjectCache` and to `createBluezPairing` (the agent then answers no caller but BlueZ; U5 review, 2ac9948, finding 8). Until then the system bus policy is the only guard, and the PIN is the public 1234. From the U4 review (8e000ed): when BlueZ's owner goes (a daemon restart), the cache clears, turns not ready and tells its listeners; when a new owner comes, it takes a fresh snapshot (finding 9). Once the owner is wired, an unknown owner rejects signals instead of passing them (finding 10). The caller of `offerBluetoothGroup` offers to check again after "added" (D4); `GroupFixResult` has no retry of its own (finding 11). From the U6 review (d17c5b1): the inquiry and the pairing search share the connection's discovery, and an inquiry whose StartDiscovery fails would stop a pairing's discovery in its `finally`; both must go through `BtConnectionQueue` (presence `holdOnly`, pairing through `enqueue`), with an end-to-end test that an inquiry and a pairing search never overlap (finding 8). The inquiry's `log` goes to the output channel. The note for the Windows session: the `createRuntime.ts` branch, the log lines on Linux ("BT transport registered (BlueZ RFCOMM; BlueZ discovery)", presence started on Linux too).
 
+**U8 wiring note for the Windows session (`src/runtime/createRuntime.ts`, not edited from HOSTC).** `createBluezBluetooth` (`src/transports/bluezBluetooth.ts`) is built: one system-bus connection, BlueZ's owner tracked (`GetNameOwner` + `NameOwnerChanged`, from the bus daemon only), the object cache and the pairing agent fail closed while the owner is unknown, a fresh snapshot when BlueZ comes back, `retry()` for D4's "check again". In `registerRealProviders`, on `process.platform === 'linux'` only (Windows untouched):
+
+```ts
+const bluez = createBluezBluetooth({
+	log,
+	// D4: offer the fix; on "added", offer "Check again", which calls bluez.retry().
+	onAccessDenied: () => { void offerBluetoothGroup({ confirm: /* modal showing prompt.command */ }).then(/* added → retry offer; manual → show command */); },
+});
+services.add({ dispose: () => bluez.dispose() });
+void bluez.start(); // never rejects; logs why when not ready
+const btDiscovery = new BtClassicDiscovery({
+	listDevices: bluez.listDevices, radioName: bluez.radioName,
+	pairDevice: bluez.pairDevice, unpairDevice: bluez.unpairDevice,
+	onCacheUnavailable: /* as on Windows, logOnChange */, connectionQueue: btQueue, onPairingEvent: /* as on Windows */,
+	// no portScan: the SPP backend is Windows-only
+});
+const btPresence = new BtPresenceMonitor({
+	queue: btQueue, check: bluez.presenceCheck, inquire: bluez.inquire,
+	pairedWithoutSession: () => btProvider.pairedWithoutSession(),
+	onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable: ${reason}`), onChange: refreshDiscovery,
+});
+bluez.onChange(refreshDiscovery); // BlueZ's devices changed, or BlueZ went or came back
+const btProvider = new BtTransportProvider({
+	presence: btPresence, discoverDevices: btDiscovery.discover, unpairDevice: btDiscovery.unpair,
+	forgetResidue: bluez.forgetResidue, backends: bluez.backends, connectionQueue: btQueue,
+});
+log.info('BT transport registered (BlueZ RFCOMM; BlueZ discovery)');
+```
+
+Presence: `btPresence.start()` on `linux` too (today only `win32`). Pairing and the inquiry both go through `btQueue` (pairing via `BtClassicDiscovery`'s `enqueue`, presence `holdOnly`), so their discoveries never overlap (tested end to end in `bluezBluetooth.test.ts`). The inquiry's `log` warnings and the factory's go to the output channel.
+
 ### U9. Hardware session (owner at HOSTC)
 
 Dev host on HOSTC with the wiring from the Windows session: pick, pair, connect, list projects, presence, forget, re-pair, on all three bricks; then the BlueZ backend in `hardware-matrix.js`; then USB and Bluetooth to the same brick at once.

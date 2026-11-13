@@ -355,4 +355,13 @@ describe('BlueZ pairing (U5)', () => {
 		await tick();
 		assert.deepEqual(w.calls, ['SetDiscoveryFilter [["Transport","bredr"]]']);
 	});
+	it('answers nobody while BlueZ\'s owner is unknown, once it is tracked', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const pairing = createBluezPairing({ bus: w, cache: w, bluezOwner: () => undefined })(MAC);
+		await tick();
+		await assert.rejects(async () => w.agent!.RequestPinCode.handler([DEV], { sender: ':1.2' } as never), /Rejected/);
+		w.pair!.resolve();
+		await pairing;
+	});
 });
