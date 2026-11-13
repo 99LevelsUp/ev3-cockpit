@@ -15,7 +15,8 @@
 
 import { TransportError } from '../errors';
 import {
-	COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB, UI_BUTTON_SUB, UI_READ_SUB,
+	COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB, PROGRAM_INFO_SUB, PROGRAM_SLOT, PROGRAM_STATUS,
+	UI_BUTTON_SUB, UI_READ_SUB,
 } from '../protocol/ev3Packet';
 
 /** `TYPE_NONE` (`bytecodes.h`): nothing on the port. */
@@ -47,6 +48,8 @@ export interface MockBrickView {
 	readonly bluetoothPeers: number;
 	readonly wifiOn: boolean;
 	readonly wifiPresent: boolean;
+	/** Whether a program runs in the user slot. */
+	readonly programRunning: boolean;
 }
 
 type Parameter = { readonly global: number } | { readonly constant: number };
@@ -146,6 +149,13 @@ export function executeTelemetryFrame(frame: Uint8Array, brick: MockBrickView): 
 			else if (sub === UI_READ_SUB.GET_VBATT) { view.setFloat32(global(4), brick.batteryVoltage, true); }
 			else if (sub === UI_READ_SUB.GET_FW_VERS) { const length = constant(); text(global(length), length, brick.firmwareVersion); }
 			else { throw new TransportError(`UI_READ subcode ${sub} is not interpreted.`); }
+			break;
+		}
+		case EV3_OPCODE.PROGRAM_INFO: {
+			const sub = constant();
+			if (sub !== PROGRAM_INFO_SUB.GET_STATUS) { throw new TransportError(`PROGRAM_INFO subcode ${sub} is not interpreted.`); }
+			const slot = constant();
+			globals[global(1)] = slot === PROGRAM_SLOT.USER && brick.programRunning ? PROGRAM_STATUS.RUNNING : PROGRAM_STATUS.STOPPED;
 			break;
 		}
 		case EV3_OPCODE.UI_BUTTON: {
