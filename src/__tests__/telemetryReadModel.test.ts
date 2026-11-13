@@ -392,4 +392,20 @@ describe('Telemetry read model (step-6 U6)', () => {
 
 		assert.deepEqual([w.model.valueOf(A, FIRMWARE)?.stale, w.model.valueOf(A, FIRMWARE)?.effectiveIntervalMs], [false, 'once']);
 	});
+	it('keeps a dropped row dropped until it is read again, however it went stale (review 4)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.advance(400);                  // stale by age at 300
+		w.plan(A, {});                   // stopped at 400
+		w.advance(950);                  // dropped at 1300
+		w.take();
+
+		w.sample(A, [TACHO, 91]);        // a late reply at 1350
+
+		assert.equal(w.model.valueOf(A, TACHO), undefined);
+		w.plan(A, { [TACHO]: 100 });     // read again
+		w.sample(A, [TACHO, 92]);
+		assert.equal(w.model.valueOf(A, TACHO)?.value, 92);
+	});
 });

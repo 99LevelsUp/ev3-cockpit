@@ -99,6 +99,8 @@ interface RowPlan {
 	static: boolean;
 	/** When it stopped being read; undefined while it is read. */
 	stoppedAt?: number;
+	/** Its value was dropped: no reply for it while it is not read brings it back, until a plan reads it again. */
+	dropped?: boolean;
 }
 
 /**
@@ -217,9 +219,14 @@ export class TelemetryReadModel implements vscode.Disposable {
 		}
 		// Stale before gone, even with no time between: a reader hears both.
 		this.announce();
-		for (const entries of this.bricks.values()) {
+		for (const [brickKey, entries] of this.bricks) {
 			for (const [id, entry] of entries) {
-				if (entry.staleSince !== undefined && now >= entry.staleSince + staleTimeoutMs) { entries.delete(id); }
+				if (entry.staleSince !== undefined && now >= entry.staleSince + staleTimeoutMs) {
+					entries.delete(id);
+					// A row still read takes its next sample anyway; the next plan that reads it clears this.
+					const history = this.planned.get(brickKey)?.get(id);
+					if (history) { history.dropped = true; }
+				}
 			}
 		}
 		this.announce();
@@ -247,7 +254,8 @@ export class TelemetryReadModel implements vscode.Disposable {
 				reading.interval = 'once';
 			} else if (planned === undefined) {
 				// Not read any more: the reply of a frame sent before the re-plan. Kept, but stale
-				// since it stopped being read, so its drop is not put off; past its drop, not taken.
+				// since it stopped being read, so its drop is not put off; once dropped, not taken.
+				if (history?.dropped) { continue; }
 				const since = before?.staleSince ?? history?.stoppedAt ?? now;
 				if (now >= since + this.settings.staleTimeoutMs) { continue; }
 				reading.staleSince = since;
