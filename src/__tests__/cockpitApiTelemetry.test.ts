@@ -20,7 +20,7 @@ import { ErrorCode, ModeConflictError } from '../errors/CockpitError';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { createRuntime } from '../runtime/createRuntime';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
-import { telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
+import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const A = 'AAA' as BrickId;
@@ -85,6 +85,7 @@ function world() {
 			},
 			release: (handle) => { released.push(handle); },
 			onClaimsEnded: (listener) => listen(endedListeners, listener as (typeof endedListeners)[number]),
+			programStatusIntervalMs: () => 1000,
 			snapshot: (brickKey, rowIds) => (values.get(brickKey as BrickId) ?? []).filter((v) => !rowIds || rowIds.includes(v.rowId)),
 			onChange: (listener) => listen(changeListeners, listener),
 		},
@@ -442,7 +443,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
 		const runtime = createRuntime({
 			extensionPath: '.', log: quiet, startPresence: false,
-			telemetrySettings: telemetrySettingsFromPackage(manifest), throttleSettings: throttleSettingsFromPackage(manifest),
+			telemetrySettings: telemetrySettingsFromPackage(manifest), throttleSettings: throttleSettingsFromPackage(manifest), programPreset: programPresetSettingsFromPackage(manifest),
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		const api = createCockpitApi({
@@ -455,6 +456,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 				onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
 				snapshot: (brickKey, rowIds) => runtime.telemetryView.snapshot(brickKey, rowIds),
 				onChange: (listener) => runtime.telemetryView.onChange(listener),
+				programStatusIntervalMs: () => 1000,
 			},
 		});
 		try {

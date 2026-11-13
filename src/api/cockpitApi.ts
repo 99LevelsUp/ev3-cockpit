@@ -29,7 +29,7 @@ import { CockpitError, ConsumerError, NotConnectedError, ProtocolError, Subscrip
 import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
-import { ProgramService, ProgramServiceOptions } from '../programs/programService';
+import { ProgramService, ProgramServiceOptions, followProgramRow } from '../programs/programService';
 import type { RowDescriptor } from '../telemetry/rowRegistry';
 import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
@@ -191,6 +191,8 @@ export interface CockpitApiDeps {
 		onClaimsEnded(listener: (event: { readonly brickKey: string; readonly handles: readonly string[] }) => void): Subscription;
 		snapshot(brickId: BrickId, rowIds?: readonly string[]): ReadValue[];
 		onChange(listener: (change: ReadModelChange) => void): Subscription;
+		/** How often a followed program's state is read (the user's setting, U9). */
+		programStatusIntervalMs(): number;
 	};
 }
 
@@ -217,7 +219,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const programsOf = (brickId: BrickId): ProgramService => {
 		let service = programs.get(brickId);
 		if (!service) {
-			service = new ProgramService((command) => deps.bricks.send(brickId, command), deps.programOptions);
+			// Its run state follows the telemetry row (U9); without telemetry it cannot be followed.
+			const telemetry = deps.telemetry;
+			service = new ProgramService((command) => deps.bricks.send(brickId, command), deps.programOptions,
+				telemetry ? followProgramRow(telemetry, brickId, () => telemetry.programStatusIntervalMs()) : undefined);
 			programs.set(brickId, service);
 		}
 		return service;

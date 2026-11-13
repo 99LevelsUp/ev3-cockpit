@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.300",
+  "version": "0.2.301",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -126,6 +126,12 @@
           "default": 200,
           "minimum": 0,
           "markdownDescription": "While a program runs on a brick, its telemetry is read **no more often than this**, in milliseconds - for the panel and for every extension that subscribed. Each telemetry command costs a running program about 2 ms of the brick (measured). `0` turns this off."
+        },
+        "ev3-cockpit.programs.statusIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 1,
+          "markdownDescription": "How often a brick is asked whether its program still runs, in milliseconds, while an extension follows it. It rides in the brick's telemetry, so the active brick is asked at its own telemetry pace anyway."
         }
       }
     }

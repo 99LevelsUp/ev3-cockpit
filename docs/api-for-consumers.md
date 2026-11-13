@@ -75,6 +75,20 @@ sub.dispose();  // releases exactly this subscription
   everyone else. A listener that throws stops nothing but itself.
 - A subscription to a brick that is not the active one runs that brick's telemetry for you; each
   telemetry command costs a program running on the brick about 2 ms, so ask for what you need.
+- **While a program runs on a brick, its telemetry slows down** to the user's
+  `ev3-cockpit.telemetry.programRunningTickMs` (200 ms unless changed; 0 turns it off) — for
+  everyone, your subscription included. Your grant stays; `effectiveIntervalMs` shows the slower
+  reads. The program comes first.
+
+## Following a program
+
+`onProgramStateChanged(brick, listener)` follows the brick's program through its telemetry
+(`program.user.running`), not a poll of its own, and only while someone listens. The listener hears
+each start and end once, asynchronously, never inside the call that subscribed. A lost link that
+comes back keeps following; it ends when the brick is disconnected or signed out, as telemetry
+subscriptions do — subscribe again after reconnecting. How often a brick you follow is asked is the
+user's `ev3-cockpit.programs.statusIntervalMs`; the active brick is asked at its own telemetry pace
+anyway. `isProgramRunning(brick)` asks the brick directly, now.
 
 ## Safe and full mode
 
