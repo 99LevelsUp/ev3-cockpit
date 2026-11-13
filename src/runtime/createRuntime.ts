@@ -22,7 +22,7 @@ import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
 import { TelemetryService } from '../telemetry/telemetryService';
-import type { TelemetrySettings } from '../telemetry/telemetrySettings';
+import type { TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
 import { BrickManager } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
@@ -64,6 +64,8 @@ export interface RuntimeOptions {
 	 * declares (`telemetrySettingsFromPackage`). The runtime has no values of its own.
 	 */
 	readonly telemetrySettings: TelemetrySettings;
+	/** How each brick's telemetry slows down when its round trips grow (U7); read as the stale settings are. */
+	readonly throttleSettings: ThrottleSettings;
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
@@ -154,7 +156,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	// After the brick layer, so disposing the runtime (in reverse) stops the loops before the
 	// sessions they send over. The host gates on the pair (2.8.10a): a brick is read only while it is
 	// signed in and has a route.
-	const telemetry = services.add(new TelemetryService({ host: bricks.telemetryHost(), providerRegistry: registry }));
+	const telemetry = services.add(new TelemetryService({
+		host: bricks.telemetryHost(), providerRegistry: registry, throttle: options.throttleSettings,
+	}));
 	const telemetryView = services.add(new TelemetryReadModel({ source: telemetry, settings: options.telemetrySettings }));
 	services.add(telemetry.onPlanChange((e) => {
 		const brick = brickLabel(aggregator, e.brickKey as BrickId);
@@ -162,6 +166,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		const ticks = [...e.intervals.values()].filter((ms): ms is number => typeof ms === 'number');
 		log.info(`Telemetry: ${brick} ${telemetry.modeOf(e.brickKey)}, ${e.intervals.size} row(s) read, `
 			+ `fastest every ${ticks.length ? Math.min(...ticks) : 'once'} ms`);
+	}));
+	// Said when the tick moves, which is a window's decision, not a frame's.
+	services.add(telemetry.onThrottleChange((e) => {
+		const { state } = e;
+		log.info(`Telemetry: ${brickLabel(aggregator, e.brickKey as BrickId)} tick ${Math.round(state.periodMs)} ms `
+			+ `(${state.factor === 1 ? 'as planned' : `${Number(state.factor.toFixed(2))}x the plan`}; `
+			+ `p95 ${state.p95Ms ?? '-'} ms against ${state.limitMs} ms, ${state.stalls} stall(s))`);
 	}));
 	// A failing frame repeats every tick: said once per brick, and once more when frames come back.
 	const failing = new Set<string>();

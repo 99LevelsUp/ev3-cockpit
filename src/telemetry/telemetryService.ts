@@ -46,6 +46,8 @@ import { RowRegistry, createEv3RowRegistry } from './rowRegistry';
 import { ClaimCadence, ClaimHandle, ClaimRequest, Grant, TelemetryClaims } from './telemetryClaims';
 import { cadenceFor } from './telemetryConstants';
 import { RowValue } from './telemetryRow';
+import type { ThrottleSettings } from './telemetrySettings';
+import { ThrottleState, TickThrottle, typicalRoundTripMs } from './tickThrottle';
 
 /** One brick's telemetry values, tagged with where they came from. */
 export interface TelemetryValuesEvent {
@@ -78,6 +80,20 @@ export interface PlanChangeEvent {
 /** A brick this service read has no session any more: whatever was read of it is gone (U6). */
 export interface SessionEndedEvent {
 	readonly brickKey: BrickRef;
+}
+
+/** A brick's throttle, as the diagnostic display shows it (3.4.5): the decision's numbers and the tick. */
+export interface BrickThrottleState extends ThrottleState {
+	/** The plan's tick, in milliseconds. */
+	readonly basePeriodMs: number;
+	/** The tick the loop runs at: the plan's times the factor. */
+	readonly periodMs: number;
+}
+
+/** A brick's throttle moved its tick (U7). */
+export interface ThrottleChangeEvent {
+	readonly brickKey: BrickRef;
+	readonly state: BrickThrottleState;
 }
 
 /** Claims that ended because their brick went, not because their makers released them. */
@@ -131,11 +147,20 @@ export interface TelemetryServiceOptions {
 	 * probes; production leaves it unset.
 	 */
 	readonly tickPeriodMs?: number;
+	/**
+	 * How each brick's tick slows down when its round trips grow (U7); the user's settings. Absent,
+	 * no brick is throttled.
+	 */
+	readonly throttle?: ThrottleSettings;
 	readonly now?: () => number;
 }
 
 interface RunningLoop {
 	readonly loop: BrickTelemetry;
+	/** The plan's tick; the loop runs at it times the throttle's factor. */
+	basePeriodMs: number;
+	/** Absent while throttling has no settings. */
+	throttle?: TickThrottle;
 	/** This loop's identity: a frame waiting in the chain goes out only while it is the brick's loop. */
 	readonly token: object;
 	/** The transport the loop was built for; another one restarts it. */
@@ -158,6 +183,7 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly subscriptions: vscode.Disposable[] = [];
 	private nextHandle = 1;
 	private disposed = false;
+	private throttleSettings: ThrottleSettings | undefined;
 
 	private readonly _onValues = new vscode.EventEmitter<TelemetryValuesEvent>();
 	readonly onValues = this._onValues.event;
@@ -177,9 +203,14 @@ export class TelemetryService implements vscode.Disposable {
 	/** A brick this service read has no session any more. */
 	readonly onSessionEnded = this._onSessionEnded.event;
 
+	private readonly _onThrottleChange = new vscode.EventEmitter<ThrottleChangeEvent>();
+	/** A brick's throttle moved its tick. */
+	readonly onThrottleChange = this._onThrottleChange.event;
+
 	constructor(private readonly options: TelemetryServiceOptions) {
 		const { host } = options;
 		this.registry = options.registry ?? createEv3RowRegistry();
+		this.throttleSettings = options.throttle;
 
 		this.subscriptions.push(
 			host.onActiveBrickChange((event) => {
@@ -207,6 +238,24 @@ export class TelemetryService implements vscode.Disposable {
 	/** What each brick is read for now, as last announced: for a reader attached after the loops started. */
 	currentPlans(): ReadonlyMap<BrickRef, ReadonlyMap<string, number | 'once'>> {
 		return this.announced;
+	}
+
+	/** A brick's throttle for the diagnostic display; undefined when it is not read or not throttled. */
+	throttleOf(brickKey: BrickRef): BrickThrottleState | undefined {
+		const running = this.loops.get(brickKey);
+		return running?.throttle ? stateOf(running) : undefined;
+	}
+
+	/** New throttle settings apply at once to every brick. Throws, changing nothing, for settings out of range. */
+	configureThrottle(settings: ThrottleSettings): void {
+		for (const [brickKey, running] of this.loops) {
+			if (!running.throttle) {
+				running.throttle = new TickThrottle(settings, typicalRoundTripMs(running.transport));
+			} else if (running.throttle.configure(settings)) {
+				this.applyThrottle(brickKey, running);
+			}
+		}
+		this.throttleSettings = settings;
 	}
 
 	/** The running loop for a brick, for tests and hardware probes. */
@@ -269,6 +318,7 @@ export class TelemetryService implements vscode.Disposable {
 		this._onClaimsEnded.dispose();
 		this._onPlanChange.dispose();
 		this._onSessionEnded.dispose();
+		this._onThrottleChange.dispose();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
@@ -304,7 +354,10 @@ export class TelemetryService implements vscode.Disposable {
 		const running = this.loops.get(brickKey);
 		if (running && running.transport === transport) {
 			running.loop.setRows(plan.rows);
-			if (running.loop.tickPeriodMs !== plan.periodMs) { running.loop.setPeriod(plan.periodMs); }
+			running.basePeriodMs = plan.periodMs;
+			// The brick's slowdown carries over to the new plan's tick.
+			const period = plan.periodMs * (running.throttle?.factor ?? 1);
+			if (running.loop.tickPeriodMs !== period) { running.loop.setPeriod(period); }
 			this.announce(brickKey, intervalsOf(running.loop));
 			return;
 		}
@@ -320,10 +373,15 @@ export class TelemetryService implements vscode.Disposable {
 			floorMs: this.cadenceOf(transport).floorMs,
 			now: this.options.now,
 			onValues: (values) => { if (current()) { this._onValues.fire({ brickKey, values }); } },
+			onRoundTrip: (ms) => { if (current()) { this.observe(brickKey, ms); } },
 			// A retired loop's refused frame is not a failure anyone needs to hear about.
 			onError: (error) => { if (current()) { this._onError.fire({ brickKey, error }); } },
 		});
-		this.loops.set(brickKey, { loop, transport, token });
+		this.loops.set(brickKey, {
+			loop, transport, token, basePeriodMs: plan.periodMs,
+			// A new loop is a new link: it starts unthrottled and learns this one's round trips.
+			...(this.throttleSettings ? { throttle: new TickThrottle(this.throttleSettings, typicalRoundTripMs(transport)) } : {}),
+		});
 		this.read.add(brickKey);
 		loop.start();
 		this.announce(brickKey, intervalsOf(loop));
@@ -401,6 +459,20 @@ export class TelemetryService implements vscode.Disposable {
 		this.announce(brickKey, new Map());
 	}
 
+	/** One frame's round trip, to its brick's throttle. */
+	private observe(brickKey: BrickRef, ms: number): void {
+		const running = this.loops.get(brickKey);
+		if (running?.throttle?.observe(ms)) { this.applyThrottle(brickKey, running); }
+	}
+
+	/** Moves a loop's tick to the plan's times the factor, and says so: in the plan (D2) and to the display. */
+	private applyThrottle(brickKey: BrickRef, running: RunningLoop): void {
+		const period = running.basePeriodMs * (running.throttle?.factor ?? 1);
+		if (running.loop.tickPeriodMs !== period) { running.loop.setPeriod(period); }
+		this.announce(brickKey, intervalsOf(running.loop));
+		this._onThrottleChange.fire({ brickKey, state: stateOf(running) });
+	}
+
 	/** Tells the read model what a brick is read for now, if that differs from what it was last told. */
 	private announce(brickKey: BrickRef, intervals: ReadonlyMap<string, number | 'once'>): void {
 		const before = this.announced.get(brickKey) ?? new Map<string, number | 'once'>();
@@ -436,4 +508,12 @@ function sameIntervals(a: ReadonlyMap<string, number | 'once'>, b: ReadonlyMap<s
 	if (a.size !== b.size) { return false; }
 	for (const [id, interval] of a) { if (b.get(id) !== interval) { return false; } }
 	return true;
+}
+
+function stateOf(running: RunningLoop): BrickThrottleState {
+	return {
+		...(running.throttle?.state() ?? { factor: 1, limitMs: 0, stalls: 0, windowSamples: 0 }),
+		basePeriodMs: running.basePeriodMs,
+		periodMs: running.loop.tickPeriodMs,
+	};
 }

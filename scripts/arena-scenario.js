@@ -34,7 +34,7 @@ Module._resolveFilename = function (request, ...rest) {
 const out = (dir) => path.join(REPO, 'out', dir);
 const { createRuntime } = require(out('runtime/createRuntime'));
 const { createBrickFilesystem } = require(out('fs/brickFilesystem'));
-const { telemetrySettingsFromPackage } = require(out('telemetry/telemetrySettings'));
+const { telemetrySettingsFromPackage, throttleSettingsFromPackage } = require(out('telemetry/telemetrySettings'));
 const { ChannelState, Transport } = require(out('contracts/enums'));
 
 const argAfter = (flag, fallback) => {
@@ -200,6 +200,7 @@ async function main() {
 		extensionPath: REPO, log: quiet, startPresence: true,
 		// The defaults package.json declares, as an installed extension gets them.
 		telemetrySettings: telemetrySettingsFromPackage(require(path.join(REPO, 'package.json'))),
+		throttleSettings: throttleSettingsFromPackage(require(path.join(REPO, 'package.json'))),
 	});
 	try {
 		const id = await findBrick(runtime);
