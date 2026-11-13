@@ -65,6 +65,21 @@ export interface TelemetryClaimTicket {
 	readonly grant: Grant;
 }
 
+/**
+ * Which rows a brick is read for now and how often each comes: the loop's tick times the row's
+ * divider, `'once'` for a static row. Empty when the brick is not read. The read model learns
+ * from it what is fresh and the effective interval it reports (D2, U6).
+ */
+export interface PlanChangeEvent {
+	readonly brickKey: BrickRef;
+	readonly intervals: ReadonlyMap<string, number | 'once'>;
+}
+
+/** A brick this service read has no session any more: whatever was read of it is gone (U6). */
+export interface SessionEndedEvent {
+	readonly brickKey: BrickRef;
+}
+
 /** Claims that ended because their brick went, not because their makers released them. */
 export interface ClaimsEndedEvent {
 	readonly brickKey: BrickRef;
@@ -136,6 +151,10 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly registry: RowRegistry;
 	/** Each brick's last telemetry frame, settled or not: the next one, from any loop, goes after it. */
 	private readonly lastFrame = new Map<BrickRef, Promise<unknown>>();
+	/** The plan last announced per brick, so a refresh that changed nothing announces nothing. */
+	private readonly announced = new Map<BrickRef, ReadonlyMap<string, number | 'once'>>();
+	/** Bricks read since their session began: the ones whose end is worth announcing. */
+	private readonly read = new Set<BrickRef>();
 	private readonly subscriptions: vscode.Disposable[] = [];
 	private nextHandle = 1;
 	private disposed = false;
@@ -149,6 +168,14 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly _onClaimsEnded = new vscode.EventEmitter<ClaimsEndedEvent>();
 	/** Claims that ended with their brick (4.5.4); the API's hook to tell their makers. */
 	readonly onClaimsEnded = this._onClaimsEnded.event;
+
+	private readonly _onPlanChange = new vscode.EventEmitter<PlanChangeEvent>();
+	/** A brick's rows or their intervals changed; empty when it stops being read. */
+	readonly onPlanChange = this._onPlanChange.event;
+
+	private readonly _onSessionEnded = new vscode.EventEmitter<SessionEndedEvent>();
+	/** A brick this service read has no session any more. */
+	readonly onSessionEnded = this._onSessionEnded.event;
 
 	constructor(private readonly options: TelemetryServiceOptions) {
 		const { host } = options;
@@ -235,6 +262,8 @@ export class TelemetryService implements vscode.Disposable {
 		this._onValues.dispose();
 		this._onError.dispose();
 		this._onClaimsEnded.dispose();
+		this._onPlanChange.dispose();
+		this._onSessionEnded.dispose();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
@@ -254,7 +283,13 @@ export class TelemetryService implements vscode.Disposable {
 		const wanted = host.getSession(brickKey)?.connectionState === ConnectionState.Connected
 			&& transport !== undefined && this.servesFrames(transport)
 			&& (active || this.claims.get(brickKey)?.hasClaims() === true);
-		if (!wanted) { this.stopFor(brickKey); return; }
+		if (!wanted) {
+			this.stopFor(brickKey);
+			if (!this.hasSession(brickKey) && this.read.delete(brickKey)) {
+				this._onSessionEnded.fire({ brickKey });
+			}
+			return;
+		}
 
 		const claims = this.claimsFor(brickKey);
 		claims.setCadence(this.cadenceOf(transport));
@@ -265,6 +300,7 @@ export class TelemetryService implements vscode.Disposable {
 		if (running && running.transport === transport) {
 			running.loop.setRows(plan.rows);
 			if (running.loop.tickPeriodMs !== plan.periodMs) { running.loop.setPeriod(plan.periodMs); }
+			this.announce(brickKey, intervalsOf(running.loop));
 			return;
 		}
 		this.stopFor(brickKey);
@@ -283,7 +319,9 @@ export class TelemetryService implements vscode.Disposable {
 			onError: (error) => { if (current()) { this._onError.fire({ brickKey, error }); } },
 		});
 		this.loops.set(brickKey, { loop, transport, token });
+		this.read.add(brickKey);
 		loop.start();
+		this.announce(brickKey, intervalsOf(loop));
 	}
 
 	/** The host as one loop sees it: its sends chained behind the brick's last frame, from any loop. */
@@ -355,6 +393,15 @@ export class TelemetryService implements vscode.Disposable {
 		if (!running) { return; }
 		this.loops.delete(brickKey);
 		running.loop.dispose();
+		this.announce(brickKey, new Map());
+	}
+
+	/** Tells the read model what a brick is read for now, if that differs from what it was last told. */
+	private announce(brickKey: BrickRef, intervals: ReadonlyMap<string, number | 'once'>): void {
+		const before = this.announced.get(brickKey) ?? new Map<string, number | 'once'>();
+		if (sameIntervals(before, intervals)) { return; }
+		if (intervals.size === 0) { this.announced.delete(brickKey); } else { this.announced.set(brickKey, intervals); }
+		this._onPlanChange.fire({ brickKey, intervals });
 	}
 
 	/**
@@ -368,4 +415,20 @@ export class TelemetryService implements vscode.Disposable {
 		return this.options.providerRegistry.get(transport)
 			?.capabilities.supportsTelemetryFrames === true;
 	}
+}
+
+/** How often each row of a loop comes now: its divider times the loop's tick, `'once'` for a one-shot. */
+function intervalsOf(loop: BrickTelemetry): Map<string, number | 'once'> {
+	const intervals = new Map<string, number | 'once'>();
+	for (const row of loop.rows) {
+		if (row.lifetime.kind === 'repeating') { intervals.set(row.id, row.lifetime.divider * loop.tickPeriodMs); }
+		if (row.lifetime.kind === 'oneShot') { intervals.set(row.id, 'once'); }
+	}
+	return intervals;
+}
+
+function sameIntervals(a: ReadonlyMap<string, number | 'once'>, b: ReadonlyMap<string, number | 'once'>): boolean {
+	if (a.size !== b.size) { return false; }
+	for (const [id, interval] of a) { if (b.get(id) !== interval) { return false; } }
+	return true;
 }

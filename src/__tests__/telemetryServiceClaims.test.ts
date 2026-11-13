@@ -17,7 +17,7 @@ import { ActivityMode, ConnectionState, Transport } from '../contracts/enums';
 import { ErrorCode } from '../errors/CockpitError';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { ClaimsEndedEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
+import { ClaimsEndedEvent, PlanChangeEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
 import type { TelemetryRow } from '../telemetry/telemetryRow';
 
 const A = 'AAA' as BrickId;
@@ -392,6 +392,53 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 			assert.equal(bricks.sent.length, 3, 'nothing goes out for a disposed service');
 		} finally {
 			bricks.releaseSends();
+			service.dispose();
+		}
+	});
+
+	it('says which rows a brick reads and how often, whenever that changes, and nothing once it stops (U6)', () => {
+		const { bricks, service } = world();
+		const plans: PlanChangeEvent[] = [];
+		service.onPlanChange((event) => plans.push(event));
+		try {
+			bricks.connect(A);
+			bricks.setActive(A);
+			const foreground = plans.pop();
+			assert.equal(foreground?.brickKey, A);
+			assert.equal(foreground?.intervals.get('ports.motor.A.tacho'), 100);
+			assert.equal(foreground?.intervals.get('system.battery.level'), 500);
+			assert.equal(foreground?.intervals.get('system.firmwareVersion'), 'once');
+
+			bricks.moveRoute(A, Transport.USB);   // two events, nothing changed
+			assert.equal(plans.length, 0, 'a refresh that changes nothing announces nothing');
+
+			service.claim(A, { rowIds: ['ports.motor.A.tacho'], intervalMs: 50 }, 'ev3-c');
+			assert.equal(plans.pop()?.intervals.get('system.battery.level'), 500, 'still every 500 ms on a 50 ms tick');
+
+			bricks.setActive(undefined);
+			assert.deepEqual([...(plans.pop()?.intervals ?? [])], [['ports.motor.A.tacho', 50]]);
+
+			bricks.loseLink(A);
+			assert.deepEqual(plans.pop(), { brickKey: A, intervals: new Map() });
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it('says once that a brick it read has no session any more, and nothing for a brick it never read (U6)', () => {
+		const { bricks, service } = world();
+		const gone: unknown[] = [];
+		service.onSessionEnded((event) => gone.push(event.brickKey));
+		try {
+			bricks.connect(A);
+			bricks.connect(B);
+			bricks.setActive(A);
+
+			bricks.signOut(A);
+			bricks.disconnect(B);
+
+			assert.deepEqual(gone, [A]);
+		} finally {
 			service.dispose();
 		}
 	});
