@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.310",
+  "version": "0.2.311",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -16,6 +16,15 @@
   "categories": [
     "Other"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "ev3-cockpit.accessMode"
+      ],
+      "description": "The cockpit runs nothing from the workspace. Until you trust it, the access mode other extensions get on a brick comes from your user settings only, never from the workspace."
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
