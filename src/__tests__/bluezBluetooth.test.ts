@@ -31,8 +31,12 @@ function device(name: string, mac: string, paired: boolean): Map<string, Variant
 }
 
 function objects(...devices: [string, Map<string, Variant>][]): Map<string, Map<string, Map<string, Variant>>> {
+	return objectsOn('/org/bluez/hci0', ...devices);
+}
+
+function objectsOn(adapterPath: string, ...devices: [string, Map<string, Variant>][]): Map<string, Map<string, Map<string, Variant>>> {
 	return new Map([
-		['/org/bluez/hci0', new Map([['org.bluez.Adapter1', new Map<string, Variant>([['Alias', new Variant('s', 'HOSTC')], ['Address', new Variant('s', '00:00:00:00:00:01')]])]])],
+		[adapterPath, new Map([['org.bluez.Adapter1', new Map<string, Variant>([['Alias', new Variant('s', 'HOSTC')], ['Address', new Variant('s', '00:00:00:00:00:01')]])]])],
 		...devices.map(([path, props]) => [path, new Map([['org.bluez.Device1', props]])] as [string, Map<string, Map<string, Variant>>]),
 	]);
 }
@@ -55,8 +59,11 @@ class FakeBus implements BluezBus {
 	private signalHandlers = new Set<(m: DBusMessage) => void>();
 	private closeHandlers = new Set<() => void>();
 
+	/** Each call as `member path`. */
+	routes: string[] = [];
 	async call(o: { member: string; path: string; body?: DBusValue[] }): Promise<DBusValue[]> {
 		this.calls.push(o.member);
+		this.routes.push(`${o.member} ${o.path}`);
 		if (o.member === 'GetNameOwner') {
 			if (this.ownerError) { throw this.ownerError; }
 			if (!this.owner) { throw new DBusError('org.freedesktop.DBus.Error.NameHasNoOwner', 'no owner'); }
@@ -378,5 +385,102 @@ describe('createBluezBluetooth — the factory (U8)', () => {
 	it('loads no native module when it is imported, so the runtime can import it anywhere (U8 review #7, the part here)', () => {
 		const out = execFileSync(process.execPath, ['-e', "require('./out/transports/bluezBluetooth.js'); process.stdout.write(String(Object.keys(require.cache).filter((k) => /node_modules/.test(k)).length));"], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' });
 		assert.equal(out, '0');
+	});
+	it('joins an open still pending instead of opening a second bus (U8 confirmation #1)', async () => {
+		const first = new FakeBus();
+		const pending = deferred();
+		let opened = 0;
+		const bt = createBluezBluetooth({
+			log: silentLog, platform: 'linux', reconnectMs: 5,
+			openBus: async () => { opened += 1; if (opened === 2) { await pending.promise; } return opened === 1 ? first : new FakeBus(); },
+		});
+		await bt.start();
+		first.close();
+		await tick(20);
+		assert.equal(opened, 2, 'the reconnect is opening');
+		const started = bt.start();
+		pending.resolve();
+		await started;
+		await tick();
+		assert.equal(opened, 2, 'start() joined it');
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA']);
+		bt.dispose();
+	});
+
+	it('keeps trying when the system bus is unreachable at the first start (U8 confirmation #1)', async () => {
+		const bus = new FakeBus();
+		let tries = 0;
+		const bt = createBluezBluetooth({
+			log: silentLog, platform: 'linux', reconnectMs: 5,
+			openBus: async () => { tries += 1; if (tries === 1) { throw new Error('connect ENOENT'); } return bus; },
+		});
+		await bt.start();
+		assert.throws(() => bt.listDevices(), /not ready/);
+		await tick(40);
+		assert.equal(tries, 2);
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA']);
+		bt.dispose();
+	});
+
+	it('a retry during a pending open that then fails still schedules a reconnect (U8 confirmation #1)', async () => {
+		const bus = new FakeBus();
+		const pending = deferred();
+		let tries = 0;
+		const bt = createBluezBluetooth({
+			log: silentLog, platform: 'linux', reconnectMs: 5,
+			// The pending open fails, and so does the next: something must still try again.
+			openBus: async () => { tries += 1; if (tries === 1) { await pending.promise; } if (tries <= 2) { throw new Error('connect ECONNREFUSED'); } return bus; },
+		});
+		const started = bt.start();
+		const retried = bt.retry();
+		pending.resolve();
+		await Promise.all([started, retried]);
+		await tick(60);
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA']);
+		bt.dispose();
+	});
+
+	it('an inquiry that waited for the gate reads the adapter and the bus of after the wait, together (U8 confirmation #2)', async () => {
+		const first = new FakeBus();
+		first.managed = objects();
+		const late = deferred();
+		first.deferStart = late.promise;
+		const second = new FakeBus();
+		second.managed = objectsOn('/org/bluez/hci1');
+		const buses = [first, second];
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => buses.shift()!, searchMs: 20, inquiryWindowMs: 20 });
+		await bt.start();
+		assert.equal((await bt.pairDevice('00:16:53:F0:0C:0C')).ok, false);
+		const inquiry = bt.inquire();
+		await tick();
+		await bt.retry();
+		late.resolve();
+		await inquiry;
+		assert.ok(second.routes.includes('SetDiscoveryFilter /org/bluez/hci1'), second.routes.join(','));
+		assert.ok(!second.routes.some((r) => r.endsWith('/org/bluez/hci0')), second.routes.join(','));
+		bt.dispose();
+	});
+	it('a bus lost while BlueZ is still being read reconnects, and a retry then opens a new one', async () => {
+		const first = new FakeBus();
+		const gate = deferred();
+		first.managedGate = gate.promise;
+		const second = new FakeBus();
+		const third = new FakeBus();
+		const buses = [first, second, third];
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => buses.shift()!, reconnectMs: 5 });
+		const started = bt.start();
+		await tick();
+		first.close();
+		// The reconnect comes while the old read still waits.
+		await tick(20);
+		gate.resolve();
+		await started;
+		await tick(30);
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA'], 'ready on the reconnect');
+		assert.equal(buses.length, 1);
+		await bt.retry();
+		assert.equal(buses.length, 0, 'retry opened a new bus');
+		assert.equal(second.closed, true);
+		bt.dispose();
 	});
 });
