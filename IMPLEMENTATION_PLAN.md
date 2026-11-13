@@ -710,7 +710,7 @@ Build the source of truth for connected bricks.
     discovered. Sign-in has no persistence: it lives in the extension host's memory, so closing
     the cockpit signs everything out — which is what makes "nothing is signed in at startup" a
     rule rather than a habit.
-  - [ ] 2.8.10a **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
+  - [x] 2.8.10a **Done 13.11.2026 (step 6 U5 review + U6, 3bc10ee):** the telemetry host reports a session only for a signed-in brick and runs a loop only while it has a route; the service runs in the shipped runtime. **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
     one place: telemetry should run exactly while a brick is signed in *and* available, and
     stop the moment either drops. Belongs with the telemetry runtime wiring in 3.3
   - [x] 2.8.11 **Bluetooth cannot yet hold a session, and that blocks its scenarios.**
@@ -1545,24 +1545,24 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.4.3 Frequency scaling algorithm (increase the tick period when the latency tail grows)
   - [ ] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
   - [ ] 3.4.5 Diagnostic output — current telemetry speed observable for the UI
-- [ ] **3.5 Read model for the active brick**
-  - [ ] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots
-  - [ ] 3.5.2 Port state (A–D motors, 1–4 sensors)
-  - [ ] 3.5.3 Peripheral detection and type identification
-  - [ ] 3.5.4 Button state
-  - [ ] 3.5.5 Battery state
-  - [ ] 3.5.6 System information for config mode
-- [ ] **3.6 Stale snapshot policy**
-  - [ ] 3.6.1 After a subscription ends, hold last snapshot briefly as `stale`
-  - [ ] 3.6.2 Configurable stale timeout
-  - [ ] 3.6.3 Clear stale data after timeout
+- [x] **3.5 Read model for the active brick** — done 13.11.2026 in step 6 U6; the panel that draws it is Phase 5
+  - [x] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.2 Port state (A–D motors, 1–4 sensors), layer 0 (D3) (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.3 Peripheral detection and type identification, raw code kept (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.4 Button state (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.5 Battery state (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [~] 3.5.6 System information for config mode — firmware version and Bluetooth visibility in the view (step 6 U6, ccb1ce1, `activeBrickView.ts`); the rows for Bluetooth on, Wi-Fi and the brick's name are read, and join the view when config mode (Phase 5) says what it shows
+- [x] **3.6 Stale snapshot policy** — done 13.11.2026 in step 6 U6, owner decision D9
+  - [x] 3.6.1 After a subscription ends, hold last snapshot briefly as `stale` — and when a value is `staleFactor` of its intervals old (step 6 U6, d64aab1, `telemetryReadModel.ts`)
+  - [x] 3.6.2 Configurable stale timeout — user settings `ev3-cockpit.telemetry.staleTimeoutMs` and `staleFactor`, defaults only in package.json, applied without a reload (step 6 U6, d64aab1, `telemetryReadModel.ts`)
+  - [x] 3.6.3 Clear stale data after timeout; at once when the session ends (step 6 U6, d64aab1, `telemetryReadModel.ts`)
 - [ ] **3.7 Unit tests**
   - [x] 3.7.1 Telemetry scheduler mode switching tests — `brickTelemetry.test.ts`: foreground
     vs minimal, hand-over on an active-brick change, stop when the brick disconnects
   - [ ] 3.7.2 Adaptive throttling response to latency changes
   - [x] 3.7.3 ~~Category~~ Row-claim add/remove tests — `telemetryClaims.test.ts`, `telemetryServiceClaims.test.ts` (claims are on rows, not categories)
-  - [ ] 3.7.4 Stale snapshot expiry tests
-  - [ ] 3.7.5 Read model aggregation tests
+  - [x] 3.7.4 Stale snapshot expiry tests — `telemetryReadModel.test.ts`, mutations 17/17
+  - [x] 3.7.5 Read model aggregation tests — `telemetryReadModel.test.ts`, `activeBrickView.test.ts`, end to end in `createRuntime.test.ts`
   - [x] 3.7.6 Multi-brick concurrent telemetry tests — `telemetryServiceClaims.test.ts` (foreground and subscribed loops side by side, handles unique across bricks)
 - [ ] **3.8 Per-mode timing constants** — partially landed as `src/telemetry/telemetryConstants.ts`.
 
