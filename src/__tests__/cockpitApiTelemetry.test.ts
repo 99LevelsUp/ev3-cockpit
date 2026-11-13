@@ -53,6 +53,8 @@ function world() {
 	const endedListeners: ((e: { brickKey: BrickId; handles: readonly string[] }) => void)[] = [];
 	const values = new Map<BrickId, ReadValue[]>();
 	let next = 1;
+	let interval = 1000;
+	const intervalListeners: (() => void)[] = [];
 	let refuse: Error | undefined;
 	let duringClaim: (() => void) | undefined;
 	/** As the product's emitter does: listeners as they were at the fire, and a dispose that removes. */
@@ -85,7 +87,8 @@ function world() {
 			},
 			release: (handle) => { released.push(handle); },
 			onClaimsEnded: (listener) => listen(endedListeners, listener as (typeof endedListeners)[number]),
-			programStatusIntervalMs: () => 1000,
+			programStatusIntervalMs: () => interval,
+			onProgramStatusIntervalChange: (listener) => listen(intervalListeners, listener),
 			snapshot: (brickKey, rowIds) => (values.get(brickKey as BrickId) ?? []).filter((v) => !rowIds || rowIds.includes(v.rowId)),
 			onChange: (listener) => listen(changeListeners, listener),
 		},
@@ -94,6 +97,8 @@ function world() {
 	return {
 		api, claims, released, values,
 		refuseWith(error: Error) { refuse = error; },
+		/** As the user changing ev3-cockpit.programs.statusIntervalMs. */
+		changeInterval(ms: number) { interval = ms; for (const l of [...intervalListeners]) { l(); } },
 		/** Runs inside the next claims, as a read model that announces on a claim would. */
 		onClaim(work: () => void) { duringClaim = work; },
 		/** How many listeners the API keeps on the telemetry source. */
@@ -422,6 +427,19 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		assert.deepEqual(w.released.sort(), w.claims.map((c) => c.handle).sort());
 		assert.throws(() => consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined),
 			(e) => codeOf(e) === ErrorCode.ConsumerFailed);
+	});
+
+	it('follows a program again at a changed interval, the new claim before the old one goes (U9 review 1)', () => {
+		const w = world();
+		const consumer = w.api.registerConsumer('ev3-c');
+		consumer.onProgramStateChanged(A, () => undefined);
+		assert.deepEqual(w.claims.map((c) => [c.rowIds[0], c.intervalMs, c.owner]), [['program.user.running', 1000, 'cockpit:programs']]);
+
+		w.changeInterval(250);
+
+		assert.deepEqual(w.claims.map((c) => c.intervalMs), [1000, 250]);
+		assert.deepEqual(w.released, [w.claims[0].handle]);
+		w.api.dispose();
 	});
 
 	it('gives every refusal a stable code (KTD6)', () => {
