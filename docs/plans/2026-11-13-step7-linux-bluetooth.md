@@ -1,7 +1,7 @@
 ---
 title: Step 7 — the Linux Bluetooth backend (IMPLEMENTATION_PLAN 1.11.11), then TCP on Linux
 date: 2026-11-13
-status: draft — owner decisions D1–D4 open
+status: active — owner decisions D1–D4 taken 13.11.2026; U0 measured
 origin: owner via the Windows session, 13.11.2026 — build the Linux Bluetooth backend on HOSTC; one branch `linux-backend` for USB (done), Bluetooth and TCP (last)
 ---
 
@@ -40,17 +40,21 @@ From `docs/plans/linux-session-results/2026-11-11-hostc.md`; raw material in `ho
 - All Bluetooth wiring is in `createRuntime.ts` (`registerRealProviders`), and presence starts only on `win32`.
 - `BtWinsockAdapter` is the pattern for an FFI socket adapter: a non-blocking connect polled with `select` on the main thread (DESIGN §4.1.1: a blocking connect on a koffi worker could not be aborted and ended Bluetooth until the process exited), idle and active receive polling, error codes mapped to `BrickUnreachableError` / `TransportError`.
 
-## Decisions for the owner
+## Decisions (owner, 13.11.2026)
 
-- **D1. How the extension talks to BlueZ.** Pairing needs an agent object exported on the system bus (BlueZ calls `RequestPinCode` on it); discovery and presence need properties and signals. Options, each against the packaging the Windows session is building (platform VSIX per target, arm64 and x64, native modules shipped per target; a pure-JS dependency is bundled by esbuild and ships everywhere):
-  - **(a) A D-Bus library, pure JS** — `@homebridge/dbus-native` (0.7.9, maintained, Oct 2026; MIT) or `dbus-next` (0.10.2, last release 2022, optional native `usocket`). Little code of ours; adds a runtime dependency and its transitive ones (`xml2js`, `event-stream`, `long`, `hexy`, `minimist`, `safe-buffer`) to a public extension; `event-stream` carries the 2018 supply-chain incident in its history (the versions here are after it). Bundled by esbuild: no per-target build.
-  - **(b) `koffi` on `libdbus-1.so.3`** — no new dependency (koffi is already shipped); but marshalling `a{oa{sa{sv}}}` through hand-written FFI, a dispatch loop polled from the main thread, and C callbacks for the agent. Most code, most crash surface (FFI), inherits koffi's per-target packaging.
-  - **(c) Our own minimal D-Bus client in TypeScript** over the system bus socket (`/run/dbus/system_bus_socket`, `EXTERNAL` auth): marshalling for the types BlueZ uses, method calls, signals, `AddMatch`, and incoming method calls for the agent. About 600–900 lines plus tests; no dependency, no FFI, bundled by esbuild; the wire format is a public, stable spec, and byte fixtures make it testable without a bus. Risk: alignment and marshalling bugs of our own, mitigated by fixtures and a round-trip against the real bus on HOSTC.
-  - **(d) Run `bluetoothctl`** (and `busctl --json` for reads). No dependency; but parsing a human interface whose output changes between BlueZ versions (5.82 adds escape codes and prompts), an agent driven over a pseudo-terminal, and `bluetoothctl` is a separate package on some distributions (`bluez-utils` on Arch). `busctl` exists only with systemd.
-  - *Recommendation:* **(c)**, with (a) `@homebridge/dbus-native` as the fallback if the owner prefers not to own a protocol implementation. (c) adds nothing to the supply chain of a public extension, ships unchanged on arm64 and x64, and keeps the agent in-process; the repo already writes its own bindings (Winsock through koffi) rather than wrap them. (b) and (d) are the most fragile.
-- **D2. How "is a paired brick switched on" is answered.** Windows asks an SDP query (the helper's `--sdp`), which proves the brick is on without connecting and never raises a pairing dialog. Options: (a) an L2CAP connect to PSM 1 (SDP) through koffi and close at once — the same question at the same layer; (b) an RFCOMM connect — heavier, takes the brick's only channel and its 2.5 s cooldown; (c) only what BlueZ's cache says (`Connected`, `RSSI` during a discovery) — a paired brick that is not discoverable never shows. *Recommendation:* (a), confirmed by measurement in U0 before it is built (a page to a non-discoverable paired brick, time to answer, no dialog on the brick, user permissions).
-- **D3. Mark a paired brick `Trusted`?** BlueZ needs `Trusted` only for incoming connections and for auto-authorising services; the cockpit only connects out. Windows sets nothing like it. *Recommendation:* no.
-- **D4. A distribution whose D-Bus policy restricts BlueZ** (some limit it to a `bluetooth` group): the cockpit reports Bluetooth unavailable with the reason ("BlueZ refused: … — on this distribution the user may need to be in the `bluetooth` group") and changes nothing itself. *Recommendation:* that; plus a line in the user documentation (0.2.5).
+- **D1. Our own minimal D-Bus client in TypeScript** over the system bus socket, `EXTERNAL` auth, no new dependency (option (c) of the draft). Small and ours: only what BlueZ needs. Byte fixtures for the marshalling: `a{sv}`, `a{oa{sa{sv}}}` from `GetManagedObjects`, the signals `InterfacesAdded` and `PropertiesChanged`, exporting the agent object and answering `RequestPinCode` / `RequestConfirmation`.
+  *Considered:* (a) a pure-JS library (`@homebridge/dbus-native`, `dbus-next`) — adds a runtime dependency and its transitive ones to a public extension; (b) `koffi` on `libdbus` — most FFI code and crash surface, the agent through C callbacks; (d) running `bluetoothctl` / `busctl` — a human interface that changes between BlueZ versions, an agent over a pseudo-terminal, a separate package on some distributions.
+- **D2. Presence: a short L2CAP connect to PSM 1 (SDP), closed at once** — measured in U0 below before it is built.
+- **D3. `Trusted` is not set.** The cockpit only connects out; Windows sets nothing like it.
+- **D4. A distribution whose D-Bus policy limits BlueZ to the `bluetooth` group: the cockpit offers the fix and runs it when the user confirms.**
+  - Run through `pkexec` (polkit shows its own system dialog for the password; no password ever passes through the cockpit): `pkexec usermod -aG bluetooth <user>`.
+  - The user comes from `os.userInfo().username`, never from input.
+  - A fixed argv, no shell.
+  - Without `pkexec`: show the command to copy.
+  - After success: say the change applies after logging out and in (or `newgrp`), and offer to check again.
+  - Nothing else runs without confirmation.
+  - Test: the argv is exactly this, and nothing runs without confirmation.
+  - Built in U4, where the permissions are found out.
 
 ## Key Technical Decisions
 
@@ -60,16 +64,21 @@ From `docs/plans/linux-session-results/2026-11-11-hostc.md`; raw material in `ho
 - **KTD4. One BlueZ object cache** (`bluezObjects.ts`): `GetManagedObjects` at start, then `InterfacesAdded` / `InterfacesRemoved` / `PropertiesChanged`. It answers synchronously what the synchronous seams ask: the paired bricks (`Device1` with `Paired`, LEGO OUI or Class 0x000804 → `BluetoothDeviceInfo`, with the name BlueZ knows — better than Windows, which forgets names of unconnected devices) and the adapter's `Alias`. The first adapter (`hci0`) unless D-Bus says otherwise.
 - **KTD5. Pairing through an agent we own.** `RegisterAgent(<our path>, 'KeyboardDisplay')` without `RequestDefaultAgent`: BlueZ asks the agent of the connection that called `Pair`, so a desktop's own agent stays default and is not displaced. A brick not in BlueZ's list is found first by a BR/EDR discovery (filter `Transport: bredr`), as the Windows helper searches first. `RequestPinCode` → `1234` (`EV3_PAIRING_PIN`); `RequestConfirmation`, `AuthorizeService` → accept for that brick only, refuse anything else; `Cancel` and `Release` handled. Events map onto `BtPairingEvent` (`searching`, `found`, `pairingRequested`, `result`) so the log and the picker read the same on both platforms. Abort → `Device1.CancelPairing`. `AuthenticationRejected` after 60 s reads "the brick's dialog was not confirmed in time; it may still be showing on the brick".
 - **KTD6. Two type widenings, Windows unchanged.** `unpairDevice` in `BtTransportProvider` and `BtClassicDiscovery` becomes `(mac) => PairingResult | Promise<PairingResult>`; `forget()` is already async and awaits it. `RemoveDevice` is a D-Bus call and cannot answer synchronously. Windows' synchronous function returns the same values.
-- **KTD7. Residue per platform.** `BtTransportProviderOptions.forgetResidue?: (mac) => ForgetResidue[]`, default `windowsResidue`. Linux reports what BlueZ keeps after `RemoveDevice`, as measured in U0 (expected: `/var/lib/bluetooth/<adapter>/cache/<mac>`, the name cache; the device directory with the link key is expected to go). Reported, never removed: root-owned (as on Windows, step-3 KD3).
+- **KTD7. Residue per platform.** `BtTransportProviderOptions.forgetResidue?: (mac) => ForgetResidue[]`, default `windowsResidue`. Linux reports what BlueZ keeps after `RemoveDevice`, as measured in U0: `/var/lib/bluetooth/<adapter>/cache/<mac>`, the name cache; the device directory with the link key goes. Reported, never removed: root-owned (as on Windows, step-3 KD3).
 - **KTD8. One factory, wired by the Windows session.** `createBluezBluetooth({ log, queue })` returns `{ backends, discoverDevices, unpairDevice, forgetResidue, pairDevice, radioName, presenceCheck, inquire, dispose }`. A wiring note in the plan says exactly what `createRuntime.ts` does on `linux` (and that `win32` is untouched). No file in `src/runtime/` is edited from HOSTC.
 - **KTD9. Presence and inquiry.** `check(mac)`: D2. `inquire()`: `SetDiscoveryFilter({ Transport: 'bredr' })`, `StartDiscovery` for `BT.PRESENCE_INQUIRY_SECONDS`, collect `Device1` objects seen with an `RSSI` and the LEGO OUI, `StopDiscovery`; unpaired ones become `ScannedBrick`s. The monitor's existing intervals and miss counts are kept.
 - **KTD10. Tests without a radio, then on HOSTC.** Unit tests use fakes: a fake libc (`linuxBluetoothSocket`), byte fixtures and a fake bus (D-Bus client), a fake object cache (discovery, pairing, presence). Each unit's hardware check runs on HOSTC with the owner (pairing needs him at the brick); `scripts/hardware-matrix.js` gains the BlueZ backend on Linux. Every test run is under a time limit (`timeout`), and the unit runner already has `--test-timeout=30000`.
 
 ## Implementation Units
 
-### U0. Measurements before code (HOSTC, owner at the bricks)
+### U0. Measurements before code (HOSTC, owner at the bricks) — done 13.11.2026
 
-No product code. (1) D2: an L2CAP connect to PSM 1 through koffi to a paired, non-discoverable brick, switched on and off: answer, time, any dialog on the brick, permissions. (2) What stays in `/var/lib/bluetooth` after `RemoveDevice` — needs the owner to run `sudo ls -R /var/lib/bluetooth/<adapter>` before and after in a desktop terminal (the MAC is replaced before anything is written down). (3) Pairing through `Device1.Pair` with an agent registered by the calling connection only, while the desktop's agent is default: which agent BlueZ asks. (4) The names BlueZ keeps for paired bricks across a restart of `bluetoothd`. Results into this plan.
+No product code. Probes in Python's standard `socket` and `python3-dbus` (on HOSTC already); originals in `.review-out/hostc-bt-u0/`.
+
+1. **Presence by L2CAP to PSM 1 (D2) — holds.** All three bricks paired, Bluetooth on, **visibility off**: three rounds each, every connect succeeded in **2.9–4.1 s** (AAA 3.0–4.1, BBB 2.9–3.3, CCC 3.9–4.1). **No dialog on any brick** (owner). CCC switched off: `EHOSTDOWN` (112) after **5.12 s**, three rounds of three, with AAA answering in between. As a normal user, no group. `koffi` opens the socket from Node (`socket(31, SOCK_SEQPACKET, BTPROTO_L2CAP)` → a descriptor), and the non-blocking RFCOMM socket too (`SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC`).
+2. **What `RemoveDevice` leaves in `/var/lib/bluetooth` — measured on CCC.** The owner listed the tree with `sudo ls -laR` before and after. `RemoveDevice` deletes the whole device directory `<adapter>/<mac>/` (its `info`, which holds the link key, and `attributes`). **It keeps `<adapter>/cache/<mac>`**, rewritten from 477 to 20 bytes (by its size, the name alone). So the Linux residue is that one file: reported, root-owned, never touched.
+3. **Which agent BlueZ asks — ours.** An agent registered by the pairing connection with `RegisterAgent(path, 'KeyboardDisplay')` and **no** `RequestDefaultAgent`, while the desktop panel (`wf-panel-pi`) runs: CCC (visibility on) found by a BR/EDR discovery in 1.9 s; `Pair` → our agent's `RequestPinCode` 6.4 s later → `1234` → `Pair` ok at 6.7 s; `Paired`, `Bonded`, `Connected` true, `Trusted` false. The brick showed its usual connection request, then the PIN keyboard.
+4. **Names.** BlueZ holds `Name` for every paired brick (`AAA`, `BBB`, `CCC`, class 2052) while none is connected — unlike Windows. Not measured across a `bluetoothd` restart; `info` (gone after a forget) and `cache/<mac>` (kept) are where BlueZ stores it.
 
 ### U1. libc RFCOMM bindings — `src/transports/linuxBluetoothSocket.ts`
 
@@ -83,9 +92,9 @@ KTD3. Tests with the fake libc: connect in progress then done, a deadline that c
 
 Marshalling and unmarshalling (alignment, `a{sv}`, variants, object paths, signatures), `EXTERNAL` auth, `Hello`, method calls with replies and errors, signals and `AddMatch`, exported objects answering incoming calls. Tests: byte fixtures for every type BlueZ sends us, a fake bus over a socket pair. Hardware: `GetManagedObjects` against HOSTC's `org.bluez` returns the three paired bricks.
 
-### U4. BlueZ object cache, discovery and the radio name — `src/transports/bluezObjects.ts`, `bluezDiscovery.ts`
+### U4. BlueZ object cache, discovery, the radio name and the `bluetooth` group — `src/transports/bluezObjects.ts`, `bluezDiscovery.ts`, `bluezAccess.ts`
 
-KTD4. `listDevices` and `radioName` for `BtClassicDiscovery`. Tests: devices appearing, changing, removed; non-bricks dropped; the adapter's `Alias`; a bus that refuses (D4) reported once.
+KTD4. `listDevices` and `radioName` for `BtClassicDiscovery`. Tests: devices appearing, changing, removed; non-bricks dropped; the adapter's `Alias`; a bus that refuses reported once. D4: an `AccessDenied` from BlueZ is told apart, and the cockpit offers `pkexec usermod -aG bluetooth <user>` (argv fixed, user from `os.userInfo()`, run only on confirmation; without `pkexec` the command to copy; after success "log out and in, or `newgrp`", and a check again). Tests pin the argv, no shell, and that nothing runs unconfirmed.
 
 ### U5. Pairing — `src/transports/bluezPairing.ts`
 
@@ -117,8 +126,8 @@ The owner puts AAA (the brick with the Wi-Fi dongle) and HOSTC on one network. `
 
 ## Risks
 
-- **A desktop agent answering instead of ours** (blueman, GNOME): KTD5 relies on BlueZ asking the caller's agent; U0 (3) measures it before U5 is built.
+- **A desktop agent answering instead of ours:** U0 (3) showed BlueZ asks the caller's agent with the RPi OS panel running; blueman and GNOME are not measured.
 - **D-Bus policy differs by distribution** (D4): only Debian 13 / RPi OS is measured.
-- **The L2CAP presence page might raise a dialog or need root** on some setups: U0 (1) decides D2 before U6.
+- **The L2CAP presence page:** no dialog and no root on HOSTC (U0 (1)); other adapters not measured.
 - **koffi per-target packaging** is the Windows session's 0.2.5; until it lands an installed VSIX has no Bluetooth on Linux either (as on Windows today).
 - **One adapter assumed** (`hci0`); a second radio is out of scope and reported.
