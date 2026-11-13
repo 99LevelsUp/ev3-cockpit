@@ -31,10 +31,12 @@ export interface ThrottleSettings {
 	readonly calmWindows: number;
 }
 
-/** How a running program slows its brick's telemetry (step-6 U9, owner decision D11). */
+/** How programs are followed and slow their brick's telemetry (step-6 U9, owner decision D11). */
 export interface ProgramPresetSettings {
 	/** While a program runs, the tick is at least this, in milliseconds; 0 turns it off. 0 or more. */
 	readonly programRunningTickMs: number;
+	/** How often a followed program's state is read, in milliseconds. 1 or more. */
+	readonly programStatusIntervalMs: number;
 }
 
 /** The part of a VS Code configuration section this needs: `getConfiguration('ev3-cockpit')`. */
@@ -70,6 +72,7 @@ const THROTTLE: Specs<ThrottleSettings> = {
 
 const PRESET: Specs<ProgramPresetSettings> = {
 	programRunningTickMs: { key: 'telemetry.programRunningTickMs', kind: 'number', min: 0 },
+	programStatusIntervalMs: { key: 'programs.statusIntervalMs', kind: 'number', min: 1 },
 };
 
 /** Throws, naming the setting, for stale settings out of range. */

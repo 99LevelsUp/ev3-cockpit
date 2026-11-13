@@ -58,7 +58,7 @@ function world(programRunningTickMs: number, transport = Transport.USB) {
 	};
 	const registry = new ProviderRegistry();
 	registry.register(provider(transport));
-	const service = new TelemetryService({ host, providerRegistry: registry, programPreset: { programRunningTickMs } });
+	const service = new TelemetryService({ host, providerRegistry: registry, programPreset: { programRunningTickMs, programStatusIntervalMs: 1000 } });
 	const plans: PlanChangeEvent[] = [];
 	service.onPlanChange((e) => plans.push(e));
 	const loop = () => {
@@ -122,11 +122,11 @@ describe('Telemetry while a program runs (step-6 U9, D11)', () => {
 		try {
 			w.program(true);
 			await w.read();
-			w.service.configureProgramPreset({ programRunningTickMs: 300 });
+			w.service.configureProgramPreset({ programRunningTickMs: 300, programStatusIntervalMs: 1000 });
 			assert.equal(w.loop().tickPeriodMs, 300);
-			w.service.configureProgramPreset({ programRunningTickMs: 0 });
+			w.service.configureProgramPreset({ programRunningTickMs: 0, programStatusIntervalMs: 1000 });
 			assert.equal(w.loop().tickPeriodMs, 100, 'turned off while the program still runs');
-			assert.throws(() => w.service.configureProgramPreset({ programRunningTickMs: -1 }), /programRunningTickMs/);
+			assert.throws(() => w.service.configureProgramPreset({ programRunningTickMs: -1, programStatusIntervalMs: 1000 }), /programRunningTickMs/);
 		} finally {
 			w.service.dispose();
 		}

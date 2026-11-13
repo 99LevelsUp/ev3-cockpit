@@ -75,16 +75,16 @@ describe('telemetry settings (D9)', () => {
 		assert.equal(warnings.length, 3, "'yes' for a switch, a window of 7.5 frames and a step that never slows are refused");
 	});
 	it('declares the program preset in package.json, 200 ms as the measurement decided (U9, D11)', () => {
-		assert.deepEqual(programPresetSettingsFromPackage(pkg), { programRunningTickMs: 200 });
+		assert.deepEqual(programPresetSettingsFromPackage(pkg), { programRunningTickMs: 200, programStatusIntervalMs: 1000 });
 	});
 
 	it('reads 0 as the preset turned off, and refuses a negative tick (U9)', () => {
-		const declared = { 'telemetry.programRunningTickMs': 200 };
+		const declared = { 'telemetry.programRunningTickMs': 200, 'programs.statusIntervalMs': 1000 };
 		const warnings: string[] = [];
 		assert.deepEqual(readProgramPresetSettings(section({ 'telemetry.programRunningTickMs': 0 }, declared), (m) => warnings.push(m)),
-			{ programRunningTickMs: 0 });
+			{ programRunningTickMs: 0, programStatusIntervalMs: 1000 });
 		assert.deepEqual(readProgramPresetSettings(section({ 'telemetry.programRunningTickMs': -5 }, declared), (m) => warnings.push(m)),
-			{ programRunningTickMs: 200 });
+			{ programRunningTickMs: 200, programStatusIntervalMs: 1000 });
 		assert.equal(warnings.length, 1);
 	});
 });

@@ -4,8 +4,9 @@
  *
  * KTD2: the firmware refuses a start into a running slot in silence, so the service checks
  * first (refused unless `replace`) and confirms afterwards. KTD3: emergency stop is the brick's
- * own power-off sequence. KTD4: run state is polled while someone listens, and not otherwise —
- * not even for a program the service started (owner decision D5 of the step-6 plan).
+ * own power-off sequence. KTD4: run state is followed while someone listens, and not otherwise —
+ * not even for a program the service started (owner decision D5 of the step-6 plan). Since step 6
+ * U9 it is followed through the telemetry row, not a poll of the service's own.
  */
 
 import assert from 'assert/strict';
@@ -14,7 +15,7 @@ import { describe, it } from 'node:test';
 import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { BrickCommand, BrickResponse, makeBrickKey, Transport } from '../contracts';
 import { ErrorCode } from '../errors/CockpitError';
-import { ProgramService } from '../programs/programService';
+import { ProgramFollow, ProgramService } from '../programs/programService';
 import { waitFor } from './waitFor';
 
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,7 +23,21 @@ const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeou
 const KEY = makeBrickKey(Transport.Mock, 'M1');
 const PRG = '/home/root/lms2012/prjs/Demo/Demo.rbf';
 
-async function world(options: { pollMs?: number } = {}) {
+/** A stand-in for following the program row: counts follows and lets a test say the state. */
+function fakeFollow() {
+	let tell: ((running: boolean) => void) | undefined;
+	const counts = { follows: 0, disposes: 0 };
+	const follow: ProgramFollow = {
+		follow: (onState) => {
+			counts.follows += 1;
+			tell = onState;
+			return { dispose: () => { counts.disposes += 1; tell = undefined; } };
+		},
+	};
+	return { follow, counts, say: (running: boolean) => tell?.(running) };
+}
+
+async function world() {
 	const mock = new MockTransportProvider({
 		transport: Transport.Mock,
 		bricks: [{
@@ -37,9 +52,10 @@ async function world(options: { pollMs?: number } = {}) {
 		sent.push(command.kind);
 		return override?.(command) ?? mock.executeCommand(KEY, command);
 	};
-	const service = new ProgramService(send, { pollMs: options.pollMs ?? 20, confirmTimeoutMs: 200, confirmStepMs: 10 });
+	const row = fakeFollow();
+	const service = new ProgramService(send, { confirmTimeoutMs: 200, confirmStepMs: 10 }, row.follow);
 	return {
-		mock, service, sent,
+		mock, service, sent, row,
 		setOverride: (f: typeof override) => { override = f; },
 		done: () => { service.dispose(); mock.dispose(); },
 	};
@@ -96,32 +112,42 @@ describe('Program control service (step-5 U3)', () => {
 		w.done();
 	});
 
-	it('keeps polling for a listener through lost replies', async () => {
+	it('follows the run state while anyone listens: one follow for every listener, ended with the last (U9)', async () => {
 		const w = await world();
-		w.service.onStateChange(() => { /* listening */ });
-		let lost = 0;
-		w.setOverride((command) => {
-			if (command.kind === 'program:status' && lost < 3) { lost += 1; throw new Error('a lost reply'); }
-			return undefined;
-		});
-		await waitFor(() => lost >= 3, 2000);
-		const before = w.sent.length;
+		const first = w.service.onStateChange(() => { /* listening */ });
+		const second = w.service.onStateChange(() => { /* listening */ });
+		assert.deepEqual(w.row.counts, { follows: 1, disposes: 0 });
 
-		await waitFor(() => w.sent.length > before, 2000);
-
+		first.dispose();
+		assert.deepEqual(w.row.counts, { follows: 1, disposes: 0 }, 'one listener still there');
+		second.dispose();
+		assert.deepEqual(w.row.counts, { follows: 1, disposes: 1 });
+		assert.ok(!w.sent.includes('program:status'), 'no poll of its own (U9)');
 		w.done();
 	});
 
-	it('stops polling as soon as the last listener leaves', async () => {
+	it('refuses to follow without telemetry, and keeps no listener whose follow could not start (U9)', async () => {
 		const w = await world();
-		const listening = w.service.onStateChange(() => { /* listening */ });
-		await waitFor(() => w.sent.includes('program:status'), 1000);
+		const bare = new ProgramService(async () => ({ kind: 'program:stop' }) as BrickResponse);
+		assert.throws(() => bare.onStateChange(() => undefined), (error) => codeOf(error) === ErrorCode.SubscriptionFailed);
 
-		listening.dispose();
-		const after = w.sent.length;
-		await settle(100);
-
-		assert.equal(w.sent.length, after, 'kept polling with nobody listening');
+		let fail = true;
+		let say: ((running: boolean) => void) | undefined;
+		const flaky = new ProgramService(async () => ({ kind: 'program:stop' }) as BrickResponse, {}, {
+			follow: (onState) => {
+				if (fail) { throw new Error('the brick is not connected'); }
+				say = onState;
+				return { dispose: () => undefined };
+			},
+		});
+		const refused: boolean[] = [];
+		assert.throws(() => flaky.onStateChange((running) => refused.push(running)), /not connected/);
+		fail = false;
+		const later = flaky.onStateChange(() => undefined);   // a fresh attempt, not a stale listener's
+		say?.(false);
+		say?.(true);
+		assert.deepEqual(refused, [], 'a listener that was refused hears nothing');
+		later.dispose();
 		w.done();
 	});
 
@@ -135,7 +161,7 @@ describe('Program control service (step-5 U3)', () => {
 			return w.mock.executeCommand(KEY, command);
 		};
 		const service = new ProgramService(async (command) => { w.sent.push(command.kind); return statusGate(command); },
-			{ pollMs: 20, confirmTimeoutMs: 200, confirmStepMs: 10 });
+			{ confirmTimeoutMs: 200, confirmStepMs: 10 });
 
 		const running = service.run(PRG);   // waits on its first status question
 		await settle(10);
@@ -190,45 +216,22 @@ describe('Program control service (step-5 U3)', () => {
 
 		await w.service.run(PRG);
 		await waitFor(() => states.length === 1, 1000);
-		w.mock.endProgram(KEY);
-		await waitFor(() => states.length === 2, 1000);
-		await settle(80);
+		w.row.say(false);   // the program row: it ended by itself
+		w.row.say(false);   // and is read again, still ended
 
 		assert.deepEqual(states, [true, false]);
 		w.done();
 	});
 
-	it('does not poll again after a poll that was on its way when the last listener left', async () => {
-		const w = await world();
-		let release: () => void = () => { /* replaced below */ };
-		const held = new Promise<void>((resolve) => { release = resolve; });
-		let holding = true;
-		const service = new ProgramService(async (command) => {
-			w.sent.push(command.kind);
-			if (command.kind === 'program:status' && holding) { holding = false; await held; }
-			return w.mock.executeCommand(KEY, command);
-		}, { pollMs: 20, confirmTimeoutMs: 200, confirmStepMs: 10 });
-		const listening = service.onStateChange(() => { /* listening */ });
-		await waitFor(() => !holding, 1000);   // the first poll is on its way
-
-		listening.dispose();
-		const after = w.sent.length;   // counted before the reply comes back: no poll may follow it
-		release();
-		await settle(130);
-
-		assert.equal(w.sent.length, after, 'the poll on its way scheduled another one for nobody');
-		service.dispose();
-		w.done();
-	});
-
-	it('does not poll the brick when nobody listens, even while a program it started runs', async () => {
+	it('does not follow the brick when nobody listens, even while a program it started runs', async () => {
 		const w = await world();
 		await w.service.run(PRG);
 		const before = w.sent.length;
 
 		await settle(100);
 
-		assert.equal(w.sent.length, before, 'polled a brick nobody asked about (step-6 plan D5)');
+		assert.equal(w.sent.length, before, 'asked a brick nobody asked about (step-6 plan D5)');
+		assert.equal(w.row.counts.follows, 0);
 		w.done();
 	});
 });

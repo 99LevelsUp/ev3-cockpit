@@ -12,7 +12,7 @@ import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { createRuntime } from '../runtime/createRuntime';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { ActivityMode } from '../contracts/enums';
-import { telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
+import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -20,6 +20,7 @@ const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 const telemetrySettings = telemetrySettingsFromPackage(manifest);
 const throttleSettings = throttleSettingsFromPackage(manifest);
+const programPreset = programPresetSettingsFromPackage(manifest);
 
 describe('createRuntime', () => {
 	it('wires discovery to the brick layer: a discovered mock brick signs in and answers', async () => {
@@ -27,7 +28,7 @@ describe('createRuntime', () => {
 			extensionPath: '.',
 			log: quiet,
 			startPresence: false,
-			telemetrySettings, throttleSettings,
+			telemetrySettings, throttleSettings, programPreset,
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		try {
@@ -48,7 +49,7 @@ describe('createRuntime', () => {
 		const lines: string[] = [];
 		const log = { ...quiet, info: (message: string) => { lines.push(message); } };
 		const runtime = createRuntime({
-			extensionPath: '.', log, startPresence: false, telemetrySettings, throttleSettings,
+			extensionPath: '.', log, startPresence: false, telemetrySettings, throttleSettings, programPreset,
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		try {
@@ -71,15 +72,44 @@ describe('createRuntime', () => {
 		}
 	});
 
+	it('slows a brick\'s telemetry while its program runs, through the shipped wiring (U9, D11)', async () => {
+		const prg = '/home/root/lms2012/prjs/Demo/Demo.rbf';
+		const mock = new MockTransportProvider({
+			transport: Transport.Mock,
+			bricks: [{
+				id: 'demo', displayName: 'Demo', battery: { level: 80 }, motorPorts: [], sensorPorts: [],
+				filesystem: [{ path: prg, content: 'LEGO-rbf-image' }],
+			}],
+		} as never);
+		const runtime = createRuntime({
+			extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, programPreset,
+			providers: [mock],
+		});
+		try {
+			const demo = brickIdOf(makeBrickKey(Transport.Mock, 'demo'));
+			await waitFor(() => runtime.aggregator.getBrick(demo) !== undefined, 2000);
+			await runtime.bricks.signIn(demo);
+			assert.equal(runtime.telemetry.loopFor(demo)?.tickPeriodMs, 100);
+
+			await runtime.bricks.send(demo, { kind: 'program:run', path: prg });
+			await waitFor(() => runtime.telemetry.loopFor(demo)?.tickPeriodMs === programPreset.programRunningTickMs, 3000);
+
+			await runtime.bricks.send(demo, { kind: 'program:stop' });
+			await waitFor(() => runtime.telemetry.loopFor(demo)?.tickPeriodMs === 100, 3000);
+		} finally {
+			runtime.dispose();
+		}
+	});
+
 	it('builds no Bluetooth pairing or presence when the providers are injected', () => {
-		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, providers: [] });
+		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, programPreset, providers: [] });
 		assert.equal(runtime.btDiscovery, undefined);
 		assert.equal(runtime.btPresence, undefined);
 		runtime.dispose();
 	});
 
 	it('gives the brick layer Windows\' side of a pairing, so the one-sided check can run (step-4 plan, U7)', () => {
-		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, providers: [] });
+		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, programPreset, providers: [] });
 		// Absent, the check is silently off: nothing else in the product would show it.
 		assert.ok((runtime.bricks as unknown as { windowsPairing?: unknown }).windowsPairing, 'the check has no source');
 		runtime.dispose();

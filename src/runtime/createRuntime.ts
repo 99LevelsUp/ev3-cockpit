@@ -22,7 +22,7 @@ import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
 import { TelemetryService } from '../telemetry/telemetryService';
-import type { TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
+import type { ProgramPresetSettings, TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
 import { BrickManager } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
@@ -66,6 +66,8 @@ export interface RuntimeOptions {
 	readonly telemetrySettings: TelemetrySettings;
 	/** How each brick's telemetry slows down when its round trips grow (U7); read as the stale settings are. */
 	readonly throttleSettings: ThrottleSettings;
+	/** How a running program slows its brick's telemetry (U9, D11): the user's settings, as above. */
+	readonly programPreset: ProgramPresetSettings;
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
@@ -157,7 +159,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	// sessions they send over. The host gates on the pair (2.8.10a): a brick is read only while it is
 	// signed in and has a route.
 	const telemetry = services.add(new TelemetryService({
-		host: bricks.telemetryHost(), providerRegistry: registry, throttle: options.throttleSettings,
+		host: bricks.telemetryHost(), providerRegistry: registry, throttle: options.throttleSettings, programPreset: options.programPreset,
 	}));
 	const telemetryView = services.add(new TelemetryReadModel({ source: telemetry, settings: options.telemetrySettings }));
 	services.add(telemetry.onPlanChange((e) => {

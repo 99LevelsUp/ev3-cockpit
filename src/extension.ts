@@ -13,7 +13,7 @@ import { createNotifier } from './ui/notify';
 import { AccessMode } from './api/accessPolicy';
 import { CockpitApi, createCockpitApi } from './api/cockpitApi';
 import { NotConnectedError } from './errors/CockpitError';
-import { readTelemetrySettings, readThrottleSettings } from './telemetry/telemetrySettings';
+import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from './telemetry/telemetrySettings';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -47,6 +47,7 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		// The user's settings; VS Code hands back package.json's default for what nobody set (D9).
 		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+		programPreset: readProgramPresetSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 	}));
 	// A changed setting applies at once, no reload.
 	services.add(vscode.workspace.onDidChangeConfiguration((e) => {
@@ -54,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		const section = vscode.workspace.getConfiguration('ev3-cockpit');
 		runtime.telemetryView.configure(readTelemetrySettings(section, (m) => logger.warn(m)));
 		runtime.telemetry.configureThrottle(readThrottleSettings(section, (m) => logger.warn(m)));
+		runtime.telemetry.configureProgramPreset(readProgramPresetSettings(section, (m) => logger.warn(m)));
 		logger.info('Telemetry settings changed');
 	}));
 	const { bricks, aggregator, btPresence } = runtime;
@@ -259,6 +261,9 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 			onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
 			snapshot: (brickId, rowIds) => runtime.telemetryView.snapshot(brickId, rowIds),
 			onChange: (listener) => runtime.telemetryView.onChange(listener),
+			// Read when a follow starts, so a changed setting needs no reload.
+			programStatusIntervalMs: () => readProgramPresetSettings(
+				vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)).programStatusIntervalMs,
 		},
 		connect: async (brickId) => {
 			await connectPickedBrick(brickId, connectUi());
