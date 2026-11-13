@@ -111,7 +111,7 @@ Built and passing (427 unit tests, 4 extension-host integration tests):
 Open, by phase:
 
 - **Phase 1:** 1.6.10 mock configuration from a workspace file; 1.11.11 Linux Bluetooth
-  (blocked: no Linux host); 1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows,
+  (built on `linux-backend`; the runtime wiring and the hardware session U9 left); 1.11.9 classic Bluetooth RSSI (closed as unavailable on Windows,
   carried as a limitation).
 - **Phase 2:** 2.8.10a telemetry gated on signed-in *and* available; 2.8.12 the remaining
   hardware scenarios, among them 2.8.18's one unverified path: an inquiry chained into pairing
@@ -124,36 +124,55 @@ Open, by phase:
   subscriptions, 3.4 adaptive throttling, 3.5 read model, 3.6 stale snapshots, 3.8 remaining
   constants.
 - **Phase 4:** the public API (4.2–4.5, 4.7, 4.8), program control (4.7a), 4.6.4 per-transport
-  chunk size, 4.6.13 remaining file subcodes, 4.6.16 libusb on Linux, 4.9 sibling consumers.
+  chunk size, 4.6.13 remaining file subcodes, 4.9 sibling consumers.
 - **Phases 5–7:** not started.
 
 ### What Linux needs
 
-REQUIREMENTS §12 makes Linux a required platform. Nothing below blocks the Windows release;
-each item waits for a Linux host, because none of it can be built or verified without one.
+REQUIREMENTS §12 makes Linux a required platform. Nothing below blocks the Windows release.
+Since 11.11.2026 a Linux host (HOSTC, Raspberry Pi 5, arm64, Debian 13, BlueZ 5.82) builds and
+measures it on the `linux-backend` branch; the Bluetooth items are the step-7 plan
+(`docs/plans/2026-11-13-step7-linux-bluetooth.md`).
 
-- **Bluetooth transport** — 1.11.11 `BtBluezBackend`, RFCOMM over BlueZ D-Bus. The Winsock
-  backend (`windowsWinsock.ts`, `ws2_32` through `koffi`) is Windows-only.
-- **Bluetooth discovery** — the device cache and the COM-port scan go through `bthprops`
-  (`windowsBluetooth.ts`, `koffi`) and `serialport` port names; BlueZ lists paired devices
-  through `org.bluez.Device1` objects instead.
-- **Pairing** — the net48 WinRT helper (`native/bin/bt-pairing-helper.exe`) is Windows-only.
-  BlueZ needs an agent (`org.bluez.AgentManager1`) and `Device1.Pair`.
-- **Bluetooth presence and inquiry** — the background inquiry and the paired-brick check run
-  through the same WinRT helper; BlueZ has `Adapter1.StartDiscovery` and device properties.
-- **Forget** — `org.bluez.Adapter1.RemoveDevice` for the unpair, and a `ForgetResidue` list
-  of what BlueZ keeps: verify on a host what stays under `/var/lib/bluetooth/<adapter>/<mac>`
-  and `/var/lib/bluetooth/<adapter>/cache/<mac>` after `RemoveDevice`.
-- **This computer's Bluetooth name** — the brick matches its entry for this computer by the
-  name the radio reports; on Linux that is the adapter's `Alias` (`org.bluez.Adapter1`),
-  replacing `BluetoothGetRadioInfo`.
-- **USB** — 4.6.16 libusb on Linux: udev rules so a normal user can open the brick, and the
-  permissions story for an installed extension.
-- **USB read padding** — DESIGN line 240: the Linux libusb path is unverified;
-  `READ_OVERRUN_SLACK` in `usbLibusbAdapter.ts` is set for Windows only and needs checking
-  there.
+- **Bluetooth transport** — 1.11.11. Built: `BtBluezAdapter`, RFCOMM channel 1 through libc via
+  `koffi`, measured on all three bricks (step-7 U2). DESIGN §4.1.1, "Bluetooth on Linux".
+- **Bluetooth discovery** — built: BlueZ's `Device1` objects through our own D-Bus client (owner
+  decision D1) and one object cache, BlueZ's owner tracked (U3, U4, U8).
+- **Pairing** — built: an agent of our own, PIN `1234`, a BR/EDR search first; paired AAA, BBB
+  and CCC on HOSTC (U5).
+- **Bluetooth presence and inquiry** — built: an L2CAP connect to PSM 1 as the check (D2), a
+  filtered BR/EDR discovery heard on RSSI reports as the inquiry; on and off measured (U6).
+- **Forget** — built: `Adapter1.RemoveDevice` through the adapter holding the brick; the residue
+  is BlueZ's name cache, `/var/lib/bluetooth/<adapter>/cache/<mac>`, root-owned, reported only;
+  the device directory with the link key goes (measured in U0; U7).
+- **This computer's Bluetooth name** — built: the adapter's `Alias` (U4).
+- **The `bluetooth` group** — built: where the bus policy refuses the user, the cockpit offers
+  `pkexec usermod -aG bluetooth <user>` and runs it on confirmation (D4, U4, U8). Debian / RPi OS
+  needs no group; other distributions are not measured.
+- **Left for Bluetooth:** the branch in `createRuntime.ts` that builds `createBluezBluetooth` on
+  `linux` and starts presence there (the Windows session's; the step-7 plan's U8 wiring note says
+  exactly what), then the hardware session U9 on HOSTC — pick, pair, connect, presence, forget,
+  re-pair, a BlueZ restart, `hardware-matrix.js` on the BlueZ backend.
+- ~~**USB** — 4.6.16 libusb on Linux.~~ Done 13.11.2026: libusb on all three bricks, detaching
+  `usbhid` as the normal user and clearing the halt; a udev rule shipped in
+  `native/linux/70-lego-ev3.rules`; recovery from a cable pull holds
+  (`docs/plans/linux-session-results/2026-11-13-hostc-usb.md`).
+- ~~**USB read padding** — `READ_OVERRUN_SLACK` on Linux.~~ Checked 13.11.2026: no slack byte on
+  Linux; the hardware matrix passes on libusb with 1024-byte frames.
+- **TCP** — not yet run on Linux (step-7 plan, U11).
 - ~~**Registry** — the optional `regkey` dependency is Windows-only; nothing on Linux should
   load it.~~ Removed 13.11.2026: nothing required it.
+
+**What a user on Linux does** (for the 0.2.5 install notes):
+
+- USB: install the udev rule once — copy `native/linux/70-lego-ev3.rules` to
+  `/etc/udev/rules.d/`, run `sudo udevadm control --reload`, re-plug the brick. An extension cannot
+  write `/etc/udev`; without the rule the connect fails with a message naming it.
+- Bluetooth: nothing on Debian and Raspberry Pi OS. Where BlueZ is limited to the `bluetooth`
+  group, the cockpit offers to add the user (D4): polkit asks for the password, and the group
+  applies after logging out and in. Without `pkexec` the cockpit shows the command to run.
+- TCP and the mock: nothing.
+- VS Code as a Snap or Flatpak: the sandbox may block USB and Bluetooth; not measured.
 
 ## 3. Phase Overview
 
@@ -559,7 +578,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     cache or completes fast enough to call synchronously, the same way `tcpSocketAdapter`
     already does for TCP. A second execution context would have nothing to do that koffi
     is not already doing — the same shape as 1.11.1 and 1.11.2, dropped for the same reason
-  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available. Everything else Linux needs is listed in §2, "What Linux needs". **Unblocked 11.11.2026** — a Linux host (HOSTC, Raspberry Pi 5, arm64, BlueZ 5.82) is available and measured (`docs/plans/linux-session-results/2026-11-11-hostc.md`, L5/L6 on all three bricks): the brick's only service is Serial Port `00001101`, RFCOMM channel 1; pairing is the brick's dialog then a PIN (`1234`) asked of a BlueZ agent, bonded in 3.4–5.4 s; an unanswered dialog ends after 60 s with `AuthenticationRejected` and stays open on the brick; connect 0.5–2.7 s, an `info` reply in 42–96 ms; a reconnect needs a pause of about 2.5 s (`EBUSY` at once, then `ECONNREFUSED`), on both firmware versions; discovery must scan BR/EDR only — a mixed LE + BR/EDR scan missed a visible brick for 40 s; and `koffi` opens an `AF_BLUETOOTH` RFCOMM socket from Node on arm64, so the backend can live in the extension with no helper process
+  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available. Everything else Linux needs is listed in §2, "What Linux needs". **Unblocked 11.11.2026** — a Linux host (HOSTC, Raspberry Pi 5, arm64, BlueZ 5.82) is available and measured (`docs/plans/linux-session-results/2026-11-11-hostc.md`, L5/L6 on all three bricks): the brick's only service is Serial Port `00001101`, RFCOMM channel 1; pairing is the brick's dialog then a PIN (`1234`) asked of a BlueZ agent, bonded in 3.4–5.4 s; an unanswered dialog ends after 60 s with `AuthenticationRejected` and stays open on the brick; connect 0.5–2.7 s, an `info` reply in 42–96 ms; a reconnect needs a pause of about 2.5 s (`EBUSY` at once, then `ECONNREFUSED`), on both firmware versions; discovery must scan BR/EDR only — a mixed LE + BR/EDR scan missed a visible brick for 40 s; and `koffi` opens an `AF_BLUETOOTH` RFCOMM socket from Node on arm64, so the backend can live in the extension with no helper process. **Built 13.11.2026** on `linux-backend` (step-7 plan, `docs/plans/2026-11-13-step7-linux-bluetooth.md`, U1–U8, each reviewed): the RFCOMM adapter (`BtBluezAdapter`, `'bluez'`), our own D-Bus client (D1), BlueZ's objects with its owner tracked, pairing through our own agent, presence by an L2CAP connect to PSM 1 (D2) and an inquiry heard on RSSI reports, forget through `RemoveDevice` with BlueZ's name cache as residue, the `bluetooth` group offered through `pkexec` (D4), all in one factory, `createBluezBluetooth`. Measured on HOSTC on all three bricks: connect, pairing, presence on and off. **Open:** the `createRuntime.ts` branch on `linux` (the Windows session's, per the plan's U8 wiring note) and the hardware session U9; DESIGN §4.1.1, "Bluetooth on Linux"
 - [x] **1.12 Transport unit tests**
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
@@ -1682,8 +1701,14 @@ Export a stable API for other extensions without giving them direct access to th
       `copy`/`move` while leaving every transfer chunked to 64 bytes, silently
     - USB is now the **fastest** transport for bulk work by a factor of five, inverting the
       ranking a second time and in the opposite direction (DESIGN §4.1)
-  - [ ] 4.6.16 Unverified on the libusb path: the Linux backend (padding should be
-    harmless, but has not been run) and recovery from unplugging mid-transfer. Linux items
+  - [x] 4.6.16 Unverified on the libusb path: the Linux backend (padding should be
+    harmless, but has not been run) and recovery from unplugging mid-transfer. **Done 13.11.2026
+    on HOSTC** (`docs/plans/linux-session-results/2026-11-13-hostc-usb.md`, `linux-backend`):
+    `usbhid` held the interface (`LIBUSB_ERROR_BUSY`); the cockpit now detaches it as the normal
+    user and clears the halt on both endpoints, keeps a held brick listed, steps over the stale
+    packet a freshly plugged brick holds, and names the udev rule on a permission failure. The
+    matrix 43/44 on libusb on all three bricks (TCP only), no slack byte, 8 × 4 MB uploads; a
+    cable pulled mid-transfer is a `TransportError` at once and the brick reconnects after. Linux items
     are collected in §2, "What Linux needs". 11.11.2026: still not run — HOSTC had no USB to
     the bricks; the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`) come
     prebuilt for linux-arm64 and load (`docs/plans/linux-session-results/2026-11-11-hostc.md`)
