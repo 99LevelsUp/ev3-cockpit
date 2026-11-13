@@ -8,15 +8,24 @@
  *
  * **Stale (D9).** A value is stale when its row stops being read — the link went, the brick is no
  * longer active, the claim was released — or when it is `staleFactor` of its own intervals old
- * while the row is still read (the brick is stalling). A stale value stays, marked, for
- * `staleTimeoutMs`, then goes. When the brick's session ends its values go at once. A static row,
- * read once, stays fresh for the whole session: it is what serves a claim made after the read.
- * Both numbers are user settings; this class holds none of its own.
+ * while the row is still read (the brick is stalling). Once stale it stays stale until a new
+ * sample. A stale value stays, marked, for `staleTimeoutMs` counted from when it went stale, then
+ * goes. When the brick's session ends its values go at once, and replies still on their way are not
+ * taken until the brick is read again. A static row, read once, stays fresh for the whole session:
+ * it is what serves a claim made after the read. Both numbers are user settings; this class holds
+ * none of its own.
  *
- * **Events carry the rows that changed (D10)** — value, mode, stale flag or effective interval —
- * and the rows dropped. Nothing is lost in an outage: there are no samples to lose, the values
- * turning stale is an event, and the first sample after the outage is one even when its value is
- * the same, because the stale flag flips back.
+ * **Events carry the rows that changed (D10)** — value, mode, unit, stale flag or effective
+ * interval — and the rows dropped. Nothing is lost in an outage: there are no samples to lose, the
+ * values turning stale is an event, and the first sample after the outage is one even when its
+ * value is the same, because the stale flag flips back.
+ *
+ * **One order for every input** (review of U6, rounds 1–2, where each input had kept its own and
+ * each round found one that forgot a case). A sample, a plan, a session's end, a settings change
+ * and the timer all go through {@link TelemetryReadModel.run}: first time is brought up to now
+ * under the state as it was — what went stale is announced, then what expired goes — and only then
+ * is the input applied. Events are not picked by hand: they are the difference between what readers
+ * were last told and what holds now, so a change cannot go untold.
  */
 
 import * as vscode from 'vscode';
@@ -75,8 +84,9 @@ interface Entry {
 	unit?: string;
 	mode?: number;
 	sampledAt: number;
+	/** How often the row is read now; `'once'` for a static row; undefined while it is not read. */
 	interval?: number | 'once';
-	/** When the value turned stale; undefined while it is fresh. */
+	/** When the value went stale; undefined while it is fresh. Sticky until a new sample. */
 	staleSince?: number;
 }
 
@@ -99,11 +109,16 @@ export class TelemetryReadModel implements vscode.Disposable {
 	private readonly bricks = new Map<BrickRef, Map<string, Entry>>();
 	/** What each brick is read for now, as the source last said. */
 	private readonly plans = new Map<BrickRef, ReadonlyMap<string, number | 'once'>>();
+	/** What readers were last told, per brick: events are the difference from it. */
+	private readonly told = new Map<BrickRef, Map<string, ReadValue>>();
+	/** Bricks whose session ended and that are not read again yet: their late replies are not taken. */
+	private readonly ended = new Set<BrickRef>();
 	private readonly subscriptions: vscode.Disposable[];
 	private readonly now: () => number;
 	private readonly timer: ReadModelTimer;
 	private settings: TelemetrySettings;
 	private cancelTimer: (() => void) | undefined;
+	private disposed = false;
 
 	private readonly _onChange = new vscode.EventEmitter<ReadModelChange>();
 	readonly onChange = this._onChange.event;
@@ -118,17 +133,17 @@ export class TelemetryReadModel implements vscode.Disposable {
 			if (intervals.size > 0) { this.plans.set(brickKey, intervals); }
 		}
 		this.subscriptions = [
-			source.onValues((event) => this.take(event)),
-			source.onPlanChange((event) => this.plan(event)),
-			source.onSessionEnded((event) => this.end(event.brickKey)),
+			source.onValues((event) => this.run(() => this.take(event))),
+			source.onPlanChange((event) => this.run(() => this.plan(event))),
+			source.onSessionEnded((event) => this.run(() => this.end(event.brickKey))),
 		];
 	}
 
 	/** Changes the stale settings; they apply at once. Throws, changing nothing, for settings out of range. */
 	configure(settings: TelemetrySettings): void {
 		checkTelemetrySettings(settings);
-		this.settings = settings;
-		this.sweep();
+		// Time up to now under the old settings, then the new ones.
+		this.run(() => { this.settings = settings; });
 	}
 
 	/** The brick's values, all or the rows named; a row with no value is left out. */
@@ -148,126 +163,145 @@ export class TelemetryReadModel implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.bricks.clear();
 		this.plans.clear();
+		this.told.clear();
 		this._onChange.dispose();
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
 
+	/**
+	 * Every input goes through here: time first, under the state as it was; then the input; then
+	 * time again under the new state (a shorter interval or a smaller `staleFactor` may put a
+	 * deadline in the past); each step tells what changed.
+	 */
+	private run(input: () => void): void {
+		if (this.disposed) { return; }
+		this.settle();
+		input();
+		this.announce();
+		this.settle();
+		this.schedule();
+	}
+
+	/** Brings time up to now: what went stale is announced, then what has been stale long enough goes. */
+	private settle(): void {
+		const now = this.now();
+		const { staleFactor, staleTimeoutMs } = this.settings;
+		for (const entries of this.bricks.values()) {
+			for (const entry of entries.values()) {
+				if (entry.staleSince !== undefined || typeof entry.interval !== 'number') { continue; }
+				// From the deadline, however late this runs: that is when it went stale.
+				const deadline = entry.sampledAt + staleFactor * entry.interval;
+				if (now >= deadline) { entry.staleSince = deadline; }
+			}
+		}
+		// Stale before gone, even with no time between: a reader hears both.
+		this.announce();
+		for (const entries of this.bricks.values()) {
+			for (const [id, entry] of entries) {
+				if (entry.staleSince !== undefined && now >= entry.staleSince + staleTimeoutMs) { entries.delete(id); }
+			}
+		}
+		this.announce();
+	}
+
 	private take(event: TelemetryValuesEvent): void {
-		// Deadlines that have passed are announced first: a sample that beats a late timer to it
-		// must not erase an outage without a word (D10; review of U6, round 1).
-		this.sweep();
 		const { brickKey } = event;
+		// A reply still on its way when the session ended — or ended by a listener just now.
+		if (this.ended.has(brickKey)) { return; }
 		let entries = this.bricks.get(brickKey);
 		if (!entries) { entries = new Map(); this.bricks.set(brickKey, entries); }
 		const plan = this.plans.get(brickKey);
 		const now = this.now();
-		const changed: ReadValue[] = [];
 		for (const value of event.values) {
 			const before = entries.get(value.rowId);
 			const planned = plan?.get(value.rowId);
-			const reading = {
+			const reading: Entry = {
 				value: value.value,
 				...(value.unit !== undefined ? { unit: value.unit } : {}),
 				...(value.mode !== undefined ? { mode: value.mode } : {}),
 				sampledAt: value.sampledAt,
 			};
-			let entry: Entry;
 			if (planned === 'once' || before?.interval === 'once') {
-				entry = { ...reading, interval: 'once' };
+				reading.interval = 'once';
 			} else if (planned === undefined) {
-				// A row no longer read: the reply of a frame sent before the re-plan. Its value is
-				// kept, but it stays stale, and its drop is not put off.
-				entry = { ...reading, staleSince: before?.staleSince ?? now };
+				// Not read any more: the reply of a frame sent before the re-plan. Kept, but stale
+				// since it stopped being read, so its drop is not put off.
+				reading.staleSince = before?.staleSince ?? now;
 			} else {
-				entry = { ...reading, interval: planned };
+				reading.interval = planned;
 			}
-			entries.set(value.rowId, entry);
-			if (!before || !Object.is(before.value, entry.value) || before.mode !== entry.mode || before.unit !== entry.unit
-				|| (before.staleSince === undefined) !== (entry.staleSince === undefined) || before.interval !== entry.interval) {
-				changed.push(view(value.rowId, entry));
-			}
+			entries.set(value.rowId, reading);
 		}
-		this.tell(brickKey, changed, []);
-		this.schedule();
 	}
 
 	private plan(event: PlanChangeEvent): void {
 		const { brickKey, intervals } = event;
-		if (intervals.size === 0) { this.plans.delete(brickKey); } else { this.plans.set(brickKey, intervals); }
+		if (intervals.size === 0) {
+			this.plans.delete(brickKey);
+		} else {
+			this.plans.set(brickKey, intervals);
+			// Read again: a new session's loop.
+			this.ended.delete(brickKey);
+		}
 		const entries = this.bricks.get(brickKey);
 		if (!entries) { return; }
-		const changed: ReadValue[] = [];
 		const now = this.now();
 		for (const [id, entry] of entries) {
 			if (entry.interval === 'once') { continue; }
 			const interval = intervals.get(id);
 			if (interval === undefined) {
-				// No longer read: stale at once, whatever its age.
-				if (entry.staleSince === undefined) { entry.staleSince = now; changed.push(view(id, entry)); }
-				continue;
+				entry.interval = undefined;
+				entry.staleSince ??= now;
+			} else {
+				// Stale stays stale until a sample, whatever the new interval.
+				entry.interval = interval;
 			}
-			if (interval !== entry.interval) { entry.interval = interval; changed.push(view(id, entry)); }
 		}
-		this.tell(brickKey, changed, []);
-		this.sweep();
 	}
 
 	private end(brickKey: BrickRef): void {
-		const entries = this.bricks.get(brickKey);
 		this.bricks.delete(brickKey);
 		this.plans.delete(brickKey);
-		if (entries && entries.size > 0) { this.tell(brickKey, [], [...entries.keys()]); }
-		this.schedule();
+		this.ended.add(brickKey);
 	}
 
-	/**
-	 * Marks what has aged past the stale limit and drops what has been stale long enough.
-	 *
-	 * Times count from the deadlines, not from when this runs: a value went stale when it reached
-	 * `staleFactor` of its intervals, however late the timer is. A value that went stale and is
-	 * gone in one pass is announced stale first, then gone: nothing is skipped (D10).
-	 */
-	private sweep(): void {
-		const now = this.now();
-		const { staleFactor, staleTimeoutMs } = this.settings;
-		for (const [brickKey, entries] of this.bricks) {
-			const turnedStale: ReadValue[] = [];
-			const removed: string[] = [];
+	/** Tells readers what differs from what they were last told, per brick. */
+	private announce(): void {
+		const bricks = new Set<BrickRef>([...this.bricks.keys(), ...this.told.keys()]);
+		for (const brickKey of bricks) {
+			const entries = this.bricks.get(brickKey) ?? new Map<string, Entry>();
+			const before = this.told.get(brickKey) ?? new Map<string, ReadValue>();
+			const now = new Map<string, ReadValue>();
+			const rows: ReadValue[] = [];
 			for (const [id, entry] of entries) {
-				if (entry.interval === 'once') { continue; }
-				if (entry.staleSince === undefined && typeof entry.interval === 'number') {
-					const deadline = entry.sampledAt + staleFactor * entry.interval;
-					if (now >= deadline) {
-						entry.staleSince = deadline;
-						turnedStale.push(view(id, entry));
-					}
-				}
-				if (entry.staleSince !== undefined && now >= entry.staleSince + staleTimeoutMs) {
-					entries.delete(id);
-					removed.push(id);
-				}
+				const current = view(id, entry);
+				now.set(id, current);
+				const was = before.get(id);
+				if (!was || differs(was, current)) { rows.push(current); }
 			}
-			this.tell(brickKey, turnedStale, []);
-			this.tell(brickKey, [], removed);
+			const removed = [...before.keys()].filter((id) => !entries.has(id));
+			if (now.size > 0) { this.told.set(brickKey, now); } else { this.told.delete(brickKey); }
+			if (entries.size === 0) { this.bricks.delete(brickKey); }
+			if (rows.length > 0 || removed.length > 0) { this._onChange.fire({ brickKey, rows, removed }); }
 		}
-		this.schedule();
 	}
 
 	/** Sets the timer for the next moment a value turns stale or a stale one goes. */
 	private schedule(): void {
+		if (this.disposed) { return; }
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
 		const { staleFactor, staleTimeoutMs } = this.settings;
 		let next = Number.POSITIVE_INFINITY;
 		for (const entries of this.bricks.values()) {
 			for (const entry of entries.values()) {
-				if (entry.interval === 'once') { continue; }
 				if (entry.staleSince !== undefined) {
 					next = Math.min(next, entry.staleSince + staleTimeoutMs);
 				} else if (typeof entry.interval === 'number') {
@@ -275,16 +309,18 @@ export class TelemetryReadModel implements vscode.Disposable {
 				}
 			}
 		}
-		if (next === Number.POSITIVE_INFINITY) { return; }
+		if (!Number.isFinite(next)) { return; }
 		this.cancelTimer = this.timer.set(Math.min(Math.max(0, next - this.now()), LONGEST_TIMER_MS), () => {
 			this.cancelTimer = undefined;
-			this.sweep();
+			this.run(() => undefined);
 		});
 	}
+}
 
-	private tell(brickKey: BrickRef, rows: readonly ReadValue[], removed: readonly string[]): void {
-		if (rows.length > 0 || removed.length > 0) { this._onChange.fire({ brickKey, rows, removed }); }
-	}
+/** Whether a reader would see a difference: a new sample of the same value is not one (D10). */
+function differs(a: ReadValue, b: ReadValue): boolean {
+	return !Object.is(a.value, b.value) || a.unit !== b.unit || a.mode !== b.mode
+		|| a.stale !== b.stale || a.effectiveIntervalMs !== b.effectiveIntervalMs;
 }
 
 function view(rowId: string, entry: Entry): ReadValue {
