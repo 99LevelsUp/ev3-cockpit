@@ -69,7 +69,10 @@ have two adapter implementations, because the "obvious" one carries a real cost:
 path caps every packet at 64 bytes (a defect in the brick's own descriptor, not a library
 limitation), so the extension prefers a libusb adapter that reaches the firmware's real
 1024-byte frame and falls back to HID loudly rather than silently. Bluetooth's two adapters
-were chosen the same way — measured against live bricks, not assumed.
+on Windows were chosen the same way — measured against live bricks, not assumed. On Linux
+Bluetooth has one adapter, an RFCOMM socket through libc, with BlueZ reached for discovery,
+pairing, presence and forget through the cockpit's own D-Bus client (DESIGN §4.1.1, "Bluetooth
+on Linux"; built, not yet wired into the runtime).
 
 A **transport provider** composes an adapter with the protocol layer and implements the one
 contract every transport shares: `discover`, `connect`, `disconnect`, `send`, `recover`,
