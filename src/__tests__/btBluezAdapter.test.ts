@@ -40,8 +40,9 @@ class FakeLibc implements LinuxBtSocketApi {
 	recvAtEnd?: number;
 	recvErrno = EAGAIN;
 	sockets = 0;
-	blocking: [number, number][] = [];
-	setBlockingResult = 0;
+	/** canWrite answers false this many times before true. */
+	notWritableFor = 0;
+	canWriteCalls = 0;
 	/** Scripted answers for the next sends: bytes accepted, or -1 with an errno. */
 	sendScript: ({ accept: number } | { fail: number })[] = [];
 	/** recv answers -1 with EINTR this many times before reading. */
@@ -52,10 +53,10 @@ class FakeLibc implements LinuxBtSocketApi {
 		this.sockets += 1;
 		return this.fd;
 	}
-	setBlocking(fd: number, sendTimeoutMs: number): number {
-		this.blocking.push([fd, sendTimeoutMs]);
-		this.errnoNow = 9;
-		return this.setBlockingResult;
+	canWrite(): boolean {
+		this.canWriteCalls += 1;
+		if (this.notWritableFor > 0) { this.notWritableFor -= 1; return false; }
+		return true;
 	}
 	connect(_fd: number, address: Uint8Array): number {
 		this.lastAddress = Uint8Array.from(address);
@@ -325,27 +326,15 @@ describe('BtBluezAdapter — who owns the socket while it opens (review of 6955f
 		assert.deepEqual(libc.closed, [20], 'and nothing is closed twice');
 	});
 
-	it('turns the socket blocking after the connect, with a 2 s send timeout, as Winsock does', async () => {
-		const { adapter, libc } = await opened();
-		assert.deepEqual(libc.blocking, [[20, 2000]]);
-		await adapter.close();
-	});
 
-	it('fails the open and releases the socket when it cannot turn blocking', async () => {
-		const libc = new FakeLibc();
-		libc.connectResult = 0;
-		libc.setBlockingResult = -1;
-		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc });
-		await assert.rejects(() => adapter.open(), /errno 9/);
-		assert.deepEqual(libc.closed, [20]);
-		assert.equal(adapter.isOpen, false);
-	});
+
+
 });
 
 describe('BtBluezAdapter — a write that stops part-way (review of 6955f22)', () => {
 	it('closes the link when a packet is left half-sent: the brick would read the next one as its tail', async () => {
 		const { adapter, libc } = await opened();
-		libc.sendScript = [{ accept: 3 }, { fail: EAGAIN }];
+		libc.sendScript = [{ accept: 3 }, { fail: 104 }];
 		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 1000 }), /after 3 of/);
 		assert.equal(adapter.isOpen, false);
 		assert.deepEqual(libc.closed, [20]);
@@ -353,8 +342,8 @@ describe('BtBluezAdapter — a write that stops part-way (review of 6955f22)', (
 
 	it('keeps the link when the write fails before its first byte', async () => {
 		const { adapter, libc } = await opened();
-		libc.sendScript = [{ fail: EAGAIN }];
-		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 1000 }), /send failed \(errno 11\)/);
+		libc.sendScript = [{ fail: 104 }];
+		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 1000 }), /send failed \(errno 104\)/);
 		assert.equal(adapter.isOpen, true);
 		libc.inbound.push(reply(2));
 		const answer = await adapter.send(request(2), { expectedMessageCounter: 2, timeoutMs: 1000 });
@@ -372,5 +361,78 @@ describe('BtBluezAdapter — a write that stops part-way (review of 6955f22)', (
 		assert.deepEqual([...Buffer.concat(libc.sent.map((c) => Buffer.from(c)))], [...request(5)]);
 		assert.equal(adapter.isOpen, true);
 		await adapter.close();
+	});
+});
+
+describe('BtBluezAdapter — a non-blocking write that waits (ownership audit, round 4)', () => {
+	it('waits for the socket to take more, and finishes the packet', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ accept: 2 }, { fail: EAGAIN }];
+		libc.notWritableFor = 3;
+		libc.inbound.push(reply(6));
+		const answer = await adapter.send(request(6), { expectedMessageCounter: 6, timeoutMs: 1000 });
+		assert.equal(answer[2], 6);
+		assert.deepEqual([...Buffer.concat(libc.sent.map((c) => Buffer.from(c)))], [...request(6)]);
+		assert.ok(libc.canWriteCalls >= 3);
+		assert.equal(adapter.isOpen, true);
+		await adapter.close();
+	});
+
+	it('gives up at the exchange deadline when nothing could be written, and keeps the link', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ fail: EAGAIN }];
+		libc.notWritableFor = 1_000_000;
+		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 60 }), TimeoutError);
+		assert.equal(adapter.isOpen, true);
+		await adapter.close();
+	});
+
+	it('closes the link at the deadline when part of the packet went out', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ accept: 3 }, { fail: EAGAIN }];
+		libc.notWritableFor = 1_000_000;
+		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 60 }));
+		await tick(20);
+		assert.equal(adapter.isOpen, false);
+		assert.deepEqual(libc.closed, [20]);
+	});
+
+	it('stops writing when the exchange is aborted, closing the link if bytes went out', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ accept: 3 }, { fail: EAGAIN }];
+		libc.notWritableFor = 1_000_000;
+		const controller = new AbortController();
+		const sending = adapter.send(request(1), { timeoutMs: 5000, signal: controller.signal });
+		await tick(30);
+		controller.abort();
+		await assert.rejects(() => sending);
+		await tick(20);
+		assert.equal(adapter.isOpen, false);
+	});
+});
+
+describe('BtBluezAdapter — open with a signal (ownership audit, round 4)', () => {
+	it('opens no socket for a signal already aborted', async () => {
+		const libc = new FakeLibc();
+		const controller = new AbortController();
+		controller.abort(new Error('disposed'));
+		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc });
+		await assert.rejects(() => adapter.open({ signal: controller.signal }), /disposed/);
+		assert.equal(libc.sockets, 0);
+	});
+
+	it('closes the socket and rejects with the reason when aborted during the connect', async () => {
+		const libc = new FakeLibc();
+		const controller = new AbortController();
+		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc, connectTimeoutMs: 2000 });
+		const opening = adapter.open({ signal: controller.signal }).then(() => 'opened', (e: unknown) => e);
+		await tick(60);
+		controller.abort(new Error('disposed'));
+		const outcome = await opening;
+		assert.ok(outcome instanceof Error && /disposed/.test(outcome.message), `got ${String(outcome)}`);
+		assert.deepEqual(libc.closed, [20]);
+		libc.state = 'connected';
+		await tick(80);
+		assert.equal(adapter.isOpen, false);
 	});
 });

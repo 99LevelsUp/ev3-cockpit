@@ -646,3 +646,77 @@ describe('UsbLibusbAdapter — a close while the open is still finding the brick
 		assert.equal(adapter.isOpen, false);
 	});
 });
+
+describe('UsbLibusbAdapter — one lifetime: abort, a shared close, native calls counted (ownership audit, round 4)', () => {
+	async function settle(): Promise<void> {
+		for (let i = 0; i < 20; i += 1) { await new Promise((r) => setImmediate(r)); }
+	}
+
+	it('opens nothing for a signal already aborted', async () => {
+		const { adapter, log } = adapterFor([{}], undefined, 0, 'linux');
+		const controller = new AbortController();
+		controller.abort(new Error('disposed'));
+		await assert.rejects(() => adapter.open({ signal: controller.signal }), /disposed/);
+		assert.deepEqual(log.openedDevices, []);
+	});
+
+	it('gives everything back when aborted during the clear-halt, and rejects with the reason', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, autoDetach: false, holdClearHalt: true }], undefined, 0, 'linux');
+		const controller = new AbortController();
+		const opening = adapter.open({ signal: controller.signal }).then(() => 'opened', (e: unknown) => e);
+		await settle();
+		controller.abort(new Error('disposed'));
+		for (const answer of log.heldClearHalts.splice(0)) { answer(); }
+		const outcome = await opening;
+		assert.ok(outcome instanceof Error && /disposed/.test(outcome.message), `got ${String(outcome)}`);
+		assert.deepEqual(log.events.slice(-3), ['release', 'attach', 'close']);
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('sends no second clear-halt after a close during the first', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, holdClearHalt: true }], undefined, 0, 'linux');
+		const opening = adapter.open().then(() => 'opened', (e: unknown) => e);
+		await settle();
+		const closing = adapter.close();
+		for (const answer of log.heldClearHalts.splice(0)) { answer(); }
+		await settle();
+		await closing;
+		assert.ok((await opening) instanceof Error);
+		assert.equal(log.events.filter((e) => e.startsWith('clearHalt')).length, 1, 'the endpoint was already released');
+	});
+
+	it('makes a second close wait for the first to finish', async () => {
+		const { adapter, log } = adapterFor([{ holdReads: true }], undefined, 0, 'linux');
+		await adapter.open();
+		void adapter.send(new Uint8Array([0, 0]), { timeoutMs: 10 }).catch(() => undefined);
+		await new Promise((r) => setTimeout(r, 30));
+		const first = adapter.close();
+		let secondDone = false;
+		const second = adapter.close().then(() => { secondDone = true; });
+		await settle();
+		assert.equal(secondDone, false, 'the release is still waiting for the read in flight');
+		for (const answer of log.heldReads.splice(0)) { answer(new Error('LIBUSB_TRANSFER_CANCELLED')); }
+		await Promise.all([first, second]);
+		assert.equal(secondDone, true);
+		assert.equal(log.released, 1);
+	});
+
+	it('counts a clear-halt that has not answered as in flight: the close waits for it', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, holdClearHalt: true }], undefined, 0, 'linux');
+		const opening = adapter.open();
+		await settle();
+		// The first clear-halt is past its 1 s limit; the open goes on, but libusb still holds the request.
+		await new Promise((r) => setTimeout(r, 1100));
+		for (const answer of log.heldClearHalts.splice(1)) { answer(); }
+		await settle();
+		const late = log.heldClearHalts.splice(0);
+		await opening.catch(() => undefined);
+		let closed = false;
+		const closing = adapter.close().then(() => { closed = true; });
+		await settle();
+		assert.equal(closed, false, 'the release waits for the clear-halt libusb still holds');
+		for (const answer of late) { answer(); }
+		await closing;
+		assert.equal(closed, true);
+	});
+});

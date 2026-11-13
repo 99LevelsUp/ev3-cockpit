@@ -440,3 +440,33 @@ describe('BtWinsockAdapter — exchanges', () => {
 		assert.deepEqual(api.closed, [42]);
 	});
 });
+
+describe('BtWinsockAdapter — open with a signal (ownership audit, round 4)', () => {
+	it('opens no socket for a signal already aborted', async () => {
+		const api = new FakeWinsock();
+		let sockets = 0;
+		const socket = api.socket.bind(api);
+		api.socket = () => { sockets += 1; return socket(); };
+		const controller = new AbortController();
+		controller.abort(new Error('disposed'));
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api });
+		await assert.rejects(() => adapter.open({ signal: controller.signal }), /disposed/);
+		assert.equal(sockets, 0);
+	});
+
+	it('closes the socket and rejects with the reason when aborted during the connect', async () => {
+		const api = new FakeWinsock();
+		api.holdConnect = true;
+		const controller = new AbortController();
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api, connectTimeoutMs: 2000 });
+		const opening = adapter.open({ signal: controller.signal }).then(() => 'opened', (e: unknown) => e);
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		controller.abort(new Error('disposed'));
+		const outcome = await opening;
+		assert.ok(outcome instanceof Error && /disposed/.test(outcome.message), `got ${String(outcome)}`);
+		assert.deepEqual(api.closed, [42]);
+		api.finishConnect(0);
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		assert.equal(adapter.isOpen, false);
+	});
+});

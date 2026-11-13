@@ -13,7 +13,7 @@
  */
 
 import { describeAddress } from '../contracts';
-import { TransportAdapter, SendOptions } from './transportAdapter';
+import { TransportAdapter, SendOptions, OpenOptions } from './transportAdapter';
 import { TransportError, TimeoutError, BackendUnavailableError, BrickUnreachableError } from '../errors/CockpitError';
 import {
 	PendingReply,
@@ -54,8 +54,8 @@ const ACTIVE_POLL_MS = 5;
 /** Receive poll with nothing outstanding (ms): the brick never speaks unprompted. */
 const IDLE_POLL_MS = 250;
 
-/** Longest a blocking send may hold the extension host's thread, `SO_SNDTIMEO` (ms). */
-const SEND_BLOCK_LIMIT_MS = 2000;
+/** How often a write that would block checks whether the socket can take more (ms). */
+const WRITE_POLL_MS = 5;
 
 /** Receive buffer per `recv`: twice the firmware's frame, so a full reply lands whole. */
 const RECV_CHUNK_BYTES = 2048;
@@ -115,14 +115,15 @@ export class BtBluezAdapter implements TransportAdapter {
 	 *   no koffi, no Bluetooth stack, not a MAC). Nothing touched the radio.
 	 * @throws {BrickUnreachableError} When the brick did not answer.
 	 */
-	async open(): Promise<void> {
+	async open(options?: OpenOptions): Promise<void> {
 		if (this._isOpen) { return; }
 		if (this.opening) { return this.opening; }
-		this.opening = this.openInternal().finally(() => { this.opening = undefined; });
+		this.opening = this.openInternal(options?.signal).finally(() => { this.opening = undefined; });
 		return this.opening;
 	}
 
-	private async openInternal(): Promise<void> {
+	private async openInternal(signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
 		// Before anything else, because both fail without touching the radio.
 		const api = this.injectedApi ?? loadLinuxBtSocket();
 		const address = sockaddrRc(this.mac, this.channel);
@@ -180,16 +181,14 @@ export class BtBluezAdapter implements TransportAdapter {
 				}
 				const pause = Math.max(0, Math.min(CONNECT_POLL_MS, deadline - Date.now()));
 				await new Promise((resolve) => setTimeout(resolve, pause));
-				// The close that overtook this open has already released the descriptor.
+				// The close that overtook this open has already released the descriptor; an abort has
+				// not, so this open does it.
 				if (overtaken()) { throw closedWhileOpening(); }
+				if (signal?.aborted) {
+					this.releaseDescriptor();
+					throw signal.reason;
+				}
 			}
-		}
-
-		// Blocking for the exchange, as the Winsock adapter does after its connect: a send either
-		// goes whole or fails, never "would block" half-way. SO_SNDTIMEO bounds how long a brick
-		// that stopped answering can hold this thread (review of 6955f22).
-		if (api.setBlocking(fd, SEND_BLOCK_LIMIT_MS) !== 0) {
-			throw failed(api.lastError());
 		}
 
 		this.receiveBuffer = Buffer.alloc(0);
@@ -247,36 +246,51 @@ export class BtBluezAdapter implements TransportAdapter {
 				transport: 'BT BlueZ',
 			});
 
-			try {
-				this.writeAll(api, fd, packet);
-			} catch (error) {
-				this.doRejectPendingReply(error);
-				return;
-			}
-			this.schedulePoll();
+			const exchange = this.pendingReply;
+			void this.writeAll(api, fd, packet, exchange).then(
+				() => this.schedulePoll(),
+				(error) => { if (this.pendingReply === exchange) { this.doRejectPendingReply(error); } },
+			);
 		});
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
 
 	/**
-	 * Writes the whole packet, however many calls that takes. A failure before the first byte
-	 * fails the exchange only; one after it closes the link, because the brick would read the
-	 * next packet as the tail of this one (review of 6955f22).
+	 * Writes the whole packet on the non-blocking socket, waiting for room when it would block —
+	 * within the exchange's own deadline and abort, which end it by settling `exchange`. A failure
+	 * before the first byte fails the exchange only; one after it, or an exchange abandoned with
+	 * part of the packet out, closes the link, because the brick would read the next packet as the
+	 * tail of this one (ownership audit, round 4). Never blocks the extension host's thread.
 	 */
-	private writeAll(api: LinuxBtSocketApi, fd: number, packet: Uint8Array): void {
+	private async writeAll(api: LinuxBtSocketApi, fd: number, packet: Uint8Array, exchange: PendingReply | undefined): Promise<void> {
+		const generation = this.generation;
 		let sent = 0;
-		while (sent < packet.length) {
-			const written = api.send(fd, packet.subarray(sent), packet.length - sent);
-			if (written < 0 && api.lastError() === EINTR) { continue; }
-			if (written > 0) { sent += written; continue; }
-			const why = written < 0 ? `send failed (errno ${api.lastError()})` : 'send stalled';
-			if (sent === 0) {
-				throw new TransportError(`BT BlueZ ${why}.`);
-			}
+		const abandoned = (): boolean => generation !== this.generation || this.pendingReply !== exchange;
+		const cut = (why: string): TransportError => {
 			const error = new TransportError(`BT BlueZ ${why} after ${sent} of ${packet.length} bytes; link closed.`);
-			this.handleFailure(error);
-			throw error;
+			if (generation === this.generation) { this.handleFailure(error); }
+			return error;
+		};
+		while (sent < packet.length) {
+			if (abandoned()) {
+				// Timed out, aborted or closed: the exchange is already settled.
+				if (sent > 0) { cut('send abandoned'); }
+				return;
+			}
+			const written = api.send(fd, packet.subarray(sent), packet.length - sent);
+			if (written > 0) { sent += written; continue; }
+			const code = written < 0 ? api.lastError() : 0;
+			if (written < 0 && code === EINTR) { continue; }
+			if (written < 0 && code === EAGAIN) {
+				while (!api.canWrite(fd) && !abandoned()) {
+					await new Promise((resolve) => setTimeout(resolve, WRITE_POLL_MS));
+				}
+				continue;
+			}
+			const why = written < 0 ? `send failed (errno ${code})` : 'send stalled';
+			if (sent === 0) { throw new TransportError(`BT BlueZ ${why}.`); }
+			throw cut(why);
 		}
 	}
 

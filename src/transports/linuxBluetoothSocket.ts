@@ -47,10 +47,7 @@ export const POLLNVAL = 0x20;
 
 const SOL_SOCKET = 1;
 const SO_ERROR = 4;
-const SO_SNDTIMEO = 21;
-const F_GETFL = 3;
-const F_SETFL = 4;
-const O_NONBLOCK = 0o4000;
+
 
 /** `struct sockaddr_rc`: `sa_family_t`, `bdaddr_t` (6 bytes), `uint8_t` channel, padded to 10. */
 export const SOCKADDR_RC_SIZE = 10;
@@ -85,11 +82,10 @@ export interface LinuxBtSocketApi {
 	 */
 	connectState(fd: number): ConnectState;
 	/**
-	 * Turns a connected socket blocking for the exchange, as the Winsock adapter does after its
-	 * connect, with `SO_SNDTIMEO` so a send to a brick that stopped answering cannot hold the
-	 * extension host's thread for longer than `sendTimeoutMs`. 0, or -1 (see {@link lastError}).
+	 * Whether the socket can take more bytes now: a zero-timeout `poll` for `POLLOUT`. An error or a
+	 * hang-up counts as yes, so the write that follows surfaces it; an interrupted poll as no.
 	 */
-	setBlocking(fd: number, sendTimeoutMs: number): number;
+	canWrite(fd: number): boolean;
 	/** Bytes accepted, or -1. Never raises SIGPIPE ({@link MSG_NOSIGNAL}). */
 	send(fd: number, data: Uint8Array, length: number): number;
 	/** Bytes received, 0 at end of stream, or -1 ({@link EAGAIN} when nothing is waiting). */
@@ -172,8 +168,6 @@ export interface RawLibc {
 	send(fd: number, data: Uint8Array, length: number, flags: number): number | bigint;
 	recv(fd: number, buffer: Uint8Array, length: number, flags: number): number | bigint;
 	close(fd: number): number;
-	fcntl(fd: number, command: number, value: number): number;
-	setsockopt(fd: number, level: number, name: number, value: Buffer, length: number): number;
 }
 
 /**
@@ -219,15 +213,9 @@ export function bindLinuxBtSocket(raw: RawLibc, errno: () => number): LinuxBtSoc
 			if (revents & (POLLERR | POLLHUP)) { return { state: 'failed', error: EIO }; }
 			return revents & POLLOUT ? { state: 'connected', error: 0 } : { state: 'pending', error: 0 };
 		},
-		setBlocking: (fd, sendTimeoutMs) => {
-			const flags = raw.fcntl(fd, F_GETFL, 0);
-			if (flags < 0) { return -1; }
-			if (raw.fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) { return -1; }
-			// struct timeval: two longs, 64-bit on every Linux the cockpit ships.
-			const timeval = Buffer.alloc(16);
-			timeval.writeBigInt64LE(BigInt(Math.floor(sendTimeoutMs / 1000)), 0);
-			timeval.writeBigInt64LE(BigInt((sendTimeoutMs % 1000) * 1000), 8);
-			return raw.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, timeval, timeval.length) < 0 ? -1 : 0;
+		canWrite: (fd) => {
+			const revents = pollNow(fd, POLLOUT);
+			return revents < 0 || (revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL)) !== 0;
 		},
 		send: (fd, data, length) => {
 			checkLength(data, length, 'send');
@@ -289,8 +277,6 @@ export function loadLinuxBtSocket(platform: NodeJS.Platform = os.platform()): Li
 			send: libc.func('intptr_t send(int, const uint8_t *, size_t, int)') as RawLibc['send'],
 			recv: libc.func('intptr_t recv(int, _Out_ uint8_t *, size_t, int)') as RawLibc['recv'],
 			close: libc.func('int close(int)') as RawLibc['close'],
-			fcntl: libc.func('int fcntl(int, int, int)') as RawLibc['fcntl'],
-			setsockopt: libc.func('int setsockopt(int, int, int, const uint8_t *, uint32_t)') as RawLibc['setsockopt'],
 		};
 		cached = bindLinuxBtSocket(raw, () => koffi.errno());
 		return cached;
