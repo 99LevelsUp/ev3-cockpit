@@ -15,10 +15,11 @@ import { TransportError, ConnectionError, DevicePermissionError } from '../error
 import { TransportAdapter } from './transportAdapter';
 import { UsbHidAdapter, UsbHidAdapterOptions } from './usbHidAdapter';
 import {
-	UsbLibusbAdapter, UsbLibusbAdapterOptions, UsbDeviceLocation
+	UsbLibusbAdapter, UsbLibusbAdapterOptions, UsbDeviceLocation, LINUX_UDEV_RULE_PATH
 } from './usbLibusbAdapter';
 import { USB } from './transportConstants';
 import { listLegoUsbDevices } from './usbNodeUsb';
+import * as fs from 'fs';
 
 // ── node-hid discovery (duck-typed) ─────────────────────────────────
 
@@ -32,6 +33,17 @@ interface HidDeviceInfo {
 
 interface NodeHidModule {
 	devices(vendorId?: number, productId?: number): HidDeviceInfo[];
+}
+
+/** `fs.accessSync` for read and write: EACCES or EPERM is a refusal. */
+function defaultHidAccess(path: string): 'denied' | 'ok' | 'unknown' {
+	try {
+		fs.accessSync(path, fs.constants.R_OK | fs.constants.W_OK);
+		return 'ok';
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		return code === 'EACCES' || code === 'EPERM' ? 'denied' : 'unknown';
+	}
 }
 
 /** Why the libusb link did not open; a refused device carries its permission error. */
@@ -92,6 +104,11 @@ export interface UsbTransportProviderOptions {
 	listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	/** The platform whose discovery rules apply (default: this one). For tests. */
 	platform?: NodeJS.Platform;
+	/**
+	 * Whether this user may open a hidraw node (Linux). node-hid's open failure carries no
+	 * errno, so the node itself is asked. Default: `fs.accessSync` for read and write.
+	 */
+	hidAccess?: (path: string) => 'denied' | 'ok' | 'unknown';
 }
 
 /**
@@ -127,7 +144,10 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly listUsbDevices: typeof listLegoUsbDevices;
 	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	private readonly platform: NodeJS.Platform;
+	private readonly hidAccess: (path: string) => 'denied' | 'ok' | 'unknown';
 	private disposed = false;
+	/** The closes {@link disposeAsync} started, for a second caller to wait on too. */
+	private disposing: Promise<void> = Promise.resolve();
 	/**
 	 * Probe links open now, with where each one sits. Their devices count as in use, so
 	 * discovery and a connect leave them alone until they close.
@@ -154,6 +174,7 @@ export class UsbTransportProvider implements TransportProvider {
 		this.listUsbDevices = options?.listUsbDevices ?? listLegoUsbDevices;
 		this.listHidDevices = options?.listHidDevices;
 		this.platform = options.platform ?? process.platform;
+		this.hidAccess = options.hidAccess ?? defaultHidAccess;
 	}
 
 	async discover(): Promise<DiscoveryScanResult> {
@@ -256,9 +277,14 @@ export class UsbTransportProvider implements TransportProvider {
 		// A brick this provider holds is on the cable whatever node-hid says. On Linux the libusb
 		// claim takes the interface from `usbhid`, and the brick's hidraw node goes with it, so
 		// node-hid stops listing a brick the moment it is connected (HOSTC, 13.11.2026).
+		// Linux only, and only while libusb still finds it at its bus address: a pulled cable
+		// drops it at once rather than at the next heartbeat (review of 2dacf24). Windows lists
+		// from node-hid alone, as it always has.
 		const listed = new Set(items.map((item) => item.brickKey));
-		for (const brickKey of this.sessions.keys()) {
-			if (listed.has(brickKey)) { continue; }
+		const onBus = (at: UsbDeviceLocation | undefined): boolean => at !== undefined && nodeUsbDevices.some(
+			(device) => device.location?.busNumber === at.busNumber && device.location?.deviceAddress === at.deviceAddress);
+		for (const [brickKey, session] of this.platform === 'linux' ? this.sessions : []) {
+			if (listed.has(brickKey) || !onBus(session.location)) { continue; }
 			const serial = this.extractSerial(brickKey);
 			const knownName = serial ? this.nameBySerial.get(serial.toLowerCase()) : undefined;
 			items.push({
@@ -328,6 +354,11 @@ export class UsbTransportProvider implements TransportProvider {
 				} catch (error) {
 					await adapter.close().catch(() => { /* nothing to unwind */ });
 					throw error;
+				}
+				if (this.disposed) {
+					// Landed after the dispose, which could not see it: give the device back.
+					await adapter.close().catch(() => { /* disposing */ });
+					throw new TransportError('UsbTransportProvider has been disposed.');
 				}
 				this.probes.set(adapter, adapter.deviceLocation);
 				return adapter;
@@ -409,6 +440,11 @@ export class UsbTransportProvider implements TransportProvider {
 					...(error instanceof DevicePermissionError ? { permission: error } : {}),
 				};
 			}
+			if (this.disposed) {
+				// Landed after the dispose, which could not see it: give the device back.
+				await libusb.close().catch(() => { /* disposing */ });
+				throw new TransportError('UsbTransportProvider has been disposed.');
+			}
 			this.sessions.set(brickKey, {
 				adapter: libusb,
 				backend: 'libusb',
@@ -444,11 +480,16 @@ export class UsbTransportProvider implements TransportProvider {
 			// Name both failures: "USB connect failed" against a working brick usually
 			// means the libusb claim lost to something, and only that message says so.
 			const hidMessage = hidError instanceof Error ? hidError.message : String(hidError);
-			if (libusbFailure.permission) {
-				// Without the udev rule HID is refused for the same reason; say what to do, and keep
-				// HID's own words for the log.
+			// Permission from either backend, by its own code: libusb's LIBUSB_ERROR_ACCESS, and on
+			// Linux the hidraw node itself. Not when that node is open to this user and HID failed
+			// for another reason: then the rule is in place and something else is wrong.
+			const hid = this.platform === 'linux' ? this.hidNodeAccess(serial) : 'unknown';
+			if ((libusbFailure.permission || hid === 'denied') && hid !== 'ok') {
 				throw new DevicePermissionError(
-					`Connect failed for ${describeChannel(brickKey)}. ${libusbFailure.message} HID: ${hidMessage}`,
+					`Connect failed for ${describeChannel(brickKey)}: this user may not open the EV3's USB `
+					+ `device. Install the udev rule that ships with the extension, ${LINUX_UDEV_RULE_PATH} in `
+					+ 'its folder: copy it to /etc/udev/rules.d/, run "sudo udevadm control --reload", then '
+					+ `plug the brick in again. libusb: ${libusbFailure.message}. HID: ${hidMessage}`,
 					hidError
 				);
 			}
@@ -506,14 +547,43 @@ export class UsbTransportProvider implements TransportProvider {
 	}
 
 	dispose(): void {
+		void this.disposeAsync();
+	}
+
+	/**
+	 * Closes every session and probe, and resolves once each has given its device back.
+	 *
+	 * On Linux an open libusb link holds the brick with `usbhid` detached, and only its release
+	 * gives the driver back. The synchronous {@link dispose} starts the closes and returns, and an
+	 * extension host that exits right after leaves the brick with no driver (HOSTC, 13.11.2026:
+	 * one brick after every `npm run test:host`). A deactivate that awaits this does not.
+	 */
+	async disposeAsync(): Promise<void> {
+		if (this.disposed) { return this.disposing; }
 		this.disposed = true;
+		const closes: Promise<void>[] = [];
 		for (const [, session] of this.sessions) {
-			void this.closeHeld(session.adapter, session.location).catch(() => { /* disposing */ });
+			closes.push(this.closeHeld(session.adapter, session.location).catch(() => { /* disposing */ }));
 		}
 		this.sessions.clear();
+		// Probes too: one left open is a brick left without its driver.
+		for (const [probe, location] of this.probes) {
+			closes.push(this.closeHeld(probe, location).catch(() => { /* disposing */ }));
+		}
+		this.probes.clear();
+		this.disposing = Promise.all(closes).then(() => undefined);
+		return this.disposing;
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
+
+	/** Whether this user may open the brick's hidraw node, found by its serial. */
+	private hidNodeAccess(serial: string | undefined): 'denied' | 'ok' | 'unknown' {
+		if (!serial) { return 'unknown'; }
+		const devices = this.listHidDevices?.() ?? tryLoadNodeHid()?.devices(USB.VENDOR_ID, USB.PRODUCT_ID) ?? [];
+		const path = devices.find((device) => device.serialNumber?.trim().toUpperCase() === serial.toUpperCase())?.path;
+		return path ? this.hidAccess(path) : 'unknown';
+	}
 
 	/** Whether a session, an open probe or a closing link holds the device at this bus address. */
 	private isInUse(location: { busNumber: number; deviceAddress: number }): boolean {

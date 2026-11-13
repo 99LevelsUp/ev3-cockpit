@@ -310,3 +310,151 @@ describe('USB connect — a device this user may not open', () => {
 		provider.dispose();
 	});
 });
+
+describe('USB provider — dispose gives every device back (review of 2dacf24)', () => {
+	// On Linux an open libusb link holds the brick with `usbhid` detached; one left open when the
+	// extension stops leaves the brick with no driver. `npm run test:host` showed it: the name
+	// probe was still open when VS Code closed, and dispose closed sessions only.
+	function trackedProvider(openGate?: Promise<void>) {
+		const closed: string[] = [];
+		let made = 0;
+		const provider = new UsbTransportProvider({
+			createLibusbAdapter: () => {
+				const id = `libusb${(made += 1)}`;
+				let open = false;
+				return {
+					async open(): Promise<void> { await openGate; open = true; },
+					async close(): Promise<void> { if (open) { closed.push(id); } open = false; },
+					send: () => Promise.resolve(new Uint8Array()),
+					get isOpen(): boolean { return open; },
+					maxPacketBytes: 1024,
+					deviceLocation: { busNumber: 2, deviceAddress: 10 },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any;
+			},
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: 'no HID here' }) as any,
+		});
+		return { provider, closed };
+	}
+
+	it('closes an open name probe', async () => {
+		const { provider, closed } = trackedProvider();
+		await provider.openProbe(KEY);
+		provider.dispose();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(closed, ['libusb1']);
+	});
+
+	it('closes a probe whose open lands after the dispose, and refuses it', async () => {
+		let land!: () => void;
+		const { provider, closed } = trackedProvider(new Promise<void>((resolve) => { land = resolve; }));
+		const probing = provider.openProbe(KEY).then(() => 'opened', (e: unknown) => e);
+		await new Promise((resolve) => setImmediate(resolve));
+		provider.dispose();
+		land();
+		const outcome = await probing;
+		assert.ok(outcome instanceof Error, 'a probe opened after dispose must not be handed out');
+		assert.deepEqual(closed, ['libusb1']);
+	});
+
+	it('closes a connect whose libusb open lands after the dispose, and keeps no session', async () => {
+		let land!: () => void;
+		const { provider, closed } = trackedProvider(new Promise<void>((resolve) => { land = resolve; }));
+		const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+		await new Promise((resolve) => setImmediate(resolve));
+		provider.dispose();
+		land();
+		const outcome = await connecting;
+		assert.ok(outcome instanceof Error, 'a connect that lands after dispose must fail');
+		assert.deepEqual(closed, ['libusb1']);
+		assert.equal(provider.backendFor(KEY), undefined);
+	});
+});
+
+describe('USB connect — permission from either backend, by its code (review of 2dacf24)', () => {
+	const HID_PATH = '/dev/hidraw3';
+	function permissionProvider(config: {
+		libusbError: Error;
+		hidAccess: 'denied' | 'ok' | 'unknown';
+		platform?: NodeJS.Platform;
+	}): UsbTransportProvider {
+		return new UsbTransportProvider({
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createLibusbAdapter: () => ({ ...adapter({}), open: () => Promise.reject(config.libusbError) }) as any,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: `cannot open device with path ${HID_PATH}` }) as any,
+			listHidDevices: () => [{ path: HID_PATH, serialNumber: '001653AABBCC', product: 'AAA' }],
+			listUsbDevices: (() => Promise.resolve([])) as never,
+			hidAccess: () => config.hidAccess,
+			platform: config.platform ?? 'linux',
+		});
+	}
+
+	it('says permission when libusb is refused and the hidraw node is refused too', async () => {
+		const provider = permissionProvider({ libusbError: new DevicePermissionError('may not open (LIBUSB_ERROR_ACCESS); udev rule'), hidAccess: 'denied' });
+		await assert.rejects(() => provider.connect(KEY), DevicePermissionError);
+		provider.dispose();
+	});
+
+	it('says permission when only the hidraw node is refused, whatever libusb said', async () => {
+		const provider = permissionProvider({ libusbError: new Error('Could not claim USB interface 0 (LIBUSB_ERROR_IO)'), hidAccess: 'denied' });
+		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof DevicePermissionError, `got ${String(error)}`);
+		assert.match((error as Error).message, /native\/linux\/70-lego-ev3\.rules/);
+	});
+
+	it('does not send a user to the udev rule when the hidraw node is open to them and HID failed otherwise', async () => {
+		const provider = permissionProvider({ libusbError: new DevicePermissionError('may not open (LIBUSB_ERROR_ACCESS)'), hidAccess: 'ok' });
+		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof ConnectionError);
+		assert.ok(!(error instanceof DevicePermissionError), 'the rule is in place for hidraw; something else failed');
+		provider.dispose();
+	});
+
+	it('never checks the hidraw node on Windows', async () => {
+		let asked = false;
+		const provider = new UsbTransportProvider({
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createLibusbAdapter: () => ({ ...adapter({}), open: () => Promise.reject(new Error('LIBUSB_ERROR_ACCESS')) }) as any,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: 'cannot open device' }) as any,
+			listHidDevices: () => [{ path: HID_PATH, serialNumber: '001653AABBCC', product: 'AAA' }],
+			listUsbDevices: (() => Promise.resolve([])) as never,
+			hidAccess: () => { asked = true; return 'denied'; },
+			platform: 'win32',
+		});
+		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);
+		assert.ok(!(error instanceof DevicePermissionError));
+		assert.equal(asked, false);
+		provider.dispose();
+	});
+});
+
+describe('USB provider — disposeAsync waits until every device is given back', () => {
+	// Disposal through context.subscriptions is synchronous, and the extension host exits right
+	// after: a close still waiting on libusb's release never gives `usbhid` back. On HOSTC one brick
+	// was left without a driver after every `npm run test:host`, even with probes closed on dispose.
+	it('resolves only once the sessions and probes have closed', async () => {
+		const closedAt: string[] = [];
+		let made = 0;
+		const provider = new UsbTransportProvider({
+			createLibusbAdapter: () => {
+				const id = `libusb${(made += 1)}`;
+				return {
+					open: () => Promise.resolve(),
+					close: () => new Promise<void>((resolve) => setTimeout(() => { closedAt.push(id); resolve(); }, 30)),
+					send: () => Promise.resolve(new Uint8Array()),
+					isOpen: true,
+					maxPacketBytes: 1024,
+					deviceLocation: { busNumber: 2, deviceAddress: 10 + made },
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				} as any;
+			},
+		});
+		await provider.connect(KEY);
+		await provider.openProbe(makeBrickKey(Transport.USB, '001653000099'));
+		await provider.disposeAsync();
+		assert.deepEqual(closedAt.sort(), ['libusb1', 'libusb2']);
+	});
+});

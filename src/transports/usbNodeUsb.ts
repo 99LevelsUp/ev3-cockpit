@@ -8,6 +8,8 @@ export interface LegoUsbDeviceInfo {
 	serialNumber: string | null;
 	manufacturer: string | null;
 	product: string | null;
+	/** Where it sits on the bus: known without opening it, so also for a device in use. */
+	location: { busNumber: number; deviceAddress: number };
 }
 
 /** Options for {@link listLegoUsbDevices}. */
@@ -58,6 +60,7 @@ export async function listLegoUsbDevices(
 				serialNumber: null,
 				manufacturer: null,
 				product: null,
+				location: { busNumber: device.busNumber, deviceAddress: device.deviceAddress },
 			});
 			continue;
 		}
@@ -78,6 +81,7 @@ export async function listLegoUsbDevices(
 			serialNumber,
 			manufacturer,
 			product,
+			location: { busNumber: device.busNumber, deviceAddress: device.deviceAddress },
 		});
 	}
 	return results;

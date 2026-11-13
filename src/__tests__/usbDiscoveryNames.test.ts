@@ -100,25 +100,31 @@ describe('USB discovery — display names', () => {
 
 describe('USB discovery — a brick libusb holds (Linux, HOSTC 13.11.2026)', () => {
 	// On Linux the libusb claim takes the interface from `usbhid`, and the brick's hidraw node
-	// goes with it: node-hid stops listing a brick the moment it is connected. Measured on HOSTC
-	// with the detach fix: "while AAA held: CCC, BBB", AAA back after the release.
-	it('still lists a connected brick that node-hid no longer sees, under its known name', async () => {
-		let hidSeesIt = true;
-		const provider = new UsbTransportProvider({
+	// goes with it: node-hid stops listing a brick the moment it is connected. libusb still
+	// enumerates it — without opening it, skipped as in use — at its bus address.
+	const heldOnBus = { serialNumber: null, product: null, location: usbDevice.location };
+
+	function heldProvider(platform: NodeJS.Platform, bus: () => unknown[], hid: () => unknown[]) {
+		return new UsbTransportProvider({
 			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
-			listHidDevices: () => (hidSeesIt ? [hidDevice] : []),
-			listUsbDevices: (() => Promise.resolve(hidSeesIt ? [usbDevice] : [])) as never,
+			listHidDevices: hid as never,
+			listUsbDevices: (() => Promise.resolve(bus())) as never,
 			createLibusbAdapter: (() => ({
 				open: () => Promise.resolve(), close: () => Promise.resolve(),
 				send: () => Promise.resolve(new Uint8Array()), isOpen: true, maxPacketBytes: 1024,
 				deviceLocation: usbDevice.location,
 			})) as never,
+			platform,
 		});
+	}
+
+	it('still lists a connected brick node-hid no longer sees, while it is on the bus, under its known name', async () => {
+		let connected = false;
+		const provider = heldProvider('linux', () => (connected ? [heldOnBus] : [usbDevice]), () => (connected ? [] : [hidDevice]));
 		try {
 			const first = await provider.discover();
 			await provider.connect(first.items[0].brickKey);
-
-			hidSeesIt = false;
+			connected = true;
 			const held = await provider.discover();
 			assert.equal(held.items.length, 1, 'a connected brick must not vanish from discovery');
 			assert.equal(held.items[0].brickKey, first.items[0].brickKey);
@@ -129,23 +135,47 @@ describe('USB discovery — a brick libusb holds (Linux, HOSTC 13.11.2026)', () 
 		}
 	});
 
-	it('lists such a brick once when node-hid does still see it, as on Windows', async () => {
-		const provider = new UsbTransportProvider({
-			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
-			listHidDevices: () => [hidDevice],
-			listUsbDevices: (() => Promise.resolve([usbDevice])) as never,
-			createLibusbAdapter: (() => ({
-				open: () => Promise.resolve(), close: () => Promise.resolve(),
-				send: () => Promise.resolve(new Uint8Array()), isOpen: true, maxPacketBytes: 1024,
-				deviceLocation: usbDevice.location,
-			})) as never,
-		});
+	it('drops a connected brick whose cable is out, without waiting for the heartbeat (review of 2dacf24)', async () => {
+		// Another brick stays on the bus, at another address: only the held brick's own address counts.
+		const otherBrick = { serialNumber: '00165300000B', product: 'BBB', location: { busNumber: 1, deviceAddress: 5 } };
+		let state: 'free' | 'held' | 'unplugged' = 'free';
+		const provider = heldProvider('linux',
+			() => (state === 'free' ? [usbDevice, otherBrick] : state === 'held' ? [heldOnBus, otherBrick] : [otherBrick]),
+			() => (state === 'free' ? [hidDevice] : []));
+		try {
+			const first = await provider.discover();
+			const aaa = first.items.find((item) => item.displayName === 'AAA')!;
+			await provider.connect(aaa.brickKey);
+			state = 'unplugged';
+			const after = await provider.discover();
+			assert.deepEqual(after.items.map((item) => item.displayName), ['BBB']);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it('lists a connected brick once when node-hid does still see it', async () => {
+		const provider = heldProvider('linux', () => [usbDevice], () => [hidDevice]);
 		try {
 			const first = await provider.discover();
 			await provider.connect(first.items[0].brickKey);
 			const again = await provider.discover();
 			assert.equal(again.items.length, 1);
 			assert.equal(again.items[0].connected, true);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it('on Windows lists from node-hid alone, as before (review of 2dacf24)', async () => {
+		let connected = false;
+		const provider = heldProvider('win32', () => (connected ? [heldOnBus] : [usbDevice]), () => (connected ? [] : [hidDevice]));
+		try {
+			const first = await provider.discover();
+			await provider.connect(first.items[0].brickKey);
+			connected = true;
+			const held = await provider.discover();
+			assert.equal(held.items.length, 0);
 		} finally {
 			provider.dispose();
 		}
