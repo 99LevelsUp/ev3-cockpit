@@ -204,6 +204,11 @@ export class TelemetryService implements vscode.Disposable {
 		return this.hasSession(brickKey) ? ActivityMode.Minimal : ActivityMode.None;
 	}
 
+	/** What each brick is read for now, as last announced: for a reader attached after the loops started. */
+	currentPlans(): ReadonlyMap<BrickRef, ReadonlyMap<string, number | 'once'>> {
+		return this.announced;
+	}
+
 	/** The running loop for a brick, for tests and hardware probes. */
 	loopFor(brickKey: BrickRef): BrickTelemetry | undefined {
 		return this.loops.get(brickKey)?.loop;
