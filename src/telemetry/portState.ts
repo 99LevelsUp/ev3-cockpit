@@ -10,21 +10,20 @@
  * `READY_*` subcodes and `opINPUT_READY`; U10 measures it on a brick.
  */
 
-export type PortState =
-	/** No occupancy row has reported on the port yet. Read as if known: a cold start does not wait. */
-	| 'unreported'
-	/** `TYPE_NONE` 126: nothing attached. */
-	| 'empty'
-	/** `TYPE_UNKNOWN` 125: attached, being identified — a second or two after every plug-in. */
-	| 'identifying'
-	/** A device type: the value is read. */
-	| 'known'
-	/** `TYPE_ERROR` 127: attached, type invalid. */
-	| 'error'
-	/** `TYPE_TERMINAL` 124: a console, not a peripheral. */
-	| 'terminal'
-	/** Any other code at or above 124: shown as such, never guessed at. */
-	| 'not-readable';
+import type { PortOccupancy } from '../contracts/models';
+
+/**
+ * - `unreported` — no occupancy row has reported on the port yet. Read as if known: a cold start does not wait.
+ * - `empty` — `TYPE_NONE` 126: nothing attached.
+ * - `identifying` — `TYPE_UNKNOWN` 125: attached, being identified, a second or two after every plug-in.
+ * - `known` — a device type: the value is read.
+ * - `error` — `TYPE_ERROR` 127: attached, type invalid.
+ * - `terminal` — `TYPE_TERMINAL` 124: a console, not a peripheral.
+ * - `not-readable` — any other code at or above 124: shown as such, never guessed at.
+ *
+ * The union lives in the contracts, so the view of a brick can carry it.
+ */
+export type PortState = PortOccupancy;
 
 const TYPE_TERMINAL = 124;
 const TYPE_UNKNOWN = 125;
