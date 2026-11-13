@@ -41,6 +41,8 @@ const { brickKeyId, makeBrickKey } = require(out('contracts/brickKey'));
 const { Transport } = require(out('contracts/enums'));
 
 const quiet = { log: { info: () => {}, warn: () => {} } };
+/** A MAC without separators, lower case: USB keys carry `001653…`, Bluetooth keys `00:16:53:…`. */
+const macOf = (key) => brickKeyId(key).replace(/[:-]/g, '').toLowerCase();
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
 
 // ── the owner's description ─────────────────────────────────────────
@@ -168,8 +170,7 @@ async function compare() {
 			if (only && only !== name) { continue; }
 			const usbItem = usbScan.items.find((i) => i.displayName === name);
 			if (!usbItem) { verdictLines.push(`${name}: not found on USB, skipped`); continue; }
-			const id = brickKeyId(usbItem.brickKey);
-			const btItem = btScan.items.find((i) => brickKeyId(i.brickKey).toLowerCase() === id.toLowerCase());
+			const btItem = btScan.items.find((i) => macOf(i.brickKey) === macOf(usbItem.brickKey));
 			process.stdout.write(`\n${name}\n`);
 
 			// One frame for every side, so the same rows sit at the same slots.
@@ -254,8 +255,7 @@ async function openBrick(name, on = 'usb') {
 			connectionQueue: queue,
 		});
 		created.push(() => { bt.dispose(); queue.dispose(); });
-		const id = brickKeyId(usbItem.brickKey).toLowerCase();
-		const btItem = (await bt.discover()).items.find((i) => brickKeyId(i.brickKey).toLowerCase() === id);
+		const btItem = (await bt.discover()).items.find((i) => macOf(i.brickKey) === macOf(usbItem.brickKey));
 		if (!btItem) { throw new Error(`${name} is not seen over BT.`); }
 		provider = bt; key = btItem.brickKey;
 	}
@@ -379,4 +379,10 @@ if (!commands[command]) {
 	console.error(`Usage: node scripts/telemetry-truth-probe.js <${Object.keys(commands).join('|')}> …`);
 	process.exit(2);
 }
-commands[command]().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); });
+// The transports unref their timers so they never hold the extension host open; a probe awaiting
+// only such a timer (a Bluetooth connect) would see Node exit 0 halfway (13.11.2026). Held until done.
+const keepAlive = setInterval(() => {}, 1 << 30);
+commands[command]().then(
+	() => { clearInterval(keepAlive); process.exitCode = 0; },
+	(error) => { clearInterval(keepAlive); console.error(error); process.exitCode = 1; },
+).finally(() => { setTimeout(() => process.exit(), 500).unref(); });
