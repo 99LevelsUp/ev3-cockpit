@@ -159,6 +159,14 @@ log.info('BT transport registered (BlueZ RFCOMM; BlueZ discovery)');
 
 Presence: `btPresence.start()` on `linux` too (today only `win32`). Pairing and the inquiry both go through `btQueue` (pairing via `BtClassicDiscovery`'s `enqueue`, presence `holdOnly`), so their discoveries never overlap (tested end to end in `bluezBluetooth.test.ts`). The inquiry's `log` warnings and the factory's go to the output channel.
 
+**U8 review (3309b45), fixed in the factory:** one bus at a time — a second `start()` while one is held opens nothing (#1); an unexpected close of the system-bus connection reconnects on its own, 1 s doubling to 30 s, and never after `dispose()` (#2); a direct handover from one BlueZ owner to the next drops the old daemon's objects at once (#3); `GetNameOwner` failing is "BlueZ not running" only for `NameHasNoOwner`, `AccessDenied` goes to D4, anything else is "Bluetooth unavailable" (#4); a pairing search that gives up before its `StartDiscovery` settles leaves the late `StopDiscovery` with a `DiscoveryGate` the next search or inquiry waits for, so a queue slot freed early cannot let a discovery start that the late stop would end (#5); a pairing and an inquiry pin the connection they started on, so their cleanup never reaches a newer connection after `retry()` (#6); every agent method checks its caller, `Cancel` and `Release` included (#8); BlueZ's match rules go to each connection once, however often BlueZ restarts (#9). The factory's module loads no native module when imported (half of #7).
+
+**Left for the wiring (U8 review):**
+
+- **#7, the other half:** `createRuntime.ts` requires `bluezBluetooth` lazily inside the `linux` branch, and a test pins that a `win32` wiring leaves no `bluez*` or `dbus/` module in `require.cache`.
+- **#10:** on Linux `inquire` is `bluez.inquire` itself, with no helper timeout around it; the monitor has none of its own. A window is 15 s, plus the wait for a late `StopDiscovery` and the bus calls (each up to 25 s). If the wiring adds a timeout around it, it must exceed that, not reuse `PRESENCE_INQUIRY_SECONDS + 20` (30 s, the Windows helper's).
+- **#11:** the D4 caller is placeholder code in the note above: on `onAccessDenied`, call `offerBluetoothGroup({ confirm })` with a modal showing `prompt.command`; on `added`, say "log out and in (or `newgrp`)" and offer "Check again", which calls `bluez.retry()`; on `manual`, show the command.
+
 ### U9. Hardware session (owner at HOSTC)
 
 Dev host on HOSTC with the wiring from the Windows session: pick, pair, connect, list projects, presence, forget, re-pair, on all three bricks; then the BlueZ backend in `hardware-matrix.js`; then USB and Bluetooth to the same brick at once.

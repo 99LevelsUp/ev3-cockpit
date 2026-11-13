@@ -24,7 +24,7 @@ import { Variant, type DBusValue } from './dbus/wire';
 import type { BluezAdapter, BluezDevice } from './bluezObjects';
 import { BLUEZ } from './bluezObjects';
 import type { ScannedBrick } from './btPairingHelper';
-import { bluezDeviceName } from './bluezDiscovery';
+import { bluezDeviceName, type DiscoveryGate } from './bluezDiscovery';
 import { DBusError } from './dbus/connection';
 import {
 	AF_BLUETOOTH, BTPROTO_L2CAP, ECONNREFUSED, EHOSTDOWN, EHOSTUNREACH, EINPROGRESS, ETIMEDOUT,
@@ -128,6 +128,8 @@ export function createBluezPresenceCheck(options: BluezPresenceCheckOptions = {}
 /** What the inquiry needs of the bus. */
 export interface InquiryBus {
 	call(options: CallOptions): Promise<DBusValue[]>;
+	/** The connection of this moment, held for one window, so its StopDiscovery goes where it started (U8 review #6). */
+	pin?(): InquiryBus;
 }
 
 /** What the inquiry needs of the object cache. */
@@ -146,6 +148,8 @@ export interface BluezInquiryOptions {
 	windowMs?: number;
 	/** Told when the discovery may not have stopped. */
 	log?: (message: string) => void;
+	/** Shared with the pairing search: a window starts only once no discovery waits to be stopped (U8 review #5). */
+	discoveryGate?: DiscoveryGate;
 }
 
 const LEGO_OUI = BT.LEGO_OUI.toUpperCase();
@@ -161,11 +165,14 @@ export const DEFAULT_INQUIRY_WINDOW_MS = 15_000;
 
 /** One inquiry window: every LEGO brick BlueZ heard during it, paired or not. */
 export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<ScannedBrick[]> {
-	const { bus, cache } = options;
+	const { cache } = options;
 	const windowMs = options.windowMs ?? DEFAULT_INQUIRY_WINDOW_MS;
 	return async () => {
 		const adapter = cache.adapter();
 		if (!adapter) { throw new Error('This computer has no Bluetooth adapter BlueZ knows.'); }
+		// A pairing search's late StopDiscovery would end this window: let it go out first.
+		await options.discoveryGate?.idle();
+		const bus = options.bus.pin?.() ?? options.bus;
 		const startedAt = Date.now();
 		const before = new Map(cache.devices().map((d) => [d.path, cache.rssiReports(d.path)]));
 		const heard = new Map<string, ScannedBrick>();
