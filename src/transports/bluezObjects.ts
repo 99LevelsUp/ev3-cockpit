@@ -81,6 +81,7 @@ export class BluezObjectCache {
 	 *   the bus closing before the snapshot is in. A failed start leaves nothing attached.
 	 */
 	async start(): Promise<void> {
+		if (this.disposed) { throw new Error('The BlueZ object cache is disposed.'); }
 		if (this.started) { throw new Error('The BlueZ object cache is already started.'); }
 		this.started = true;
 		this.pending = [];
@@ -92,7 +93,7 @@ export class BluezObjectCache {
 			await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${OBJECT_MANAGER}'`);
 			await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${PROPERTIES}',member='PropertiesChanged'`);
 			const [managed] = await this.bus.call({ destination: BLUEZ, path: '/', interface: OBJECT_MANAGER, member: 'GetManagedObjects' });
-			if (this.closed || this.disposed) { throw new Error('The bus closed before BlueZ\'s objects were read.'); }
+			if (this.closed || this.disposed) { throw new Error('The bus closed, or the cache was disposed, before BlueZ\'s objects were read.'); }
 			if (!(managed instanceof Map)) { throw new Error('BlueZ answered GetManagedObjects with something that is not a map.'); }
 			for (const [path, interfaces] of managed) {
 				this.addInterfaces(path, interfaces);
@@ -227,6 +228,8 @@ export class BluezObjectCache {
 		for (const [key, value] of unwrap(changed)) { props.set(key, value); }
 		// BlueZ invalidates what it no longer knows, in practice RSSI and TxPower. A boolean it
 		// invalidates (Paired, Connected, Powered) keeps its last known value rather than read false.
+		// Device1 Paired/Bonded/Connected and Adapter1 Powered have no exists() in BlueZ, so they are
+		// never invalidated; keeping the last value only guards against a BlueZ that changes this.
 		for (const key of invalidated) {
 			if (typeof key === 'string' && typeof props.get(key) !== 'boolean') { props.delete(key); }
 		}
