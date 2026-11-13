@@ -405,7 +405,7 @@ shell, the user from the OS, the password asked by polkit and never seen by the 
 `pkexec` it shows the command to copy. The group applies to a new login; "check again" opens a new
 bus connection.
 
-Unverified: the cockpit's wiring end to end on HOSTC (step-7 plan, U9); other distributions' bus
+Measured through the factory on HOSTC (step-7 plan, U9): the hardware matrix on all three bricks, a BlueZ restart, a brick switched off and on, forget and re-pair. With HOSTC's own Wi-Fi up, one matrix run in two had page timeouts (`EHOSTDOWN`) on two bricks; the Pi 5's Wi-Fi and Bluetooth share one chip. Unverified: the cockpit's wiring end to end in VS Code; other distributions' bus
 policy; desktop agents other than Raspberry Pi OS's (blueman, GNOME); other adapters' behaviour
 on the L2CAP page; a second adapter (out of scope: the first one is used and forget refuses a
 brick held by another).

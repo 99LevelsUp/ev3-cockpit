@@ -173,6 +173,15 @@ Dev host on HOSTC with the wiring from the Windows session: pick, pair, connect,
 
 Ready before it (13.11.2026): `hardware-matrix.js` builds Bluetooth on Linux from `createBluezBluetooth` (paired bricks from BlueZ's objects, RFCOMM through libc), Windows as before; `--discover-only` lists what each transport finds and connects nothing. On HOSTC it lists CCC, AAA and BBB over Bluetooth from BlueZ's objects alone, no radio used.
 
+**U9 results (HOSTC, 13.11.2026, BlueZ 5.82; bricks released by the Windows session).** Run through the factory wired as the U8 note says (`createBluezBluetooth` → `BtClassicDiscovery`, `BtTransportProvider`, `BtPresenceMonitor`), from a script: the `createRuntime.ts` branch is not written yet, so the dev host in VS Code is still to do.
+
+1. *`hardware-matrix.js` on the BlueZ backend,* all three bricks: run 1 with HOSTC's Wi-Fi down, **43/43 on Bluetooth**, BBB included (it never connected over Bluetooth from HOSTA that day, WSA 10060: HOSTA's radio, not BBB). With HOSTC's Wi-Fi up: run 2 failed CCC's connect and BBB's reconnect with `EHOSTDOWN` (112), and the contract checks that follow from them; run 3 **58/58** (Bluetooth and TCP; only USB discovery, no cable). The presence check with Wi-Fi up: 14 of 15 answered (0.5–4.9 s), BBB missed once (5.1 s, a page timeout; the monitor needs two misses). On the Pi 5 Wi-Fi and Bluetooth share one chip; coexistence is the likely cause, not measured.
+2. *A BlueZ restart* (`systemctl restart bluetooth`, by the owner): the factory saw the owner go ("BlueZ stopped"), cleared, saw the new owner in the same 0.1 s, and read BlueZ again; its first snapshot had no adapter yet, and `InterfacesAdded` brought the adapter and the three bricks within the next 0.1 s. Presence went on with all three heard.
+3. *Presence, a brick switched off and on:* CCC switched off → "not heard" 10.7 s after the last report that heard it; switched on again by the owner → heard 43.8 s after it turned "not heard" (the time off and the brick's boot included). Check rounds every 10 s. AAA and BBB heard throughout. No dialog on any brick.
+4. *Forget and re-pair through the cockpit:* `BtTransportProvider.forget` removed CCC from BlueZ at once and reported the name cache as the residue; then `BtClassicDiscovery.pair`: queued and slot at once, found 4.4 s, PIN asked 20.4 s (the owner at the brick), Paired 20.8 s; a connect right after took 0.9 s.
+
+Left: the dev host in VS Code once the `createRuntime.ts` branch exists (pick, pair, connect, list projects, forget, from the panel and the commands), and USB with Bluetooth to one brick at once (the bricks' cables were on HOSTA).
+
 ### U10. Documents — done 13.11.2026, before U9
 
 DESIGN §4.1.1 (the Linux backend, D1, the agent, presence), IMPLEMENTATION_PLAN 1.11.11 and §2 "What Linux needs" (Bluetooth items closed or carried), REQUIREMENTS §12 if anything changes, the user notes for 0.2.5 (D4).
@@ -182,6 +191,8 @@ Written: DESIGN §4.1.1 "Bluetooth on Linux" (and the Linux USB paragraph, which
 ### U11. TCP on Linux (last)
 
 The owner puts AAA (the brick with the Wi-Fi dongle) and HOSTC on one network. `hardware-matrix.js` TCP section; the dev host connects over TCP and lists files; USB, Bluetooth and TCP to AAA at once. Results into `docs/plans/linux-session-results/`.
+
+**U11 results (HOSTC, 13.11.2026).** The owner put HOSTC's Wi-Fi on AAA's network (HOSTC had been on a USB network link only). The beacon is heard and `hardware-matrix.js` passes every TCP check on AAA in both runs: transport (discovery, connect), protocol, filesystem, telemetry, session, contract. Nothing Linux-specific was needed beyond the shared beacon port (68a8838). Left: the dev host connecting over TCP from VS Code, and USB, Bluetooth and TCP to AAA at once (AAA's cable is on HOSTA).
 
 ## Risks
 
