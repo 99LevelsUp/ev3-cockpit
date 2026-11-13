@@ -27,14 +27,22 @@ function device(paired: boolean, path = DEV): BluezDevice {
 
 class World implements PairingBus, PairingCache {
 	calls: string[] = [];
+	/** Calls with the object path they went to. */
+	targets: string[] = [];
 	known: BluezDevice[] = [];
 	agent?: Record<string, ExportedMethod>;
 	agentPath?: string;
 	withdrawn = false;
+	/** BlueZ takes one agent per connection: a second RegisterAgent fails with AlreadyExists. */
+	registered = false;
 	/** What Pair does: answer when the test says, or fail with an error. */
 	pair?: { resolve: () => void; reject: (e: Error) => void };
+	pairs = new Map<string, { resolve: () => void; reject: (e: Error) => void }>();
 	pairOutcome?: () => Promise<void>;
-	private changeHandlers = new Set<() => void>();
+	/** CancelPairing is acknowledged but Pair keeps hanging. */
+	cancelIgnored = false;
+	failOn?: { member: string; error: Error };
+	changeHandlers = new Set<() => void>();
 	discoveryFinds?: BluezDevice;
 
 	// PairingCache
@@ -46,20 +54,33 @@ class World implements PairingBus, PairingCache {
 	exportObject(path: string, _iface: string, methods: Record<string, ExportedMethod>): () => void {
 		this.agentPath = path;
 		this.agent = methods;
+		this.withdrawn = false;
 		return () => { this.withdrawn = true; };
 	}
 	async call(o: { path: string; interface: string; member: string; body?: DBusValue[]; timeoutMs?: number }): Promise<DBusValue[]> {
 		this.calls.push(`${o.member}${o.member === 'SetDiscoveryFilter' ? ' ' + JSON.stringify([...(o.body![0] as Map<string, Variant>)].map(([k, v]) => [k, v.value])) : ''}`);
+		this.targets.push(`${o.member} ${o.path}`);
+		if (this.failOn?.member === o.member) { throw this.failOn.error; }
+		if (o.member === 'RegisterAgent') {
+			if (this.registered) { throw new DBusError('org.bluez.Error.AlreadyExists', 'Already Exists'); }
+			this.registered = true;
+		}
+		if (o.member === 'UnregisterAgent') { this.registered = false; }
 		if (o.member === 'StartDiscovery' && this.discoveryFinds) {
 			const found = this.discoveryFinds;
 			setTimeout(() => { this.known = [found]; for (const h of this.changeHandlers) { h(); } }, 20);
 		}
 		if (o.member === 'Pair') {
 			if (this.pairOutcome) { await this.pairOutcome(); return []; }
-			return new Promise<DBusValue[]>((resolve, reject) => { this.pair = { resolve: () => resolve([]), reject }; });
+			return new Promise<DBusValue[]>((resolve, reject) => {
+				const entry = { resolve: () => resolve([]), reject };
+				this.pair = entry;
+				this.pairs.set(o.path, entry);
+			});
 		}
-		if (o.member === 'CancelPairing' && this.pair) {
-			this.pair.reject(new DBusError('org.bluez.Error.AuthenticationCanceled', 'Authentication Canceled'));
+		if (o.member === 'CancelPairing' && !this.cancelIgnored) {
+			const entry = this.pairs.get(o.path);
+			entry?.reject(new DBusError('org.bluez.Error.AuthenticationCanceled', 'Authentication Canceled'));
 		}
 		return [];
 	}
@@ -93,7 +114,7 @@ describe('BlueZ pairing (U5)', () => {
 		assert.deepEqual(result, { ok: true, status: 'Paired' });
 		assert.deepEqual(w.calls, ['RegisterAgent', 'Pair', 'UnregisterAgent']);
 		assert.equal(w.withdrawn, true);
-		assert.deepEqual(events.map((e) => e.type), ['pairingRequested', 'result']);
+		assert.deepEqual(events.map((e) => e.type), ['found', 'pairingRequested', 'result']);
 	});
 
 	it('refuses to answer for any other device', async () => {
@@ -136,7 +157,7 @@ describe('BlueZ pairing (U5)', () => {
 		const result = await createBluezPairing({ bus: w, cache: w })(MAC);
 		assert.equal(result.ok, false);
 		assert.equal(result.status, 'AuthenticationRejected');
-		assert.match(result.reason!, /not confirmed.*may still be showing on the brick/);
+		assert.match(result.reason!, /rejected the pairing.*often because its dialog was not confirmed in time.*may still be showing on the brick/);
 		assert.ok(w.calls.includes('UnregisterAgent'), 'the agent goes whatever happened');
 	});
 
@@ -174,5 +195,112 @@ describe('BlueZ pairing (U5)', () => {
 		const result = await createBluezPairing({ bus: w, cache: w })('zz:00:16:53:F0:0A');
 		assert.equal(result.ok, false);
 		assert.deepEqual(w.calls, []);
+	});
+	it('pairs one brick at a time: a second waits for the first, and neither is told AlreadyPaired falsely', async () => {
+		const w = new World();
+		w.known = [device(false), device(false, OTHER)];
+		const pair = createBluezPairing({ bus: w, cache: w });
+		const first = pair(MAC);
+		const second = pair('00:16:53:F0:0B:0B');
+		await tick();
+		assert.deepEqual(w.calls, ['RegisterAgent', 'Pair'], 'the second has not started');
+		assert.deepEqual(await w.agent!.RequestPinCode.handler([DEV], {} as never), ['1234']);
+		w.pairs.get(DEV)!.resolve();
+		assert.deepEqual(await first, { ok: true, status: 'Paired' });
+		await tick();
+		assert.deepEqual(w.calls, ['RegisterAgent', 'Pair', 'UnregisterAgent', 'RegisterAgent', 'Pair']);
+		assert.equal(w.withdrawn, false, 'the second brick has its agent');
+		assert.deepEqual(await w.agent!.RequestPinCode.handler([OTHER], {} as never), ['1234']);
+		w.pairs.get(OTHER)!.resolve();
+		assert.deepEqual(await second, { ok: true, status: 'Paired' });
+	});
+
+	it('does not count an agent BlueZ refused as a paired brick', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		w.failOn = { member: 'RegisterAgent', error: new DBusError('org.bluez.Error.AlreadyExists', 'Already Exists') };
+		const result = await createBluezPairing({ bus: w, cache: w })(MAC);
+		assert.equal(result.ok, false);
+		assert.equal(result.status, 'AlreadyExists');
+	});
+
+	it('says "found" for a brick BlueZ already holds unpaired, before pairing, so the user is told to watch it', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const events: BtPairingEvent[] = [];
+		const pairing = createBluezPairing({ bus: w, cache: w })(MAC, (e) => { events.push(e); if (e.type === 'found') { w.calls.push('(found)'); } });
+		await tick();
+		assert.deepEqual(events[0], { type: 'found', id: MAC, name: 'AAA', alreadyPaired: false });
+		assert.deepEqual(w.calls, ['(found)', 'RegisterAgent', 'Pair']);
+		w.pair!.resolve();
+		await pairing;
+	});
+
+	it('answers a discovery the adapter refuses with a status and a result event, not a rejection', async () => {
+		const w = new World();
+		w.failOn = { member: 'StartDiscovery', error: new DBusError('org.bluez.Error.NotReady', 'Resource Not Ready') };
+		const events: BtPairingEvent[] = [];
+		const result = await createBluezPairing({ bus: w, cache: w })(MAC, (e) => events.push(e));
+		assert.equal(result.ok, false);
+		assert.equal(result.status, 'NotReady');
+		assert.match(result.reason!, /Bluetooth.*off/i);
+		assert.deepEqual(events.at(-1), { type: 'result', status: 'NotReady', ok: false });
+		assert.equal(w.changeHandlers.size, 0, 'nothing is left listening');
+	});
+
+	it('sees an abort that comes while it says it is searching, and does not touch the radio', async () => {
+		const w = new World();
+		const controller = new AbortController();
+		const started = Date.now();
+		const result = await createBluezPairing({ bus: w, cache: w })(MAC, (e) => { if (e.type === 'searching') { controller.abort(); } }, controller.signal);
+		assert.deepEqual(result, { ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' });
+		assert.ok(Date.now() - started < 1000);
+		assert.deepEqual(w.calls, [], 'the radio is not touched');
+		assert.equal(w.changeHandlers.size, 0);
+	});
+
+	it('takes an address without separators, and pairs the right object', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		w.pairOutcome = async () => { /* paired */ };
+		const result = await createBluezPairing({ bus: w, cache: w })('001653f00a0a');
+		assert.deepEqual(result, { ok: true, status: 'Paired' });
+		assert.ok(w.targets.includes(`Pair ${DEV}`));
+	});
+
+	it('cancels the pairing at BlueZ when Pair runs past its time here', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		w.cancelIgnored = true;
+		const result = await createBluezPairing({ bus: w, cache: w, pairTimeoutMs: 50 })(MAC);
+		assert.equal(result.ok, false);
+		assert.equal(result.status, 'Timeout');
+		assert.ok(w.calls.includes('CancelPairing'));
+		assert.ok(w.calls.includes('UnregisterAgent'));
+	});
+
+	it('answers an abort within the pairing time even when BlueZ acknowledges CancelPairing and Pair keeps hanging', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		w.cancelIgnored = true;
+		const controller = new AbortController();
+		const started = Date.now();
+		const pairing = createBluezPairing({ bus: w, cache: w, pairTimeoutMs: 80 })(MAC, undefined, controller.signal);
+		await tick();
+		controller.abort();
+		assert.deepEqual(await pairing, { ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' });
+		assert.ok(Date.now() - started < 1000);
+		assert.ok(w.calls.includes('UnregisterAgent'));
+	});
+
+	it('answers only BlueZ itself when it knows who BlueZ is on the bus', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const pairing = createBluezPairing({ bus: w, cache: w, bluezOwner: () => ':1.2' })(MAC);
+		await tick();
+		await assert.rejects(async () => w.agent!.RequestPinCode.handler([DEV], { sender: ':1.66' } as never), /Rejected/);
+		assert.deepEqual(await w.agent!.RequestPinCode.handler([DEV], { sender: ':1.2' } as never), ['1234']);
+		w.pair!.resolve();
+		await pairing;
 	});
 });
