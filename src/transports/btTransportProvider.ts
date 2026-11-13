@@ -27,7 +27,7 @@ import type { PairedPresence, UnpairedSighting } from './btPresence';
 
 // ── BT backend types ────────────────────────────────────────────────
 
-export type BtBackend = 'winsock' | 'spp';
+export type BtBackend = 'winsock' | 'spp' | 'bluez';
 
 /** Factory that creates a transport adapter for a specific BT backend. */
 export type BtAdapterFactory = (mac: string) => TransportAdapter;
