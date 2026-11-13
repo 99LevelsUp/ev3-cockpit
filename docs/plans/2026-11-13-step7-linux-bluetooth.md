@@ -106,7 +106,7 @@ KTD9, D2. Tests: a brick heard / not heard, misses counted by the existing monit
 
 **U6 results (HOSTC, 13.11.2026, BlueZ 5.82-1.1+rpt2).**
 
-1. *The presence check on the bricks:* AAA, BBB and CCC on, visibility off on AAA and BBB: answered in 4.40, 3.01 and 3.52 s. No dialog on any brick through all the checks and the inquiries (owner).
+1. *The presence check on the bricks:* AAA, BBB and CCC on, visibility off on AAA and BBB: answered in 4.40, 3.01 and 3.52 s. No dialog on any brick through all the checks and the inquiries (owner). CCC switched off: the L2CAP connect fails with `SO_ERROR` 112 (EHOSTDOWN) after 5.13 s, twice; the check answers not heard after 5.14 s; `BtBluezAdapter.open()` throws `BrickUnreachableError` (errno 112) after 5.15 s. AAA answered as the control. U5 re-pair with the reviewed code: found after 2.3 s, PIN asked at 10.6 s, Paired and Bonded at 10.9 s, Trusted false; a dialog confirmed after BlueZ's 60 s ended `AuthenticationRejected` at 65.3 s with the reworded reason.
 2. *When BlueZ reports an RSSI (source, BlueZ 5.82):* `adapter.c` 7375-7378 sets a found device's RSSI with delta 0 under a filtered discovery and with `RSSI_THRESHOLD` (8 dBm, `device.c` 78) otherwise; with delta 0 a same value is still emitted (`device.c` 6538). A client's filter counts as filtered unless it is empty and its transport equals the adapter's scan type (`adapter.c` 2209-2219); ours, `Transport=bredr` on a dual-mode adapter, is filtered. Every RSSI is cleared when the last discovery stops (`adapter.c` 1692-1696).
 3. *RSSI reports counted per window (CCC visible; AAA and BBB not):*
 
