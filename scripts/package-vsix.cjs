@@ -110,7 +110,7 @@ function pack(target, dir, version) {
 	// the staged package's only dependencies, installed for the target. `--no-dependencies` would drop
 	// node_modules altogether.
 	run(process.execPath, [path.join(REPO, 'node_modules', '@vscode', 'vsce', 'vsce'), 'package',
-		'--target', target, '--skip-license', '--out', vsix], dir);
+		'--target', target, '--out', vsix], dir);
 	return vsix;
 }
 

@@ -16,14 +16,11 @@ const TARGETS = {
 	'linux-arm64': { os: 'linux', cpu: 'arm64', helper: false },
 };
 
-/**
- * The modules the bundle leaves external and loads at run time. `regkey` is a dependency nothing
- * requires, so it does not ship.
- */
+/** The modules the bundle leaves external and loads at run time. */
 const NATIVE_MODULES = ['usb', 'node-hid', 'serialport', 'koffi'];
 
 /** The extension's own files, relative to the repository; nothing else of the repository ships. */
-const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'out/extension.js'];
+const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
 
 /**
  * Whether a module's prebuilt binary folder is for this target. `node-hid` prefixes the platform
@@ -66,7 +63,7 @@ const KOFFI_PLATFORM = /^extension\/node_modules\/@koromix\/koffi-([^/]+)\//;
 function allowed(target, entry) {
 	if (!entry.startsWith('extension/')) { return true; }   // the VSIX's own manifest and content types
 	const file = entry.slice('extension/'.length);
-	if (['package.json', 'readme.md', 'changelog.md', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
+	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
 	if (file.startsWith('native/bin/')) { return TARGETS[target].helper && !file.endsWith('.pdb'); }
 	if (!file.startsWith('node_modules/')) { return false; }
 	const prebuild = PREBUILD.exec(entry);
@@ -80,6 +77,7 @@ function allowed(target, entry) {
 function required(target) {
 	const needs = [
 		'extension/package.json',
+		'extension/LICENSE',
 		'extension/out/extension.js',
 		'extension/node_modules/koffi/',
 		`extension/node_modules/@koromix/koffi-${target}/`,

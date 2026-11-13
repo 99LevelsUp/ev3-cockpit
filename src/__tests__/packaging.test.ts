@@ -26,7 +26,7 @@ const ZIP = Buffer.from('UEsDBBQAAAAAAOFybV1o8gHhAQAAAAEAAAAWAAAAZXh0ZW5zaW9uLnZ
 /** What a correct linux-arm64 VSIX holds, at the paths the checks look for. */
 const LINUX_ARM64 = [
 	'extension.vsixmanifest', '[Content_Types].xml',
-	'extension/package.json', 'extension/readme.md', 'extension/out/extension.js',
+	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js',
 	'extension/node_modules/usb/prebuilds/linux-arm64/node.napi.armv8.node',
 	'extension/node_modules/node-hid/prebuilds/HID-linux-arm64/node-napi-v3.node',
 	'extension/node_modules/node-hid/prebuilds/HID_hidraw-linux-arm64/node-napi-v3.node',
