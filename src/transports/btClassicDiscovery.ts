@@ -59,7 +59,7 @@ export interface BtClassicDiscoveryOptions {
 	 */
 	onPairingEvent?: (mac: string, event: BtPairingEvent, elapsedMs: number) => void;
 	/** Removes a pairing. */
-	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	unpairDevice?: (mac: string) => PairingResult | Promise<PairingResult>;
 	/**
 	 * Reads this computer's Bluetooth radio name, or undefined when there is no radio.
 	 * Injectable for the same reason as {@link listDevices}.
@@ -101,7 +101,7 @@ export class BtClassicDiscovery {
 		mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
 	) => Promise<PairingResult>;
 	private readonly onPairingEvent?: (mac: string, event: BtPairingEvent, elapsedMs: number) => void;
-	private readonly unpairDevice: (mac: string) => PairingResult;
+	private readonly unpairDevice: (mac: string) => PairingResult | Promise<PairingResult>;
 	private readonly readRadioName: () => string | undefined;
 	private readonly connectionQueue?: Pick<BtConnectionQueue, 'enqueue'>;
 
@@ -187,11 +187,14 @@ export class BtClassicDiscovery {
 	 * cockpit's own bookkeeping and left the Windows pairing in place, so a forgotten brick
 	 * reappeared on the next scan.
 	 */
-	unpair = (mac: string): PairingResult => {
+	unpair = (mac: string): PairingResult | Promise<PairingResult> => {
+		const refused = (error: unknown): PairingResult => ({ ok: false, reason: error instanceof Error ? error.message : String(error) });
 		try {
-			return this.unpairDevice(mac);
+			const result = this.unpairDevice(mac);
+			// Windows answers at once and stays synchronous; BlueZ's RemoveDevice answers later.
+			return result instanceof Promise ? result.catch(refused) : result;
 		} catch (error) {
-			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+			return refused(error);
 		}
 	};
 

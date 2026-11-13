@@ -94,6 +94,12 @@ function windowsResidue(mac: string): ForgetResidue[] {
 	];
 }
 
+/** What an unpair answers: Windows' synchronously, BlueZ's later (step-7 plan, KTD6). */
+export interface UnpairResult {
+	ok: boolean;
+	reason?: string;
+}
+
 /** Configuration for {@link BtTransportProvider}. */
 export interface BtTransportProviderOptions {
 	/** BT adapter factories keyed by backend name, in priority order. */
@@ -109,7 +115,12 @@ export interface BtTransportProviderOptions {
 	 * `capabilities.supportsForget` is true. Without it forget only drops the backend
 	 * preference, and the brick returns on the next scan as though nothing happened.
 	 */
-	unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	unpairDevice?: (mac: string) => UnpairResult | Promise<UnpairResult>;
+	/**
+	 * What the OS keeps of a brick after the unpair, reported to the user (step-7 plan, KTD7).
+	 * Default: what Windows keeps. Linux names BlueZ's name cache.
+	 */
+	forgetResidue?: (mac: string) => ForgetResidue[];
 	/**
 	 * How long a brick gets after its connection is closed before the next connect to it
 	 * (default {@link BT.RECONNECT_GAP_AFTER_CLOSE_MS}). Per brick: other bricks are not held.
@@ -140,7 +151,8 @@ export class BtTransportProvider implements TransportProvider {
 	private readonly backends: Map<BtBackend, BtAdapterFactory>;
 	private readonly discoverDevices?: BtDiscoveryFunction;
 	private readonly connectionQueue?: BtConnectionQueue;
-	private readonly unpairDevice?: (mac: string) => { ok: boolean; reason?: string };
+	private readonly unpairDevice?: (mac: string) => UnpairResult | Promise<UnpairResult>;
+	private readonly forgetResidue: (mac: string) => ForgetResidue[];
 	private readonly sessions = new Map<BrickKey, BtSession>();
 	private readonly preferredBackend = new Map<string, BtBackend>();
 	/** When each brick's last connection was closed, by MAC. */
@@ -162,6 +174,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.discoverDevices = options?.discoverDevices;
 		this.connectionQueue = options?.connectionQueue;
 		this.unpairDevice = options?.unpairDevice;
+		this.forgetResidue = options?.forgetResidue ?? windowsResidue;
 		this.reconnectGapAfterCloseMs = options?.reconnectGapAfterCloseMs ?? BT.RECONNECT_GAP_AFTER_CLOSE_MS;
 		this.presence = options?.presence;
 		this.capabilities = {
@@ -356,7 +369,7 @@ export class BtTransportProvider implements TransportProvider {
 		this.preferredBackend.delete(mac);
 		if (!this.unpairDevice) { return []; }
 
-		const result = this.unpairDevice(mac);
+		const result = await this.unpairDevice(mac);
 		if (!result.ok) {
 			throw new TransportError(
 				`Could not forget ${describeAddress(mac)}: ${result.reason ?? 'the operating system refused.'}`
@@ -369,7 +382,7 @@ export class BtTransportProvider implements TransportProvider {
 		const forgotten = normaliseMac(mac);
 		this.lastPaired = this.lastPaired.filter((paired) => normaliseMac(paired) !== forgotten);
 
-		return windowsResidue(mac);
+		return this.forgetResidue(mac);
 	}
 
 	dispose(): void {
