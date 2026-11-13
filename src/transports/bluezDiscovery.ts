@@ -14,7 +14,7 @@ import type { BluezDevice, BluezObjectCache } from './bluezObjects';
  * @throws Before the cache has read BlueZ: discovery reports that once, rather than show an empty
  *   list as though there were no bricks.
  */
-export function bluezListDevices(cache: BluezObjectCache): () => BluetoothDeviceInfo[] {
+export function bluezListDevices(cache: Pick<BluezObjectCache, 'ready' | 'devices'>): () => BluetoothDeviceInfo[] {
 	return () => {
 		if (!cache.ready) { throw new Error('BlueZ is not ready: its objects have not been read.'); }
 		const devices: BluetoothDeviceInfo[] = [];
@@ -35,7 +35,7 @@ export function bluezListDevices(cache: BluezObjectCache): () => BluetoothDevice
 }
 
 /** This computer's Bluetooth name: the adapter's `Alias`, which BlueZ defaults to the host name. */
-export function bluezRadioName(cache: BluezObjectCache): () => string | undefined {
+export function bluezRadioName(cache: Pick<BluezObjectCache, 'adapter'>): () => string | undefined {
 	return () => cache.adapter()?.alias || undefined;
 }
 

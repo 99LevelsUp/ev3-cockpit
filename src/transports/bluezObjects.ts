@@ -46,8 +46,9 @@ export interface BluezAdapter {
 
 export interface BluezObjectCacheOptions {
 	/**
-	 * The unique name that owns `org.bluez`, to check each signal's sender against. Without it the
-	 * match rules' `sender='org.bluez'` is the filter: the bus delivers only BlueZ's signals.
+	 * The unique name that owns `org.bluez`, to check each signal's sender against; while it answers
+	 * undefined (BlueZ gone, or not yet known) every signal is dropped. Without the option the match
+	 * rules' `sender='org.bluez'` is the filter: the bus delivers only BlueZ's signals.
 	 */
 	bluezOwner?: () => string | undefined;
 }
@@ -187,8 +188,11 @@ export class BluezObjectCache {
 	// ── Internal ────────────────────────────────────────────────────
 
 	private onSignal(message: DBusMessage): void {
-		const owner = this.options.bluezOwner?.();
-		if (owner !== undefined && message.sender !== owner) { return; }
+		// Once BlueZ's owner is tracked, fail closed: while it is unknown, no signal is BlueZ's.
+		if (this.options.bluezOwner) {
+			const owner = this.options.bluezOwner();
+			if (owner === undefined || message.sender !== owner) { return; }
+		}
 		if (this.pending) { this.pending.push(message); return; }
 		if (this.apply(message)) { this.notify(); }
 	}

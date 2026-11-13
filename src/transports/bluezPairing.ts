@@ -41,7 +41,7 @@ export interface BluezPairingOptions {
 	searchMs?: number;
 	/** How long Pair may take; BlueZ itself gives up on the brick's dialog after 60 s (default 90 s). */
 	pairTimeoutMs?: number;
-	/** BlueZ's unique bus name; when known, the agent answers no other caller. */
+	/** BlueZ's unique bus name; with this option the agent answers no other caller, and nobody while it is unknown. */
 	bluezOwner?: () => string | undefined;
 }
 
@@ -144,8 +144,11 @@ export function createBluezPairing(options: BluezPairingOptions): PairingFunctio
 
 			// Our agent, for this pairing only; it answers BlueZ about this brick and refuses the rest.
 			const forThisBrick = (device: DBusValue, message: { sender?: string } | undefined): void => {
-				const owner = options.bluezOwner?.();
-				if (owner !== undefined && message?.sender !== owner) { throw new DBusError('org.bluez.Error.Rejected', 'Not BlueZ.'); }
+				// Once BlueZ's owner is tracked, fail closed: while it is unknown, nobody is BlueZ.
+				if (options.bluezOwner) {
+					const owner = options.bluezOwner();
+					if (owner === undefined || message?.sender !== owner) { throw new DBusError('org.bluez.Error.Rejected', 'Not BlueZ.'); }
+				}
 				if (device !== devicePath) { throw new DBusError('org.bluez.Error.Rejected', 'Not the brick being paired.'); }
 			};
 			phase = 'agent';
