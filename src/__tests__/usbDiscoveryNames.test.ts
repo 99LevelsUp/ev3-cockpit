@@ -151,3 +151,56 @@ describe('USB discovery — a brick libusb holds (Linux, HOSTC 13.11.2026)', () 
 		}
 	});
 });
+
+describe('USB discovery — a brick only libusb sees (Linux, HOSTC 13.11.2026)', () => {
+	// An extension host killed while it held a brick never gives `usbhid` back: the brick stays
+	// on the bus with no driver and no hidraw node, so node-hid no longer lists it. Reproduced on
+	// HOSTC by `npm run test:host`, which ends VS Code while activation probes the bricks' names.
+	it('lists a brick libusb enumerates when node-hid does not', async () => {
+		const provider = new UsbTransportProvider({
+			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
+			listHidDevices: () => [],
+			listUsbDevices: (() => Promise.resolve([usbDevice])) as never,
+			platform: 'linux',
+		});
+		try {
+			const scan = await provider.discover();
+			assert.equal(scan.items.length, 1, 'a brick on the bus must not vanish because its driver did');
+			assert.equal(scan.items[0].displayName, 'AAA');
+			assert.match(String(scan.items[0].brickKey), new RegExp(SERIAL, 'i'));
+			assert.equal(scan.items[0].connected, false);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it('lists a brick both enumerations see once', async () => {
+		const provider = new UsbTransportProvider({
+			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
+			listHidDevices: () => [hidDevice],
+			listUsbDevices: (() => Promise.resolve([usbDevice])) as never,
+			platform: 'linux',
+		});
+		try {
+			const scan = await provider.discover();
+			assert.equal(scan.items.length, 1);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it('lists from node-hid alone on Windows, as before', async () => {
+		const provider = new UsbTransportProvider({
+			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
+			listHidDevices: () => [],
+			listUsbDevices: (() => Promise.resolve([usbDevice])) as never,
+			platform: 'win32',
+		});
+		try {
+			const scan = await provider.discover();
+			assert.equal(scan.items.length, 0);
+		} finally {
+			provider.dispose();
+		}
+	});
+});

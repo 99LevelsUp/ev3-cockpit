@@ -90,6 +90,8 @@ export interface UsbTransportProviderOptions {
 	 */
 	listUsbDevices?: typeof listLegoUsbDevices;
 	listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
+	/** The platform whose discovery rules apply (default: this one). For tests. */
+	platform?: NodeJS.Platform;
 }
 
 /**
@@ -124,6 +126,7 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly makeHidAdapter: (options: UsbHidAdapterOptions) => UsbHidAdapter;
 	private readonly listUsbDevices: typeof listLegoUsbDevices;
 	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
+	private readonly platform: NodeJS.Platform;
 	private disposed = false;
 	/**
 	 * Probe links open now, with where each one sits. Their devices count as in use, so
@@ -150,6 +153,7 @@ export class UsbTransportProvider implements TransportProvider {
 		this.makeHidAdapter = options.createHidAdapter ?? ((o) => new UsbHidAdapter(o));
 		this.listUsbDevices = options?.listUsbDevices ?? listLegoUsbDevices;
 		this.listHidDevices = options?.listHidDevices;
+		this.platform = options.platform ?? process.platform;
 	}
 
 	async discover(): Promise<DiscoveryScanResult> {
@@ -221,6 +225,32 @@ export class UsbTransportProvider implements TransportProvider {
 				favorite: false,
 				lastSeenAt: now,
 			});
+		}
+
+		// On Linux a brick can be on the bus with no hidraw node: an extension host that died
+		// holding it never gave `usbhid` back (HOSTC, 13.11.2026, reproduced by `test:host`).
+		// libusb still sees it, and a libusb connect needs no driver to detach.
+		if (this.platform === 'linux') {
+			const seen = new Set(items.map((item) => item.brickKey));
+			for (const device of nodeUsbDevices) {
+				const serial = device.serialNumber?.trim().toUpperCase();
+				if (!serial) { continue; }
+				const brickKey = makeBrickKey(Transport.USB, serial);
+				if (seen.has(brickKey)) { continue; }
+				seen.add(brickKey);
+				const name = this.nameBySerial.get(serial.toLowerCase()) ?? device.product?.trim();
+				items.push({
+					brickKey,
+					displayName: name || serial,
+					nameSource: name ? 'usb-descriptor' : 'fallback',
+					transport: Transport.USB,
+					presenceState: PresenceState.Available,
+					remembered: false,
+					connected: this.sessions.has(brickKey),
+					favorite: false,
+					lastSeenAt: now,
+				});
+			}
 		}
 
 		// A brick this provider holds is on the cable whatever node-hid says. On Linux the libusb
