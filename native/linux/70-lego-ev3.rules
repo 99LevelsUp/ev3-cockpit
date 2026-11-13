@@ -1,0 +1,5 @@
+# LEGO MINDSTORMS EV3 (USB 0694:0005): read and write access for the user at the seat.
+# Install:  sudo cp 70-lego-ev3.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# then plug the brick in again.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", TAG+="uaccess"

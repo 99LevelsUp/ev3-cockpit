@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { UsbLibusbAdapter } from '../transports/usbLibusbAdapter';
+import { DevicePermissionError } from '../errors/CockpitError';
 
 const FRAME = 1024;
 const INTERRUPT = 0x03;
@@ -58,6 +59,15 @@ interface FakeDeviceSpec {
 	deviceAddress?: number;
 	/** IN transfers never call back on their own: a read still in flight inside libusb. */
 	holdReads?: boolean;
+	/**
+	 * A kernel driver holds the interface, as Linux's `usbhid` holds an EV3's: the claim fails
+	 * with LIBUSB_ERROR_BUSY until the driver is detached (measured on HOSTC, 13.11.2026).
+	 */
+	kernelDriverActive?: boolean;
+	/** The device offers libusb's auto-detach (`setAutoDetachKernelDriver`). Default true. */
+	autoDetach?: boolean;
+	/** `open()` throws this, as libusb does for a device the user may not open. */
+	openError?: string;
 }
 
 function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unknown[] }; log: Recorded } {
@@ -73,6 +83,20 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 			{ direction: 'in' as const, type: INTERRUPT, maxPacketSize: FRAME },
 			{ direction: 'out' as const, type: INTERRUPT, maxPacketSize: FRAME },
 		];
+		let kernelHeld = spec.kernelDriverActive ?? false;
+		let autoDetachOn = false;
+		/**
+		 * After the kernel driver is taken off, the endpoints' data toggle no longer matches the
+		 * brick's and the first reply is dropped as a duplicate, until a clear-halt resets both
+		 * sides (HOSTC, 13.11.2026: the first exchange after every detach timed out).
+		 */
+		let toggleOutOfStep = false;
+		const kernelSeams = spec.autoDetach === false ? {} : {
+			setAutoDetachKernelDriver(enable: boolean): void {
+				autoDetachOn = enable;
+				log.events.push(`autoDetach:${enable}`);
+			},
+		};
 		const endpoints = endpointSpecs.map((ep) => ({
 			direction: ep.direction,
 			descriptor: {
@@ -81,6 +105,11 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 				wMaxPacketSize: ep.maxPacketSize,
 			},
 			timeout: 0,
+			clearHalt(callback: (error?: Error) => void): void {
+				toggleOutOfStep = false;
+				log.events.push(`clearHalt:${ep.direction}`);
+				setImmediate(() => callback());
+			},
 			transfer(
 				lengthOrData: number | Buffer,
 				callback: (error: Error | undefined, data?: Buffer) => void,
@@ -93,6 +122,12 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 					return;
 				}
 				log.requestedReadLengths.push(lengthOrData as number);
+				if (toggleOutOfStep) {
+					toggleOutOfStep = false;
+					replies.shift();
+					setImmediate(() => callback(new Error('LIBUSB_TRANSFER_TIMED_OUT')));
+					return;
+				}
 				if (spec.holdReads) {
 					log.heldReads.push((error, data) => { log.events.push('read-callback'); callback(error, data); });
 					return;
@@ -105,23 +140,33 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 		}));
 
 		return {
+			...kernelSeams,
 			deviceDescriptor: { idVendor: 0x0694, idProduct: 0x0005, iSerialNumber: 3 },
 			busNumber: spec.busNumber ?? 2,
 			deviceAddress: spec.deviceAddress ?? 10 + index,
-			open(): void { log.openedDevices.push(name); },
+			open(): void {
+				if (spec.openError) { throw new Error(spec.openError); }
+				log.openedDevices.push(name);
+			},
 			close(): void { log.closed += 1; log.closedDevices.push(name); log.events.push('close'); },
 			interface(): unknown {
 				return {
 					endpoints,
 					claim(): void {
 						if (spec.claimError) { throw new Error(spec.claimError); }
+						if (kernelHeld && !autoDetachOn) { throw new Error('LIBUSB_ERROR_BUSY'); }
+						if (kernelHeld) { kernelHeld = false; toggleOutOfStep = true; log.events.push('auto-detached'); }
 						log.claimed += 1;
+						log.events.push('claim');
 					},
 					release(_close: boolean, callback: () => void): void {
 						log.released += 1;
 						log.events.push('release');
 						callback();
 					},
+					isKernelDriverActive(): boolean { return kernelHeld; },
+					detachKernelDriver(): void { kernelHeld = false; toggleOutOfStep = true; log.events.push('detach'); },
+					attachKernelDriver(): void { kernelHeld = true; log.events.push('attach'); },
 				};
 			},
 			getStringDescriptor(
@@ -136,13 +181,14 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 	return { module: { getDeviceList: () => devices }, log };
 }
 
-function adapterFor(specs: FakeDeviceSpec[], serial?: string, readSlackBytes = 0): {
+function adapterFor(specs: FakeDeviceSpec[], serial?: string, readSlackBytes = 0, platform?: NodeJS.Platform): {
 	adapter: UsbLibusbAdapter; log: Recorded;
 } {
 	const { module, log } = fakeUsb(specs);
 	const adapter = new UsbLibusbAdapter({
 		serial,
 		readSlackBytes,
+		...(platform ? { platform } : {}),
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		moduleLoader: () => module as any,
 	});
@@ -399,5 +445,96 @@ describe('UsbLibusbAdapter — open failures release what they took', () => {
 		await assert.rejects(() => adapter.open(), /no interrupt endpoint pair/);
 		assert.equal(log.released, 1);
 		assert.equal(log.closed, 1);
+	});
+});
+
+describe('UsbLibusbAdapter — a kernel driver holding the interface (Linux, HOSTC 13.11.2026)', () => {
+	// On Linux the kernel's `usbhid` binds the EV3's interface 0, so a bare claim fails with
+	// LIBUSB_ERROR_BUSY and every Linux user silently lands on 64-byte HID. Detaching works as a
+	// normal user and gives the 1024-byte endpoints.
+
+	it('turns on auto-detach before the claim, so the interface is claimed', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true }], undefined, 0, 'linux');
+		await adapter.open();
+		assert.equal(adapter.isOpen, true);
+		assert.equal(adapter.maxPacketBytes, FRAME);
+		assert.deepEqual(log.events.slice(0, 3), ['autoDetach:true', 'auto-detached', 'claim']);
+	});
+
+	it('without auto-detach, detaches before the claim and reattaches after the release', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, autoDetach: false }], undefined, 0, 'linux');
+		await adapter.open();
+		assert.equal(adapter.isOpen, true);
+		await adapter.close();
+		assert.deepEqual(log.events, ['detach', 'claim', 'clearHalt:in', 'clearHalt:out', 'release', 'attach', 'close']);
+	});
+
+	it('leaves an interface no kernel driver holds alone', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: false, autoDetach: false }], undefined, 0, 'linux');
+		await adapter.open();
+		await adapter.close();
+		assert.deepEqual(log.events, ['claim', 'clearHalt:in', 'clearHalt:out', 'release', 'close']);
+	});
+
+	it('gives the driver back and closes when the claim fails after a detach', async () => {
+		const { adapter, log } = adapterFor(
+			[{ kernelDriverActive: true, autoDetach: false, claimError: 'LIBUSB_ERROR_IO' }], undefined, 0, 'linux');
+		await assert.rejects(() => adapter.open(), /Could not claim USB interface 0/);
+		assert.deepEqual(log.events, ['detach', 'attach', 'close']);
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('clears both endpoints after taking the interface from the kernel, so the first reply arrives', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, replies: [paddedReply(1)] }], undefined, 0, 'linux');
+		await adapter.open();
+		const claimAt = log.events.indexOf('claim');
+		assert.ok(log.events.indexOf('clearHalt:in') > claimAt, 'IN cleared after the claim');
+		assert.ok(log.events.indexOf('clearHalt:out') > claimAt, 'OUT cleared after the claim');
+		const reply = await adapter.send(replyPacket(1), { expectedMessageCounter: 1, timeoutMs: 1000 });
+		assert.equal(reply[2], 1);
+	});
+
+	it('never touches the kernel driver on Windows', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: false }], undefined, 0, 'win32');
+		await adapter.open();
+		await adapter.close();
+		assert.deepEqual(log.events, ['claim', 'release', 'close'], 'no detach and no clear-halt on Windows');
+	});
+});
+
+describe('UsbLibusbAdapter — a device this user may not open (Linux, HOSTC 13.11.2026)', () => {
+	// Without the udev rule every EV3 node is root-only. The serial lookup swallowed the
+	// LIBUSB_ERROR_ACCESS and said "No EV3 on the USB bus reports serial …", which sends a user
+	// looking for the wrong brick instead of at the permissions.
+
+	it('says permission, and names the udev rule, when every candidate refuses to open', async () => {
+		const { adapter } = adapterFor(
+			[{ serial: 'aaa', openError: 'LIBUSB_ERROR_ACCESS' }, { serial: 'bbb', openError: 'LIBUSB_ERROR_ACCESS' }],
+			'aaa', 0, 'linux');
+		const error = await adapter.open().then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof DevicePermissionError, `got ${String(error)}`);
+		assert.match((error as Error).message, /LIBUSB_ERROR_ACCESS/);
+		assert.match((error as Error).message, /native\/linux\/70-lego-ev3\.rules/);
+		assert.match((error as Error).message, /\/etc\/udev\/rules\.d/);
+	});
+
+	it('says permission when the one brick it would take refuses to open', async () => {
+		const { adapter } = adapterFor([{ openError: 'LIBUSB_ERROR_ACCESS' }], undefined, 0, 'linux');
+		await assert.rejects(() => adapter.open(), DevicePermissionError);
+	});
+
+	it('says permission when a device it could not open might be the brick asked for', async () => {
+		const { adapter } = adapterFor(
+			[{ serial: 'bbb' }, { serial: 'ccc', openError: 'LIBUSB_ERROR_ACCESS' }], 'aaa', 0, 'linux');
+		const error = await adapter.open().then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof DevicePermissionError,
+			'a refusing device may be the brick asked for: its serial could not be read');
+	});
+
+	it('keeps the Windows message as it was', async () => {
+		const { adapter } = adapterFor([{ serial: 'aaa', openError: 'LIBUSB_ERROR_ACCESS' }], 'aaa', 0, 'win32');
+		const error = await adapter.open().then(() => undefined, (e: unknown) => e);
+		assert.ok(!(error instanceof DevicePermissionError));
+		assert.match((error as Error).message, /No EV3 on the USB bus reports serial AAA/);
 	});
 });

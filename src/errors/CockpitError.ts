@@ -247,3 +247,17 @@ export class AccessDeniedError extends CockpitError {
 		this.name = 'AccessDeniedError';
 	}
 }
+
+/**
+ * The operating system will not let this user open the brick's device.
+ *
+ * A connection failure like any other to everything that counts them; its own class so the
+ * message can say what to do — on Linux, install the udev rule the extension ships — rather
+ * than send a user looking for a brick that is plugged in (HOSTC, 13.11.2026).
+ */
+export class DevicePermissionError extends ConnectionError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause);
+		this.name = 'DevicePermissionError';
+	}
+}
