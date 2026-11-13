@@ -16,6 +16,7 @@ interface Packaging {
 	keepPrebuild(module: string, dir: string, target: string): boolean;
 	listZipEntries(zip: Uint8Array): string[];
 	checkVsix(target: string, entries: readonly string[]): { missing: string[]; unexpected: string[] };
+	SHIPPED_FILES_FOR(target: string): string[];
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const packaging = require(path.join(__dirname, '..', '..', 'scripts', 'packaging.cjs')) as Packaging;
@@ -34,6 +35,7 @@ const LINUX_ARM64 = [
 	'extension/node_modules/@koromix/koffi-linux-arm64/koffi.node',
 	'extension/node_modules/koffi/index.js',
 	'extension/node_modules/serialport/dist/index.js',
+	'extension/native/linux/70-lego-ev3.rules',
 ];
 
 describe('Platform VSIX packaging (0.2.5)', () => {
@@ -83,5 +85,21 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		assert.deepEqual(unexpected.sort(), leaky.slice(LINUX_ARM64.length).sort());
 		assert.ok(packaging.checkVsix('win32-x64', ['extension/native/bin/bt-pairing-helper.pdb']).unexpected.length === 1,
 			'debug symbols do not ship');
+	});
+
+	it('ships the udev rule the Linux permission message points at, on Linux only (merge review, 13.11.2026)', () => {
+		// The message told a Linux user to copy a file that no VSIX carried.
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { LINUX_UDEV_RULE_PATH } = require('../transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
+		const entry = `extension/${LINUX_UDEV_RULE_PATH}`;
+		const repoRoot = path.join(__dirname, '..', '..');
+		assert.ok(require('node:fs').existsSync(path.join(repoRoot, LINUX_UDEV_RULE_PATH)), 'the rule is in the repository');
+		assert.ok(packaging.SHIPPED_FILES_FOR('linux-arm64').includes(LINUX_UDEV_RULE_PATH), 'staged for Linux');
+		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(LINUX_UDEV_RULE_PATH), 'not staged for Windows');
+		for (const target of ['linux-x64', 'linux-arm64']) {
+			const without = LINUX_ARM64.filter((e) => e !== entry);
+			assert.ok(packaging.checkVsix(target, without).missing.includes(entry), `${target} must carry ${entry}`);
+		}
+		assert.ok(packaging.checkVsix('win32-x64', [entry]).unexpected.includes(entry), 'Windows does not carry it');
 	});
 });
