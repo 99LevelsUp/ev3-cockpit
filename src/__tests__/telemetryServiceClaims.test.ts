@@ -408,6 +408,8 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 			assert.equal(foreground?.intervals.get('ports.motor.A.tacho'), 100);
 			assert.equal(foreground?.intervals.get('system.battery.level'), 500);
 			assert.equal(foreground?.intervals.get('system.firmwareVersion'), 'once');
+			assert.equal(service.currentPlans().get(A)?.get('ports.motor.A.tacho'), 100,
+				'a reader attached later learns it too (review of U6, round 1)');
 
 			bricks.moveRoute(A, Transport.USB);   // two events, nothing changed
 			assert.equal(plans.length, 0, 'a refresh that changes nothing announces nothing');

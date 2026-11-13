@@ -51,6 +51,11 @@ export interface TelemetrySource {
 	readonly onValues: vscode.Event<TelemetryValuesEvent>;
 	readonly onPlanChange: vscode.Event<PlanChangeEvent>;
 	readonly onSessionEnded: vscode.Event<SessionEndedEvent>;
+	/**
+	 * What each brick is read for right now: a reader attached to a source that already runs learns
+	 * the plans announced before it subscribed (review of U6, round 1).
+	 */
+	currentPlans(): ReadonlyMap<BrickRef, ReadonlyMap<string, number | 'once'>>;
 }
 
 /** Runs `fn` once after `ms`; returns a function that cancels it. */
@@ -74,6 +79,12 @@ interface Entry {
 	/** When the value turned stale; undefined while it is fresh. */
 	staleSince?: number;
 }
+
+/**
+ * The longest delay Node's timers keep; a longer one fires after 1 ms. Not a setting: the platform's
+ * limit. A deadline further out wakes the timer at this and is checked again (review of U6, round 1).
+ */
+const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 const realTimer: ReadModelTimer = {
 	set: (ms, fn) => {
@@ -103,6 +114,9 @@ export class TelemetryReadModel implements vscode.Disposable {
 		this.now = options.now ?? (() => Date.now());
 		this.timer = options.timer ?? realTimer;
 		const { source } = options;
+		for (const [brickKey, intervals] of source.currentPlans()) {
+			if (intervals.size > 0) { this.plans.set(brickKey, intervals); }
+		}
 		this.subscriptions = [
 			source.onValues((event) => this.take(event)),
 			source.onPlanChange((event) => this.plan(event)),
@@ -145,23 +159,37 @@ export class TelemetryReadModel implements vscode.Disposable {
 	// ── Internal ────────────────────────────────────────────────────
 
 	private take(event: TelemetryValuesEvent): void {
+		// Deadlines that have passed are announced first: a sample that beats a late timer to it
+		// must not erase an outage without a word (D10; review of U6, round 1).
+		this.sweep();
 		const { brickKey } = event;
 		let entries = this.bricks.get(brickKey);
 		if (!entries) { entries = new Map(); this.bricks.set(brickKey, entries); }
-		const interval = this.plans.get(brickKey);
+		const plan = this.plans.get(brickKey);
+		const now = this.now();
 		const changed: ReadValue[] = [];
 		for (const value of event.values) {
 			const before = entries.get(value.rowId);
-			const entry: Entry = {
+			const planned = plan?.get(value.rowId);
+			const reading = {
 				value: value.value,
 				...(value.unit !== undefined ? { unit: value.unit } : {}),
 				...(value.mode !== undefined ? { mode: value.mode } : {}),
 				sampledAt: value.sampledAt,
-				interval: interval?.get(value.rowId) ?? before?.interval,
 			};
+			let entry: Entry;
+			if (planned === 'once' || before?.interval === 'once') {
+				entry = { ...reading, interval: 'once' };
+			} else if (planned === undefined) {
+				// A row no longer read: the reply of a frame sent before the re-plan. Its value is
+				// kept, but it stays stale, and its drop is not put off.
+				entry = { ...reading, staleSince: before?.staleSince ?? now };
+			} else {
+				entry = { ...reading, interval: planned };
+			}
 			entries.set(value.rowId, entry);
-			if (!before || !Object.is(before.value, entry.value) || before.mode !== entry.mode
-				|| before.unit !== entry.unit || before.staleSince !== undefined || before.interval !== entry.interval) {
+			if (!before || !Object.is(before.value, entry.value) || before.mode !== entry.mode || before.unit !== entry.unit
+				|| (before.staleSince === undefined) !== (entry.staleSince === undefined) || before.interval !== entry.interval) {
 				changed.push(view(value.rowId, entry));
 			}
 		}
@@ -198,27 +226,35 @@ export class TelemetryReadModel implements vscode.Disposable {
 		this.schedule();
 	}
 
-	/** Marks what has aged past the stale limit and drops what has been stale long enough. */
+	/**
+	 * Marks what has aged past the stale limit and drops what has been stale long enough.
+	 *
+	 * Times count from the deadlines, not from when this runs: a value went stale when it reached
+	 * `staleFactor` of its intervals, however late the timer is. A value that went stale and is
+	 * gone in one pass is announced stale first, then gone: nothing is skipped (D10).
+	 */
 	private sweep(): void {
 		const now = this.now();
 		const { staleFactor, staleTimeoutMs } = this.settings;
 		for (const [brickKey, entries] of this.bricks) {
-			const changed: ReadValue[] = [];
+			const turnedStale: ReadValue[] = [];
 			const removed: string[] = [];
 			for (const [id, entry] of entries) {
 				if (entry.interval === 'once') { continue; }
-				if (entry.staleSince === undefined) {
-					if (typeof entry.interval === 'number' && now - entry.sampledAt >= staleFactor * entry.interval) {
-						entry.staleSince = now;
-						changed.push(view(id, entry));
+				if (entry.staleSince === undefined && typeof entry.interval === 'number') {
+					const deadline = entry.sampledAt + staleFactor * entry.interval;
+					if (now >= deadline) {
+						entry.staleSince = deadline;
+						turnedStale.push(view(id, entry));
 					}
 				}
-				if (entry.staleSince !== undefined && now - entry.staleSince >= staleTimeoutMs) {
+				if (entry.staleSince !== undefined && now >= entry.staleSince + staleTimeoutMs) {
 					entries.delete(id);
 					removed.push(id);
 				}
 			}
-			this.tell(brickKey, changed.filter((row) => !removed.includes(row.rowId)), removed);
+			this.tell(brickKey, turnedStale, []);
+			this.tell(brickKey, [], removed);
 		}
 		this.schedule();
 	}
@@ -240,7 +276,7 @@ export class TelemetryReadModel implements vscode.Disposable {
 			}
 		}
 		if (next === Number.POSITIVE_INFINITY) { return; }
-		this.cancelTimer = this.timer.set(Math.max(0, next - this.now()), () => {
+		this.cancelTimer = this.timer.set(Math.min(Math.max(0, next - this.now()), LONGEST_TIMER_MS), () => {
 			this.cancelTimer = undefined;
 			this.sweep();
 		});

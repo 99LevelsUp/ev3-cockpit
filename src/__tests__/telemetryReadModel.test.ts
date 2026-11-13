@@ -25,16 +25,24 @@ const TACHO = 'ports.motor.A.tacho';
 const BATTERY = 'system.battery.level';
 const FIRMWARE = 'system.firmwareVersion';
 
-function world(settings = { staleFactor: 3, staleTimeoutMs: 1000 }) {
+function world(
+	settings = { staleFactor: 3, staleTimeoutMs: 1000 },
+	running: ReadonlyMap<BrickId, ReadonlyMap<string, number | 'once'>> = new Map(),
+) {
 	const values = new vscode.EventEmitter<TelemetryValuesEvent>();
 	const plans = new vscode.EventEmitter<PlanChangeEvent>();
 	const ended = new vscode.EventEmitter<{ readonly brickKey: BrickId }>();
-	const source: TelemetrySource = { onValues: values.event, onPlanChange: plans.event, onSessionEnded: ended.event };
+	const source: TelemetrySource = {
+		onValues: values.event, onPlanChange: plans.event, onSessionEnded: ended.event,
+		currentPlans: () => running,
+	};
 
 	let now = 0;
 	let pending: { at: number; fn: () => void } | undefined;
+	const delays: number[] = [];
 	const timer: ReadModelTimer = {
 		set: (ms, fn) => {
+			delays.push(ms);
 			const entry = { at: now + ms, fn };
 			pending = entry;
 			return () => { if (pending === entry) { pending = undefined; } };
@@ -45,7 +53,11 @@ function world(settings = { staleFactor: 3, staleTimeoutMs: 1000 }) {
 	model.onChange((change) => changes.push(change));
 
 	return {
-		model, changes,
+		model, changes, delays,
+		/** Moves the clock without running the timer: a callback the event loop has not reached yet. */
+		jump(ms: number) { now += ms; },
+		/** Runs the timer now, if one is set: the late callback finally runs. */
+		fire() { const due = pending; pending = undefined; due?.fn(); },
 		plan: (brickKey: BrickId, intervals: Record<string, number | 'once'>) =>
 			plans.fire({ brickKey, intervals: new Map(Object.entries(intervals)) }),
 		sample: (brickKey: BrickId, ...rows: [string, RowValue['value']][]) =>
@@ -222,5 +234,78 @@ describe('Telemetry read model (step-6 U6)', () => {
 		assert.equal(w.model.valueOf(A, TACHO)?.stale, true, '250 ms is past 2 intervals of 100');
 		assert.throws(() => w.model.configure({ staleFactor: 0, staleTimeoutMs: 1000 }), /staleFactor/);
 		assert.throws(() => w.model.configure({ staleFactor: 3, staleTimeoutMs: -1 }), /staleTimeoutMs/);
+	});
+	it('keeps a row that left the plan stale when a late reply still brings it, and does not put off its drop (review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.plan(A, {});                   // re-planned while a frame was in flight
+		w.take();
+		w.advance(50);
+
+		w.sample(A, [TACHO, 91]);        // that frame's reply
+
+		const late = w.model.valueOf(A, TACHO);
+		assert.deepEqual([late?.value, late?.stale, late?.effectiveIntervalMs], [91, true, undefined]);
+		w.advance(950);
+		assert.equal(w.model.valueOf(A, TACHO), undefined, 'dropped 1000 ms after it stopped being read, not after the late reply');
+	});
+
+	it('announces an outage even when a sample beats the late timer to it, then the recovery (D10, review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.take();
+
+		w.jump(400);                     // the timer was due at 300 and has not run
+		w.sample(A, [TACHO, 90]);        // the brick answers again, the same value
+
+		assert.deepEqual(w.take().map((change) => rowsOf(change)), [[[TACHO, 90, true]], [[TACHO, 90, false]]]);
+	});
+
+	it('counts a stale value\'s time from when it went stale, not from when the timer got round to it (review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.take();
+
+		w.jump(2000);                    // stale at 300, due to go at 1300
+		w.fire();
+
+		assert.equal(w.model.valueOf(A, TACHO), undefined);
+		assert.deepEqual(w.take(), [
+			{ brickKey: A, rows: [{ rowId: TACHO, value: 90, sampledAt: 0, effectiveIntervalMs: 100, stale: true }], removed: [] },
+			{ brickKey: A, rows: [], removed: [TACHO] },
+		], 'stale first, then gone: nothing skipped');
+	});
+
+	it('says a value went stale before it says it is gone, even with no time between (staleTimeoutMs 0, review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 0 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.take();
+
+		w.advance(300);
+
+		assert.deepEqual(w.take().map((change) => [rowsOf(change), change.removed]), [[[[TACHO, 90, true]], []], [[], [TACHO]]]);
+	});
+
+	it('never asks the platform for a longer timer than it can keep (review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 2 ** 40 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.plan(A, {});
+
+		assert.ok(w.delays.every((ms) => ms <= 2 ** 31 - 1), `asked for ${Math.max(...w.delays)} ms`);
+		w.model.configure({ staleFactor: Number.MAX_VALUE, staleTimeoutMs: 1000 });   // never stale by age
+	});
+
+	it('learns what a brick is already read for when it is attached to a service that runs (review 1)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 }, new Map([[A, new Map([[TACHO, 100]])]]));
+		w.sample(A, [TACHO, 90]);
+
+		assert.equal(w.model.valueOf(A, TACHO)?.effectiveIntervalMs, 100);
+		w.advance(300);
+		assert.equal(w.model.valueOf(A, TACHO)?.stale, true);
 	});
 });
