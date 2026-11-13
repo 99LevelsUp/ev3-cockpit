@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.299",
+  "version": "0.2.300",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -120,6 +120,12 @@
           "default": 3,
           "minimum": 1,
           "markdownDescription": "How many windows in a row must stay within the limit before the telemetry speeds up a step."
+        },
+        "ev3-cockpit.telemetry.programRunningTickMs": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "markdownDescription": "While a program runs on a brick, its telemetry is read **no more often than this**, in milliseconds - for the panel and for every extension that subscribed. Each telemetry command costs a running program about 2 ms of the brick (measured). `0` turns this off."
         }
       }
     }

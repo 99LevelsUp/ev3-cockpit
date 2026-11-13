@@ -353,8 +353,10 @@ export function firmwareVersionRow(): TelemetryRow {
  * says running (D11). Event tier: a program starting or ending is an event, and the foreground
  * reads it every fifth tick. Only `RUNNING` is a running program; a halted or unknown slot is not.
  */
+export const PROGRAM_RUNNING_ROW = 'program.user.running';
+
 export function programRunningRow(divider = DEFAULT_DIVIDERS.event): TelemetryRow {
-	const id = 'program.user.running';
+	const id = PROGRAM_RUNNING_ROW;
 	return {
 		id,
 		tier: 'event',
