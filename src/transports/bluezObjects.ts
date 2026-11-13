@@ -64,6 +64,8 @@ export class BluezObjectCache {
 	/** Signals heard before the snapshot is in, replayed over it in bus order. */
 	private pending: DBusMessage[] | undefined;
 	private removers: (() => void)[] = [];
+	/** RSSI-bearing signals per device: what a discovery heard, a same value included. */
+	private readonly reports = new Map<string, number>();
 
 	constructor(private readonly bus: BusLike, private readonly options: BluezObjectCacheOptions = {}) {}
 
@@ -164,6 +166,17 @@ export class BluezObjectCache {
 		return undefined;
 	}
 
+	/**
+	 * How many signals carrying an RSSI have come for this device: an `InterfacesAdded` with one, or
+	 * a `PropertiesChanged` setting it. The evidence a discovery heard it; the snapshot is none, and
+	 * an RSSI BlueZ still holds from an earlier discovery is none either. Under a filtered discovery
+	 * BlueZ 5.82 reports every result, a same value too (adapter.c, `device_set_rssi_with_delta(dev,
+	 * rssi, 0)`; measured on HOSTC 13.11.2026: three reports in 30 s, equal values among them).
+	 */
+	rssiReports(path: string): number {
+		return this.reports.get(path) ?? 0;
+	}
+
 	/** Told after each change to the cache. */
 	onChange(handler: () => void): () => void {
 		this.changeHandlers.add(handler);
@@ -179,6 +192,18 @@ export class BluezObjectCache {
 		if (this.apply(message)) { this.notify(); }
 	}
 
+	private countReport(message: DBusMessage): void {
+		const [a, b] = message.body;
+		let path: string | undefined;
+		if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesAdded' && typeof a === 'string' && b instanceof Map) {
+			const device = b.get(DEVICE);
+			if (device instanceof Map && device.has('RSSI')) { path = a; }
+		} else if (message.interface === PROPERTIES && message.member === 'PropertiesChanged' && a === DEVICE && b instanceof Map && b.has('RSSI')) {
+			path = message.path;
+		}
+		if (path) { this.reports.set(path, (this.reports.get(path) ?? 0) + 1); }
+	}
+
 	private onBusClosed(): void {
 		this.closed = true;
 		const wasReady = this._ready;
@@ -190,6 +215,7 @@ export class BluezObjectCache {
 	/** One signal applied to the cache. Returns true when it changed something. */
 	private apply(message: DBusMessage): boolean {
 		const [a, b, c] = message.body;
+		this.countReport(message);
 		if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesAdded') {
 			if (typeof a === 'string' && b instanceof Map) { return this.addInterfaces(a, b); }
 		} else if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesRemoved') {

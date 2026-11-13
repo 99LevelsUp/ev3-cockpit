@@ -88,7 +88,7 @@ describe('BlueZ presence check — an L2CAP connect to PSM 1 (D2)', () => {
 	});
 
 	it('does not hear a brick on the errnos that mean it did not answer, at once or after the connect', async () => {
-		for (const errno of [EHOSTDOWN, 113, 111, 110, 104]) {
+		for (const errno of [EHOSTDOWN, 113, 110]) {
 			const now = new FakeSocket();
 			now.errno = errno;
 			assert.equal(await check(now)(MAC), false, `connect errno ${errno}`);
@@ -96,6 +96,18 @@ describe('BlueZ presence check — an L2CAP connect to PSM 1 (D2)', () => {
 			const later = new FakeSocket();
 			later.states = [{ state: 'failed', error: errno }];
 			assert.equal(await check(later)(MAC), false, `SO_ERROR ${errno}`);
+		}
+	});
+
+	it('hears a brick that refused or reset the channel: it answered, if only to refuse', async () => {
+		for (const errno of [111, 104]) {
+			const now = new FakeSocket();
+			now.errno = errno;
+			assert.equal(await check(now)(MAC), true, `connect errno ${errno}`);
+			assert.deepEqual(now.closed, [7]);
+			const later = new FakeSocket();
+			later.states = [{ state: 'failed', error: errno }];
+			assert.equal(await check(later)(MAC), true, `SO_ERROR ${errno}`);
 		}
 	});
 
@@ -202,12 +214,13 @@ class World implements InquiryBus, InquiryCache {
 	heard: BluezDevice[] = [];
 	/** Another client is already discovering. */
 	discovering = false;
-	/** BlueZ sends no signal for these: an RSSI change under its 8 dBm threshold. */
-	silent = false;
+	/** RSSI-bearing signals per device path, as BluezObjectCache counts them. */
+	reports = new Map<string, number>();
 
 	devices(): BluezDevice[] { return this.known; }
 	adapter() { return { path: '/org/bluez/hci0', address: undefined, alias: 'HOSTC', powered: true, discovering: this.discovering }; }
 	onChange(h: () => void): () => void { this.handlers.add(h); return () => this.handlers.delete(h); }
+	rssiReports(path: string): number { return this.reports.get(path) ?? 0; }
 	async call(o: { member: string; body?: DBusValue[] }): Promise<DBusValue[]> {
 		this.calls.push(o.member === 'SetDiscoveryFilter'
 			? `SetDiscoveryFilter ${JSON.stringify([...(o.body![0] as Map<string, Variant>)].map(([k, v]) => [k, v.value]))}`
@@ -217,7 +230,8 @@ class World implements InquiryBus, InquiryCache {
 			setTimeout(() => {
 				for (const d of this.heard) {
 					this.known = [...this.known.filter((k) => k.path !== d.path), d];
-					if (!this.silent) { for (const h of this.handlers) { h(); } }
+					this.reports.set(d.path, (this.reports.get(d.path) ?? 0) + 1);
+					for (const h of this.handlers) { h(); }
 				}
 			}, 5);
 		}
@@ -270,21 +284,21 @@ describe('BlueZ inquiry — a BR/EDR discovery window (KTD9)', () => {
 		await assert.rejects(() => createBluezInquiry({ bus: w, cache: w, windowMs: 30 })(), /adapter/);
 		assert.deepEqual(w.calls, []);
 	});
-	it('hears a brick whose RSSI holds steady while another client was already discovering (the desktop panel open)', async () => {
+	it('does not hear a brick whose cached RSSI gets no report during the window, even under another client\'s discovery', async () => {
+		// A brick switched off while a desktop panel keeps discovering keeps its RSSI in BlueZ.
 		const w = new World();
 		w.discovering = true;
 		w.known = [device(MAC, 'AAA', false, -50)];
-		w.silent = true;
 		const heard = await createBluezInquiry({ bus: w, cache: w, windowMs: 30 })();
-		assert.deepEqual(heard.map((b) => b.mac), [MAC]);
+		assert.deepEqual(heard, []);
 	});
 
-	it('does not count a same-value RSSI signal as a sighting when nobody else was discovering', async () => {
+	it('hears a brick whose RSSI is reported again with the same value: a filtered discovery reports every result', async () => {
 		const w = new World();
 		w.known = [device(MAC, 'AAA', false, -50)];
 		w.heard = [device(MAC, 'AAA', false, -50)];
 		const heard = await createBluezInquiry({ bus: w, cache: w, windowMs: 30 })();
-		assert.deepEqual(heard, []);
+		assert.deepEqual(heard.map((b) => b.mac), [MAC]);
 	});
 
 	it('names a brick without a Name nothing, not the dashed address BlueZ puts in Alias', async () => {
