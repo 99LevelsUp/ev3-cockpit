@@ -1,4 +1,4 @@
-import { ConnectionState, TelemetryCategory, Transport } from './enums';
+import { ConnectionState, Transport } from './enums';
 import { BrickKey } from './brickKey';
 
 export interface ConnectedBrickSnapshot {
@@ -25,20 +25,6 @@ export interface ActiveBrickSnapshot {
     brickKey: BrickKey | null;
     displayName?: string;
     transport?: Transport;
-}
-
-export interface TelemetrySnapshot {
-    brickKey: BrickKey;
-    category: TelemetryCategory;
-    timestamp: number;
-    data: unknown;
-}
-
-export interface TelemetryEvent {
-    brickKey: BrickKey;
-    category: TelemetryCategory;
-    timestamp: number;
-    delta: unknown;
 }
 
 export interface FilesystemEvent {

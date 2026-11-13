@@ -42,7 +42,7 @@ import { ActivityMode, ConnectionState } from '../contracts/enums';
 import { NotConnectedError, SubscriptionError } from '../errors/CockpitError';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { BrickTelemetry, TelemetrySender, createBrickTelemetry, transportFor } from './brickTelemetry';
-import { RowRegistry, createEv3RowRegistry } from './rowRegistry';
+import { RowDescriptor, RowRegistry, createEv3RowRegistry } from './rowRegistry';
 import { ClaimCadence, ClaimHandle, ClaimRequest, Grant, TelemetryClaims } from './telemetryClaims';
 import { cadenceFor } from './telemetryConstants';
 import { RowValue } from './telemetryRow';
@@ -233,6 +233,11 @@ export class TelemetryService implements vscode.Disposable {
 				: ActivityMode.Subscribed;
 		}
 		return this.hasSession(brickKey) ? ActivityMode.Minimal : ActivityMode.None;
+	}
+
+	/** The rows a brick offers, as plain data: what a consumer can claim (U8, 4.5.1). */
+	rows(): RowDescriptor[] {
+		return this.registry.list();
 	}
 
 	/** What each brick is read for now, as last announced: for a reader attached after the loops started. */

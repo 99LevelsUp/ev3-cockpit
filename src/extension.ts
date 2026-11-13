@@ -251,6 +251,15 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	const api = services.add(createCockpitApi({
 		bricks,
 		aggregator,
+		// Telemetry for consumers (step-6 U8): claims on the service, values from the read model.
+		telemetry: {
+			rows: () => runtime.telemetry.rows(),
+			claim: (brickId, request, owner) => runtime.telemetry.claim(brickId, request, owner),
+			release: (handle) => runtime.telemetry.release(handle),
+			onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
+			snapshot: (brickId, rowIds) => runtime.telemetryView.snapshot(brickId, rowIds),
+			onChange: (listener) => runtime.telemetryView.onChange(listener),
+		},
 		connect: async (brickId) => {
 			await connectPickedBrick(brickId, connectUi());
 			if (!bricks.isSignedIn(brickId)) {

@@ -16,16 +16,23 @@
  * - Connecting and disconnecting go through the brick layer's own paths — sign-in with pairing and
  *   the brick's dialog as consent, sign-out — so the connection lifecycle keeps one owner (KD4).
  * - A consumer's subscriptions end when it unregisters (R8).
+ * - Telemetry (step-6 U8): a consumer subscribes to rows of a brick at an interval and gets back what
+ *   each row was granted, then a snapshot, then only the rows that changed, each value with when it
+ *   was sampled, the interval it runs at now and whether it is stale (D2, D10). Disposing the handle
+ *   releases exactly that claim; a brick that goes ends its subscriptions with an `ended` update.
  */
 
 import {
 	BrickCommand, BrickEntry, BrickId, BrickResponse, ChannelState, FsEntry, SendCommandOptions,
 } from '../contracts';
-import { ConsumerError, NotConnectedError, ProtocolError } from '../errors/CockpitError';
+import { CockpitError, ConsumerError, NotConnectedError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
 import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
 import { ProgramService, ProgramServiceOptions } from '../programs/programService';
+import type { RowDescriptor } from '../telemetry/rowRegistry';
+import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
+import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 import { AccessMode, assertAllowed } from './accessPolicy';
 
 export const API_VERSION = 1;
@@ -57,6 +64,50 @@ export interface ApiBrick {
 export interface ProgramState {
 	readonly brickId: string;
 	readonly running: boolean;
+}
+
+/** A row a consumer can subscribe to (4.5.1). */
+export type TelemetryRowInfo = RowDescriptor;
+
+/** What a consumer asks for: rows by id, how often, and a mode per sensor port (D6). */
+export interface TelemetryRequest {
+	readonly rows: readonly string[];
+	/** How often the rows are wanted, in milliseconds; the grant says what each row got. */
+	readonly intervalMs: number;
+	/** The mode to read a sensor port in, by port: `{ '1': 2 }`. The first claim on a port holds it (D7). */
+	readonly modes?: Readonly<Record<string, number>>;
+}
+
+/** One row's value: plain data. */
+export interface TelemetryValue {
+	readonly rowId: string;
+	readonly value: number | string | boolean | undefined;
+	readonly unit?: string;
+	readonly mode?: number;
+	/** When the reply carrying the value arrived, in ms since the epoch. */
+	readonly sampledAt: number;
+	/** How often the row is read now — slower than granted under throttling (D2); `'once'` for a static row. */
+	readonly effectiveIntervalMs?: number | 'once';
+	/** No newer reading came for a while, or the row is no longer read (D9). */
+	readonly stale: boolean;
+}
+
+/** What a subscription hears: a snapshot first, then changes, and `ended` when its brick goes. */
+export interface TelemetryUpdate {
+	readonly brickId: string;
+	readonly kind: 'snapshot' | 'change' | 'ended';
+	readonly values: readonly TelemetryValue[];
+	/** Rows whose values were dropped (stale long enough, D9). */
+	readonly removed: readonly string[];
+}
+
+/** A telemetry subscription (4.5.1): dispose it to release exactly this claim (4.5.3). */
+export interface TelemetrySubscription extends Subscription {
+	readonly brickId: string;
+	/** What each row was granted: at least this often, in ms, or `'once'` for a static row. */
+	readonly grant: Readonly<Record<string, number | 'once'>>;
+	/** The subscribed rows' values now. */
+	snapshot(): TelemetryValue[];
 }
 
 export interface ShellResult {
@@ -101,6 +152,9 @@ export interface CockpitConsumer extends Subscription {
 	runShell(brick: BrickTarget, command: string): Promise<ShellResult>;
 	getAccessMode(): AccessMode;
 	onAccessModeChanged(listener: (mode: AccessMode) => void): Subscription;
+	// Telemetry (step-6 U8)
+	listTelemetryRows(): TelemetryRowInfo[];
+	subscribeTelemetry(brick: BrickTarget, request: TelemetryRequest, listener: (update: TelemetryUpdate) => void): TelemetrySubscription;
 }
 
 export interface CockpitApi {
@@ -128,6 +182,28 @@ export interface CockpitApiDeps {
 	onAccessModeChange(listener: (mode: AccessMode) => void): Subscription;
 	readonly log?: { info(message: string): void; warn(message: string): void };
 	readonly programOptions?: ProgramServiceOptions;
+	/** The telemetry service and its read model; absent, telemetry is refused. */
+	readonly telemetry?: {
+		rows(): RowDescriptor[];
+		claim(brickId: BrickId, request: ClaimRequest, owner: string): { readonly handle: string; readonly grant: Grant };
+		release(handle: string): void;
+		onClaimsEnded(listener: (event: { readonly brickKey: string; readonly handles: readonly string[] }) => void): Subscription;
+		snapshot(brickId: BrickId, rowIds?: readonly string[]): ReadValue[];
+		onChange(listener: (change: ReadModelChange) => void): Subscription;
+	};
+}
+
+/** A read model value as plain data, with only the fields it has. */
+function toTelemetryValue(value: ReadValue): TelemetryValue {
+	return {
+		rowId: value.rowId,
+		value: value.value,
+		...(value.unit !== undefined ? { unit: value.unit } : {}),
+		...(value.mode !== undefined ? { mode: value.mode } : {}),
+		sampledAt: value.sampledAt,
+		...(value.effectiveIntervalMs !== undefined ? { effectiveIntervalMs: value.effectiveIntervalMs } : {}),
+		stale: value.stale,
+	};
 }
 
 /** Builds the API object; `dispose` ends every consumer and every program service. */
@@ -157,6 +233,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		return service;
 	};
 	const filesOf = (brickId: BrickId) => createBrickFilesystem(deps.bricks as unknown as BrickSender, brickId);
+	const telemetryOf = (): NonNullable<CockpitApiDeps['telemetry']> => {
+		if (!deps.telemetry) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
+		return deps.telemetry;
+	};
 	const toApiBrick = (entry: BrickEntry): ApiBrick => ({
 		brickId: entry.brickId,
 		name: entry.name.value,
@@ -260,6 +340,64 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			}),
 			getAccessMode: () => deps.accessMode(),
 			onAccessModeChanged: (listener) => keep(deps.onAccessModeChange(listener)),
+
+			listTelemetryRows: () => telemetryOf().rows().map((row) => ({ ...row })),
+			subscribeTelemetry: (brick, request, listener) => {
+				open();
+				const telemetry = telemetryOf();
+				const brickId = resolve(brick);
+				let claim: { readonly handle: string; readonly grant: Grant };
+				try {
+					claim = telemetry.claim(brickId, {
+						rowIds: [...request.rows], intervalMs: request.intervalMs,
+						...(request.modes ? { modes: { ...request.modes } } : {}),
+					}, name);
+				} catch (error) {
+					// Every refusal carries a stable code: a mode held by another claim keeps its own.
+					if (error instanceof CockpitError) { throw error; }
+					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
+				}
+				const rows = new Set(request.rows);
+				let live = true;
+				let ready = false;
+				const deliver = (update: TelemetryUpdate): void => {
+					if (!live) { return; }
+					try {
+						listener(update);
+					} catch (error) {
+						deps.log?.warn(`Telemetry listener of ${name} threw: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				};
+				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
+				const changes = telemetry.onChange((change) => {
+					// Before the snapshot went out, a change is already in it.
+					if (!ready || change.brickKey !== brickId) { return; }
+					const values = change.rows.filter((row) => rows.has(row.rowId)).map(toTelemetryValue);
+					const removed = change.removed.filter((id) => rows.has(id));
+					if (values.length > 0 || removed.length > 0) { deliver({ brickId, kind: 'change', values, removed }); }
+				});
+				const ended = telemetry.onClaimsEnded((event) => {
+					if (event.brickKey !== brickId || !event.handles.includes(claim.handle)) { return; }
+					deliver({ brickId, kind: 'ended', values: [], removed: [] });
+					stop(false);
+				});
+				const stop = (release: boolean): void => {
+					if (!live) { return; }
+					live = false;
+					changes.dispose();
+					ended.dispose();
+					// A claim that ended with its brick is gone already; releasing it again does nothing.
+					if (release) { telemetry.release(claim.handle); }
+				};
+				// The snapshot goes out once this call has returned, before any change (4.5.2).
+				queueMicrotask(() => {
+					if (!live) { return; }
+					ready = true;
+					deliver({ brickId, kind: 'snapshot', values: snapshot(), removed: [] });
+				});
+				const kept = keep({ dispose: () => stop(true) });
+				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => kept.dispose() };
+			},
 
 			dispose: () => {
 				closed = true;
