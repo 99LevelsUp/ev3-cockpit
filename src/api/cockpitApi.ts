@@ -369,7 +369,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				// The snapshot is the state at the claim; what changes after it is queued until the
 				// snapshot has gone out, then told in order, so nothing in between is lost (D10, review 1).
 				const boundary = snapshot();
-				let state: 'pending' | 'live' | 'done' = 'pending';
+				// pending: before the snapshot; draining: telling the snapshot and the queue, where anything new
+				// still joins the queue's end, so a listener reacting to one update cannot overtake an older
+				// one (review 2); live: told as it comes; done: finished.
+				let state: 'pending' | 'draining' | 'live' | 'done' = 'pending';
 				let claimEnded = false;
 				const queue: TelemetryUpdate[] = [];
 				const record: Subscription = { dispose: () => { finish(!claimEnded); } };
@@ -383,7 +386,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 					if (release) { telemetry.release(claim.handle); }
 				};
 				const tell = (update: TelemetryUpdate): void => {
-					if (state === 'pending') { queue.push(update); return; }
+					if (state === 'pending' || state === 'draining') { queue.push(update); return; }
 					if (state !== 'live') { return; }
 					if (update.kind === 'ended') { finish(false); }
 					emit(update);
@@ -405,9 +408,14 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				// The snapshot goes out once this call has returned, before anything else (4.5.2).
 				queueMicrotask(() => {
 					if (state !== 'pending') { return; }
-					state = 'live';
+					state = 'draining';
 					emit({ brickId, kind: 'snapshot', values: boundary, removed: [] });
-					for (const update of queue.splice(0)) { tell(update); }
+					while (state === 'draining' && queue.length > 0) {
+						const update = queue.shift() as TelemetryUpdate;
+						if (update.kind === 'ended') { finish(false); }
+						emit(update);
+					}
+					if (state === 'draining') { state = 'live'; }
 				});
 				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => record.dispose() };
 			},

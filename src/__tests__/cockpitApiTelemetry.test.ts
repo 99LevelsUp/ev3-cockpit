@@ -186,6 +186,22 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		assert.deepEqual(w.released, []);
 	});
 
+	it('loses no queued change when the snapshot listener itself ends the brick (review 2)', async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const updates: TelemetryUpdate[] = [];
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			updates.push(u);
+			if (u.kind === 'snapshot') { w.end(A, [w.claims[0].handle]); }   // e.g. it signs the brick out
+		});
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });   // queued behind the snapshot
+
+		await settle();
+
+		assert.deepEqual(updates.map((u) => [u.kind, u.values.map((v) => v.value)]),
+			[['snapshot', [90]], ['change', [91]], ['ended', []]]);
+	});
+
 	it('releases nothing for a subscription disposed after its brick went, before its snapshot (review 1)', async () => {
 		const w = world();
 		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
