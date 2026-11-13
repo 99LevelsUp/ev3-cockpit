@@ -330,6 +330,61 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		assert.equal(w.listening(), 0);
 	});
 
+	it('tells nothing inside the call that subscribes, also when a listener subscribes (4.5.2, review 4)', async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const consumer = w.api.registerConsumer('ev3-c');
+		const early: TelemetryUpdate[] = [];
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => early.push(u));
+		assert.deepEqual(early, [], 'nothing before the call returned');
+
+		let inner = 0;
+		let heardInside = -1;
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind !== 'snapshot') { return; }
+			consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => { inner += 1; });
+			heardInside = inner;
+		});
+		await settle();
+
+		assert.equal(heardInside, 0, 'the inner subscription heard nothing before its call returned');
+		assert.equal(inner, 1, 'and its snapshot after');
+	});
+
+	it("does not let a throwing listener cost another consumer anything (review 4)", async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const heard: TelemetryUpdate[] = [];
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => { throw new Error('bug'); });
+		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
+		await settle();
+
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		w.end(A, w.claims.map((c) => c.handle));
+		await settle();
+
+		assert.deepEqual(heard.map((u) => [u.kind, u.values.map((v) => v.value)]),
+			[['snapshot', [90]], ['change', [91]], ['ended', []]]);
+	});
+
+	it('refuses a consumer once the API is gone, so no claim outlives it (review 4)', () => {
+		const w = world();
+		w.api.dispose();
+
+		assert.throws(() => w.api.registerConsumer('ev3-c'), (e) => codeOf(e) === ErrorCode.ConsumerFailed);
+		assert.deepEqual(w.claims, []);
+	});
+
+	it('gives back a claim whose consumer went away while it was being made (review 4)', () => {
+		const w = world();
+		const consumer = w.api.registerConsumer('ev3-c');
+		w.onClaim(() => consumer.dispose());
+
+		assert.throws(() => consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined),
+			(e) => codeOf(e) === ErrorCode.ConsumerFailed);
+		assert.deepEqual(w.released, w.claims.map((c) => c.handle));
+	});
+
 	it('releases nothing for a subscription disposed after its brick went, before its snapshot (review 1)', async () => {
 		const w = world();
 		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
