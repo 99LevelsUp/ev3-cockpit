@@ -19,7 +19,7 @@ const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;
 const ROW = 'program.user.running';
 
-function fakeTelemetry(snapshot: ReadValue[] = []) {
+function fakeTelemetry(snapshot: ReadValue[] = [], options: { endInsideClaim?: boolean } = {}) {
 	const claims: { brickId: string; rowIds: readonly string[]; intervalMs: number; owner: string }[] = [];
 	const released: string[] = [];
 	let onChange: ((change: ReadModelChange) => void) | undefined;
@@ -31,7 +31,10 @@ function fakeTelemetry(snapshot: ReadValue[] = []) {
 		telemetry: {
 			claim: (brickId: BrickId, request: { rowIds: readonly string[]; intervalMs: number }, owner: string) => {
 				claims.push({ brickId, ...request, owner });
-				return { handle: `h${claims.length}`, grant: {} };
+				const handle = `h${claims.length}`;
+				// As a synchronous listener ending the brick inside claim() would (review of U9, round 2).
+				if (options.endInsideClaim) { onEnded?.({ brickKey: brickId, handles: [handle] }); }
+				return { handle, grant: {} };
 			},
 			release: (handle: string) => { released.push(handle); },
 			snapshot: (brickId: BrickId, rowIds?: readonly string[]) =>
@@ -119,5 +122,12 @@ describe('Following the program row (step-6 U9)', () => {
 		t.change({ brickKey: A, rows: [{ ...value(true), sampledAt: 42 }], removed: [] });
 		await settle();
 		assert.deepEqual(heard, [[true, 42]]);
+	});
+	it('refuses a follow whose claim ended while it was being made, listening to nothing (U9 review 2)', () => {
+		const t = fakeTelemetry([], { endInsideClaim: true });
+		assert.throws(() => followProgramRow(t.telemetry, A, () => 1000).follow(() => undefined, () => undefined),
+			(error) => (error as { code?: unknown }).code === 'subscription_failed');
+		t.change({ brickKey: A, rows: [value(true)], removed: [] });   // nobody left listening
+		t.endClaims(A, ['h1']);
 	});
 });

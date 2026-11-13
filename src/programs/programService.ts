@@ -259,7 +259,28 @@ export interface ProgramRowTelemetry {
 export function followProgramRow(telemetry: ProgramRowTelemetry, brickId: BrickId, intervalMs: () => number): ProgramFollow {
 	return {
 		follow: (onState, onEnded) => {
-			const { handle } = telemetry.claim(brickId, { rowIds: [PROGRAM_RUNNING_ROW], intervalMs: intervalMs() }, 'cockpit:programs');
+			// Listening before the claim is made: a claim that ends inside `claim()` itself — a
+			// synchronous listener ending the brick — is heard too (review of U9, round 2).
+			let handle: string | undefined;
+			const endedEarly = new Set<string>();
+			const ending = telemetry.onClaimsEnded((event) => {
+				if (event.brickKey !== brickId) { return; }
+				if (handle === undefined) { for (const ended of event.handles) { endedEarly.add(ended); } return; }
+				if (!open || !event.handles.includes(handle)) { return; }
+				close();
+				onEnded();
+			});
+			try {
+				handle = telemetry.claim(brickId, { rowIds: [PROGRAM_RUNNING_ROW], intervalMs: intervalMs() }, 'cockpit:programs').handle;
+			} catch (error) {
+				ending.dispose();
+				throw error;
+			}
+			if (endedEarly.has(handle)) {
+				ending.dispose();
+				throw new SubscriptionError(`Brick ${brickId} went while its program was being followed.`);
+			}
+			const claimed = handle;
 			let open = true;
 			const tell = (value: ReadValue | undefined): void => {
 				if (!value || value.stale || typeof value.value !== 'boolean') { return; }
@@ -275,18 +296,12 @@ export function followProgramRow(telemetry: ProgramRowTelemetry, brickId: BrickI
 			const listening = telemetry.onChange((change) => {
 				if (change.brickKey === brickId) { tell(change.rows.find((row) => row.rowId === PROGRAM_RUNNING_ROW)); }
 			});
-			// The brick's session ended the claim: the follow ends with it, and says so.
-			const ending = telemetry.onClaimsEnded((event) => {
-				if (!open || event.brickKey !== brickId || !event.handles.includes(handle)) { return; }
-				close();
-				onEnded();
-			});
 			tell(telemetry.snapshot(brickId, [PROGRAM_RUNNING_ROW])[0]);
 			return {
 				dispose: () => {
 					if (!open) { return; }
 					close();
-					telemetry.release(handle);
+					telemetry.release(claimed);
 				},
 			};
 		},
