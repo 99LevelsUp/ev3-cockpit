@@ -125,6 +125,7 @@ export class BluezObjectCache {
 		const wasReady = this._ready;
 		this._ready = false;
 		this.objects.clear();
+		this.reports.clear();
 		if (wasReady) { this.notify(); }
 	}
 
@@ -209,6 +210,7 @@ export class BluezObjectCache {
 		const wasReady = this._ready;
 		this._ready = false;
 		this.objects.clear();
+		this.reports.clear();
 		if (wasReady) { this.notify(); }
 	}
 

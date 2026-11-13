@@ -7,10 +7,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 
 import {
-	createBluezPresenceCheck, createBluezInquiry, sockaddrL2, SDP_PSM, type InquiryBus, type InquiryCache,
+	createBluezPresenceCheck, createBluezInquiry, sockaddrL2, SDP_PSM, DEFAULT_INQUIRY_WINDOW_MS, type InquiryBus, type InquiryCache,
 } from '../transports/bluezPresence';
 import {
 	AF_BLUETOOTH, BTPROTO_L2CAP, SOCK_SEQPACKET, SOCK_NONBLOCK, SOCK_CLOEXEC,
@@ -24,6 +24,7 @@ import { DBusError } from '../transports/dbus/connection';
 import type { DBusValue, Variant } from '../transports/dbus/wire';
 
 const MAC = '00:16:53:F0:0A:0A';
+const DEV_PATH = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';
 
 /** A libc that answers a connect as the test says. */
 class FakeSocket implements Partial<LinuxBtSocketApi> {
@@ -320,5 +321,31 @@ describe('BlueZ inquiry — a BR/EDR discovery window (KTD9)', () => {
 		await createBluezInquiry({ bus: loud, cache: loud, windowMs: 10, log: (m) => said.push(m) })();
 		assert.equal(said.length, 1);
 		assert.match(said[0], /StopDiscovery.*NoReply/);
+	});
+});
+
+describe('BlueZ inquiry — its window outlasts the report cycle (U6 round 3)', () => {
+	it('defaults to a window above the measured 14 s report cycle', () => {
+		assert.ok(DEFAULT_INQUIRY_WINDOW_MS >= 15_000, `${DEFAULT_INQUIRY_WINDOW_MS}`);
+	});
+
+	it('hears a brick whose report comes 12 s into a window of the default length', async () => {
+		mock.timers.enable({ apis: ['setTimeout'] });
+		try {
+			const w = new World();
+			const inquiring = createBluezInquiry({ bus: w, cache: w })();
+			for (let i = 0; i < 5; i += 1) { await Promise.resolve(); }
+			mock.timers.tick(12_000);
+			// Let a window that has already ended finish before the report comes.
+			for (let i = 0; i < 10; i += 1) { await Promise.resolve(); }
+			w.known = [device(MAC, 'AAA', false, -50)];
+			w.reports.set(DEV_PATH, 1);
+			for (const h of w.handlers) { h(); }
+			mock.timers.tick(DEFAULT_INQUIRY_WINDOW_MS);
+			const heard = await inquiring;
+			assert.deepEqual(heard.map((b) => b.mac), [MAC]);
+		} finally {
+			mock.timers.reset();
+		}
 	});
 });

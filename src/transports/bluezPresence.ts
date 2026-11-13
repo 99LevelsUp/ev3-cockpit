@@ -142,7 +142,7 @@ export interface InquiryCache {
 export interface BluezInquiryOptions {
 	bus: InquiryBus;
 	cache: InquiryCache;
-	/** One window (default `BT.PRESENCE_INQUIRY_SECONDS`). */
+	/** One window (default {@link DEFAULT_INQUIRY_WINDOW_MS}). */
 	windowMs?: number;
 	/** Told when the discovery may not have stopped. */
 	log?: (message: string) => void;
@@ -151,10 +151,18 @@ export interface BluezInquiryOptions {
 const LEGO_OUI = BT.LEGO_OUI.toUpperCase();
 const isLego = (mac: string | undefined): mac is string => !!mac && mac.replace(/[:-]/g, '').toUpperCase().startsWith(LEGO_OUI);
 
+/**
+ * One inquiry window on Linux (ms). Longer than the 8–14 s between a brick's reports measured on
+ * HOSTC while another client was discovering (13.11.2026), so a window holds at least one report.
+ * The cost: the Bluetooth queue is held 15 s of every minute. Not `BT.PRESENCE_INQUIRY_SECONDS`,
+ * which the Windows helper's inquiry uses.
+ */
+export const DEFAULT_INQUIRY_WINDOW_MS = 15_000;
+
 /** One inquiry window: every LEGO brick BlueZ heard during it, paired or not. */
 export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<ScannedBrick[]> {
 	const { bus, cache } = options;
-	const windowMs = options.windowMs ?? BT.PRESENCE_INQUIRY_SECONDS * 1000;
+	const windowMs = options.windowMs ?? DEFAULT_INQUIRY_WINDOW_MS;
 	return async () => {
 		const adapter = cache.adapter();
 		if (!adapter) { throw new Error('This computer has no Bluetooth adapter BlueZ knows.'); }

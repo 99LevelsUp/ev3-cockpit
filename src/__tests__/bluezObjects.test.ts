@@ -346,3 +346,37 @@ describe('BluezObjectCache — RSSI reports, the evidence a discovery heard a de
 		assert.equal(cache.rssiReports(AAA), 1);
 	});
 });
+
+describe('BluezObjectCache — the RSSI reports go with everything else (U6 round 3)', () => {
+	const report = (bus: FakeBus, path: string): void => bus.signal(path, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['RSSI', new Variant('n', -50)]]), []]);
+
+	it('forgets the counts on dispose', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		assert.equal(cache.rssiReports(AAA), 1);
+		cache.dispose();
+		assert.equal(cache.rssiReports(AAA), 0);
+	});
+
+	it('forgets the counts when the bus closes', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		bus.close();
+		assert.equal(cache.rssiReports(AAA), 0);
+	});
+
+	it('keeps counting across a device removed and added again', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesRemoved', [AAA, ['org.bluez.Device1']]);
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesAdded', [AAA, new Map([['org.bluez.Device1', device('AAA', '00:16:53:F0:0A:0A', true)]])]);
+		report(bus, AAA);
+		assert.equal(cache.rssiReports(AAA), 2);
+	});
+});
