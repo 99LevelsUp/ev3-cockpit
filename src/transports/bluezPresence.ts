@@ -8,15 +8,14 @@
  * 2.9–4.1 s and shows nothing; one that is off fails with EHOSTDOWN after 5.12 s. It needs no
  * group and no D-Bus, and opens no session the brick would show.
  *
- * The inquiry is a BR/EDR discovery for one window. BlueZ 5.82 reports an RSSI change only of
- * 8 dBm or more (`RSSI_THRESHOLD`, src/device.c) and clears every RSSI when the last discovery
- * stops (src/adapter.c). So:
- *  - nobody else discovering: every RSSI was cleared, and a brick is heard when it gets one during
- *    the window, a new object or an RSSI that changed. An RSSI there before is not counted;
- *  - another client already discovering (a desktop panel open): its discovery keeps a steady
- *    brick's RSSI without a signal, so every LEGO device with an RSSI at the end counts.
- * A change during the window may come from another client's discovery: a real sighting of the
- * brick all the same, just not necessarily ours.
+ * The inquiry is a BR/EDR discovery for one window, and a brick is heard on evidence: a signal
+ * carrying its RSSI during the window (`BluezObjectCache.rssiReports`), never a value compared.
+ * Our discovery is filtered (Transport=bredr), and under a filtered discovery BlueZ 5.82 reports
+ * every result, a same value too (adapter.c, delta 0; the 8 dBm `RSSI_THRESHOLD` is for an
+ * unfiltered one). Measured on HOSTC (13.11.2026): a steady brick reported three times in 30 s,
+ * alone and with another client discovering. An RSSI BlueZ still holds is no evidence: under
+ * another client's discovery it outlives a brick switched off. A report may come from another
+ * client's discovery: a real sighting of the brick all the same, just not necessarily ours.
  */
 
 import { BackendUnavailableError } from '../errors/CockpitError';
@@ -44,17 +43,19 @@ const BDADDR_BREDR = 0;
 const EAFNOSUPPORT = 97;
 
 /**
- * The errnos that mean the brick did not answer: EHOSTDOWN as measured (page timeout), and the
- * others a connect to a device out of reach or refusing ends with. The adapter being down
- * (ENETDOWN, ENETUNREACH) and every local failure fail the round instead: they say nothing about
- * the brick, and must not count as its misses.
+ * What a failed connect says about the brick. Not there: EHOSTDOWN as measured (page timeout),
+ * EHOSTUNREACH, ETIMEDOUT. There, if only to refuse: ECONNREFUSED and ECONNRESET, which the brick
+ * itself sends once paged. The adapter being down (ENETDOWN, ENETUNREACH) and every local failure
+ * say nothing about the brick: the round fails, and nothing counts as its miss.
  */
 const ECONNRESET = 104;
-const NOT_ANSWERED = new Set([EHOSTDOWN, EHOSTUNREACH, ECONNREFUSED, ETIMEDOUT, ECONNRESET]);
+const NOT_ANSWERED = new Set([EHOSTDOWN, EHOSTUNREACH, ETIMEDOUT]);
+const ANSWERED_TO_REFUSE = new Set([ECONNREFUSED, ECONNRESET]);
 
-/** False for a brick that did not answer; throws for anything that is not about the brick. */
-function unanswered(errno: number): false {
+/** Whether the brick answered, from a failed connect's errno; throws for anything not about the brick. */
+function answeredByErrno(errno: number): boolean {
 	if (NOT_ANSWERED.has(errno)) { return false; }
+	if (ANSWERED_TO_REFUSE.has(errno)) { return true; }
 	throw new Error(`The presence check failed here, not at the brick (errno ${errno}).`);
 }
 
@@ -107,14 +108,14 @@ export function createBluezPresenceCheck(options: BluezPresenceCheckOptions = {}
 		try {
 			if (api.connect(fd, address) === 0) { return true; }
 			const errno = api.lastError();
-			if (errno !== EINPROGRESS) { return unanswered(errno); }
+			if (errno !== EINPROGRESS) { return answeredByErrno(errno); }
 			// Monotonic: a wall clock set back must not stretch the check.
 			const deadline = performance.now() + timeoutMs;
 			while (performance.now() < deadline) {
 				await new Promise((resolve) => setTimeout(resolve, pollMs));
 				const { state, error } = api.connectState(fd);
 				if (state === 'connected') { return true; }
-				if (state === 'failed') { return unanswered(error); }
+				if (state === 'failed') { return answeredByErrno(error); }
 			}
 			return false;
 		} finally {
@@ -134,6 +135,8 @@ export interface InquiryCache {
 	devices(): BluezDevice[];
 	adapter(): BluezAdapter | undefined;
 	onChange(handler: () => void): () => void;
+	/** RSSI-bearing signals so far for a device. */
+	rssiReports(path: string): number;
 }
 
 export interface BluezInquiryOptions {
@@ -156,14 +159,13 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 		const adapter = cache.adapter();
 		if (!adapter) { throw new Error('This computer has no Bluetooth adapter BlueZ knows.'); }
 		const startedAt = Date.now();
-		// Someone else's discovery keeps a steady RSSI without a signal: then any RSSI is fresh.
-		const othersDiscovering = adapter.discovering;
-		const before = new Map(cache.devices().map((d) => [d.path, d.rssi]));
+		const before = new Map(cache.devices().map((d) => [d.path, cache.rssiReports(d.path)]));
 		const heard = new Map<string, ScannedBrick>();
 		const look = (): void => {
 			for (const d of cache.devices()) {
 				if (!isLego(d.address) || d.rssi === undefined) { continue; }
-				if (!othersDiscovering && !heard.has(d.path) && before.has(d.path) && before.get(d.path) === d.rssi) { continue; }
+				// Heard only on a report during the window.
+				if (cache.rssiReports(d.path) <= (before.get(d.path) ?? 0)) { continue; }
 				const known = heard.get(d.path);
 				heard.set(d.path, {
 					mac: d.address.toUpperCase(),
@@ -181,8 +183,6 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 			attempted = true;
 			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StartDiscovery' });
 			await new Promise((resolve) => setTimeout(resolve, windowMs));
-			// Once more at the end: a steady brick under someone else's discovery sends nothing.
-			look();
 			return [...heard.values()];
 		} finally {
 			stopListening();
