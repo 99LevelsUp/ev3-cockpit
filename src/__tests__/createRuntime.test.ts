@@ -12,13 +12,14 @@ import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { createRuntime } from '../runtime/createRuntime';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { ActivityMode } from '../contracts/enums';
-import { telemetrySettingsFromPackage } from '../telemetry/telemetrySettings';
+import { telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 /** The declared defaults, as an installed extension gets them when nobody changed a setting. */
-const telemetrySettings = telemetrySettingsFromPackage(
-	JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown);
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
+const telemetrySettings = telemetrySettingsFromPackage(manifest);
+const throttleSettings = throttleSettingsFromPackage(manifest);
 
 describe('createRuntime', () => {
 	it('wires discovery to the brick layer: a discovered mock brick signs in and answers', async () => {
@@ -26,7 +27,7 @@ describe('createRuntime', () => {
 			extensionPath: '.',
 			log: quiet,
 			startPresence: false,
-			telemetrySettings,
+			telemetrySettings, throttleSettings,
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		try {
@@ -47,7 +48,7 @@ describe('createRuntime', () => {
 		const lines: string[] = [];
 		const log = { ...quiet, info: (message: string) => { lines.push(message); } };
 		const runtime = createRuntime({
-			extensionPath: '.', log, startPresence: false, telemetrySettings,
+			extensionPath: '.', log, startPresence: false, telemetrySettings, throttleSettings,
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		try {
@@ -71,14 +72,14 @@ describe('createRuntime', () => {
 	});
 
 	it('builds no Bluetooth pairing or presence when the providers are injected', () => {
-		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, providers: [] });
+		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, providers: [] });
 		assert.equal(runtime.btDiscovery, undefined);
 		assert.equal(runtime.btPresence, undefined);
 		runtime.dispose();
 	});
 
 	it('gives the brick layer Windows\' side of a pairing, so the one-sided check can run (step-4 plan, U7)', () => {
-		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, providers: [] });
+		const runtime = createRuntime({ extensionPath: '.', log: quiet, startPresence: false, telemetrySettings, throttleSettings, providers: [] });
 		// Absent, the check is silently off: nothing else in the product would show it.
 		assert.ok((runtime.bricks as unknown as { windowsPairing?: unknown }).windowsPairing, 'the check has no source');
 		runtime.dispose();

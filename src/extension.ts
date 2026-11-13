@@ -12,7 +12,7 @@ import { createNotifier } from './ui/notify';
 import { AccessMode } from './api/accessPolicy';
 import { CockpitApi, createCockpitApi } from './api/cockpitApi';
 import { NotConnectedError } from './errors/CockpitError';
-import { readTelemetrySettings } from './telemetry/telemetrySettings';
+import { readTelemetrySettings, readThrottleSettings } from './telemetry/telemetrySettings';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -45,11 +45,14 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		mockBricks: mockBricksWanted(context),
 		// The user's settings; VS Code hands back package.json's default for what nobody set (D9).
 		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 	}));
 	// A changed setting applies at once, no reload.
 	services.add(vscode.workspace.onDidChangeConfiguration((e) => {
 		if (!e.affectsConfiguration('ev3-cockpit.telemetry')) { return; }
-		runtime.telemetryView.configure(readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)));
+		const section = vscode.workspace.getConfiguration('ev3-cockpit');
+		runtime.telemetryView.configure(readTelemetrySettings(section, (m) => logger.warn(m)));
+		runtime.telemetry.configureThrottle(readThrottleSettings(section, (m) => logger.warn(m)));
 		logger.info('Telemetry settings changed');
 	}));
 	const { bricks, aggregator, btPresence } = runtime;

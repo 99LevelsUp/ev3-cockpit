@@ -19,6 +19,7 @@ import { ProviderRegistry } from '../transports/providerRegistry';
 import { createEv3RowRegistry } from '../telemetry/rowRegistry';
 import { ClaimsEndedEvent, PlanChangeEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
 import type { TelemetryRow } from '../telemetry/telemetryRow';
+import type { ThrottleSettings } from '../telemetry/telemetrySettings';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;
@@ -111,7 +112,7 @@ function fakeBricks() {
 	};
 }
 
-function world(options: { tickPeriodMs?: number } = {}) {
+function world(options: { tickPeriodMs?: number; throttle?: ThrottleSettings } = {}) {
 	const bricks = fakeBricks();
 	const registry = new ProviderRegistry();
 	registry.register(provider(Transport.USB));
@@ -441,6 +442,27 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 
 			assert.deepEqual(gone, [A]);
 		} finally {
+			service.dispose();
+		}
+	});
+
+	it('does not count a retired loop\'s round trip against the new link (U7)', async () => {
+		const { bricks, service } = world({
+			throttle: { enabled: true, windowSize: 5, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 2 },
+		});
+		try {
+			bricks.connect(B);
+			service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			bricks.holdSends();
+			const retired = service.loopFor(B)?.runTick();
+			bricks.moveRoute(B, Transport.BT);
+
+			bricks.releaseSends();
+			await retired;
+
+			assert.equal(service.throttleOf(B)?.windowSamples, 0, 'the old link\'s frame is not this link\'s evidence');
+		} finally {
+			bricks.releaseSends();
 			service.dispose();
 		}
 	});
