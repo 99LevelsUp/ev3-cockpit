@@ -123,7 +123,7 @@ Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room t
 ### U8. Telemetry on the public API — done 13.11.2026; review five rounds, converged (see Review)
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
-### U9. The program run-state row and the program-running preset — code done 13.11.2026; codex review pending
+### U9. The program run-state row and the program-running preset — done 13.11.2026; review three rounds, converged (see Review)
 Part 1 the row (fbb2e4e, mutations 6/6); part 2 the preset in the service (e84cd8a, 8/8); parts 3–4 the program service follows the row, wiring, consumer guide (eb6bec2, 11/12, one caught by the compiler; end to end over the shipped wiring and the mock). Planned:
 D5 (b). Done in step 5 already: the service polls only while someone listens; `following` and its failure count are gone. What is left: the program status becomes a telemetry row, the program service follows it instead of its own timer, and telemetry slows down while a program runs (the measurement's consequence 1).
 
@@ -316,6 +316,10 @@ Mutations 8/9, one caught by the compiler; unit 1055/1055.
 | # | Sev | Finding | Verdict | Outcome |
 |---|---|---|---|---|
 | 1 | major → **minor** in effect | a claim ending inside `claim()` itself went unheard by the follow, whose listeners would wait on a dead claim | CONFIRMED as a fact, **not reachable today**: the read model's only synchronous listener is the delivery, which only queues, and the program follow defers too (the U8 round 4 limitation) | fixed anyway, being small: the follow listens before it claims, keeps endings that come during the claim, and a follow whose claim already ended is refused. Mutations 3/3; unit 1056/1056 |
+
+### U9, round 3 — confirmation of round 2 (codex, `.review-out/tmp/packet_u9r3.txt`, 13.11.2026): READY, no findings
+
+Convergence gate met: no blocker or major. Majors per round 3 → 1 (not reachable, fixed anyway) → 0. U9 is closed in code; step 6 is done in code except the hardware session U10.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
