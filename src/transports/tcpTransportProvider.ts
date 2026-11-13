@@ -247,7 +247,10 @@ export class TcpTransportProvider implements TransportProvider {
 	}
 
 	private startBeaconListener(): void {
-		const socket = dgram.createSocket('udp4');
+		// Shared: every VS Code window runs its own cockpit, and a brick's beacon is a broadcast,
+		// which each socket bound with SO_REUSEADDR receives. Exclusive, a second window could not
+		// bind and failed every scan with EADDRINUSE (found on HOSTC, 13.11.2026).
+		const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
 		socket.on('message', (msg, rinfo) => {
 			// Our own broadcast probe comes back to us; it is not a brick.
