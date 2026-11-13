@@ -4,6 +4,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { createBluezBluetooth, type BluezBus } from '../transports/bluezBluetooth';
@@ -41,6 +43,12 @@ class FakeBus implements BluezBus {
 	owner: string | undefined = ':1.2';
 	managed: DBusValue = objects([AAA, device('AAA', '00:16:53:F0:0A:0A', true)]);
 	failManaged?: Error;
+	/** GetManagedObjects answers once this settles. */
+	managedGate?: Promise<void>;
+	/** GetNameOwner fails with this, when set. */
+	ownerError?: Error;
+	/** The first StartDiscovery takes effect once this settles. */
+	deferStart?: Promise<void>;
 	closed = false;
 	/** Discovery starts and stops, with the time, for the overlap test. */
 	discovery: string[] = [];
@@ -50,13 +58,21 @@ class FakeBus implements BluezBus {
 	async call(o: { member: string; path: string; body?: DBusValue[] }): Promise<DBusValue[]> {
 		this.calls.push(o.member);
 		if (o.member === 'GetNameOwner') {
+			if (this.ownerError) { throw this.ownerError; }
 			if (!this.owner) { throw new DBusError('org.freedesktop.DBus.Error.NameHasNoOwner', 'no owner'); }
 			return [this.owner];
 		}
 		if (o.member === 'GetManagedObjects') {
 			if (this.failManaged) { throw this.failManaged; }
+			if (this.managedGate) { await this.managedGate; }
 			return [this.managed];
 		}
+		if (o.member === 'StartDiscovery' && this.deferStart) {
+			const gate = this.deferStart;
+			this.deferStart = undefined;
+			await gate;
+		}
+		// Recorded when it takes effect, as BlueZ sees it.
 		if (o.member === 'StartDiscovery' || o.member === 'StopDiscovery') { this.discovery.push(o.member); }
 		if (o.member === 'Pair') { await new Promise((r) => setTimeout(r, 30)); }
 		return [];
@@ -76,6 +92,13 @@ class FakeBus implements BluezBus {
 }
 
 const silentLog = { info: (): void => undefined, warn: (): void => undefined };
+const OM_RULE = "interface='org.freedesktop.DBus.ObjectManager'";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve = (): void => undefined;
+	const promise = new Promise<void>((r) => { resolve = r; });
+	return { promise, resolve };
+}
 const tick = (ms = 5): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe('createBluezBluetooth — the factory (U8)', () => {
@@ -220,5 +243,140 @@ describe('createBluezBluetooth — the factory (U8)', () => {
 			assert.deepEqual(bus.discovery.slice(i, i + 2), ['StartDiscovery', 'StopDiscovery'], `discovery sessions nest: ${bus.discovery.join(',')}`);
 		}
 		bt.dispose();
+	});
+	it('a second start while a bus is held opens no other (U8 review #1)', async () => {
+		const first = new FakeBus();
+		let opened = 0;
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => { opened += 1; return opened === 1 ? first : new FakeBus(); } });
+		await bt.start();
+		await bt.start();
+		assert.equal(opened, 1);
+		assert.equal(first.closed, false);
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA']);
+		bt.dispose();
+		assert.equal(first.closed, true);
+	});
+
+	it('reconnects with a backoff when the system bus closes under it, and not after dispose (U8 review #2)', async () => {
+		const first = new FakeBus();
+		const second = new FakeBus();
+		second.managed = objects([BBB, device('BBB', '00:16:53:F0:0B:0B', true)]);
+		const opens: (() => Promise<BluezBus>)[] = [
+			async () => first,
+			async () => { throw new Error('connect ENOENT'); },
+			async () => second,
+		];
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: () => opens.shift()!(), reconnectMs: 5 });
+		await bt.start();
+		first.close();
+		assert.throws(() => bt.listDevices(), /not ready/);
+		await tick(60);
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['BBB'], 'ready again on a new connection, after one failed try');
+		assert.equal(opens.length, 0);
+		bt.dispose();
+		assert.equal(second.closed, true);
+		let more = 0;
+		const third = new FakeBus();
+		const after = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => { more += 1; return third; }, reconnectMs: 5 });
+		await after.start();
+		after.dispose();
+		await tick(30);
+		assert.equal(more, 1, 'a dispose is not a loss');
+	});
+
+	it('drops the old daemon\'s objects at once when BlueZ hands over to a new owner (U8 review #3)', async () => {
+		const bus = new FakeBus();
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => bus });
+		await bt.start();
+		const gate = deferred();
+		bus.managedGate = gate.promise;
+		bus.managed = objects([BBB, device('BBB', '00:16:53:F0:0B:0B', true)]);
+		bus.ownerChanged(':1.2', ':1.7');
+		assert.throws(() => bt.listDevices(), /not ready/, 'nothing of the old daemon while the new one is read');
+		gate.resolve();
+		await tick();
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['BBB']);
+		bt.dispose();
+	});
+
+	it('tells a bus that refuses this user from BlueZ not running, at GetNameOwner too (U8 review #4)', async () => {
+		const denied = new FakeBus();
+		denied.ownerError = new DBusError('org.freedesktop.DBus.Error.AccessDenied', 'Rejected send message');
+		const said: string[] = [];
+		const offered: string[] = [];
+		const bt = createBluezBluetooth({ log: { info: (m) => said.push(m), warn: (m) => said.push(m) }, platform: 'linux', openBus: async () => denied, username: () => 'alice', onAccessDenied: (c) => offered.push(c) });
+		await bt.start();
+		assert.deepEqual(offered, ['sudo usermod -aG bluetooth alice']);
+		assert.ok(!said.some((m) => /not running/.test(m)), said.join(' | '));
+		bt.dispose();
+
+		const broken = new FakeBus();
+		broken.ownerError = new DBusError('org.freedesktop.DBus.Error.NoMemory', 'out of memory');
+		const told: string[] = [];
+		const other = createBluezBluetooth({ log: { info: (m) => told.push(m), warn: (m) => told.push(m) }, platform: 'linux', openBus: async () => broken, onAccessDenied: () => offered.push('again') });
+		await other.start();
+		assert.ok(told.some((m) => /Bluetooth unavailable.*NoMemory/.test(m)), told.join(' | '));
+		assert.ok(!told.some((m) => /not running/.test(m)));
+		assert.equal(offered.length, 1);
+		other.dispose();
+	});
+
+	it('keeps an inquiry from starting until a pairing search\'s late discovery is stopped (U8 review #5)', async () => {
+		const bus = new FakeBus();
+		bus.managed = objects();
+		const late = deferred();
+		bus.deferStart = late.promise;
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => bus, inquiryWindowMs: 20, searchMs: 20 });
+		await bt.start();
+		const queue = new BtConnectionQueue({ interConnectionCooldownMs: 0, errorRecoveryCooldownMs: 0 });
+		const discovery = new BtClassicDiscovery({ listDevices: bt.listDevices, pairDevice: bt.pairDevice, connectionQueue: queue });
+		const monitor = new BtPresenceMonitor({ queue, check: async () => true, inquire: bt.inquire, pairedWithoutSession: () => [] });
+		const paired = await discovery.pair('00:16:53:F0:0C:0C');
+		assert.equal(paired.ok, false, 'the search ran out before the discovery started');
+		const inquiry = monitor.runInquiry();
+		await tick(40);
+		assert.equal(bus.calls.filter((c) => c === 'SetDiscoveryFilter').length, 1, `the inquiry waits for the late stop: ${bus.calls.join(',')}`);
+		late.resolve();
+		await inquiry;
+		monitor.dispose();
+		assert.deepEqual(bus.discovery, ['StartDiscovery', 'StopDiscovery', 'StartDiscovery', 'StopDiscovery']);
+		bt.dispose();
+	});
+
+	it('ends an operation on the connection it started on, never on the next one (U8 review #6)', async () => {
+		const first = new FakeBus();
+		first.managed = objects();
+		const late = deferred();
+		first.deferStart = late.promise;
+		const second = new FakeBus();
+		const buses = [first, second];
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => buses.shift()!, searchMs: 20 });
+		await bt.start();
+		const result = await bt.pairDevice('00:16:53:F0:0C:0C');
+		assert.equal(result.ok, false);
+		await bt.retry();
+		late.resolve();
+		await tick(20);
+		assert.ok(first.calls.includes('StopDiscovery'), 'the late discovery is stopped where it ran');
+		assert.ok(!second.calls.includes('StopDiscovery'), second.calls.join(','));
+		bt.dispose();
+	});
+
+	it('adds BlueZ\'s match rules once per connection, however often BlueZ restarts (U8 review #9)', async () => {
+		const bus = new FakeBus();
+		const bt = createBluezBluetooth({ log: silentLog, platform: 'linux', openBus: async () => bus });
+		await bt.start();
+		for (const owner of [':1.7', ':1.8', ':1.9']) {
+			bus.ownerChanged('', owner);
+			await tick();
+		}
+		assert.equal(bus.matches.filter((m) => m.includes(OM_RULE)).length, 1, bus.matches.join('\n'));
+		assert.deepEqual(bt.listDevices().map((d) => d.name), ['AAA']);
+		bt.dispose();
+	});
+
+	it('loads no native module when it is imported, so the runtime can import it anywhere (U8 review #7, the part here)', () => {
+		const out = execFileSync(process.execPath, ['-e', "require('./out/transports/bluezBluetooth.js'); process.stdout.write(String(Object.keys(require.cache).filter((k) => /node_modules/.test(k)).length));"], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' });
+		assert.equal(out, '0');
 	});
 });

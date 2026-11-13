@@ -16,11 +16,11 @@ import * as os from 'os';
 
 import { BackendUnavailableError } from '../errors/CockpitError';
 import type { ForgetResidue } from '../contracts';
-import { DBusConnection, type CallOptions, type ExportedMethod } from './dbus/connection';
+import { DBusConnection, DBusError, type CallOptions, type ExportedMethod } from './dbus/connection';
 import type { DBusMessage } from './dbus/message';
 import type { DBusValue } from './dbus/wire';
 import { BluezObjectCache, type BluezAdapter, type BluezDevice, type BusLike } from './bluezObjects';
-import { bluezListDevices, bluezRadioName } from './bluezDiscovery';
+import { bluezListDevices, bluezRadioName, DiscoveryGate } from './bluezDiscovery';
 import { createBluezPairing } from './bluezPairing';
 import { createBluezUnpair, bluezForgetResidue } from './bluezForget';
 import { createBluezPresenceCheck, createBluezInquiry } from './bluezPresence';
@@ -32,6 +32,10 @@ import type { BluetoothDeviceInfo } from './windowsBluetooth';
 
 const BLUEZ_NAME = 'org.bluez';
 const DBUS_NAME = 'org.freedesktop.DBus';
+const NAME_HAS_NO_OWNER = 'org.freedesktop.DBus.Error.NameHasNoOwner';
+/** The first reconnect after the bus closed under us (ms); doubled each failed try, up to the cap. */
+const RECONNECT_FIRST_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
 
 /** What the factory needs of a bus connection; `DBusConnection` in production, a fake in tests. */
 export interface BluezBus extends BusLike {
@@ -52,6 +56,8 @@ export interface BluezBluetoothOptions {
 	/** For tests: the inquiry window and the pairing search. */
 	inquiryWindowMs?: number;
 	searchMs?: number;
+	/** For tests: the first reconnect's delay after the bus closed (default 1 s, doubling to 30 s). */
+	reconnectMs?: number;
 }
 
 export interface BluezBluetooth {
@@ -119,30 +125,50 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 	const username = options.username ?? (() => os.userInfo().username);
 
 	const live = new LiveCache();
+	const gate = new DiscoveryGate();
 	let bus: BluezBus | undefined;
+	/** `bus` for the object caches: each match rule added once per connection (U8 review #9). */
+	let cacheBus: BusLike | undefined;
 	let owner: string | undefined;
 	let generation = 0;
 	let disposed = false;
 	let busRemovers: (() => void)[] = [];
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	let reconnectTries = 0;
+	const reconnectFirstMs = options.reconnectMs ?? RECONNECT_FIRST_MS;
 
-	// The bus of the moment, behind one stable face for pairing, forgetting and the inquiry.
-	const liveBus = {
+	const notConnected = (): Error => new Error('Not connected to the system bus.');
+	/** One connection, held for one operation: its cleanup goes where it started (U8 review #6). */
+	const pinned = (connection: BluezBus | undefined): Pick<BluezBus, 'call' | 'exportObject'> => ({
 		call(callOptions: CallOptions): Promise<DBusValue[]> {
-			return bus ? bus.call(callOptions) : Promise.reject(new Error('Not connected to the system bus.'));
+			return connection ? connection.call(callOptions) : Promise.reject(notConnected());
 		},
 		exportObject(path: string, iface: string, methods: Record<string, ExportedMethod>): () => void {
-			if (!bus) { throw new Error('Not connected to the system bus.'); }
-			return bus.exportObject(path, iface, methods);
+			if (!connection) { throw notConnected(); }
+			return connection.exportObject(path, iface, methods);
 		},
+	});
+	// The bus of the moment for single calls; `pin()` for an operation that cleans up after itself.
+	const liveBus = {
+		call(callOptions: CallOptions): Promise<DBusValue[]> { return pinned(bus).call(callOptions); },
+		exportObject(path: string, iface: string, methods: Record<string, ExportedMethod>): () => void { return pinned(bus).exportObject(path, iface, methods); },
+		pin: () => pinned(bus),
 	};
 	const bluezOwner = (): string | undefined => owner;
 
 	const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+	/** D4: the bus policy keeps this user from BlueZ. */
+	function accessDenied(): void {
+		const command = manualGroupCommand(username());
+		log.warn(`BlueZ refused this user: on many systems only members of the "bluetooth" group may use it. To join it: ${command}`);
+		options.onAccessDenied?.(command);
+	}
+
 	/** A fresh cache under the current owner; a stale one (an older generation) is dropped. */
 	async function readBluez(): Promise<void> {
 		const mine = generation;
-		const connection = bus;
+		const connection = cacheBus;
 		if (!connection || !owner) { live.replace(undefined); return; }
 		const cache = new BluezObjectCache(connection, { bluezOwner });
 		try {
@@ -151,9 +177,7 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 			if (mine !== generation) { return; }
 			live.replace(undefined);
 			if (isBluezAccessDenied(error)) {
-				const command = manualGroupCommand(username());
-				log.warn(`BlueZ refused this user: on many systems only members of the "bluetooth" group may use it. To join it: ${command}`);
-				options.onAccessDenied?.(command);
+				accessDenied();
 			} else {
 				log.warn(`Could not read BlueZ's devices: ${describe(error)}`);
 			}
@@ -169,9 +193,10 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		const [name, , next] = message.body;
 		if (name !== BLUEZ_NAME || typeof next !== 'string') { return; }
 		generation += 1;
+		// Nothing of the old daemon stays, even while the new one is read (U8 review #3).
+		live.replace(undefined);
 		if (!next) {
 			owner = undefined;
-			live.replace(undefined);
 			log.warn('BlueZ stopped; Bluetooth waits for it to come back.');
 			return;
 		}
@@ -184,44 +209,98 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		for (const remove of busRemovers.splice(0)) { remove(); }
 		const connection = bus;
 		bus = undefined;
+		cacheBus = undefined;
 		owner = undefined;
 		connection?.close();
 	}
 
-	async function start(): Promise<void> {
-		if (disposed) { return; }
+	function cancelReconnect(): void {
+		if (reconnectTimer) { clearTimeout(reconnectTimer); }
+		reconnectTimer = undefined;
+		reconnectTries = 0;
+	}
+
+	/** After the bus closed under us: try again, 1 s, 2 s, 4 s … up to 30 s apart (U8 review #2). */
+	function scheduleReconnect(): void {
+		if (disposed || reconnectTimer) { return; }
+		const delay = Math.min(reconnectFirstMs * 2 ** reconnectTries, RECONNECT_MAX_MS);
+		reconnectTries += 1;
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = undefined;
+			void connect(true);
+		}, delay);
+	}
+
+	/** Each match rule once on this connection, however many caches BlueZ's restarts bring. */
+	function onceEach(connection: BluezBus): BusLike {
+		const added = new Map<string, Promise<void>>();
+		return {
+			call: (callOptions) => connection.call(callOptions),
+			addMatch: (rule) => {
+				let pending = added.get(rule);
+				if (!pending) {
+					pending = connection.addMatch(rule);
+					added.set(rule, pending);
+					pending.catch(() => { added.delete(rule); });
+				}
+				return pending;
+			},
+			onSignal: (handler) => connection.onSignal(handler),
+			onClose: (handler) => connection.onClose(handler),
+		};
+	}
+
+	async function connect(reconnecting: boolean): Promise<void> {
+		// One bus at a time: a second start while one is held opens nothing (U8 review #1).
+		if (disposed || bus) { return; }
 		generation += 1;
 		const mine = generation;
 		let connection: BluezBus;
 		try {
 			connection = await openBus();
 		} catch (error) {
+			if (disposed || mine !== generation) { return; }
 			log.warn(`Bluetooth unavailable: cannot reach the system bus (${describe(error)}).`);
+			if (reconnecting) { scheduleReconnect(); }
 			return;
 		}
-		if (disposed || mine !== generation) { connection.close(); return; }
+		if (disposed || mine !== generation || bus) { connection.close(); return; }
+		reconnectTries = 0;
 		bus = connection;
+		cacheBus = onceEach(connection);
 		busRemovers = [
 			connection.onSignal(onOwnerChanged),
 			connection.onClose(() => {
 				if (bus !== connection) { return; }
+				busRemovers.splice(0);
 				bus = undefined;
+				cacheBus = undefined;
 				owner = undefined;
+				generation += 1;
 				live.replace(undefined);
-				log.warn('The system bus connection closed; Bluetooth is not ready.');
+				log.warn('The system bus connection closed; Bluetooth is not ready until it is back.');
+				scheduleReconnect();
 			}),
 		];
 		try {
 			await connection.addMatch(`type='signal',sender='${DBUS_NAME}',interface='${DBUS_NAME}',member='NameOwnerChanged',arg0='${BLUEZ_NAME}'`);
-			try {
-				const [name] = await connection.call({ destination: DBUS_NAME, path: '/org/freedesktop/DBus', interface: DBUS_NAME, member: 'GetNameOwner', signature: 's', body: [BLUEZ_NAME] });
-				if (mine === generation) { owner = typeof name === 'string' && name ? name : undefined; }
-			} catch {
-				// NameHasNoOwner: BlueZ is not running; NameOwnerChanged says when it is.
-			}
 		} catch (error) {
+			if (mine !== generation) { return; }
+			if (isBluezAccessDenied(error)) { accessDenied(); return; }
 			log.warn(`Bluetooth unavailable: the system bus refused to watch BlueZ (${describe(error)}).`);
 			return;
+		}
+		try {
+			const [name] = await connection.call({ destination: DBUS_NAME, path: '/org/freedesktop/DBus', interface: DBUS_NAME, member: 'GetNameOwner', signature: 's', body: [BLUEZ_NAME] });
+			if (mine === generation) { owner = typeof name === 'string' && name ? name : undefined; }
+		} catch (error) {
+			if (mine !== generation) { return; }
+			// Only "nobody owns the name" means BlueZ is not running (U8 review #4).
+			if (isBluezAccessDenied(error)) { accessDenied(); return; }
+			if (!(error instanceof DBusError && error.dbusName === NAME_HAS_NO_OWNER)) {
+				log.warn(`Bluetooth unavailable: could not ask the bus who BlueZ is (${describe(error)}).`);
+				return;
+			}
 		}
 		if (mine !== generation) { return; }
 		if (!owner) {
@@ -235,23 +314,25 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		backends: new Map<BtBackend, BtAdapterFactory>([['bluez', (mac) => new BtBluezAdapter({ mac })]]),
 		listDevices: bluezListDevices(live),
 		radioName: bluezRadioName(live),
-		pairDevice: createBluezPairing({ bus: liveBus, cache: live, bluezOwner, searchMs: options.searchMs }),
+		pairDevice: createBluezPairing({ bus: liveBus, cache: live, bluezOwner, searchMs: options.searchMs, discoveryGate: gate }),
 		unpairDevice: createBluezUnpair({ bus: liveBus, cache: live }),
 		forgetResidue: bluezForgetResidue(live),
 		presenceCheck: createBluezPresenceCheck(),
-		inquire: createBluezInquiry({ bus: liveBus, cache: live, windowMs: options.inquiryWindowMs, log: (message) => log.warn(message) }),
+		inquire: createBluezInquiry({ bus: liveBus, cache: live, windowMs: options.inquiryWindowMs, log: (message) => log.warn(message), discoveryGate: gate }),
 		onChange: (handler) => live.onChange(handler),
-		start,
+		start: () => connect(false),
 		async retry(): Promise<void> {
 			if (disposed) { return; }
+			cancelReconnect();
 			live.replace(undefined);
 			closeBus();
-			await start();
+			await connect(false);
 		},
 		dispose(): void {
 			if (disposed) { return; }
 			disposed = true;
 			generation += 1;
+			cancelReconnect();
 			live.replace(undefined);
 			closeBus();
 		},

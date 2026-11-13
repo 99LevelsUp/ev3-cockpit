@@ -48,3 +48,24 @@ export function bluezDeviceName(device: Pick<BluezDevice, 'name' | 'alias'>): st
 function isAddressAlias(alias: string): boolean {
 	return /^([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}$/.test(alias);
 }
+
+/**
+ * The radio's discovery as one resource, between the pairing search and the inquiry (U8 review
+ * #5). A pairing search that gives up before its `StartDiscovery` settles stops that discovery
+ * later, when it does; the caller (and its turn in the Bluetooth queue) is gone by then. Whoever
+ * starts the next discovery waits here first, so that late `StopDiscovery` cannot end it.
+ */
+export class DiscoveryGate {
+	private readonly pending = new Set<Promise<void>>();
+
+	/** A discovery's end that outlives its caller. */
+	track(settled: Promise<unknown>): void {
+		const done: Promise<void> = settled.then(() => undefined, () => undefined).finally(() => { this.pending.delete(done); });
+		this.pending.add(done);
+	}
+
+	/** Settles once no discovery's end is outstanding. */
+	async idle(): Promise<void> {
+		while (this.pending.size > 0) { await Promise.all([...this.pending]); }
+	}
+}
