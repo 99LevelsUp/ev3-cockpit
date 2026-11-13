@@ -248,6 +248,29 @@ Convergence gate met: no blocker or major survives. Majors per round 6 → 3 →
 
 Convergence gate met: no blocker or major. The deviation from KTD5 (cap by `maxSlowdown`, not the heartbeat window) — **accepted by the owner 13.11.2026**.
 
+### U8, round 1 (codex, inline packet, 13.11.2026) — NOT-READY → fixed (7c5d86b)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a change between the claim and the snapshot was lost: the snapshot was taken when it went out, not at the claim | CONFIRMED | the snapshot is taken at the claim; changes after it queue until it has gone out |
+| 2 | major | a brick that went before the snapshot went out gave `ended` with no snapshot before it | CONFIRMED | `ended` queues behind the snapshot like any change |
+
+### U8, round 2 — confirmation of round 1 (codex, 13.11.2026) — NOT-READY → fixed (a173519)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a listener that ended the brick while hearing the snapshot made `ended` overtake a change still queued | CONFIRMED | while the queue is told, anything new joins its end |
+
+### U8, round 3 — confirmation of round 2 (codex, `.review-out/packet_u8r3.txt`, 13.11.2026) — NOT-READY → approach changed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | blocker | delivery was reentrant across subscriptions: one consumer's listener ending the brick or causing a change made another subscription lose the change it was being told, or hear a newer one first; a subscription made inside a listener heard again the change its snapshot held | CONFIRMED (updates went out from inside the source's dispatch) | see below |
+
+Same area three rounds running — the order of updates when a listener reacts — with each round patching one subscription's own ordering. **The approach changed instead of a fourth patch.** The order belongs to the stream of events, which no single subscription sees, so one owner keeps it: `TelemetryDelivery`, one per API. An event is queued for the subscriptions that exist when it happens. Updates go out only from its drain, never from inside the source's dispatch, so whatever a listener causes queues behind everything before it, for every subscription of every consumer. A snapshot is queued at its claim. Delivery is asynchronous, and one drain tells only what was queued when it began: a listener whose every update causes another cannot freeze the extension host. The consumer guide says so.
+
+Tests first: two consumers where one's listener ends the brick, a listener causing a newer change, a subscription made inside a listener, a claim that itself causes a change, a disposed subscription with an update on its way, a feedback loop (with a ceiling, so a regression cannot hang the run), one listener on the source for all. The test's stand-in source now fires like the product's emitter: a copy of the listeners, and a dispose that removes. Mutations 7/10. Three survive. Two are equivalent: an ended claim left among the recipients, and `ended` told without being marked done. Changes after `ended` queue behind it and are dropped at delivery either way. The third, the consumer's record cleaned after `ended`, is memory only and cannot be seen through the API. Unit 1022/1022.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.

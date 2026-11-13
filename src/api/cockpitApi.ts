@@ -34,6 +34,7 @@ import type { RowDescriptor } from '../telemetry/rowRegistry';
 import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 import { AccessMode, assertAllowed } from './accessPolicy';
+import { TelemetryDelivery, toTelemetryValue } from './telemetryDelivery';
 
 export const API_VERSION = 1;
 
@@ -193,19 +194,6 @@ export interface CockpitApiDeps {
 	};
 }
 
-/** A read model value as plain data, with only the fields it has. */
-function toTelemetryValue(value: ReadValue): TelemetryValue {
-	return {
-		rowId: value.rowId,
-		value: value.value,
-		...(value.unit !== undefined ? { unit: value.unit } : {}),
-		...(value.mode !== undefined ? { mode: value.mode } : {}),
-		sampledAt: value.sampledAt,
-		...(value.effectiveIntervalMs !== undefined ? { effectiveIntervalMs: value.effectiveIntervalMs } : {}),
-		stale: value.stale,
-	};
-}
-
 /** Builds the API object; `dispose` ends every consumer and every program service. */
 export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription {
 	const programs = new Map<BrickId, ProgramService>();
@@ -233,9 +221,13 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		return service;
 	};
 	const filesOf = (brickId: BrickId) => createBrickFilesystem(deps.bricks as unknown as BrickSender, brickId);
-	const telemetryOf = (): NonNullable<CockpitApiDeps['telemetry']> => {
-		if (!deps.telemetry) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
-		return deps.telemetry;
+	// One delivery order for every consumer's subscriptions (review round 3).
+	const delivery = deps.telemetry
+		? new TelemetryDelivery(deps.telemetry, (message) => deps.log?.warn(message))
+		: undefined;
+	const telemetryOf = (): { telemetry: NonNullable<CockpitApiDeps['telemetry']>; delivery: TelemetryDelivery } => {
+		if (!deps.telemetry || !delivery) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
+		return { telemetry: deps.telemetry, delivery };
 	};
 	const toApiBrick = (entry: BrickEntry): ApiBrick => ({
 		brickId: entry.brickId,
@@ -341,10 +333,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			getAccessMode: () => deps.accessMode(),
 			onAccessModeChanged: (listener) => keep(deps.onAccessModeChange(listener)),
 
-			listTelemetryRows: () => telemetryOf().rows().map((row) => ({ ...row })),
+			listTelemetryRows: () => telemetryOf().telemetry.rows().map((row) => ({ ...row })),
 			subscribeTelemetry: (brick, request, listener) => {
 				open();
-				const telemetry = telemetryOf();
+				const { telemetry, delivery } = telemetryOf();
 				const brickId = resolve(brick);
 				let claim: { readonly handle: string; readonly grant: Grant };
 				try {
@@ -359,64 +351,23 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				}
 				const rows = new Set(request.rows);
 				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
-				const emit = (update: TelemetryUpdate): void => {
-					try {
-						listener(update);
-					} catch (error) {
-						deps.log?.warn(`Telemetry listener of ${name} threw: ${error instanceof Error ? error.message : String(error)}`);
-					}
-				};
-				// The snapshot is the state at the claim; what changes after it is queued until the
-				// snapshot has gone out, then told in order, so nothing in between is lost (D10, review 1).
+				// The snapshot is the state at the claim and the subscription joins the delivery right there,
+				// with nothing told in between: what changed before is in the snapshot, what changes after
+				// comes in order behind it (D10, reviews 1-3).
 				const boundary = snapshot();
-				// pending: before the snapshot; draining: telling the snapshot and the queue, where anything new
-				// still joins the queue's end, so a listener reacting to one update cannot overtake an older
-				// one (review 2); live: told as it comes; done: finished.
-				let state: 'pending' | 'draining' | 'live' | 'done' = 'pending';
-				let claimEnded = false;
-				const queue: TelemetryUpdate[] = [];
-				const record: Subscription = { dispose: () => { finish(!claimEnded); } };
-				/** Ends the subscription before anyone hears of it, so a listener reacting to it cannot release twice. */
-				const finish = (release: boolean): void => {
-					if (state === 'done') { return; }
-					state = 'done';
-					changes.dispose();
-					ended.dispose();
-					subscriptions.delete(record);
-					if (release) { telemetry.release(claim.handle); }
+				// `onEnded` runs only from the delivery's drain, after this call has returned.
+				const place = delivery.open({
+					brickId, handle: claim.handle, rows, listener, owner: name,
+					onEnded: () => { subscriptions.delete(record); },
+				}, boundary);
+				const record: Subscription = {
+					dispose: () => {
+						subscriptions.delete(record);
+						// A claim that ended with its brick is gone: releasing it again is not done.
+						if (place.close()) { telemetry.release(claim.handle); }
+					},
 				};
-				const tell = (update: TelemetryUpdate): void => {
-					if (state === 'pending' || state === 'draining') { queue.push(update); return; }
-					if (state !== 'live') { return; }
-					if (update.kind === 'ended') { finish(false); }
-					emit(update);
-				};
-				const changes = telemetry.onChange((change) => {
-					// After `ended` the subscription is done, and a change is dropped in `tell`.
-					if (change.brickKey !== brickId) { return; }
-					const values = change.rows.filter((row) => rows.has(row.rowId)).map(toTelemetryValue);
-					const removed = change.removed.filter((id) => rows.has(id));
-					if (values.length > 0 || removed.length > 0) { tell({ brickId, kind: 'change', values, removed }); }
-				});
-				const ended = telemetry.onClaimsEnded((event) => {
-					if (event.brickKey !== brickId || !event.handles.includes(claim.handle)) { return; }
-					// The claim is gone with its brick: releasing it again does nothing, and is not done.
-					claimEnded = true;
-					tell({ brickId, kind: 'ended', values: [], removed: [] });
-				});
 				subscriptions.add(record);
-				// The snapshot goes out once this call has returned, before anything else (4.5.2).
-				queueMicrotask(() => {
-					if (state !== 'pending') { return; }
-					state = 'draining';
-					emit({ brickId, kind: 'snapshot', values: boundary, removed: [] });
-					while (state === 'draining' && queue.length > 0) {
-						const update = queue.shift() as TelemetryUpdate;
-						if (update.kind === 'ended') { finish(false); }
-						emit(update);
-					}
-					if (state === 'draining') { state = 'live'; }
-				});
 				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => record.dispose() };
 			},
 
@@ -438,6 +389,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			for (const consumer of [...consumers]) { consumer.dispose(); }
 			for (const service of programs.values()) { service.dispose(); }
 			programs.clear();
+			delivery?.dispose();
 		},
 	};
 }
