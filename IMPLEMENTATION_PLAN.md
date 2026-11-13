@@ -1955,6 +1955,22 @@ Stabilize the system for long-term use and further development.
   - [ ] 7.7.4 Refactoring and coverage improvement cycle
   - [ ] 7.7.5 VSIX packaging and manual validation
   - [ ] 7.7.6 Documentation update checklist
+- [ ] **7.8 Repository hygiene: code outside TypeScript** (owner's question 13.11.2026; GitHub shows
+  TypeScript 88 %, JavaScript 10 %, C# 2 %, other 0.5 %)
+  - [ ] 7.8.1 The hardware probes and measurement scripts (`scripts/*-probe.js`, `*-sweep.js`, `*-matrix.js`,
+    `*scenario*.js`, `bt-backend-comparison.js`, `signal-monitor.js`; 20 files, about 3 900 lines) become
+    TypeScript compiled with the rest. They load the compiled cockpit from `out/` without types, and a probe
+    has disagreed with the shipped code five times, each time the probe being wrong; a type check would have
+    caught the signature drift. They stay in the repo: the plans cite them as evidence.
+  - [ ] 7.8.2 Remove `scripts/install-hooks.sh`: `install-hooks.cjs` replaced it and nothing calls it.
+  - [ ] 7.8.3 `scripts/presence-auth-probe.ps1` (cited by the step-4 plan): rewrite with the other probes
+    or move beside its plan as recorded evidence.
+  - [ ] 7.8.4 Stays as it is, on purpose: the C# `native/bt-pairing-helper` (WinRT custom pairing; no koffi
+    route to WinRT), `scripts/bench/Bench.lms` (runs on the brick), the `.cjs` build and test plumbing
+    (Node loads it before anything is compiled), the CI workflow, the git hook, the raw Linux session
+    evidence (`docs/plans/linux-session-results/hostc-raw/`).
+  - [ ] 7.8.5 Only if the owner wants the GitHub bar to show the product alone: evidence folders marked
+    `linguist-documentation` in `.gitattributes`. Cosmetic; it changes no file.
 
 ### Minimum Validation Set
 
