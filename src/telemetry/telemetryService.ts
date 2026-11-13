@@ -46,7 +46,7 @@ import { RowRegistry, createEv3RowRegistry } from './rowRegistry';
 import { ClaimCadence, ClaimHandle, ClaimRequest, Grant, TelemetryClaims } from './telemetryClaims';
 import { cadenceFor } from './telemetryConstants';
 import { RowValue } from './telemetryRow';
-import type { ThrottleSettings } from './telemetrySettings';
+import { ThrottleSettings, checkThrottleSettings } from './telemetrySettings';
 import { ThrottleState, TickThrottle, typicalRoundTripMs } from './tickThrottle';
 
 /** One brick's telemetry values, tagged with where they came from. */
@@ -248,6 +248,7 @@ export class TelemetryService implements vscode.Disposable {
 
 	/** New throttle settings apply at once to every brick. Throws, changing nothing, for settings out of range. */
 	configureThrottle(settings: ThrottleSettings): void {
+		checkThrottleSettings(settings);
 		for (const [brickKey, running] of this.loops) {
 			if (!running.throttle) {
 				running.throttle = new TickThrottle(settings, typicalRoundTripMs(running.transport));
