@@ -11,9 +11,9 @@
 
 /** The platforms a release ships for (REQUIREMENTS §12: Windows and Linux). */
 const TARGETS = {
-	'win32-x64': { os: 'win32', cpu: 'x64', helper: true },
-	'linux-x64': { os: 'linux', cpu: 'x64', helper: false },
-	'linux-arm64': { os: 'linux', cpu: 'arm64', helper: false },
+	'win32-x64': { os: 'win32', cpu: 'x64', helper: true, udevRule: false },
+	'linux-x64': { os: 'linux', cpu: 'x64', helper: false, udevRule: true },
+	'linux-arm64': { os: 'linux', cpu: 'arm64', helper: false, udevRule: true },
 };
 
 /** The modules the bundle leaves external and loads at run time. */
@@ -21,6 +21,17 @@ const NATIVE_MODULES = ['usb', 'node-hid', 'serialport', 'koffi'];
 
 /** The extension's own files, relative to the repository; nothing else of the repository ships. */
 const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
+
+/**
+ * The udev rule a Linux user installs once for USB; the permission message names it at this path in
+ * the extension's folder (`LINUX_UDEV_RULE_PATH`), so a Linux VSIX must carry it (13.11.2026).
+ */
+const UDEV_RULE = 'native/linux/70-lego-ev3.rules';
+
+/** The repository files a target's VSIX carries. */
+function SHIPPED_FILES_FOR(target) {
+	return TARGETS[target].udevRule ? [...SHIPPED_FILES, UDEV_RULE] : [...SHIPPED_FILES];
+}
 
 /**
  * Whether a module's prebuilt binary folder is for this target. `node-hid` prefixes the platform
@@ -65,6 +76,7 @@ function allowed(target, entry) {
 	const file = entry.slice('extension/'.length);
 	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
 	if (file.startsWith('native/bin/')) { return TARGETS[target].helper && !file.endsWith('.pdb'); }
+	if (file === UDEV_RULE) { return TARGETS[target].udevRule; }
 	if (!file.startsWith('node_modules/')) { return false; }
 	const prebuild = PREBUILD.exec(entry);
 	if (prebuild) { return keepPrebuild(prebuild[1], prebuild[2], target); }
@@ -87,6 +99,7 @@ function required(target) {
 		'extension/node_modules/serialport/',
 	];
 	if (TARGETS[target].helper) { needs.push('extension/native/bin/bt-pairing-helper.exe'); }
+	if (TARGETS[target].udevRule) { needs.push(`extension/${UDEV_RULE}`); }
 	return needs;
 }
 
@@ -97,4 +110,4 @@ function checkVsix(target, entries) {
 	return { missing, unexpected };
 }
 
-module.exports = { TARGETS, NATIVE_MODULES, SHIPPED_FILES, keepPrebuild, listZipEntries, checkVsix };
+module.exports = { TARGETS, NATIVE_MODULES, SHIPPED_FILES, SHIPPED_FILES_FOR, keepPrebuild, listZipEntries, checkVsix };

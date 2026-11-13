@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { TARGETS, NATIVE_MODULES, SHIPPED_FILES, keepPrebuild, listZipEntries, checkVsix } = require('./packaging.cjs');
+const { TARGETS, NATIVE_MODULES, SHIPPED_FILES_FOR, keepPrebuild, listZipEntries, checkVsix } = require('./packaging.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const STAGING = path.join(REPO, '.vsix-staging');
@@ -65,7 +65,7 @@ function stage(target, manifest) {
 	fs.rmSync(dir, { recursive: true, force: true });
 	fs.mkdirSync(dir, { recursive: true });
 
-	for (const file of SHIPPED_FILES) {
+	for (const file of SHIPPED_FILES_FOR(target)) {
 		const from = path.join(REPO, file);
 		if (!fs.existsSync(from)) { throw new Error(`${file} is missing; build first (npm run package).`); }
 		fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
