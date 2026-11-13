@@ -365,4 +365,31 @@ describe('Telemetry read model (step-6 U6)', () => {
 
 		assert.deepEqual(w.model.snapshot(A), []);
 	});
+	it('takes no late reply for a row whose stale time has run out since it stopped being read (review 3)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.advance(10);
+		w.plan(A, {});                   // stopped at 10, gone at 1010
+		w.advance(490);
+		w.plan(A, { [BATTERY]: 500 });   // a later re-plan does not move when it stopped
+		w.advance(600);
+		w.take();
+
+		w.sample(A, [TACHO, 91]);        // a reply from before the stop, at 1100
+
+		assert.equal(w.model.valueOf(A, TACHO), undefined);
+		assert.deepEqual(w.take(), []);
+	});
+
+	it('keeps a static row fresh when its first reply comes after it left the plan (review 3)', () => {
+		const w = world();
+		w.plan(A, { [FIRMWARE]: 'once', [TACHO]: 100 });
+		w.plan(A, { [TACHO]: 100 });     // the active brick changed while the first frame was out
+
+		w.sample(A, [FIRMWARE, 'V1.10E']);
+		w.advance(60_000);
+
+		assert.deepEqual([w.model.valueOf(A, FIRMWARE)?.stale, w.model.valueOf(A, FIRMWARE)?.effectiveIntervalMs], [false, 'once']);
+	});
 });
