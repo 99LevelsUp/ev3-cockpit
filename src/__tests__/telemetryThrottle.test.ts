@@ -163,6 +163,15 @@ describe('telemetry service — throttling (step-6 U7)', () => {
 		}
 	});
 
+	it('refuses settings out of range even when no brick is read yet (review 1)', () => {
+		const w = world(null);
+		try {
+			assert.throws(() => w.service.configureThrottle({ ...THROTTLE, step: 1 }), /step/);
+		} finally {
+			w.service.dispose();
+		}
+	});
+
 	it('does not throttle without throttle settings', async () => {
 		const w = world(null);   // undefined would take the default
 		try {

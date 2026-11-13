@@ -90,10 +90,18 @@ export class TickThrottle {
 		return this.current !== before;
 	}
 
-	/** New settings apply at once; true when that changed the factor. Throws, changing nothing, for settings out of range. */
+	/**
+	 * New settings apply at once; true when that changed the factor. Evidence gathered under the old
+	 * ones — the window in progress, the calm count, the last window's numbers — is dropped, so a
+	 * decision and the display never mix two limits (review of U7, round 1). Throws, changing
+	 * nothing, for settings out of range.
+	 */
 	configure(settings: ThrottleSettings): boolean {
 		checkThrottleSettings(settings);
 		this.settings = settings;
+		this.trips = [];
+		this.calm = 0;
+		this.last = undefined;
 		const before = this.current;
 		this.current = settings.enabled ? Math.min(this.current, settings.maxSlowdown) : 1;
 		return this.current !== before;

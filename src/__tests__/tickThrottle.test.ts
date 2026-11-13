@@ -100,6 +100,18 @@ describe('Tick throttle (step-6 U7)', () => {
 		assert.throws(() => t.configure({ ...SETTINGS, step: 1 }), /step/);
 	});
 
+	it('starts afresh under new settings: no window, calm count or numbers gathered under the old ones (review 1)', () => {
+		const t = throttle({ windowSize: 20 });
+		feed(t, ...window(8, 20));                              // a calm window: p95 8 against 30
+		feed(t, ...window(8, 18), 40);                          // part of the next, a stall in it
+
+		t.configure({ ...SETTINGS, windowSize: 5, tailFactor: 6 });
+
+		assert.deepEqual(t.state(), { factor: 1, limitMs: 60, stalls: 0, windowSamples: 0 },
+			'no p95 or stalls measured against the old limit');
+		assert.deepEqual(feed(t, 40, 40, 40, 40, 40), [], 'five frames under the new rules decide, within 60 ms');
+	});
+
 	it('knows each link\'s usual round trip, and assumes the slowest for one it does not know', () => {
 		assert.equal(typicalRoundTripMs(Transport.USB), 10);
 		assert.equal(typicalRoundTripMs(Transport.TCP), 60);
