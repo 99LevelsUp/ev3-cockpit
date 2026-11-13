@@ -8,7 +8,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { readTelemetrySettings, telemetrySettingsFromPackage } from '../telemetry/telemetrySettings';
+import {
+	readThrottleSettings, readTelemetrySettings, telemetrySettingsFromPackage, throttleSettingsFromPackage,
+} from '../telemetry/telemetrySettings';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 
@@ -49,5 +51,26 @@ describe('telemetry settings (D9)', () => {
 	it('refuses to run on a package.json that declares no usable default', () => {
 		assert.throws(() => readTelemetrySettings(section({}, {}), () => undefined), /staleFactor/);
 		assert.throws(() => telemetrySettingsFromPackage({}), /staleFactor/);
+	});
+
+	it('declares the throttle\'s settings in package.json too, and nowhere else (U7)', () => {
+		assert.deepEqual(throttleSettingsFromPackage(pkg), {
+			enabled: true, windowSize: 20, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 3,
+		});
+	});
+
+	it('reads the throttle\'s settings, and falls back to the declared default for one out of range (U7)', () => {
+		const declared = {
+			'telemetry.throttle.enabled': true, 'telemetry.throttle.windowSize': 20, 'telemetry.throttle.tailFactor': 3,
+			'telemetry.throttle.step': 1.5, 'telemetry.throttle.maxSlowdown': 4, 'telemetry.throttle.calmWindows': 3,
+		};
+		const warnings: string[] = [];
+		const settings = readThrottleSettings(section({
+			'telemetry.throttle.enabled': 'yes', 'telemetry.throttle.windowSize': 7.5, 'telemetry.throttle.step': 1,
+			'telemetry.throttle.calmWindows': 5,
+		}, declared), (m) => warnings.push(m));
+
+		assert.deepEqual(settings, { enabled: true, windowSize: 20, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 5 });
+		assert.equal(warnings.length, 3, "'yes' for a switch, a window of 7.5 frames and a step that never slows are refused");
 	});
 });

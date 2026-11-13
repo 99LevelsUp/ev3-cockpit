@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.279",
+  "version": "0.2.280",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -85,6 +85,41 @@
           "default": 10000,
           "minimum": 0,
           "markdownDescription": "How long a **stale** telemetry value is still shown, marked as stale, before it is dropped, in milliseconds. A brick that disconnects drops its values at once."
+        },
+        "ev3-cockpit.telemetry.throttle.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Slow a brick's telemetry down while the brick answers slowly (a running Wi-Fi stack, its port screen open, a busy link), and speed it back up when it recovers. Each brick on its own."
+        },
+        "ev3-cockpit.telemetry.throttle.windowSize": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 5,
+          "markdownDescription": "How many telemetry frames make one window. At the end of each window the slowest 5 % of its round trips (p95) decides whether the telemetry slows down."
+        },
+        "ev3-cockpit.telemetry.throttle.tailFactor": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "markdownDescription": "A window's p95 round trip may be this many times the link's usual round trip (USB 10 ms, TCP 60 ms, Bluetooth 130 ms) before the telemetry slows down."
+        },
+        "ev3-cockpit.telemetry.throttle.step": {
+          "type": "number",
+          "default": 1.5,
+          "exclusiveMinimum": 1,
+          "markdownDescription": "How much one step slows the telemetry tick down, or speeds it back up."
+        },
+        "ev3-cockpit.telemetry.throttle.maxSlowdown": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "markdownDescription": "The most the telemetry tick is slowed, as a multiple of its planned tick."
+        },
+        "ev3-cockpit.telemetry.throttle.calmWindows": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "markdownDescription": "How many windows in a row must stay within the limit before the telemetry speeds up a step."
         }
       }
     }

@@ -1,11 +1,11 @@
 /**
- * The telemetry settings a user can change (owner decision D9, step-6 plan U6).
+ * The telemetry settings a user can change (owner decision D9, step-6 plan U6 and U7).
  *
  * The values live in one place, `package.json`'s `contributes.configuration`: VS Code shows them
  * in its settings editor and hands back the declared default for whatever the user left unset.
  * This module holds keys and the ranges that make a value usable, not values. Code that runs
  * outside VS Code — tests, the hardware harness — reads the same defaults from the manifest with
- * {@link telemetrySettingsFromPackage}.
+ * {@link telemetrySettingsFromPackage} and {@link throttleSettingsFromPackage}.
  */
 
 /** How the read model decides a value is stale and when it drops it. */
@@ -16,11 +16,20 @@ export interface TelemetrySettings {
 	readonly staleTimeoutMs: number;
 }
 
-/** Each setting's key under `ev3-cockpit`, and the range a value must be in to be used. */
-const SETTINGS: { readonly [K in keyof TelemetrySettings]: { readonly key: string; readonly min: number } } = {
-	staleFactor: { key: 'telemetry.staleFactor', min: 1 },
-	staleTimeoutMs: { key: 'telemetry.staleTimeoutMs', min: 0 },
-};
+/** How a brick's telemetry tick slows down when its round trips grow, and comes back (step-6 U7). */
+export interface ThrottleSettings {
+	readonly enabled: boolean;
+	/** Frames per window; the decision is taken at the end of each. A whole number, 5 or more. */
+	readonly windowSize: number;
+	/** The window's p95 may reach this many of the transport's measured round trips. 1 or more. */
+	readonly tailFactor: number;
+	/** How much one step slows the tick, or speeds it back. More than 1. */
+	readonly step: number;
+	/** The most the tick is slowed, as a multiple of the plan's. 1 or more. */
+	readonly maxSlowdown: number;
+	/** Windows in a row within the limit before the tick speeds up a step. A whole number, 1 or more. */
+	readonly calmWindows: number;
+}
 
 /** The part of a VS Code configuration section this needs: `getConfiguration('ev3-cockpit')`. */
 export interface SettingsSection {
@@ -28,51 +37,117 @@ export interface SettingsSection {
 	inspect<T>(key: string): { readonly defaultValue?: T } | undefined;
 }
 
-/** Whether a value can be used for a setting, or why not. */
+/** What makes a value usable for one setting. */
+interface Spec {
+	readonly key: string;
+	readonly kind: 'number' | 'integer' | 'boolean';
+	/** The least usable value; with `above`, values must be greater than it. */
+	readonly min?: number;
+	readonly above?: boolean;
+}
+
+type Specs<T> = { readonly [K in keyof T]: Spec };
+
+const STALE: Specs<TelemetrySettings> = {
+	staleFactor: { key: 'telemetry.staleFactor', kind: 'number', min: 1 },
+	staleTimeoutMs: { key: 'telemetry.staleTimeoutMs', kind: 'number', min: 0 },
+};
+
+const THROTTLE: Specs<ThrottleSettings> = {
+	enabled: { key: 'telemetry.throttle.enabled', kind: 'boolean' },
+	windowSize: { key: 'telemetry.throttle.windowSize', kind: 'integer', min: 5 },
+	tailFactor: { key: 'telemetry.throttle.tailFactor', kind: 'number', min: 1 },
+	step: { key: 'telemetry.throttle.step', kind: 'number', min: 1, above: true },
+	maxSlowdown: { key: 'telemetry.throttle.maxSlowdown', kind: 'number', min: 1 },
+	calmWindows: { key: 'telemetry.throttle.calmWindows', kind: 'integer', min: 1 },
+};
+
+/** Throws, naming the setting, for stale settings out of range. */
 export function checkTelemetrySettings(settings: TelemetrySettings): void {
-	for (const name of Object.keys(SETTINGS) as (keyof TelemetrySettings)[]) {
-		const value = settings[name];
-		if (!usable(value, SETTINGS[name].min)) {
-			throw new RangeError(`Telemetry setting ${name} must be a number of at least ${SETTINGS[name].min}, not ${String(value)}.`);
+	check(STALE, settings);
+}
+
+/** Throws, naming the setting, for throttle settings out of range. */
+export function checkThrottleSettings(settings: ThrottleSettings): void {
+	check(THROTTLE, settings);
+}
+
+/**
+ * Reads the stale settings, taking the declared default for a value that cannot be used and saying
+ * so. Throws when even the declared default is unusable: the manifest is then broken.
+ */
+export function readTelemetrySettings(section: SettingsSection, warn: (message: string) => void): TelemetrySettings {
+	return readAll(STALE, section, warn);
+}
+
+/** Reads the throttle settings, as {@link readTelemetrySettings} reads the stale ones. */
+export function readThrottleSettings(section: SettingsSection, warn: (message: string) => void): ThrottleSettings {
+	return readAll(THROTTLE, section, warn);
+}
+
+/** The declared stale defaults, read from a parsed `package.json`: for code that runs outside VS Code. */
+export function telemetrySettingsFromPackage(manifest: unknown): TelemetrySettings {
+	return fromPackage(STALE, manifest);
+}
+
+/** The declared throttle defaults, read from a parsed `package.json`. */
+export function throttleSettingsFromPackage(manifest: unknown): ThrottleSettings {
+	return fromPackage(THROTTLE, manifest);
+}
+
+// ── Internal ────────────────────────────────────────────────────────
+
+function check<T>(specs: Specs<T>, settings: T): void {
+	for (const name of Object.keys(specs) as (keyof T & string)[]) {
+		if (!usable(settings[name], specs[name])) {
+			throw new RangeError(`Telemetry setting ${name} must be ${describe(specs[name])}, not ${String(settings[name])}.`);
 		}
 	}
 }
 
-/**
- * Reads the settings, taking the declared default for a value that cannot be used and saying so.
- * Throws when even the declared default is unusable: the manifest is then broken.
- */
-export function readTelemetrySettings(section: SettingsSection, warn: (message: string) => void): TelemetrySettings {
-	const read = (name: keyof TelemetrySettings): number => {
-		const { key, min } = SETTINGS[name];
-		const value = section.get<unknown>(key);
-		if (usable(value, min)) { return value; }
-		const fallback = section.inspect<unknown>(key)?.defaultValue;
-		if (!usable(fallback, min)) {
-			throw new RangeError(`Telemetry setting ${name} (ev3-cockpit.${key}) has no usable default in package.json.`);
+function readAll<T>(specs: Specs<T>, section: SettingsSection, warn: (message: string) => void): T {
+	const result: Record<string, unknown> = {};
+	for (const name of Object.keys(specs) as (keyof T & string)[]) {
+		const spec = specs[name];
+		const value = section.get<unknown>(spec.key);
+		if (usable(value, spec)) { result[name] = value; continue; }
+		const fallback = section.inspect<unknown>(spec.key)?.defaultValue;
+		if (!usable(fallback, spec)) {
+			throw new RangeError(`Telemetry setting ${name} (ev3-cockpit.${spec.key}) has no usable default in package.json.`);
 		}
-		warn(`Setting ev3-cockpit.${key} = ${String(value)} is not a number of at least ${min}; using its default, ${fallback}.`);
-		return fallback;
-	};
-	return { staleFactor: read('staleFactor'), staleTimeoutMs: read('staleTimeoutMs') };
+		warn(`Setting ev3-cockpit.${spec.key} = ${String(value)} is not ${describe(spec)}; using its default, ${String(fallback)}.`);
+		result[name] = fallback;
+	}
+	return result as T;
 }
 
-/** The declared defaults, read from a parsed `package.json`: for code that runs outside VS Code. */
-export function telemetrySettingsFromPackage(manifest: unknown): TelemetrySettings {
+function fromPackage<T>(specs: Specs<T>, manifest: unknown): T {
 	const properties = (manifest as {
 		contributes?: { configuration?: { properties?: Record<string, { default?: unknown }> } };
 	}).contributes?.configuration?.properties ?? {};
-	const read = (name: keyof TelemetrySettings): number => {
-		const { key, min } = SETTINGS[name];
-		const value = properties[`ev3-cockpit.${key}`]?.default;
-		if (!usable(value, min)) {
-			throw new RangeError(`Telemetry setting ${name} (ev3-cockpit.${key}) has no usable default in package.json.`);
+	const result: Record<string, unknown> = {};
+	for (const name of Object.keys(specs) as (keyof T & string)[]) {
+		const spec = specs[name];
+		const value = properties[`ev3-cockpit.${spec.key}`]?.default;
+		if (!usable(value, spec)) {
+			throw new RangeError(`Telemetry setting ${name} (ev3-cockpit.${spec.key}) has no usable default in package.json.`);
 		}
-		return value;
-	};
-	return { staleFactor: read('staleFactor'), staleTimeoutMs: read('staleTimeoutMs') };
+		result[name] = value;
+	}
+	return result as T;
 }
 
-function usable(value: unknown, min: number): value is number {
-	return typeof value === 'number' && Number.isFinite(value) && value >= min;
+function usable(value: unknown, spec: Spec): boolean {
+	if (spec.kind === 'boolean') { return typeof value === 'boolean'; }
+	if (typeof value !== 'number' || !Number.isFinite(value)) { return false; }
+	if (spec.kind === 'integer' && !Number.isInteger(value)) { return false; }
+	if (spec.min === undefined) { return true; }
+	return spec.above ? value > spec.min : value >= spec.min;
+}
+
+function describe(spec: Spec): string {
+	if (spec.kind === 'boolean') { return 'true or false'; }
+	const what = spec.kind === 'integer' ? 'a whole number' : 'a number';
+	if (spec.min === undefined) { return what; }
+	return `${what} ${spec.above ? 'greater than' : 'of at least'} ${spec.min}`;
 }
