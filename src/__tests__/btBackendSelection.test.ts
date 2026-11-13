@@ -307,3 +307,29 @@ describe('BtTransportProvider — reconnecting to the same brick', () => {
 		provider.dispose();
 	});
 });
+
+describe('BtTransportProvider — dispose reaches a link still opening (review of 6955f22)', () => {
+	it('closes an adapter whose open is in flight, and keeps no session when it lands', async () => {
+		let land!: () => void;
+		const gate = new Promise<void>((resolve) => { land = resolve; });
+		const events: string[] = [];
+		const backends = new Map<BtBackend, BtAdapterFactory>([[
+			'bluez', () => ({
+				open: async () => { events.push('open-start'); await gate; events.push('open-landed'); },
+				close: () => { events.push('closed'); return Promise.resolve(); },
+				send: () => Promise.reject(new TransportError('not used')),
+				get isOpen() { return false; },
+			}),
+		]]);
+		const provider = new BtTransportProvider({ backends });
+		const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(events, ['open-start']);
+
+		provider.dispose();
+		assert.ok(events.includes('closed'), 'dispose closes the link still opening');
+		land();
+		const outcome = await connecting;
+		assert.ok(outcome instanceof Error, 'a connect that lands after dispose must fail');
+	});
+});
