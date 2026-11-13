@@ -171,6 +171,8 @@ Presence: `btPresence.start()` on `linux` too (today only `win32`). Pairing and 
 
 Dev host on HOSTC with the wiring from the Windows session: pick, pair, connect, list projects, presence, forget, re-pair, on all three bricks; then the BlueZ backend in `hardware-matrix.js`; then USB and Bluetooth to the same brick at once.
 
+Ready before it (13.11.2026): `hardware-matrix.js` builds Bluetooth on Linux from `createBluezBluetooth` (paired bricks from BlueZ's objects, RFCOMM through libc), Windows as before; `--discover-only` lists what each transport finds and connects nothing. On HOSTC it lists CCC, AAA and BBB over Bluetooth from BlueZ's objects alone, no radio used.
+
 ### U10. Documents — done 13.11.2026, before U9
 
 DESIGN §4.1.1 (the Linux backend, D1, the agent, presence), IMPLEMENTATION_PLAN 1.11.11 and §2 "What Linux needs" (Bluetooth items closed or carried), REQUIREMENTS §12 if anything changes, the user notes for 0.2.5 (D4).
