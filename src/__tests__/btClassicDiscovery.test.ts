@@ -317,6 +317,13 @@ describe('BtClassicDiscovery — pairing', () => {
 		assert.deepEqual(await discovery.pair('00:16:53:00:00:0C'), { ok: true });
 	});
 
+	it('unpairs through a binding that answers later, and turns its rejection into a refusal (step-7 plan, KTD6)', async () => {
+		const later = new BtClassicDiscovery({ unpairDevice: async () => ({ ok: true }) });
+		assert.deepEqual(await later.unpair('00:16:53:00:00:0C'), { ok: true });
+		const failing = new BtClassicDiscovery({ unpairDevice: async () => { throw new Error('bus closed'); } });
+		assert.deepEqual(await failing.unpair('00:16:53:00:00:0C'), { ok: false, reason: 'bus closed' });
+	});
+
 	it('unpairs through the binding', () => {
 		const asked: string[] = [];
 		const discovery = new BtClassicDiscovery({

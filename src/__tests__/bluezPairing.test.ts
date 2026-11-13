@@ -315,6 +315,34 @@ describe('BlueZ pairing (U5)', () => {
 		w.pair!.resolve();
 		await pairing;
 	});
+	it('checks the caller of every agent method, the display ones, Cancel and Release too (U8 review #8)', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const pairing = createBluezPairing({ bus: w, cache: w, bluezOwner: () => ':1.2' })(MAC);
+		await tick();
+		const agent = w.agent!;
+		await assert.rejects(async () => agent.DisplayPinCode.handler([DEV, '1234'], { sender: ':1.66' } as never), /Rejected/);
+		await assert.rejects(async () => agent.DisplayPasskey.handler([DEV, 1234, 0], { sender: ':1.66' } as never), /Rejected/);
+		await assert.rejects(async () => agent.DisplayPinCode.handler(['/org/bluez/hci0/dev_00_16_53_F0_0B_0B', '1234'], { sender: ':1.2' } as never), /Rejected/);
+		await assert.rejects(async () => agent.Cancel.handler([], { sender: ':1.66' } as never), /Rejected/);
+		await assert.rejects(async () => agent.Release.handler([], { sender: ':1.66' } as never), /Rejected/);
+		assert.deepEqual(await agent.DisplayPinCode.handler([DEV, '1234'], { sender: ':1.2' } as never), []);
+		assert.deepEqual(await agent.Cancel.handler([], { sender: ':1.2' } as never), []);
+		w.pair!.resolve();
+		await pairing;
+	});
+
+	it('refuses Cancel and Release from anybody while BlueZ\'s owner is unknown', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const pairing = createBluezPairing({ bus: w, cache: w, bluezOwner: () => undefined })(MAC);
+		await tick();
+		await assert.rejects(async () => w.agent!.Cancel.handler([], { sender: ':1.2' } as never), /Rejected/);
+		await assert.rejects(async () => w.agent!.Release.handler([], { sender: ':1.2' } as never), /Rejected/);
+		w.pair!.resolve();
+		await pairing;
+	});
+
 	it('owns the pairing deadline: the bus call waits longer, so a slow brick is a Timeout, not a bus error', async () => {
 		const w = new World();
 		w.known = [device(false)];
@@ -354,5 +382,14 @@ describe('BlueZ pairing (U5)', () => {
 		w.deferred!();
 		await tick();
 		assert.deepEqual(w.calls, ['SetDiscoveryFilter [["Transport","bredr"]]']);
+	});
+	it('answers nobody while BlueZ\'s owner is unknown, once it is tracked', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		const pairing = createBluezPairing({ bus: w, cache: w, bluezOwner: () => undefined })(MAC);
+		await tick();
+		await assert.rejects(async () => w.agent!.RequestPinCode.handler([DEV], { sender: ':1.2' } as never), /Rejected/);
+		w.pair!.resolve();
+		await pairing;
 	});
 });

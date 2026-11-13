@@ -104,25 +104,95 @@ KTD5. Tests: PIN answered, confirmation accepted only for the brick being paired
 
 KTD9, D2. Tests: a brick heard / not heard, misses counted by the existing monitor, inquiry filtered to bricks and to unpaired ones, discovery stopped even when it fails. Hardware: switch a brick off and on, watch "heard again" / "not heard".
 
+**U6 results (HOSTC, 13.11.2026, BlueZ 5.82-1.1+rpt2).**
+
+1. *The presence check on the bricks:* AAA, BBB and CCC on, visibility off on AAA and BBB: answered in 4.40, 3.01 and 3.52 s. No dialog on any brick through all the checks and the inquiries (owner). CCC switched off: the L2CAP connect fails with `SO_ERROR` 112 (EHOSTDOWN) after 5.13 s, twice; the check answers not heard after 5.14 s; `BtBluezAdapter.open()` throws `BrickUnreachableError` (errno 112) after 5.15 s. AAA answered as the control. U5 re-pair with the reviewed code: found after 2.3 s, PIN asked at 10.6 s, Paired and Bonded at 10.9 s, Trusted false; a dialog confirmed after BlueZ's 60 s ended `AuthenticationRejected` at 65.3 s with the reworded reason.
+2. *When BlueZ reports an RSSI (source, BlueZ 5.82):* `adapter.c` 7375-7378 sets a found device's RSSI with delta 0 under a filtered discovery and with `RSSI_THRESHOLD` (8 dBm, `device.c` 78) otherwise; with delta 0 a same value is still emitted (`device.c` 6538). A client's filter counts as filtered unless it is empty and its transport equals the adapter's scan type (`adapter.c` 2209-2219); ours, `Transport=bredr` on a dual-mode adapter, is filtered. Every RSSI is cleared when the last discovery stops (`adapter.c` 1692-1696).
+3. *RSSI reports counted per window (CCC visible; AAA and BBB not):*
+
+| Other client | Window | Reports for CCC |
+|---|---|---|
+| none | 10 s | 1 (-52) |
+| `bluetoothctl scan bredr` (filtered) | 10 s | 1 (-52; the same value as the last one) |
+| none | 30 s | 3 (-60, -52, -52) |
+| `bluetoothctl scan bredr` (filtered) | 30 s | 3 (-51, -51, -51) |
+| `bluetoothctl scan on` (unfiltered), 3 runs | 30 s | 0; 3 (-51, -51, -57); 3 (-52, -51, -51) |
+
+Same values are reported beside a filtered or an unfiltered client: the delta stays 0. One run in three beside an unfiltered client had no report at all for 30 s, changed values included, so not the threshold; the inquiry then answers "not heard", and the monitor drops an unpaired sighting only after two windows without it. So the inquiry hears a brick on evidence, a report during its window (`BluezObjectCache.rssiReports`), not on a cached RSSI, which outlives a brick switched off under another client's discovery.
+
 ### U7. Forget and residue
 
 KTD6, KTD7. `RemoveDevice` through the cache; the provider seam with Windows' default; residue as measured in U0. Tests: Windows default unchanged (the existing forget tests stay green untouched), Linux residue listed, a refusal reported. Hardware: forget a brick from the cockpit, then pair it again.
 
 ### U8. The factory and the wiring note — `src/transports/bluezBluetooth.ts`
 
-KTD8. Tests: what the factory returns on `linux`; nothing loaded on `win32`. The factory also wires BlueZ's unique bus name: `GetNameOwner(org.bluez)` at start and `NameOwnerChanged` after, passed as `bluezOwner` both to `BluezObjectCache` and to `createBluezPairing` (the agent then answers no caller but BlueZ; U5 review, 2ac9948, finding 8). Until then the system bus policy is the only guard, and the PIN is the public 1234. From the U4 review (8e000ed): when BlueZ's owner goes (a daemon restart), the cache clears, turns not ready and tells its listeners; when a new owner comes, it takes a fresh snapshot (finding 9). Once the owner is wired, an unknown owner rejects signals instead of passing them (finding 10). The caller of `offerBluetoothGroup` offers to check again after "added" (D4); `GroupFixResult` has no retry of its own (finding 11). The note for the Windows session: the `createRuntime.ts` branch, the log lines on Linux ("BT transport registered (BlueZ RFCOMM; BlueZ discovery)", presence started on Linux too).
+KTD8. Tests: what the factory returns on `linux`; nothing loaded on `win32`. The factory also wires BlueZ's unique bus name: `GetNameOwner(org.bluez)` at start and `NameOwnerChanged` after, passed as `bluezOwner` both to `BluezObjectCache` and to `createBluezPairing` (the agent then answers no caller but BlueZ; U5 review, 2ac9948, finding 8). Until then the system bus policy is the only guard, and the PIN is the public 1234. From the U4 review (8e000ed): when BlueZ's owner goes (a daemon restart), the cache clears, turns not ready and tells its listeners; when a new owner comes, it takes a fresh snapshot (finding 9). Once the owner is wired, an unknown owner rejects signals instead of passing them (finding 10). The caller of `offerBluetoothGroup` offers to check again after "added" (D4); `GroupFixResult` has no retry of its own (finding 11). From the U6 review (d17c5b1): the inquiry and the pairing search share the connection's discovery, and an inquiry whose StartDiscovery fails would stop a pairing's discovery in its `finally`; both must go through `BtConnectionQueue` (presence `holdOnly`, pairing through `enqueue`), with an end-to-end test that an inquiry and a pairing search never overlap (finding 8). The inquiry's `log` goes to the output channel. The note for the Windows session: the `createRuntime.ts` branch, the log lines on Linux ("BT transport registered (BlueZ RFCOMM; BlueZ discovery)", presence started on Linux too).
+
+**U8 wiring note for the Windows session (`src/runtime/createRuntime.ts`, not edited from HOSTC).** `createBluezBluetooth` (`src/transports/bluezBluetooth.ts`) is built: one system-bus connection, BlueZ's owner tracked (`GetNameOwner` + `NameOwnerChanged`, from the bus daemon only), the object cache and the pairing agent fail closed while the owner is unknown, a fresh snapshot when BlueZ comes back, `retry()` for D4's "check again". In `registerRealProviders`, on `process.platform === 'linux'` only (Windows untouched):
+
+```ts
+const bluez = createBluezBluetooth({
+	log,
+	// D4: offer the fix; on "added", offer "Check again", which calls bluez.retry().
+	onAccessDenied: () => { void offerBluetoothGroup({ confirm: /* modal showing prompt.command */ }).then(/* added → retry offer; manual → show command */); },
+});
+services.add({ dispose: () => bluez.dispose() });
+void bluez.start(); // never rejects; logs why when not ready
+const btDiscovery = new BtClassicDiscovery({
+	listDevices: bluez.listDevices, radioName: bluez.radioName,
+	pairDevice: bluez.pairDevice, unpairDevice: bluez.unpairDevice,
+	onCacheUnavailable: /* as on Windows, logOnChange */, connectionQueue: btQueue, onPairingEvent: /* as on Windows */,
+	// no portScan: the SPP backend is Windows-only
+});
+const btPresence = new BtPresenceMonitor({
+	queue: btQueue, check: bluez.presenceCheck, inquire: bluez.inquire,
+	pairedWithoutSession: () => btProvider.pairedWithoutSession(),
+	onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable: ${reason}`), onChange: refreshDiscovery,
+});
+bluez.onChange(refreshDiscovery); // BlueZ's devices changed, or BlueZ went or came back
+const btProvider = new BtTransportProvider({
+	presence: btPresence, discoverDevices: btDiscovery.discover, unpairDevice: btDiscovery.unpair,
+	forgetResidue: bluez.forgetResidue, backends: bluez.backends, connectionQueue: btQueue,
+});
+log.info('BT transport registered (BlueZ RFCOMM; BlueZ discovery)');
+```
+
+Presence: `btPresence.start()` on `linux` too (today only `win32`). Pairing and the inquiry both go through `btQueue` (pairing via `BtClassicDiscovery`'s `enqueue`, presence `holdOnly`), so their discoveries never overlap (tested end to end in `bluezBluetooth.test.ts`). The inquiry's `log` warnings and the factory's go to the output channel.
+
+**U8 review (3309b45), fixed in the factory:** one bus at a time — a second `start()` while one is held opens nothing (#1); an unexpected close of the system-bus connection reconnects on its own, 1 s doubling to 30 s, and never after `dispose()` (#2); a direct handover from one BlueZ owner to the next drops the old daemon's objects at once (#3); `GetNameOwner` failing is "BlueZ not running" only for `NameHasNoOwner`, `AccessDenied` goes to D4, anything else is "Bluetooth unavailable" (#4); a pairing search that gives up before its `StartDiscovery` settles leaves the late `StopDiscovery` with a `DiscoveryGate` the next search or inquiry waits for, so a queue slot freed early cannot let a discovery start that the late stop would end (#5); a pairing and an inquiry pin the connection they started on, so their cleanup never reaches a newer connection after `retry()` (#6); every agent method checks its caller, `Cancel` and `Release` included (#8); BlueZ's match rules go to each connection once, however often BlueZ restarts (#9). The factory's module loads no native module when imported (half of #7).
+
+**Left for the wiring (U8 review):**
+
+- **#7, the other half:** `createRuntime.ts` requires `bluezBluetooth` lazily inside the `linux` branch, and a test pins that a `win32` wiring leaves no `bluez*` or `dbus/` module in `require.cache`.
+- **#10:** on Linux `inquire` is `bluez.inquire` itself, with no helper timeout around it; the monitor has none of its own. A window is 15 s, plus the wait for a late `StopDiscovery` and the bus calls (each up to 25 s). If the wiring adds a timeout around it, it must exceed that, not reuse `PRESENCE_INQUIRY_SECONDS + 20` (30 s, the Windows helper's).
+- **#11:** the D4 caller is placeholder code in the note above: on `onAccessDenied`, call `offerBluetoothGroup({ confirm })` with a modal showing `prompt.command`; on `added`, say "log out and in (or `newgrp`)" and offer "Check again", which calls `bluez.retry()`; on `manual`, show the command.
 
 ### U9. Hardware session (owner at HOSTC)
 
 Dev host on HOSTC with the wiring from the Windows session: pick, pair, connect, list projects, presence, forget, re-pair, on all three bricks; then the BlueZ backend in `hardware-matrix.js`; then USB and Bluetooth to the same brick at once.
 
-### U10. Documents
+Ready before it (13.11.2026): `hardware-matrix.js` builds Bluetooth on Linux from `createBluezBluetooth` (paired bricks from BlueZ's objects, RFCOMM through libc), Windows as before; `--discover-only` lists what each transport finds and connects nothing. On HOSTC it lists CCC, AAA and BBB over Bluetooth from BlueZ's objects alone, no radio used.
+
+**U9 results (HOSTC, 13.11.2026, BlueZ 5.82; bricks released by the Windows session).** Run through the factory wired as the U8 note says (`createBluezBluetooth` → `BtClassicDiscovery`, `BtTransportProvider`, `BtPresenceMonitor`), from a script: the `createRuntime.ts` branch is not written yet, so the dev host in VS Code is still to do.
+
+1. *`hardware-matrix.js` on the BlueZ backend,* all three bricks: run 1 with HOSTC's Wi-Fi down, **43/43 on Bluetooth**, BBB included (it never connected over Bluetooth from HOSTA that day, WSA 10060: HOSTA's radio, not BBB). With HOSTC's Wi-Fi up: run 2 failed CCC's connect and BBB's reconnect with `EHOSTDOWN` (112), and the contract checks that follow from them; run 3 **58/58** (Bluetooth and TCP; only USB discovery, no cable). The presence check with Wi-Fi up: 14 of 15 answered (0.5–4.9 s), BBB missed once (5.1 s, a page timeout; the monitor needs two misses). On the Pi 5 Wi-Fi and Bluetooth share one chip; coexistence is the likely cause, not measured.
+2. *A BlueZ restart* (`systemctl restart bluetooth`, by the owner): the factory saw the owner go ("BlueZ stopped"), cleared, saw the new owner in the same 0.1 s, and read BlueZ again; its first snapshot had no adapter yet, and `InterfacesAdded` brought the adapter and the three bricks within the next 0.1 s. Presence went on with all three heard.
+3. *Presence, a brick switched off and on:* CCC switched off → "not heard" 10.7 s after the last report that heard it; switched on again by the owner → heard 43.8 s after it turned "not heard" (the time off and the brick's boot included). Check rounds every 10 s. AAA and BBB heard throughout. No dialog on any brick.
+4. *Forget and re-pair through the cockpit:* `BtTransportProvider.forget` removed CCC from BlueZ at once and reported the name cache as the residue; then `BtClassicDiscovery.pair`: queued and slot at once, found 4.4 s, PIN asked 20.4 s (the owner at the brick), Paired 20.8 s; a connect right after took 0.9 s.
+
+Left: the dev host in VS Code once the `createRuntime.ts` branch exists (pick, pair, connect, list projects, forget, from the panel and the commands), and USB with Bluetooth to one brick at once (the bricks' cables were on HOSTA).
+
+### U10. Documents — done 13.11.2026, before U9
 
 DESIGN §4.1.1 (the Linux backend, D1, the agent, presence), IMPLEMENTATION_PLAN 1.11.11 and §2 "What Linux needs" (Bluetooth items closed or carried), REQUIREMENTS §12 if anything changes, the user notes for 0.2.5 (D4).
+
+Written: DESIGN §4.1.1 "Bluetooth on Linux" (and the Linux USB paragraph, which 4.6.16 left unverified), IMPLEMENTATION_PLAN 1.11.11, 4.6.16 and §2 "What Linux needs" with "What a user on Linux does" for the 0.2.5 install notes, `docs/ARCHITECTURE.md`. REQUIREMENTS §12 unchanged: nothing in it was Windows-only. U9's results go into the plan and DESIGN's "Unverified" line when it runs.
 
 ### U11. TCP on Linux (last)
 
 The owner puts AAA (the brick with the Wi-Fi dongle) and HOSTC on one network. `hardware-matrix.js` TCP section; the dev host connects over TCP and lists files; USB, Bluetooth and TCP to AAA at once. Results into `docs/plans/linux-session-results/`.
+
+**U11 results (HOSTC, 13.11.2026).** The owner put HOSTC's Wi-Fi on AAA's network (HOSTC had been on a USB network link only). The beacon is heard and `hardware-matrix.js` passes every TCP check on AAA in both runs: transport (discovery, connect), protocol, filesystem, telemetry, session, contract. Nothing Linux-specific was needed beyond the shared beacon port (68a8838). Left: the dev host connecting over TCP from VS Code, and USB, Bluetooth and TCP to AAA at once (AAA's cable is on HOSTA).
 
 ## Risks
 

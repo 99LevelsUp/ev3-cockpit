@@ -13,6 +13,7 @@
  *
  *   node scripts/hardware-matrix.js            every brick, every transport
  *   node scripts/hardware-matrix.js --quick    skip the slow filesystem and telemetry checks
+ *   node scripts/hardware-matrix.js --discover-only    list what each transport finds, connect nothing
  *
  * Exits non-zero if any check fails, so it can gate a release.
  */
@@ -32,7 +33,7 @@ Module._resolveFilename = function (request, ...rest) {
 const out = (dir) => path.join(REPO, 'out', dir);
 const {
 	ProviderRegistry, UsbTransportProvider, TcpTransportProvider, BtTransportProvider,
-	BtSppBackend, BtWinsockAdapter, BtConnectionQueue,
+	BtSppBackend, BtWinsockAdapter, BtConnectionQueue, BtClassicDiscovery,
 } = require(out('transports'));
 const {
 	encodeEv3Packet, decodeEv3Packet, EV3_COMMAND, EV3_REPLY,
@@ -46,6 +47,8 @@ const { TelemetryScheduler } = require(out('telemetry/telemetryScheduler'));
 const { allEv3Rows, batteryLevelRow } = require(out('telemetry/ev3Rows'));
 
 const QUICK = process.argv.includes('--quick');
+/** Discovery only: lists what each transport finds and connects to nothing. */
+const DISCOVER_ONLY = process.argv.includes('--discover-only');
 
 /**
  * Round-trip times above which a transport is broken rather than slow, in ms.
@@ -403,8 +406,29 @@ async function main() {
 	// BtConnectionQueue the product shares across every BT session. Without the queue,
 	// every check here hammers the one RFCOMM channel back-to-back with no cooldown at
 	// all -- a harness bug that reads exactly like the channel refusing every reconnect.
-	const btBackend = new BtSppBackend();
 	const btQueue = new BtConnectionQueue();
+	const { bt, btDispose } = process.platform === 'linux'
+		? await bluezProvider(btQueue)
+		: windowsProvider(btQueue);
+	registry.register(usb); registry.register(tcp); registry.register(bt);
+
+	try {
+		const { usbScan, tcpScan, btScan } = await discoverAll(usb, tcp, bt);
+		if (DISCOVER_ONLY) { return summarise(); }
+
+		for (const item of usbScan.items) { await runBrick('USB', usb, item, 5000); }
+		for (const item of tcpScan.items) { await runBrick('TCP', tcp, item, 8000); }
+		for (const item of btScan.items) { await runBrick('BT ', bt, item, 12000); }
+	} finally {
+		usb.dispose(); tcp.dispose(); bt.dispose(); btDispose(); btQueue.dispose(); registry.dispose();
+	}
+
+	return summarise();
+}
+
+/** Windows: Winsock preferred, SPP fallback, as `createRuntime` builds it. */
+function windowsProvider(btQueue) {
+	const btBackend = new BtSppBackend();
 	const bt = new BtTransportProvider({
 		discoverDevices: btBackend.discover,
 		backends: new Map([
@@ -413,19 +437,32 @@ async function main() {
 		]),
 		connectionQueue: btQueue,
 	});
-	registry.register(usb); registry.register(tcp); registry.register(bt);
+	return { bt, btDispose: () => undefined };
+}
 
-	try {
-		const { usbScan, tcpScan, btScan } = await discoverAll(usb, tcp, bt);
-
-		for (const item of usbScan.items) { await runBrick('USB', usb, item, 5000); }
-		for (const item of tcpScan.items) { await runBrick('TCP', tcp, item, 8000); }
-		for (const item of btScan.items) { await runBrick('BT ', bt, item, 12000); }
-	} finally {
-		usb.dispose(); tcp.dispose(); bt.dispose(); btQueue.dispose(); registry.dispose();
-	}
-
-	return summarise();
+/**
+ * Linux: the BlueZ factory (step-7 plan, U8 wiring note), paired bricks from BlueZ's objects,
+ * RFCOMM through libc. Waits for BlueZ to be read; a bus that refuses says so and lists nothing.
+ */
+async function bluezProvider(btQueue) {
+	const { createBluezBluetooth } = require(out('transports/bluezBluetooth'));
+	const bluez = createBluezBluetooth({
+		log: { info: () => {}, warn: (m) => process.stdout.write(`  [bluez] ${m}\n`) },
+	});
+	await bluez.start();
+	const discovery = new BtClassicDiscovery({
+		listDevices: bluez.listDevices, radioName: bluez.radioName,
+		pairDevice: bluez.pairDevice, unpairDevice: bluez.unpairDevice,
+		connectionQueue: btQueue,
+	});
+	const bt = new BtTransportProvider({
+		discoverDevices: discovery.discover,
+		unpairDevice: discovery.unpair,
+		forgetResidue: bluez.forgetResidue,
+		backends: bluez.backends,
+		connectionQueue: btQueue,
+	});
+	return { bt, btDispose: () => bluez.dispose() };
 }
 
 main().then(

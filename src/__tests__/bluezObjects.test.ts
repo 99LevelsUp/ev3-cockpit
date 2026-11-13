@@ -316,3 +316,82 @@ describe('BlueZ discovery through BtClassicDiscovery — only bricks reach the l
 		assert.equal(bluezListDevices(cache)()[0].name, '');
 	});
 });
+
+describe('BluezObjectCache — RSSI reports, the evidence a discovery heard a device (U6)', () => {
+	it('counts every RSSI-bearing signal, a same value too, and nothing else', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		assert.equal(cache.rssiReports(AAA), 0, 'the snapshot is not a report');
+		const rssi = (v: number): void => bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['RSSI', new Variant('n', v)]]), []]);
+		rssi(-50);
+		rssi(-50);
+		assert.equal(cache.rssiReports(AAA), 2);
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Connected', new Variant('b', true)]]), []]);
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map(), ['RSSI']]);
+		assert.equal(cache.rssiReports(AAA), 2, 'neither another property nor an invalidated RSSI is a report');
+		const withRssi = device('BBB', '00:16:53:F0:0B:0B', false);
+		withRssi.set('RSSI', new Variant('n', -60));
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesAdded', [BBB, new Map([['org.bluez.Device1', withRssi]])]);
+		assert.equal(cache.rssiReports(BBB), 1);
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesAdded', ['/org/bluez/hci0/dev_X', new Map([['org.bluez.Device1', device('X', '00:16:53:F0:0E:0E', false)]])]);
+		assert.equal(cache.rssiReports('/org/bluez/hci0/dev_X'), 0, 'added without an RSSI is not a report');
+	});
+
+	it('counts a report that came with the snapshot, replayed over it', async () => {
+		const bus = new FakeBus();
+		bus.afterReply = [[AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['RSSI', new Variant('n', -50)]]), []]]];
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		assert.equal(cache.rssiReports(AAA), 1);
+	});
+});
+
+describe('BluezObjectCache — the RSSI reports go with everything else (U6 round 3)', () => {
+	const report = (bus: FakeBus, path: string): void => bus.signal(path, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['RSSI', new Variant('n', -50)]]), []]);
+
+	it('forgets the counts on dispose', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		assert.equal(cache.rssiReports(AAA), 1);
+		cache.dispose();
+		assert.equal(cache.rssiReports(AAA), 0);
+	});
+
+	it('forgets the counts when the bus closes', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		bus.close();
+		assert.equal(cache.rssiReports(AAA), 0);
+	});
+
+	it('keeps counting across a device removed and added again', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		report(bus, AAA);
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesRemoved', [AAA, ['org.bluez.Device1']]);
+		bus.signal('/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesAdded', [AAA, new Map([['org.bluez.Device1', device('AAA', '00:16:53:F0:0A:0A', true)]])]);
+		report(bus, AAA);
+		assert.equal(cache.rssiReports(AAA), 2);
+	});
+});
+
+describe('BluezObjectCache — fail closed once BlueZ\'s owner is tracked (U4 review #10, U8)', () => {
+	it('drops every signal while the owner is unknown', async () => {
+		let owner: string | undefined = ':1.2';
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus, { bluezOwner: () => owner });
+		await cache.start();
+		owner = undefined;
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Connected', new Variant('b', true)]]), []]);
+		assert.equal(cache.devices()[0].connected, false);
+		owner = ':1.2';
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Connected', new Variant('b', true)]]), []]);
+		assert.equal(cache.devices()[0].connected, true);
+	});
+});

@@ -190,6 +190,8 @@ Concrete adapters:
   BT backend on Windows.
 - `BtSppAdapter` — Bluetooth RFCOMM over the paired brick's outgoing serial port via
   `serialport`. Fallback, and the only path on hosts where the FFI cannot load.
+- `BtBluezAdapter` — Bluetooth RFCOMM on Linux: an `AF_BLUETOOTH` socket to channel 1 through
+  libc via `koffi`. The only BT backend on Linux ("Bluetooth on Linux" below).
 
 #### USB has two backends, and they are not equivalent
 
@@ -237,8 +239,16 @@ Discovery stays on HID enumeration, which needs no handle. libusb name probing s
 device whose interface a session holds claimed — identified by bus address, since reading a
 serial would mean opening the device discovery is trying to avoid touching.
 
-Unverified: the Linux path (padding should be harmless there, but it has not been run), and
-recovery from unplugging mid-transfer.
+**On Linux the kernel's `usbhid` holds the brick's interface**, so a plain claim fails with
+`LIBUSB_ERROR_BUSY` and every connect would land on HID. Measured on HOSTC (13.11.2026,
+`docs/plans/linux-session-results/2026-11-13-hostc-usb.md`): the cockpit detaches `usbhid` as the
+normal user (libusb's auto-detach, or a detach and reattach by hand), then clears the halt on both
+endpoints — without it the first exchange after every detach timed out. The read needs no slack
+byte there (`READ_OVERRUN_SLACK` is Windows-only). A brick that a crashed extension host left
+without a driver is still found, through libusb's own enumeration. A user may open the brick only
+with the udev rule the extension ships (`native/linux/70-lego-ev3.rules`); without it the connect
+says so. Recovery from a cable pulled mid-transfer holds on both platforms: the loss is a
+`TransportError` at once, the next command fails in milliseconds, nothing hangs.
 
 The HID ceiling also cost a real defect. The USB adapter discarded what `write()` returned,
 and the brick advances its file pointer by the length the host *declares* rather than by
@@ -323,6 +333,82 @@ Three things in this section were **assumptions, not measurements**. Measured on
   once with `LIBUSB_ERROR_IO`. The rule is removed. Built in step 2: several links open, traffic
   over one (§4.3, "Brick layer"); 30.10.2026 a 64 KB transfer with the telemetry loop running
   and both links up froze nothing either (step-2 plan, U10).
+
+#### Bluetooth on Linux: BlueZ, through our own D-Bus client
+
+Linux has the same seams as Windows and different things behind them (step-7 plan, KTD1):
+`BtTransportProvider`, `BtClassicDiscovery`, `BtPresenceMonitor` and `BtConnectionQueue` are
+shared, and one factory, `createBluezBluetooth` (`bluezBluetooth.ts`), fills every seam the
+Windows backend fills — the RFCOMM backend, the paired-device list, this computer's radio name,
+pairing, forget and its residue, the presence check and the inquiry. `createRuntime` builds it on
+`linux` only; nothing of it loads on Windows. What was measured first is in
+`docs/plans/linux-session-results/2026-11-11-hostc.md` and in the step-7 plan's U0 and U6.
+
+**Data: a libc RFCOMM socket, no helper process.** `BtBluezAdapter` opens `AF_BLUETOOTH` /
+`BTPROTO_RFCOMM` to channel 1, the brick's only service, through `koffi` (`linuxBluetoothSocket.ts`).
+As on Windows the connect is non-blocking and polled on the main thread (`poll`, then `SO_ERROR`),
+so a deadline really ends it. `EHOSTDOWN`, `EHOSTUNREACH`, `ETIMEDOUT` and `ECONNREFUSED` are an
+unreachable brick; `EBUSY` is one closed a moment ago — a reconnect needs about 2.5 s on Linux,
+which the provider's 5 s per-brick gap already covers. A kernel without Bluetooth sockets makes
+the backend unavailable, not the brick unreachable.
+
+**BlueZ is reached through a D-Bus client of our own (owner decision D1).** About 900
+lines in `src/transports/dbus/`: the `EXTERNAL` handshake on the system bus socket, method calls,
+signals and exported objects — only what BlueZ needs. A library would have added a runtime
+dependency and its transitive ones to a public extension; `libdbus` through FFI more native
+surface; `bluetoothctl` a human interface that changes between versions. On Debian 13 / Raspberry
+Pi OS the bus policy lets a desktop user talk to BlueZ with no group and no `sudo`.
+
+**One object cache answers the synchronous seams** (`bluezObjects.ts`): `GetManagedObjects` once,
+then `InterfacesAdded`, `InterfacesRemoved` and `PropertiesChanged`. Paired bricks keep the name
+BlueZ learned, even while the brick is off — better than Windows, which forgets it. **Who speaks
+for BlueZ is checked.** The factory tracks `org.bluez`'s unique name with `GetNameOwner` and
+`NameOwnerChanged` (from the bus daemon only); the cache and the pairing agent take signals and
+calls from that name only, and from nobody while it is unknown. When BlueZ restarts, the cache is
+dropped, its listeners told, and a fresh snapshot read once BlueZ is back.
+
+**Pairing goes through an agent we own** (`bluezPairing.ts`). `RegisterAgent` as
+`KeyboardDisplay`, never `RequestDefaultAgent`: BlueZ asks the agent of the connection that called
+`Pair`, so a desktop's own agent stays the default (measured with the Raspberry Pi OS panel
+running: BlueZ asked ours). The agent answers PIN `1234` and confirms for the brick being
+paired only, and only to BlueZ. A brick BlueZ does not know yet is found first by a BR/EDR
+discovery — a mixed LE and BR/EDR scan missed a visible brick for 40 s. Pairings run one at a
+time. A dialog left unconfirmed on the brick ends after BlueZ's 60 s as `AuthenticationRejected`,
+reported as such; the dialog stays on the brick. `Trusted` is not set (D3): the cockpit only
+connects out.
+
+**Presence is a short L2CAP connect to PSM 1, SDP, closed at once** (D2, `bluezPresence.ts`).
+Every Classic device listens there, and the connect asks the brick nothing: no dialog on any brick,
+no root, no D-Bus. A brick that is on answered in 2.9–4.4 s; one that is off failed with
+`EHOSTDOWN` after 5.1 s. Only what the brick did counts: a page that went unanswered (`EHOSTDOWN`,
+`EHOSTUNREACH`, `ETIMEDOUT`) is a miss, a refusal (`ECONNREFUSED`, `ECONNRESET`) is the brick
+answering, and anything else — the adapter down included — fails the round without counting
+against the brick.
+
+**The inquiry hears a brick on evidence, not on a remembered value.** It runs a BR/EDR discovery
+for a 15 s window and counts a brick heard only if BlueZ reported its RSSI *during* the window.
+Under a filtered discovery, as ours is, BlueZ 5.82 reports every result, a repeated value too
+(`adapter.c`; the 8 dBm threshold is for unfiltered ones); a brick reported every 8–14 s. An RSSI
+BlueZ still holds is not evidence: under another client's discovery it outlived a brick switched
+off. The inquiry and a pairing's search share the radio's discovery, so both go through
+`BtConnectionQueue` (pairing enqueued, presence holding it) and never overlap.
+
+**Forget is `Adapter1.RemoveDevice` through the adapter that holds the brick** (`bluezForget.ts`).
+It drops the link key; BlueZ keeps the brick's name cache under
+`/var/lib/bluetooth/<adapter>/cache/<brick>`, root-owned, which is reported as the residue and not
+touched, as on Windows. A brick BlueZ does not hold counts as forgotten.
+
+**Where a distribution limits BlueZ to the `bluetooth` group, the cockpit offers the fix** (D4,
+`bluezAccess.ts`). An `AccessDenied` from the bus is told apart from every other failure; with the
+user's confirmation the cockpit runs `pkexec usermod -aG bluetooth <user>` — a fixed argv, no
+shell, the user from the OS, the password asked by polkit and never seen by the cockpit. Without
+`pkexec` it shows the command to copy. The group applies to a new login; "check again" opens a new
+bus connection.
+
+Measured through the factory on HOSTC (step-7 plan, U9): the hardware matrix on all three bricks, a BlueZ restart, a brick switched off and on, forget and re-pair. With HOSTC's own Wi-Fi up, one matrix run in two had page timeouts (`EHOSTDOWN`) on two bricks; the Pi 5's Wi-Fi and Bluetooth share one chip. Unverified: the cockpit's wiring end to end in VS Code; other distributions' bus
+policy; desktop agents other than Raspberry Pi OS's (blueman, GNOME); other adapters' behaviour
+on the L2CAP page; a second adapter (out of scope: the first one is used and forget refuses a
+brick held by another).
 
 ### 4.2 Presence Aggregator
 
