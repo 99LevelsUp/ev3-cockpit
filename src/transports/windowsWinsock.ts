@@ -101,6 +101,100 @@ export interface Winsock2Api {
 	lastError(): number;
 }
 
+// ── Raw calls and their binding ─────────────────────────────────────
+
+/** `fd_set` as Winsock lays it out: a count, then up to 64 sockets. */
+export interface FdSet {
+	fd_count: number;
+	fd_array: number[];
+}
+
+/** `timeval`. */
+export interface Timeval {
+	tv_sec: number;
+	tv_usec: number;
+}
+
+/**
+ * The `ws2_32.dll` calls as koffi exposes them, one to one. {@link bindWinsock2} turns them into
+ * {@link Winsock2Api}; the split lets the rules of that turn — what a failed call means, what
+ * length native code may be handed — be tested without a radio.
+ */
+export interface RawWinsock2 {
+	socket(family: number, type: number, protocol: number): SocketHandle;
+	connect(socket: SocketHandle, address: BluetoothAddress, length: number): number;
+	send(socket: SocketHandle, data: Uint8Array, length: number, flags: number): number;
+	recv(socket: SocketHandle, buffer: Uint8Array, length: number, flags: number): number;
+	closesocket(socket: SocketHandle): number;
+	select(nfds: number, read: FdSet | null, write: FdSet | null, except: FdSet | null, timeout: Timeval): number;
+	/** `argp` is in-out: one cell. */
+	ioctlsocket(socket: SocketHandle, cmd: number, argp: number[]): number;
+	/** `value` and `length` are out and in-out: one cell each. */
+	getsockopt(socket: SocketHandle, level: number, name: number, value: number[], length: number[]): number;
+	WSAGetLastError(): number;
+}
+
+// `FIONBIO` is 0x8004667E; as the signed 32-bit `long` the call takes, that is negative.
+const FIONBIO = 0x8004667E | 0;
+const SOL_SOCKET = 0xffff;
+const SO_ERROR = 0x1007;
+/** `fd_set` holds 64 sockets; one is used, the rest are zero. */
+const FD_SETSIZE = 64;
+
+/**
+ * The Winsock calls this transport makes, with the rules the raw calls leave to their caller
+ * (review of the Linux socket binding, step 7 U1, where each of these was a defect):
+ *
+ * - a `select` that itself fails means the connect failed, not that it is still under way — read
+ *   as "pending", the open would poll a dead socket to its deadline and call it a timeout;
+ * - a `getsockopt` that fails returns why it failed, never an error value it did not write;
+ * - a length larger than the buffer (or not a whole, non-negative number) is refused before
+ *   native code reads or writes past the end. A view's own length counts, not its backing buffer's.
+ */
+export function bindWinsock2(raw: RawWinsock2): Winsock2Api {
+	const oneSocket = (socket: SocketHandle): FdSet =>
+		({ fd_count: 1, fd_array: [Number(socket), ...new Array<number>(FD_SETSIZE - 1).fill(0)] });
+	// Zero timeout: poll, never block. The extension host runs on this thread.
+	const noWait: Timeval = { tv_sec: 0, tv_usec: 0 };
+	const checkLength = (what: string, buffer: Uint8Array, length: number): void => {
+		if (!(Number.isInteger(length) && length >= 0 && length <= buffer.length)) {
+			throw new RangeError(`${what} of ${length} bytes on a buffer of ${buffer.length}.`);
+		}
+	};
+
+	return {
+		socket: (family, type, protocol) => raw.socket(family, type, protocol),
+		setNonBlocking: (socket, on) => raw.ioctlsocket(socket, FIONBIO, [on ? 1 : 0]),
+		connect: (socket, address) => raw.connect(socket, address, SOCKADDR_BTH_SIZE),
+		connectState: (socket) => {
+			const writable = raw.select(0, null, oneSocket(socket), null, noWait);
+			if (writable === SOCKET_ERROR) { return 'failed'; }
+			if (writable > 0) { return 'connected'; }
+			const failed = raw.select(0, null, null, oneSocket(socket), noWait);
+			if (failed === SOCKET_ERROR || failed > 0) { return 'failed'; }
+			return 'pending';
+		},
+		socketError: (socket) => {
+			const value = [0];
+			if (raw.getsockopt(socket, SOL_SOCKET, SO_ERROR, value, [4]) === SOCKET_ERROR) {
+				return raw.WSAGetLastError();
+			}
+			return value[0];
+		},
+		send: (socket, data, length) => {
+			checkLength('A send', data, length);
+			return raw.send(socket, data, length, 0);
+		},
+		recv: (socket, buffer, length) => {
+			checkLength('A receive', buffer, length);
+			return raw.recv(socket, buffer, length, 0);
+		},
+		closesocket: (socket) => raw.closesocket(socket),
+		hasPendingData: (socket) => raw.select(0, oneSocket(socket), null, null, noWait),
+		lastError: () => raw.WSAGetLastError(),
+	};
+}
+
 // ── Loader ──────────────────────────────────────────────────────────
 
 let cached: Winsock2Api | undefined;
@@ -198,35 +292,17 @@ export function loadWinsock2(): Winsock2Api {
 			'int __stdcall getsockopt(uintptr, int, int, _Out_ int32*, _Inout_ int32*)'
 		) as KoffiFunc;
 
-		const emptyFdArray = new Array<number>(63).fill(0);
-		const oneSocket = (socket: SocketHandle) => ({ fd_count: 1, fd_array: [Number(socket), ...emptyFdArray] });
-		// Zero timeout: poll, never block. The extension host runs on this thread.
-		const noWait = { tv_sec: 0, tv_usec: 0 };
-		// `FIONBIO` is 0x8004667E; as the signed 32-bit `long` the call takes, that is negative.
-		const FIONBIO = 0x8004667E | 0;
-		const SOL_SOCKET = 0xffff;
-		const SO_ERROR = 0x1007;
-
-		cached = {
+		cached = bindWinsock2({
 			socket: (family, type, protocol) => rawSocket(family, type, protocol),
-			setNonBlocking: (socket, on) => rawIoctl(socket, FIONBIO, [on ? 1 : 0]),
-			connect: (socket, address) => rawConnect(socket, address, SOCKADDR_BTH_SIZE),
-			connectState: (socket) => {
-				if (rawSelect(0, null, oneSocket(socket), null, noWait) > 0) { return 'connected'; }
-				if (rawSelect(0, null, null, oneSocket(socket), noWait) > 0) { return 'failed'; }
-				return 'pending';
-			},
-			socketError: (socket) => {
-				const value = [0];
-				rawGetSockOpt(socket, SOL_SOCKET, SO_ERROR, value, [4]);
-				return value[0];
-			},
-			send: (socket, data, length) => rawSend(socket, data, length, 0),
-			recv: (socket, buffer, length) => rawRecv(socket, buffer, length, 0),
+			connect: (socket, address, length) => rawConnect(socket, address, length),
+			send: (socket, data, length, flags) => rawSend(socket, data, length, flags),
+			recv: (socket, buffer, length, flags) => rawRecv(socket, buffer, length, flags),
 			closesocket: (socket) => rawClose(socket),
-			hasPendingData: (socket) => rawSelect(0, oneSocket(socket), null, null, noWait),
-			lastError: () => rawLastError(),
-		};
+			select: (nfds, read, write, except, timeout) => rawSelect(nfds, read, write, except, timeout),
+			ioctlsocket: (socket, cmd, argp) => rawIoctl(socket, cmd, argp),
+			getsockopt: (socket, level, name, value, length) => rawGetSockOpt(socket, level, name, value, length),
+			WSAGetLastError: () => rawLastError(),
+		});
 		return cached;
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
@@ -242,17 +318,23 @@ export function resetWinsock2Cache(): void {
 
 // ── Address helpers ─────────────────────────────────────────────────
 
+/** Six hex bytes, separated all by colons, all by dashes, or not at all. */
+const MAC = /^[0-9a-f]{2}([:-]?)[0-9a-f]{2}(?:\1[0-9a-f]{2}){4}$/i;
+
 /**
  * Converts a MAC address to the 64-bit form `SOCKADDR_BTH` expects.
  *
- * Accepts any separator, or none. The bytes keep the order they are written in, which is
- * the order Windows stores them: `00:16:53:f0:0a:0a` becomes `0x001653f00a0a`.
+ * Six hex bytes with one separator throughout — colons, dashes — or none. Anything else is
+ * refused rather than mined for twelve hex digits (review of the Linux binding, step 7 U1): a
+ * string that happens to hold them is not an address. The bytes keep the order they are written
+ * in, which is the order Windows stores them: `00:16:53:f0:0a:0a` becomes `0x001653f00a0a`.
  *
- * @returns The address, or `undefined` if the input is not six hex bytes.
+ * @returns The address, or `undefined` if the input is not a MAC address.
  */
 export function macToBtAddr(mac: string): bigint | undefined {
-	const hex = String(mac ?? '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
-	if (hex.length !== 12) { return undefined; }
+	const text = String(mac ?? '');
+	if (!MAC.test(text)) { return undefined; }
+	const hex = text.replace(/[:-]/g, '').toLowerCase();
 
 	let addr = 0n;
 	for (let i = 0; i < 12; i += 2) {
