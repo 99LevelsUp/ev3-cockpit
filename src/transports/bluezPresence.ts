@@ -8,9 +8,15 @@
  * 2.9–4.1 s and shows nothing; one that is off fails with EHOSTDOWN after 5.12 s. It needs no
  * group and no D-Bus, and opens no session the brick would show.
  *
- * The inquiry is a BR/EDR discovery for one window. A brick counts as heard when BlueZ reports an
- * RSSI for it during the window: a new object, or an RSSI that changed. An RSSI already there
- * when the window opens is an older sighting (another client's discovery), not this one.
+ * The inquiry is a BR/EDR discovery for one window. BlueZ 5.82 reports an RSSI change only of
+ * 8 dBm or more (`RSSI_THRESHOLD`, src/device.c) and clears every RSSI when the last discovery
+ * stops (src/adapter.c). So:
+ *  - nobody else discovering: every RSSI was cleared, and a brick is heard when it gets one during
+ *    the window, a new object or an RSSI that changed. An RSSI there before is not counted;
+ *  - another client already discovering (a desktop panel open): its discovery keeps a steady
+ *    brick's RSSI without a signal, so every LEGO device with an RSSI at the end counts.
+ * A change during the window may come from another client's discovery: a real sighting of the
+ * brick all the same, just not necessarily ours.
  */
 
 import { BackendUnavailableError } from '../errors/CockpitError';
@@ -19,8 +25,11 @@ import { Variant, type DBusValue } from './dbus/wire';
 import type { BluezAdapter, BluezDevice } from './bluezObjects';
 import { BLUEZ } from './bluezObjects';
 import type { ScannedBrick } from './btPairingHelper';
+import { bluezDeviceName } from './bluezDiscovery';
+import { DBusError } from './dbus/connection';
 import {
-	AF_BLUETOOTH, BTPROTO_L2CAP, EINPROGRESS, SOCK_CLOEXEC, SOCK_NONBLOCK, SOCK_SEQPACKET,
+	AF_BLUETOOTH, BTPROTO_L2CAP, ECONNREFUSED, EHOSTDOWN, EHOSTUNREACH, EINPROGRESS, ETIMEDOUT,
+	SOCK_CLOEXEC, SOCK_NONBLOCK, SOCK_SEQPACKET,
 	loadLinuxBtSocket, macToBdaddr, type LinuxBtSocketApi,
 } from './linuxBluetoothSocket';
 import { BT } from './transportConstants';
@@ -33,6 +42,21 @@ export const SOCKADDR_L2_SIZE = 14;
 const BDADDR_BREDR = 0;
 /** The kernel has no Bluetooth sockets. */
 const EAFNOSUPPORT = 97;
+
+/**
+ * The errnos that mean the brick did not answer: EHOSTDOWN as measured (page timeout), and the
+ * others a connect to a device out of reach or refusing ends with. The adapter being down
+ * (ENETDOWN, ENETUNREACH) and every local failure fail the round instead: they say nothing about
+ * the brick, and must not count as its misses.
+ */
+const ECONNRESET = 104;
+const NOT_ANSWERED = new Set([EHOSTDOWN, EHOSTUNREACH, ECONNREFUSED, ETIMEDOUT, ECONNRESET]);
+
+/** False for a brick that did not answer; throws for anything that is not about the brick. */
+function unanswered(errno: number): false {
+	if (NOT_ANSWERED.has(errno)) { return false; }
+	throw new Error(`The presence check failed here, not at the brick (errno ${errno}).`);
+}
 
 /**
  * `struct sockaddr_l2`: family, PSM (little-endian), `bdaddr_t` (reversed), CID 0, address type.
@@ -82,13 +106,15 @@ export function createBluezPresenceCheck(options: BluezPresenceCheckOptions = {}
 		}
 		try {
 			if (api.connect(fd, address) === 0) { return true; }
-			if (api.lastError() !== EINPROGRESS) { return false; }
-			const deadline = Date.now() + timeoutMs;
-			while (Date.now() < deadline) {
+			const errno = api.lastError();
+			if (errno !== EINPROGRESS) { return unanswered(errno); }
+			// Monotonic: a wall clock set back must not stretch the check.
+			const deadline = performance.now() + timeoutMs;
+			while (performance.now() < deadline) {
 				await new Promise((resolve) => setTimeout(resolve, pollMs));
-				const { state } = api.connectState(fd);
+				const { state, error } = api.connectState(fd);
 				if (state === 'connected') { return true; }
-				if (state === 'failed') { return false; }
+				if (state === 'failed') { return unanswered(error); }
 			}
 			return false;
 		} finally {
@@ -115,6 +141,8 @@ export interface BluezInquiryOptions {
 	cache: InquiryCache;
 	/** One window (default `BT.PRESENCE_INQUIRY_SECONDS`). */
 	windowMs?: number;
+	/** Told when the discovery may not have stopped. */
+	log?: (message: string) => void;
 }
 
 const LEGO_OUI = BT.LEGO_OUI.toUpperCase();
@@ -128,16 +156,18 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 		const adapter = cache.adapter();
 		if (!adapter) { throw new Error('This computer has no Bluetooth adapter BlueZ knows.'); }
 		const startedAt = Date.now();
+		// Someone else's discovery keeps a steady RSSI without a signal: then any RSSI is fresh.
+		const othersDiscovering = adapter.discovering;
 		const before = new Map(cache.devices().map((d) => [d.path, d.rssi]));
 		const heard = new Map<string, ScannedBrick>();
 		const look = (): void => {
 			for (const d of cache.devices()) {
 				if (!isLego(d.address) || d.rssi === undefined) { continue; }
-				if (!heard.has(d.path) && before.has(d.path) && before.get(d.path) === d.rssi) { continue; }
+				if (!othersDiscovering && !heard.has(d.path) && before.has(d.path) && before.get(d.path) === d.rssi) { continue; }
 				const known = heard.get(d.path);
 				heard.set(d.path, {
 					mac: d.address.toUpperCase(),
-					name: d.name ?? d.alias ?? '',
+					name: bluezDeviceName(d),
 					paired: d.paired,
 					signal: d.rssi,
 					atMs: known?.atMs ?? Date.now() - startedAt,
@@ -151,11 +181,19 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 			attempted = true;
 			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StartDiscovery' });
 			await new Promise((resolve) => setTimeout(resolve, windowMs));
+			// Once more at the end: a steady brick under someone else's discovery sends nothing.
+			look();
 			return [...heard.values()];
 		} finally {
 			stopListening();
 			if (attempted) {
-				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StopDiscovery' }).catch(() => { /* not discovering */ });
+				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StopDiscovery' }).catch((error: unknown) => {
+					const notDiscovering = error instanceof DBusError && error.dbusName === 'org.bluez.Error.Failed' && /No discovery started/.test(error.detail);
+					if (!notDiscovering) {
+						const what = error instanceof DBusError ? `${error.dbusName}: ${error.detail}` : String(error);
+						options.log?.(`StopDiscovery failed; the radio may still be discovering. ${what}`);
+					}
+				});
 			}
 		}
 	};
