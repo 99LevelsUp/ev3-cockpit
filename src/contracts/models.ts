@@ -1,5 +1,5 @@
 import { ChannelState, ConnectionState, PresenceState, Transport } from './enums';
-import { BrickId, BrickKey } from './brickKey';
+import { BrickId, BrickKey, BrickRef } from './brickKey';
 
 export interface SignalInfo {
     rssi?: number;
@@ -126,8 +126,23 @@ export interface BatteryState {
     voltage?: number;
 }
 
+/**
+ * What a port is doing, from the type code its occupancy row reports (`telemetry/portState.ts`
+ * reads it): nothing reported yet, empty, a device being identified, a known device, a fault, a
+ * terminal, or another code that is not readable.
+ */
+export type PortOccupancy = 'unreported' | 'empty' | 'identifying' | 'known' | 'error' | 'terminal' | 'not-readable';
+
 export interface PortState {
     port: string;
+    /** The daisy-chain layer; 0 until chains are supported (owner decision D3). */
+    layer?: number;
+    /** What is on the port, from its type code (telemetry view). */
+    occupancy?: PortOccupancy;
+    /** The device's mode, as the occupancy row reports it beside the type. */
+    mode?: number;
+    /** The type or the value is stale (owner decision D9). */
+    stale?: boolean;
     /** A name from the one vocabulary (`protocol/peripheralTypes.ts`); absent for an empty port. */
     peripheralType?: string;
     /** The firmware's raw type code beside the name, so an unrecognised device stays recognisable (3.2.3). */
@@ -138,7 +153,7 @@ export interface PortState {
 }
 
 export interface ActiveBrickViewModel {
-    brickKey: BrickKey;
+    brickKey: BrickRef;
     displayName: string;
     transport: Transport;
     connectionState: ConnectionState;
