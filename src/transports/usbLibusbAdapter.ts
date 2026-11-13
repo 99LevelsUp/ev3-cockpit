@@ -523,9 +523,14 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	): Promise<Uint8Array> {
 		await this.transferOut(packet, options, timeoutMs);
 
+		const expected = options?.expectedMessageCounter;
+		// On Linux a freshly plugged brick has one packet of garbage waiting on its IN endpoint
+		// (HOSTC, 13.11.2026): read at once, declaring a length the transfer cannot hold. While a
+		// known counter is awaited, an unreadable reply is stepped over like a stale one.
+		const tolerateUnreadable = this.platform === 'linux' && expected !== undefined;
 		for (let attempt = 0; attempt <= MAX_STALE_REPLIES; attempt += 1) {
-			const reply = await this.transferIn(options, timeoutMs);
-			const expected = options?.expectedMessageCounter;
+			const reply = await this.transferIn(options, timeoutMs, tolerateUnreadable);
+			if (reply === undefined) { continue; }
 			if (expected === undefined || getMessageCounter(reply) === expected) {
 				return reply;
 			}
@@ -561,11 +566,13 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		);
 	}
 
+	/** @returns undefined for an unreadable reply when `tolerateUnreadable` is set. */
 	private transferIn(
 		options: SendOptions | undefined,
 		timeoutMs: number,
-	): Promise<Uint8Array> {
-		return this.withCancellation<Uint8Array>(
+		tolerateUnreadable = false,
+	): Promise<Uint8Array | undefined> {
+		return this.withCancellation<Uint8Array | undefined>(
 			(resolve, reject) => {
 				this.submit(reject, (done) => this.inEndpoint!.transfer(this.frameBytes + this.readSlack, (error, data) => {
 					done();
@@ -580,6 +587,10 @@ export class UsbLibusbAdapter implements TransportAdapter {
 					// The transfer is frame-sized whatever the reply is, so trust the
 					// length prefix and drop the padding behind it.
 					const extracted = extractLengthPrefixedPacket(new Uint8Array(data));
+					if (!extracted && tolerateUnreadable) {
+						resolve(undefined);
+						return;
+					}
 					if (!extracted) {
 						reject(new TransportError(
 							`USB reply of ${data.length} bytes is shorter than the packet it declares.`
