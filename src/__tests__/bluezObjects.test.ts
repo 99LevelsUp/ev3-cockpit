@@ -245,6 +245,16 @@ describe('BluezObjectCache — the start, the close and the end (U4 review)', ()
 		assert.equal(ok.signalHandlers, 1);
 	});
 
+	it('refuses to start once disposed, touching neither the bus nor its handlers', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		cache.dispose();
+		await assert.rejects(() => cache.start(), /disposed/);
+		assert.deepEqual(bus.order, []);
+		assert.equal(bus.signalHandlers, 0);
+		assert.equal(bus.closeHandlerCount, 0);
+	});
+
 	it('lets go of the bus on dispose, once, and is no longer ready', async () => {
 		const bus = new FakeBus();
 		const cache = new BluezObjectCache(bus);
