@@ -301,6 +301,16 @@ Rows 2 and 4 tested and mutated, 5/5 caught. The delivery's approach stands: thi
 
 Convergence gate met: READY, no blocker or major. Round 3 changed the delivery's approach (one `TelemetryDelivery` owns the order) instead of a fourth patch. U8 is closed in code.
 
+### U9, round 1 (codex, `.review-out/tmp/packet_u9.txt`, 13.11.2026) — NOT-READY → fixed (89b5266)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | following did not end with the brick's session: the follow stayed, a listener after a reconnect started no new claim, and old listeners could be revived | CONFIRMED (`followProgramRow` did not hear `onClaimsEnded`) | the follow hears its own claim end; the service drops it and its listeners; the next listener starts a new follow |
+| 2 | major | a cached telemetry value could undo a start `run()` had just confirmed: an end and a start that never happened | CONFIRMED | every state carries when it was observed (`sampledAt`, the status reply's arrival); an older one than the last taken is not taken |
+| 3 | major | a changed `programs.statusIntervalMs` reached only the next follow | CONFIRMED | the API follows every program again on the change, the new claim before the old one goes |
+
+Mutations 8/9, one caught by the compiler; unit 1055/1055.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
