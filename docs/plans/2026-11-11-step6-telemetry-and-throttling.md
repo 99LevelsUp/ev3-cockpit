@@ -104,7 +104,8 @@ Part 1 read model + settings + service plan/session events (d64aab1, mutations 1
 - **D9. Stale and clearing — agreed, and parametrised:** stale = loop not running for the row, or older than `staleFactor` × its effective interval; kept for `staleTimeoutMs`, then dropped; session end clears at once; static rows stay for the session. Owner: *no fixed constants in the code* — both are user settings (`ev3-cockpit.telemetry.staleFactor`, default 3; `ev3-cockpit.telemetry.staleTimeoutMs`, default 10 000), whose only defaults live in `package.json`; the read model takes them as required options and follows a settings change without a restart; a value out of range falls back to the declared default with a warning.
 - **D10. Events carry changed rows only — agreed on the condition that no information is lost in an outage.** How that holds: during an outage there are no samples to lose; the values turn stale, and that is itself an event; when the link comes back, the first sample makes an event even if its value is unchanged, because the stale flag flips; a reader can take the whole snapshot at any time (U8 sends it before events). Every value carries `sampledAt`. Pinned by a test. A consumer that wants every sample (a graph) can be offered a flag in U8 if one asks.
 
-### U7. Adaptive throttling — planned in detail 13.11.2026
+### U7. Adaptive throttling — done 13.11.2026; review converged (see Review)
+Part 1 `TickThrottle` and the settings (08b110d, mutations 17/17); part 2 into the service: round trips per frame, base × factor, re-announced plans, `throttleOf`/`onThrottleChange`, runtime and `activate()` (ab5cf5d, 8/8); part 3 rows by relative lateness on a tight budget (c9590e4, 5/6, a dead tie-break removed); phase offsets left out (libusb carries 1024 B on Linux too). Planned:
 **Design.** Per brick, a `TickThrottle` watches the round trip of every telemetry frame (send to reply, queue wait included: a brick busy with a file transfer is a brick to slow down for). Tumbling windows of `windowSize` frames; at the end of each, the p95 is set against a limit of `tailFactor` × the transport's measured round trip (`COMMAND_RTT_MS`: USB 10, TCP 60, Bluetooth 130 ms — measured data, not settings). Over the limit: the tick slows one `step` (× 1.5), never past `maxSlowdown` (× 4). Within it for `calmWindows` windows in a row: one step back, never faster than the plan's tick. Port View's 37 ms p95 on USB trips it (limit 30 ms); a quiet brick's does not. The factor multiplies the plan's period, so dividers and phases stay (§9.5); a re-plan keeps the factor; a restart on a new transport starts afresh. Every change re-announces the plan, so `effectiveIntervalMs` in the data moves with it (D2). The numbers — period, factor, p95, stalls (round trips over the limit), samples — are exposed per brick for the diagnostic display (3.4.5). Owner rule (D9): no tunable constant in code — `enabled`, `windowSize`, `tailFactor`, `step`, `maxSlowdown`, `calmWindows` are user settings `ev3-cockpit.telemetry.throttle.*`, defaults only in package.json, applied without a reload.
 
 **Deviation from KTD5's wording, for the owner:** KTD5 caps the tick so that "the slowest row's interval" stays inside the heartbeat window. On Bluetooth the foreground's event rows already run every 2.5 s against a 3 s heartbeat, so that cap would leave Bluetooth — where throttling matters most — almost no room. The cap here is `maxSlowdown` on the tick; the heartbeat is not throttled and does not depend on telemetry. Reversible if the owner wants KTD5 as written.
@@ -236,6 +237,16 @@ Mutations 2/2; a plan check in the note proved dead and was removed. Unit 964/96
 ### U6, round 5 — confirmation of round 4 (codex, `.review-out/step6-u6-r5-packet.md`, 13.11.2026): READY, no findings
 
 Convergence gate met: no blocker or major survives. Majors per round 6 → 3 → 2 → 1 → 0; round 2 changed the read model's approach (one order for every input, events by difference) instead of a third patch. U6 is closed in code; U8 builds the API's snapshot and events on it.
+
+### U7, round 1 (codex, `.review-out/step6-u7-packet.md`, 13.11.2026) — no blocker or major; three minors fixed (78a5896)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | a smaller `windowSize` kept the oversized window in progress | CONFIRMED | new settings start from fresh evidence: window, calm count and last numbers dropped |
+| 2 | minor | a changed `tailFactor` left the display's stalls counted against the old limit | CONFIRMED | same reset |
+| 3 | minor | `configureThrottle` accepted bad settings with no loop running | CONFIRMED | it checks them itself |
+
+Convergence gate met: no blocker or major. The deviation from KTD5 (cap by `maxSlowdown`, not the heartbeat window) waits on the owner.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
