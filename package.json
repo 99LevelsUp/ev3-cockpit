@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.309",
+  "version": "0.2.310",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -140,9 +140,9 @@
     "compile": "tsc",
     "lint": "eslint src --ext .ts",
     "build:helper": "dotnet publish native/bt-pairing-helper -c Release -o native/bin",
-    "build:dev": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js --sourcemap",
+    "build:dev": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap",
     "package": "npm run build:helper && npm run bundle",
-    "bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js",
     "test:unit": "node scripts/run-unit-tests.cjs",
     "test-smoke": "npm run test:unit",
     "test:host": "node scripts/runTests.js",
@@ -151,7 +151,7 @@
     "test:pw:smoke": "playwright test tests/smoke.spec.ts",
     "package:vsix": "node scripts/package-vsix.cjs",
     "watch": "tsc --watch",
-    "watch:bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:regkey --external:usb --outfile=out/extension.js --sourcemap --watch",
+    "watch:bundle": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap --watch",
     "prepare": "node scripts/install-hooks.cjs"
   },
   "devDependencies": {
@@ -169,7 +169,6 @@
   "optionalDependencies": {
     "koffi": "^3.1.6",
     "node-hid": "3.3.0",
-    "regkey": "2.3.3",
     "serialport": "13.0.0",
     "usb": "^2.17.0"
   }
