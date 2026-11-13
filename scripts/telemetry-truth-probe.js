@@ -240,7 +240,11 @@ async function openBrick(name, on = 'usb') {
 	const usb = new UsbTransportProvider({
 		...quiet,
 		// Forcing HID: the provider falls back to it when libusb cannot open the brick.
-		...(on === 'hid' ? { createLibusbAdapter: () => { throw new Error('libusb withheld by the probe (3.1.13)'); } } : {}),
+		// The provider falls back when libusb's open() fails, not when the adapter cannot be made.
+		...(on === 'hid' ? { createLibusbAdapter: () => ({
+			open: () => Promise.reject(new Error('libusb withheld by the probe (3.1.13)')),
+			close: () => Promise.resolve(),
+		}) } : {}),
 	});
 	created.push(() => usb.dispose());
 	const usbItem = (await usb.discover()).items.find((i) => i.displayName === name);
@@ -274,10 +278,13 @@ const sensorIndex = (port) => {
 	return i;
 };
 
+/** Sends one frame; `byId` holds each row's value, since the assembler places rows in its own order. */
 async function sendTimed(channel, frame, timeoutMs) {
 	const started = Date.now();
 	const response = await channel.execute({ kind: 'telemetry:frame', payload: buildTelemetryFrame(frame) }, { timeoutMs });
-	return { ms: Date.now() - started, values: parseFrame(frame, response.payload, Date.now()), length: response.payload.length };
+	const values = parseFrame(frame, response.payload, Date.now());
+	const byId = new Map(values.map((v) => [v.rowId, v]));
+	return { ms: Date.now() - started, values, byId, length: response.payload.length };
 }
 
 /**
@@ -289,6 +296,7 @@ async function sendTimed(channel, frame, timeoutMs) {
  */
 async function settle() {
 	const name = arg('--brick'); const index = sensorIndex(arg('--port'));
+	const occ = `ports.sensor.${arg('--port')}.occupancy`; const val = `ports.sensor.${arg('--port')}.value`;
 	const from = Number(arg('--from') ?? 0); const to = Number(arg('--to') ?? 1);
 	const seconds = Number(arg('--seconds') ?? 3);
 	const { sensorOccupancyRow, sensorValueRow } = require(out('telemetry/ev3Rows'));
@@ -297,16 +305,16 @@ async function settle() {
 		const frameFor = (mode) => assembleFrame([sensorOccupancyRow(index), sensorValueRow(index, mode)], { maxPacketBytes: link.maxPacketBytes });
 		for (let i = 0; i < 10; i += 1) { await sendTimed(link.channel, frameFor(from), 5000); }
 		const before = await sendTimed(link.channel, frameFor(from), 5000);
-		process.stdout.write(`${name} port ${arg('--port')}: settled in mode ${before.values[0].mode}, `
-			+ `type ${before.values[0].value}, value ${before.values[1].value}\n`);
+		process.stdout.write(`${name} port ${arg('--port')}: settled in mode ${before.byId.get(occ).mode}, `
+			+ `type ${before.byId.get(occ).value}, value ${before.byId.get(val).value}\n`);
 		const switched = Date.now();
 		const lines = []; let modeAt; let valueAt;
 		while (Date.now() - switched < seconds * 1000) {
 			const r = await sendTimed(link.channel, frameFor(to), 5000);
 			const t = Date.now() - switched;
-			lines.push(`  +${String(t).padStart(5)} ms  frame ${String(r.ms).padStart(4)} ms  mode ${r.values[0].mode}  value ${r.values[1].value}`);
-			if (modeAt === undefined && r.values[0].mode === to) { modeAt = t; }
-			if (modeAt !== undefined && valueAt === undefined && classOf(r.values[1].value) !== 'none') { valueAt = t; }
+			lines.push(`  +${String(t).padStart(5)} ms  frame ${String(r.ms).padStart(4)} ms  mode ${r.byId.get(occ).mode}  value ${r.byId.get(val).value}`);
+			if (modeAt === undefined && r.byId.get(occ).mode === to) { modeAt = t; }
+			if (modeAt !== undefined && valueAt === undefined && classOf(r.byId.get(val).value) !== 'none') { valueAt = t; }
 		}
 		process.stdout.write(`${lines.join('\n')}\n`);
 		process.stdout.write(`mode ${from}→${to}: reported after ${modeAt ?? '—'} ms, first value after ${valueAt ?? '—'} ms; `
@@ -322,6 +330,7 @@ async function settle() {
  */
 async function stall() {
 	const name = arg('--brick'); const index = sensorIndex(arg('--port'));
+	const occ = `ports.sensor.${arg('--port')}.occupancy`; const val = `ports.sensor.${arg('--port')}.value`;
 	const seconds = Number(arg('--seconds') ?? 30);
 	const { sensorOccupancyRow, sensorValueRow } = require(out('telemetry/ev3Rows'));
 	const link = await openBrick(name, arg('--on') ?? 'usb');
@@ -333,8 +342,8 @@ async function stall() {
 		while (Date.now() - started < seconds * 1000) {
 			const r = await sendTimed(link.channel, frame, 5000);
 			const t = Date.now() - started; times.push(r.ms);
-			const state = `type ${r.values[0].value} mode ${r.values[0].mode}`;
-			if (state !== last) { process.stdout.write(`  +${String(t).padStart(6)} ms  ${state}  value ${r.values[1].value}  (frame ${r.ms} ms)\n`); last = state; }
+			const state = `type ${r.byId.get(occ).value} mode ${r.byId.get(occ).mode}`;
+			if (state !== last) { process.stdout.write(`  +${String(t).padStart(6)} ms  ${state}  value ${r.byId.get(val).value}  (frame ${r.ms} ms)\n`); last = state; }
 			if (r.ms > 100) { slow.push(`+${t} ms: ${r.ms} ms (${state})`); }
 		}
 		process.stdout.write(`${times.length} frames, median ${median(times)} ms, slowest ${Math.max(...times)} ms\n`);

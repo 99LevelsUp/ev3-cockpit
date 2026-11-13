@@ -185,7 +185,7 @@ Create a clean technical foundation on which further implementations can be laye
   - [x] 0.2.2 ESLint configuration (`npm run lint`)
   - [x] 0.2.3 Watch mode (`npm run watch`)
   - [x] 0.2.4 Production bundle via esbuild (`npm run package`)
-  - [~] 0.2.5 VSIX packaging (`npm run package:vsix`) — **built 13.11.2026 (fd77076):** one checked VSIX per platform (win32-x64, linux-x64, linux-arm64) from an allow-list, the native modules at the tested versions with only their own platform's binaries, the pairing helper on Windows only; the build fails on a VSIX that lacks a binary or carries anything else; `.vscodeignore` an allow-list too. **linux-arm64 holds (HOSTC, 13.11.2026, 8816dd4):** installed as a normal user in VS Code arm64, activated in an untrusted folder, the native modules load in Electron (all `.node` files aarch64), AAA connected over USB (HID fallback until the libusb auto-detach from `linux-backend` lands) and its projects listed. A second window's beacon-port failure it found is fixed (68a8838). **Open:** win32-x64 in the U10 session; linux-x64 has no machine yet. Owner 13.11.2026: the MIT `LICENSE` added and shipped; `regkey`, which nothing required, removed. Was: **reopened 13.11.2026, blocks a release:** the VSIX ships none of the native modules. `.vscodeignore` excludes `node_modules/**`, esbuild leaves `usb`, `node-hid`, `serialport`, `koffi` and `regkey` external, and there is no `vscode:prepublish`; an installed build therefore has no USB, no Bluetooth and no TCP-independent discovery on any platform, Windows included — only running from source works. Found by the Linux session (HOSTC) while weighing a D-Bus dependency, confirmed on HOSTA. Needed: platform-specific VSIXes (`vsce package --target win32-x64 linux-x64 linux-arm64 …`), each carrying those modules' `node_modules` with the prebuilt binary for its target, and a check in 7.7.5 that installs each VSIX and opens a brick
+  - [~] 0.2.5 VSIX packaging (`npm run package:vsix`) — **built 13.11.2026 (fd77076):** one checked VSIX per platform (win32-x64, linux-x64, linux-arm64) from an allow-list, the native modules at the tested versions with only their own platform's binaries, the pairing helper on Windows only; the build fails on a VSIX that lacks a binary or carries anything else; `.vscodeignore` an allow-list too. **linux-arm64 holds (HOSTC, 13.11.2026, 8816dd4):** installed as a normal user in VS Code arm64, activated in an untrusted folder, the native modules load in Electron (all `.node` files aarch64), AAA connected over USB (HID fallback until the libusb auto-detach from `linux-backend` lands) and its projects listed. A second window's beacon-port failure it found is fixed (68a8838). **win32-x64 holds (HOSTA, 13.11.2026, 0.2.317):** installed with `code --install-extension`, activated in an untrusted folder, all three bricks seen over USB and Bluetooth and AAA over TCP, AAA connected over libusb in 0.17 s, projects and storage listed. **Open:** linux-x64 has no machine yet. Owner 13.11.2026: the MIT `LICENSE` added and shipped; `regkey`, which nothing required, removed. Was: **reopened 13.11.2026, blocks a release:** the VSIX ships none of the native modules. `.vscodeignore` excludes `node_modules/**`, esbuild leaves `usb`, `node-hid`, `serialport`, `koffi` and `regkey` external, and there is no `vscode:prepublish`; an installed build therefore has no USB, no Bluetooth and no TCP-independent discovery on any platform, Windows included — only running from source works. Found by the Linux session (HOSTC) while weighing a D-Bus dependency, confirmed on HOSTA. Needed: platform-specific VSIXes (`vsce package --target win32-x64 linux-x64 linux-arm64 …`), each carrying those modules' `node_modules` with the prebuilt binary for its target, and a check in 7.7.5 that installs each VSIX and opens a brick
 - [x] **0.3 Test infrastructure**
   - [x] 0.3.1 Node built-in test runner for unit tests (`npm run test:unit`)
   - [x] 0.3.2 VS Code extension host test runner (`npm run test:host`)
@@ -1173,15 +1173,19 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
 
     On the 64-byte HID budget the same catalogue places **11 rows of 26** (62 B request,
     40 B reply). Reply payload matched declared globals exactly in every frame, confirming
-    reply = declared globals + 5. Still to do on TCP and BT, and once the BT provider is
-    wired (3.1.4d)
-  - [ ] 3.1.13 **Measure what HID does with an over-long reply.** The reply on the wire is
+    reply = declared globals + 5. **TCP and BT measured 13.11.2026 (U10, one row / 32 rows):** TCP
+    AAA 33.9/27.9 ms; Bluetooth CCC 62.4/70.5, BBB 71.6/76.3 ms; USB in the same run 5.8–7.8 ms
+    (14.3/14.9 ms on AAA with its Wi-Fi up)
+  - [x] 3.1.13 **Measure what HID does with an over-long reply.** The reply on the wire is
     always declared globals + 5 B and the firmware never checks it against `MAX_MSG_SIZE`, so a
     frame that satisfies the instruction budget can still declare more globals than a 64-byte
     HID read can carry. Determine whether the firmware fragments such a reply across reports or
     truncates it, then fix the truncation rule in 3.1.9 to bound the declaration as well as the
     bytecode. Our `ports` reply is 48 B and has never crossed the boundary, so this is untested
-    rather than known-good
+    rather than known-good. **Measured 13.11.2026 (U10, AAA, V1.09H):** over HID, replies of 13 to
+    505 B arrive whole in 12–23 ms, as over libusb: the firmware splits a long reply across 64-byte
+    reports and the HID adapter reassembles it by the header's length. Nothing is truncated, so the
+    declaration needs no HID bound (step-6 plan, U10 results)
   - [x] 3.1.14 **Three linked decisions the multi-engine review of 27.08.2026 raised, settled
     by the owner the same day.** Recorded here because they changed 3.1.6–3.1.11 and several
     Phase 3 tasks, and because a later reader will want to know these were chosen rather than

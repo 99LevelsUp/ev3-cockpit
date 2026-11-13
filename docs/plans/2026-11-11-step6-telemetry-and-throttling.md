@@ -174,6 +174,66 @@ where they do not, it is a **transport defect** and a blocker.
 *Passes when* nothing differs under 1 or 4, and every difference under 2, 3 and 5 is classified
 and either fixed in the mock or recorded here.
 
+#### U10 — results (13.11.2026, HOSTA, first session)
+
+Probe `scripts/telemetry-truth-probe.js` (shipped providers, `PacketCommandChannel`, assembler,
+row parsers and the mock's own channel); raw records in the gitignored `.review-out/u10-*`.
+
+*Real bricks against the mock* (32 rows, 97 B of globals, ten frames per side): **passes the rule.**
+
+| Brick | USB | Bluetooth | Mock | Differences |
+|---|---|---|---|---|
+| AAA | 14 ms | 107 ms | ✓ | none |
+| BBB | 6–9 ms | did not connect (WSA 10060) | ✓ | ultrasonic value: real on the brick, integer on the mock |
+| CCC | 6 ms | 78 ms | ✓ | none |
+
+Items 1 and 4 (occupancy, mode, reply length): no difference anywhere, USB and Bluetooth agree on
+every brick. The ultrasonic difference is a physical value against the mock's configured constant
+0, a case the rule did not name in advance: recorded as such, not forced into (a)–(c). BBB was not
+compared over Bluetooth (below). Firmware V1.09H on all three.
+
+*Mode switch and settle* (`settle`, USB): colour 0→2 — the new mode reported in the first frame
+(8 ms), value NaN for three frames, first value at 26 ms; gyro 0→1 — 7 ms / 25 ms; ultrasonic
+0→1 — 8 ms / 36 ms. No frame over 32 ms. The scheduler withholds a settling port's value until
+the first finite number or `SETTLE_LIMIT_MS` (1200 ms, `MAX_DEVICE_BUSY_TIME`): it lets the value
+through after ~25–36 ms, and the limit stays a backstop. Not tuned.
+
+*Does a value read stall?* (`stall`, AAA port 3, colour sensor plugged in during 40 s of frames
+with the value row ungated): empty (126) → identifying (125) at 8.6 s → colour (29) 1.5 s later;
+2750 frames, median 13 ms, slowest 32 ms. **No stall**: `opINPUT_READSI` does not re-execute,
+as `c_input.c` says. The 1.2 s frame never appears.
+
+*3.1.13, HID and a reply longer than one report* (`hid`, AAA, libusb withheld): replies of 13 to
+505 B arrive whole over HID, 12–23 ms, as over libusb. The firmware splits a long reply across
+64-byte reports and the HID adapter reassembles it by the length in the header: nothing is
+truncated, so the declaration need not be bounded for HID. One brick, V1.09H.
+
+*3.1.12 frame cost* (`hardware-matrix.js`, one row / 32 rows, median of eight): USB BBB 5.8/6.8,
+CCC 7.3/7.8, AAA with Wi-Fi 14.3/14.9 ms; TCP AAA 33.9/27.9 ms; Bluetooth CCC 62.4/70.5, BBB
+71.6/76.3 ms. A gyro stuck "identifying" (type 125, a hardware state, cleared by re-plugging it)
+made CCC's 32-row frame cost 24 ms against 7 ms.
+
+*Throttle, live in the installed VSIX*: Wi-Fi joining on AAA → 1.5×–3.38× (p95 31–80 ms, 2–3
+stalls per window), back to the plan within ~10 s of the brick quietening; Port View open on CCC →
+up to the 4× cap (p95 35–54 ms), stepping back down after it closed. Only the active brick is read
+without an API consumer, so "three bricks with one slowed" needs a consumer and stays open.
+
+*Findings for the cockpit* (owner to decide where they go):
+- N1 — a failed reconnect attempt left no trace (a Bluetooth channel sat in Reconnecting for eight
+  minutes, the picker showing "BT available"): **fixed**, each attempt is logged with its reason and
+  the next try (4dd59be).
+- N2 — a busy brick (Wi-Fi joining) made the USB session reconnect every ~1 s: a post-connect read
+  exceeded the 1000 ms budget and the link was dropped. On USB a pulled cable fails at once
+  (`NO_DEVICE`), so a timeout means slow, not gone. Open: needs a plan, in an area with a review
+  history.
+- N3 — Bluetooth from HOSTA is unreliable today: BBB never connected (10060), with visibility off
+  and on; CCC and AAA connected most times but not always; AAA's Bluetooth fell away while its
+  Wi-Fi was joining and came back by itself eight minutes later. HOSTC reaches all three. Open.
+- N4 — the picker says "TCP lost" for a channel a brick had and has not now (Wi-Fi off): true;
+  wording for Phase 5.
+- Brick apps such as Port View run in the user slot; whether they switch on the program-running
+  preset (D11) was not settled by the log. Open.
+
 ## Review
 
 ### U4, round 1 (codex, inline packet, 11.11.2026) — NOT-READY → fixed
