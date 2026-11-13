@@ -45,6 +45,33 @@ describe('createRuntime', () => {
 		}
 	});
 
+	it('logs each failed reconnect attempt with its reason and the next try (U10, 13.11.2026)', async () => {
+		const warnings: string[] = [];
+		const log = { ...quiet, warn: (message: string) => { warnings.push(message); } };
+		const mock = new MockTransportProvider(DEFAULT_MOCK_CONFIG);
+		const runtime = createRuntime({
+			extensionPath: '.', log, startPresence: false, telemetrySettings, throttleSettings, programPreset,
+			providers: [mock],
+		});
+		try {
+			const marvin = brickIdOf(makeBrickKey(Transport.Mock, 'marvin'));
+			await waitFor(() => runtime.aggregator.getBrick(marvin) !== undefined, 2000);
+			await runtime.bricks.signIn(marvin);
+
+			// As the real transports: no `recover`, and the brick does not come back.
+			(mock as { recover?: unknown }).recover = undefined;
+			mock.disconnect = () => Promise.resolve();
+			mock.connect = () => Promise.reject(new Error('BT connect failed (WSA error 10060).'));
+			runtime.sessionManager['handleHeartbeatFailure'](makeBrickKey(Transport.Mock, 'marvin'), new Error('link went away'));
+
+			await waitFor(() => warnings.some((w) => /reconnect attempt 1 failed/.test(w)), 5000);
+			const line = warnings.find((w) => /reconnect attempt 1 failed/.test(w)) ?? '';
+			assert.match(line, /^Session: .*marvin.* reconnect attempt 1 failed: BT connect failed \(WSA error 10060\)\.; next try in \d/i);
+		} finally {
+			runtime.dispose();
+		}
+	});
+
 	it('runs telemetry in the shipped wiring: a signed-in mock brick fills the read model, and signing out clears it (U6)', async () => {
 		const lines: string[] = [];
 		const log = { ...quiet, info: (message: string) => { lines.push(message); } };

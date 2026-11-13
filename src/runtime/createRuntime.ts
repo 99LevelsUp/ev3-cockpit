@@ -129,6 +129,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	services.add(sessionManager.onSessionStateChange(e => {
 		log.info(`Session: ${channelLabel(aggregator, e.brickKey)} ${e.previousState} → ${e.newState}`);
 	}));
+	// Each failed attempt, so a channel stuck in Reconnecting says why (U10, 13.11.2026).
+	services.add(sessionManager.onReconnectFailed(e => {
+		const next = e.nextDelayMs === undefined ? 'no more tries'
+			: `next try in ${e.nextDelayMs < 1000 ? `${e.nextDelayMs} ms` : `${Math.round(e.nextDelayMs / 1000)} s`}`;
+		log.warn(`Session: ${channelLabel(aggregator, e.brickKey)} reconnect attempt ${e.attempt} failed: ${e.error}; ${next}`);
+	}));
 	services.add(scheduler.onScanFailed(e => {
 		log.error(`Discovery scan failed on ${e.transport}`,
 			e.error instanceof Error ? e.error : new Error(String(e.error)));
