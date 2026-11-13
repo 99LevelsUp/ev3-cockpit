@@ -311,6 +311,12 @@ Convergence gate met: READY, no blocker or major. Round 3 changed the delivery's
 
 Mutations 8/9, one caught by the compiler; unit 1055/1055.
 
+### U9, round 2 — confirmation of round 1 (codex, `.review-out/tmp/packet_u9r2.txt`, 13.11.2026) — fixed (a1ce9e4)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major → **minor** in effect | a claim ending inside `claim()` itself went unheard by the follow, whose listeners would wait on a dead claim | CONFIRMED as a fact, **not reachable today**: the read model's only synchronous listener is the delivery, which only queues, and the program follow defers too (the U8 round 4 limitation) | fixed anyway, being small: the follow listens before it claims, keeps endings that come during the claim, and a follow whose claim already ended is refused. Mutations 3/3; unit 1056/1056 |
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
