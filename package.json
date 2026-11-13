@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.264",
+  "version": "0.2.265",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -73,6 +73,18 @@
           ],
           "default": "safe",
           "markdownDescription": "What other extensions may do on a brick through the cockpit. **safe** keeps them to the user areas; **full** opens the whole brick, shell included."
+        },
+        "ev3-cockpit.telemetry.staleFactor": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "markdownDescription": "A telemetry value counts as **stale** when no newer reading has come for this many of its own reading intervals (a brick that stalls, a reading that keeps failing). A value also turns stale at once when its brick stops being read."
+        },
+        "ev3-cockpit.telemetry.staleTimeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 0,
+          "markdownDescription": "How long a **stale** telemetry value is still shown, marked as stale, before it is dropped, in milliseconds. A brick that disconnects drops its values at once."
         }
       }
     }
