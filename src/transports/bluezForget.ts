@@ -44,8 +44,15 @@ export function createBluezUnpair(options: { bus: UnpairBus; cache: UnpairCache 
 		if (!address) { return { ok: false, reason: `Not a MAC address: ${mac}` }; }
 		const adapter = cache.adapter();
 		if (!adapter) { return { ok: false, reason: 'This computer has no Bluetooth adapter BlueZ knows.' }; }
-		const device = cache.devices().find((d) => d.address?.toUpperCase() === address);
-		if (!device) { return { ok: true }; }
+		// The cache holds every adapter's objects; only this adapter's device can be removed through it.
+		const held = cache.devices().filter((d) => d.address?.toUpperCase() === address);
+		const device = held.find((d) => d.path.startsWith(`${adapter.path}/`));
+		if (!device) {
+			if (held.length > 0) {
+				return { ok: false, reason: `BlueZ holds this brick under another adapter; the cockpit forgets through ${adapter.path} only.` };
+			}
+			return { ok: true };
+		}
 		try {
 			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'RemoveDevice', signature: 'o', body: [device.path] });
 			return { ok: true };
