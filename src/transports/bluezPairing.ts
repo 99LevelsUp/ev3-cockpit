@@ -41,6 +41,8 @@ export interface BluezPairingOptions {
 	searchMs?: number;
 	/** How long Pair may take; BlueZ itself gives up on the brick's dialog after 60 s (default 90 s). */
 	pairTimeoutMs?: number;
+	/** BlueZ's unique bus name; when known, the agent answers no other caller. */
+	bluezOwner?: () => string | undefined;
 }
 
 const AGENT = 'org.bluez.Agent1';
@@ -50,115 +52,207 @@ const ADAPTER = 'org.bluez.Adapter1';
 
 /** What BlueZ's pairing errors mean to someone at the brick. */
 const REASONS: Record<string, string> = {
-	'org.bluez.Error.AuthenticationRejected': 'The brick\'s dialog was not confirmed in time; it may still be showing on the brick.',
+	'org.bluez.Error.AuthenticationRejected': 'The brick rejected the pairing, often because its dialog was not confirmed in time; it may still be showing on the brick.',
 	'org.bluez.Error.AuthenticationCanceled': 'The pairing was cancelled on the brick.',
 	'org.bluez.Error.AuthenticationFailed': 'The brick refused the PIN.',
 	'org.bluez.Error.AuthenticationTimeout': 'The brick did not answer in time.',
 	'org.bluez.Error.ConnectionAttemptFailed': 'The brick did not answer: check that it is on and its Bluetooth is on.',
 	'org.bluez.Error.InProgress': 'Another pairing with this brick is already in progress.',
+	'org.bluez.Error.NotReady': 'Bluetooth on this computer is off: turn it on and try again.',
+	'org.bluez.Error.AlreadyExists': 'Another pairing agent of the cockpit is still registered with BlueZ.',
 };
 
 type PairingFunction = (mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal) => Promise<HelperPairingResult>;
+
+/** Pair ran longer than this side waits. */
+class PairTimeout extends Error {}
 
 export function createBluezPairing(options: BluezPairingOptions): PairingFunction {
 	const agentPath = options.agentPath ?? '/ev3cockpit/agent';
 	const searchMs = options.searchMs ?? 40_000;
 	const pairTimeoutMs = options.pairTimeoutMs ?? 90_000;
 	const { bus, cache } = options;
+	const cancelled = (): HelperPairingResult => ({ ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' });
+
+	// BlueZ takes one agent per connection, and there is one agent path: one pairing at a time.
+	let tail: Promise<void> = Promise.resolve();
 
 	return async (mac, onEvent, signal) => {
-		const cancelled: HelperPairingResult = { ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' };
-		if (signal?.aborted) { return cancelled; }
-		if (!macToBdaddr(mac) || !/^([0-9A-Fa-f]{2}[:-]?){5}[0-9A-Fa-f]{2}$/.test(mac)) {
-			return { ok: false, reason: `Not a Bluetooth address: ${mac}.`, status: 'InvalidAddress' };
+		const previous = tail;
+		let release = (): void => { /* set below */ };
+		tail = previous.then(() => new Promise<void>((resolve) => { release = resolve; }));
+		// The turn is ours once `previous` settles and `release` is set; an abort stops the wait.
+		const ourTurn = previous.then(() => true);
+		try {
+			if (!(await untilAborted(ourTurn, signal))) { return cancelled(); }
+			return await pairOne(mac, onEvent, signal);
+		} finally {
+			// A caller that gave up waiting still lets those behind it through, after `previous`.
+			void ourTurn.then(() => release());
 		}
+	};
+
+	async function pairOne(mac: string, onEvent: ((event: BtPairingEvent) => void) | undefined, signal: AbortSignal | undefined): Promise<HelperPairingResult> {
+		if (signal?.aborted) { return cancelled(); }
+		const bdaddr = macToBdaddr(mac);
+		if (!bdaddr) { return { ok: false, reason: `Not a Bluetooth address: ${mac}.`, status: 'InvalidAddress' }; }
 		const adapter = cache.adapter();
 		if (!adapter) { return { ok: false, reason: 'This computer has no Bluetooth adapter BlueZ knows.', status: 'NoAdapter' }; }
-		const devicePath = `${adapter.path}/dev_${mac.replace(/[:-]/g, '_').toUpperCase()}`;
+		// From the parsed bytes, whatever separators the address came with.
+		const hex = Array.from(bdaddr).reverse().map((b) => b.toString(16).padStart(2, '0').toUpperCase());
+		const devicePath = `${adapter.path}/dev_${hex.join('_')}`;
 		const known = (): BluezDevice | undefined => cache.devices().find((d) => d.path === devicePath);
 		const emit = (event: BtPairingEvent): void => { try { onEvent?.(event); } catch { /* the listener's fault */ } };
+		const failed = (status: string, reason: string): HelperPairingResult => {
+			emit({ type: 'result', status, ok: false });
+			return { ok: false, reason, status };
+		};
 
-		if (known()?.paired) {
+		const held = known();
+		if (held?.paired) {
 			emit({ type: 'alreadyPaired', mac });
 			return { ok: true, status: 'AlreadyPaired' };
 		}
 
-		// A brick BlueZ does not hold yet has to be heard first, as the Windows helper searches.
-		if (!known()) {
-			emit({ type: 'searching', mac });
-			const found = await search(devicePath);
-			if (signal?.aborted) { return cancelled; }
-			if (!found) {
-				return { ok: false, reason: 'The brick was not found: check that its Bluetooth is on and it is visible.', status: 'NotFound' };
-			}
-			emit({ type: 'found', id: mac, name: found.name ?? '', alreadyPaired: found.paired });
-			if (found.paired) { return { ok: true, status: 'AlreadyPaired' }; }
-		}
-
-		// Our agent, for this pairing only; it answers for this brick and refuses any other.
-		const forThisBrick = (device: DBusValue): void => {
-			if (device !== devicePath) { throw new DBusError('org.bluez.Error.Rejected', 'Not the brick being paired.'); }
-		};
-		const withdraw = bus.exportObject(agentPath, AGENT, {
-			RequestPinCode: { returns: 's', handler: ([device]) => { forThisBrick(device); emit({ type: 'pairingRequested', kind: 'ProvidePin' }); return [EV3_PAIRING_PIN]; } },
-			RequestPasskey: { returns: 'u', handler: ([device]) => { forThisBrick(device); return [Number(EV3_PAIRING_PIN)]; } },
-			RequestConfirmation: { returns: '', handler: ([device]) => { forThisBrick(device); emit({ type: 'pairingRequested', kind: 'ConfirmOnly' }); return []; } },
-			RequestAuthorization: { returns: '', handler: ([device]) => { forThisBrick(device); return []; } },
-			AuthorizeService: { returns: '', handler: ([device]) => { forThisBrick(device); return []; } },
-			DisplayPinCode: { returns: '', handler: () => [] },
-			DisplayPasskey: { returns: '', handler: () => [] },
-			Cancel: { returns: '', handler: () => [] },
-			Release: { returns: '', handler: () => [] },
-		});
+		let phase: 'search' | 'agent' | 'pair' = 'search';
 		let registered = false;
-		const onAbort = (): void => {
+		let withdraw: (() => void) | undefined;
+		const cancelAtBluez = (): void => {
 			void bus.call({ destination: BLUEZ, path: devicePath, interface: DEVICE, member: 'CancelPairing' }).catch(() => { /* nothing to cancel */ });
 		};
 		try {
+			let target = held;
+			// A brick BlueZ does not hold yet has to be heard first, as the Windows helper searches.
+			if (!target) {
+				emit({ type: 'searching', mac });
+				if (signal?.aborted) { return cancelled(); }
+				target = await search(adapter.path, devicePath, signal);
+				if (signal?.aborted) { return cancelled(); }
+				if (!target) {
+					return failed('NotFound', 'The brick was not found: check that its Bluetooth is on and it is visible.');
+				}
+				if (target.paired) {
+					emit({ type: 'found', id: mac, name: target.name ?? '', alreadyPaired: true });
+					return { ok: true, status: 'AlreadyPaired' };
+				}
+			}
+			// Whoever shows progress tells the user to watch the brick on this event, held or heard.
+			emit({ type: 'found', id: mac, name: target.name ?? '', alreadyPaired: false });
+
+			// Our agent, for this pairing only; it answers BlueZ about this brick and refuses the rest.
+			const forThisBrick = (device: DBusValue, message: { sender?: string } | undefined): void => {
+				const owner = options.bluezOwner?.();
+				if (owner !== undefined && message?.sender !== owner) { throw new DBusError('org.bluez.Error.Rejected', 'Not BlueZ.'); }
+				if (device !== devicePath) { throw new DBusError('org.bluez.Error.Rejected', 'Not the brick being paired.'); }
+			};
+			phase = 'agent';
+			withdraw = bus.exportObject(agentPath, AGENT, {
+				RequestPinCode: { returns: 's', handler: ([device], m) => { forThisBrick(device, m); emit({ type: 'pairingRequested', kind: 'ProvidePin' }); return [EV3_PAIRING_PIN]; } },
+				RequestPasskey: { returns: 'u', handler: ([device], m) => { forThisBrick(device, m); return [Number(EV3_PAIRING_PIN)]; } },
+				RequestConfirmation: { returns: '', handler: ([device], m) => { forThisBrick(device, m); emit({ type: 'pairingRequested', kind: 'ConfirmOnly' }); return []; } },
+				RequestAuthorization: { returns: '', handler: ([device], m) => { forThisBrick(device, m); return []; } },
+				AuthorizeService: { returns: '', handler: ([device], m) => { forThisBrick(device, m); return []; } },
+				DisplayPinCode: { returns: '', handler: () => [] },
+				DisplayPasskey: { returns: '', handler: () => [] },
+				Cancel: { returns: '', handler: () => [] },
+				Release: { returns: '', handler: () => [] },
+			});
 			await bus.call({ destination: BLUEZ, path: '/org/bluez', interface: AGENT_MANAGER, member: 'RegisterAgent', signature: 'os', body: [agentPath, 'KeyboardDisplay'] });
 			registered = true;
-			signal?.addEventListener('abort', onAbort, { once: true });
-			if (signal?.aborted) { return cancelled; }
-			await bus.call({ destination: BLUEZ, path: devicePath, interface: DEVICE, member: 'Pair', timeoutMs: pairTimeoutMs });
+			if (signal?.aborted) { return cancelled(); }
+
+			phase = 'pair';
+			await pairBounded(devicePath, cancelAtBluez, signal);
 			emit({ type: 'result', status: 'Paired', ok: true });
 			return { ok: true, status: 'Paired' };
 		} catch (error) {
-			if (signal?.aborted) { return cancelled; }
+			// Whatever ended the wait here, BlueZ may still be pairing: tell it to stop.
+			if (phase === 'pair' && !(error instanceof DBusError)) { cancelAtBluez(); }
+			if (signal?.aborted) { return cancelled(); }
+			if (error instanceof PairTimeout) { return failed('Timeout', 'The pairing took too long and was cancelled.'); }
 			if (error instanceof DBusError) {
-				if (error.dbusName === 'org.bluez.Error.AlreadyExists') { return { ok: true, status: 'AlreadyPaired' }; }
-				const status = error.dbusName.replace(/^.*\./, '');
-				emit({ type: 'result', status, ok: false });
-				return { ok: false, reason: REASONS[error.dbusName] ?? `BlueZ: ${error.detail || error.dbusName}`, status };
+				if (phase === 'pair' && error.dbusName === 'org.bluez.Error.AlreadyExists') { return { ok: true, status: 'AlreadyPaired' }; }
+				return failed(error.dbusName.replace(/^.*\./, ''), REASONS[error.dbusName] ?? `BlueZ: ${error.detail || error.dbusName}`);
 			}
-			return { ok: false, reason: error instanceof Error ? error.message : String(error), status: 'Failed' };
+			return failed('Failed', error instanceof Error ? error.message : String(error));
 		} finally {
-			signal?.removeEventListener('abort', onAbort);
 			if (registered) {
 				await bus.call({ destination: BLUEZ, path: '/org/bluez', interface: AGENT_MANAGER, member: 'UnregisterAgent', signature: 'o', body: [agentPath] })
 					.catch(() => { /* gone with the bus */ });
 			}
-			withdraw();
+			withdraw?.();
 		}
+	}
 
-		/** A BR/EDR discovery until BlueZ holds the brick, the search time runs out, or an abort. */
-		async function search(path: string): Promise<BluezDevice | undefined> {
-			let stopListening = (): void => { /* set below */ };
-			const heard = new Promise<BluezDevice | undefined>((resolve) => {
-				const done = (value: BluezDevice | undefined): void => { stopListening(); clearTimeout(timer); signal?.removeEventListener('abort', aborted); resolve(value); };
-				const aborted = (): void => done(undefined);
-				// Not unref'd: a search must end even where nothing else keeps the process alive.
-				const timer = setTimeout(() => done(undefined), searchMs);
-				signal?.addEventListener('abort', aborted, { once: true });
-				stopListening = cache.onChange(() => { const d = cache.devices().find((x) => x.path === path); if (d) { done(d); } });
-			});
-			try {
-				await bus.call({ destination: BLUEZ, path: adapter!.path, interface: ADAPTER, member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
-				await bus.call({ destination: BLUEZ, path: adapter!.path, interface: ADAPTER, member: 'StartDiscovery' });
-				return await heard;
-			} finally {
+	/**
+	 * Pair, bounded here by `pairTimeoutMs` whatever the bus does, and by an abort: either sends
+	 * CancelPairing. A Pair that resolves is a paired brick, whatever came after (the honest answer).
+	 */
+	async function pairBounded(devicePath: string, cancelAtBluez: () => void, signal: AbortSignal | undefined): Promise<void> {
+		const pair = bus.call({ destination: BLUEZ, path: devicePath, interface: DEVICE, member: 'Pair', timeoutMs: pairTimeoutMs });
+		let cleanup = (): void => { /* set below */ };
+		const stop = new Promise<never>((_resolve, reject) => {
+			const timer = setTimeout(() => reject(new PairTimeout()), pairTimeoutMs);
+			const onAbort = (): void => { cancelAtBluez(); reject(new Error('aborted')); };
+			signal?.addEventListener('abort', onAbort, { once: true });
+			cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+			if (signal?.aborted) { onAbort(); }
+		});
+		stop.catch(() => { /* raced below */ });
+		pair.catch(() => { /* raced below */ });
+		try {
+			await Promise.race([pair, stop]);
+		} finally {
+			cleanup();
+		}
+	}
+
+	/** A BR/EDR discovery until BlueZ holds the brick, the search time runs out, or an abort. */
+	async function search(adapterPath: string, devicePath: string, signal: AbortSignal | undefined): Promise<BluezDevice | undefined> {
+		let finish = (_value: BluezDevice | undefined): void => { /* set below */ };
+		let cleanup = (): void => { /* set below */ };
+		const heard = new Promise<BluezDevice | undefined>((resolve) => {
+			// Not unref'd: a search must end even where nothing else keeps the process alive.
+			const timer = setTimeout(() => finish(undefined), searchMs);
+			const aborted = (): void => finish(undefined);
+			signal?.addEventListener('abort', aborted, { once: true });
+			const stopListening = cache.onChange(() => { const d = cache.devices().find((x) => x.path === devicePath); if (d) { finish(d); } });
+			let clean = false;
+			cleanup = () => {
+				if (clean) { return; }
+				clean = true;
+				clearTimeout(timer);
+				signal?.removeEventListener('abort', aborted);
 				stopListening();
-				await bus.call({ destination: BLUEZ, path: adapter!.path, interface: ADAPTER, member: 'StopDiscovery' }).catch(() => { /* not discovering */ });
+			};
+			finish = (value) => { cleanup(); resolve(value); };
+			if (signal?.aborted) { finish(undefined); }
+		});
+		let started = false;
+		try {
+			await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
+			if (signal?.aborted) { return undefined; }
+			await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StartDiscovery' });
+			started = true;
+			return await heard;
+		} finally {
+			cleanup();
+			if (started) {
+				await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StopDiscovery' }).catch(() => { /* not discovering */ });
 			}
 		}
-	};
+	}
+}
+
+/** Resolves true when `turn` does, false on an abort first. */
+async function untilAborted(turn: Promise<boolean>, signal: AbortSignal | undefined): Promise<boolean> {
+	if (!signal) { return turn; }
+	if (signal.aborted) { return false; }
+	let onAbort = (): void => { /* set below */ };
+	const aborted = new Promise<boolean>((resolve) => { onAbort = () => resolve(false); signal.addEventListener('abort', onAbort, { once: true }); });
+	try {
+		return await Promise.race([turn, aborted]);
+	} finally {
+		signal.removeEventListener('abort', onAbort);
+	}
 }
