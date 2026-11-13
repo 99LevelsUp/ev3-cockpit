@@ -93,8 +93,11 @@ export class TelemetryScheduler {
 	private ticksEmpty = 0;
 	private framesFailed = 0;
 
-	/** Rows truncation deferred, which go to the front of the next tick. */
+	/** Rows truncation deferred, which come up again on the next tick. */
 	private carriedOver: TelemetryRow[] = [];
+
+	/** The tick each row waiting since a tick it was not sent on first came due: its lateness. */
+	private readonly dueSince = new Map<string, number>();
 
 	/**
 	 * The mode last sent to each port, whatever rows are in the set now: the device stays in it
@@ -180,6 +183,7 @@ export class TelemetryScheduler {
 			const next = byId.get(row.id);
 			return next && next.lifetime.kind !== 'off' ? [next] : [];
 		});
+		for (const id of [...this.dueSince.keys()]) { if (!byId.has(id)) { this.dueSince.delete(id); } }
 	}
 
 	/**
@@ -262,6 +266,10 @@ export class TelemetryScheduler {
 			const carried: TelemetryRow[] = [];
 			await this.sendFrame(candidates, carried);
 			this.carriedOver = carried;
+			const waiting = new Set(carried.map((row) => row.id));
+			for (const row of candidates) {
+				if (!waiting.has(row.id)) { this.dueSince.delete(row.id); } else if (!this.dueSince.has(row.id)) { this.dueSince.set(row.id, currentTick); }
+			}
 		} finally {
 			this.inFlight = false;
 			const pending = this.pendingRows;
@@ -322,12 +330,16 @@ export class TelemetryScheduler {
 	}
 
 	/**
-	 * Rows for this tick: what truncation deferred last time, then what comes up now.
+	 * Rows for this tick — what truncation deferred, and what comes up now — most urgent first.
 	 *
-	 * Carried-over rows go first, which is what makes truncation rotating rather than a
-	 * permanent loss. Static priority on a tight budget starves the same rows every tick —
-	 * with the old mandatory type sweep that meant a panel showing ports appear and disappear
-	 * but never a reading.
+	 * The frame takes rows in order and defers what does not fit, so the order is the priority.
+	 * A row's urgency is the share of its own interval it would be late if it waited this tick
+	 * out: a fast row not sent now is a whole interval late, a divider-5 row a fifth. So on a tight
+	 * budget the fast rows keep their cadence while there is room, and a slow row still gets in,
+	 * because its lateness grows with every tick it waits until it is first (owner, 11.11.2026; it
+	 * replaced "carried-over first", which let slow rows push fast ones out). Ties keep the order
+	 * rows were gathered in: carried over first, which serves the row waiting longest. Static priority would starve the same rows every tick — with the old
+	 * mandatory type sweep that meant a panel showing ports appear and disappear but never a reading.
 	 */
 	private candidatesFor(tick: number): TelemetryRow[] {
 		const chosen: TelemetryRow[] = [];
@@ -347,7 +359,15 @@ export class TelemetryScheduler {
 			// set replaced later may add one, and it must still be read once (step-6 U4).
 			if (row.lifetime.kind === 'oneShot' || comesUpOnTick(row.lifetime, tick)) { consider(row); }
 		}
-		return chosen;
+
+		// A one-shot has no interval of its own: it waits as patiently as the slowest row.
+		const slowest = Math.max(1, ...this.rows.map((row) => (row.lifetime.kind === 'repeating' ? row.lifetime.divider : 1)));
+		const urgency = (row: TelemetryRow): number =>
+			(tick - (this.dueSince.get(row.id) ?? tick) + 1) / (row.lifetime.kind === 'repeating' ? row.lifetime.divider : slowest);
+		return chosen
+			.map((row, index) => ({ row, index, urgency: urgency(row) }))
+			.sort((a, b) => b.urgency - a.urgency || a.index - b.index)
+			.map(({ row }) => row);
 	}
 
 	/**

@@ -34,16 +34,61 @@ carry the id. With no active brick, `'active'` fails with `code: 'not_connected'
 | stop / emergency stop / state | `stopProgram`, `emergencyStop` (also stops every motor; a `runProgram` asked before it and not yet sent is cancelled), `isProgramRunning`, `onProgramStateChanged` |
 | a shell command | `runShell(brick, command)` — only in full mode |
 | the access mode | `getAccessMode()`, `onAccessModeChanged` |
-| telemetry | step 6 |
+| telemetry | `listTelemetryRows()`, `subscribeTelemetry(brick, { rows, intervalMs, modes? }, listener)` — below |
 
 Errors are `CockpitError`s with a stable `code`: `not_connected`, `access_denied`,
 `program_running`, `program_not_found`, `program_cancelled` (an emergency stop came before the
-start was sent), `protocol_failed`, `transport_failed`, `timeout`, …
+start was sent), `mode_conflict`, `subscription_failed`, `protocol_failed`, `transport_failed`,
+`timeout`, …
 
 A brick id the cockpit does not know is refused with `not_connected`. Program, shell and
 brick-info answers name the brick by id; file answers are just the file data. A consumer that
 needs to know which brick answered takes `getActiveBrickId()` first and passes that id, not
 `'active'`: asked afterwards, the active brick may already be another one.
+
+## Telemetry
+
+```ts
+const sub = cockpit.subscribeTelemetry('active', { rows: ['ports.motor.A.tacho'], intervalMs: 100 }, (update) => {
+  // update.kind: 'snapshot' first, then 'change'; 'ended' when the brick goes
+  for (const v of update.values) { /* v.rowId, v.value, v.sampledAt, v.effectiveIntervalMs, v.stale */ }
+});
+sub.grant;      // { 'ports.motor.A.tacho': 100 } — at least this often
+sub.dispose();  // releases exactly this subscription
+```
+
+- `listTelemetryRows()` names every row: `ports.sensor.1.value`, `ports.sensor.1.occupancy` (the type
+  code, with the device's mode), `ports.motor.A.tacho`, `ui.button.enter`, `system.battery.level`, …
+- The grant is the request clamped to the link's floor (USB 50 ms, TCP 100 ms, Bluetooth 250 ms),
+  fixed when you subscribe. What a row really runs at — slower while the brick answers slowly
+  (adaptive throttling) — is each value's `effectiveIntervalMs`.
+- A sensor's mode is part of the request: `modes: { '1': 2 }`. The first subscription on a port holds
+  its mode; asking another mode of that port is refused with `mode_conflict`, naming who holds it.
+- After the snapshot you hear only rows whose value, mode, staleness or interval changed. Nothing is
+  lost in an outage: values turn `stale`, and the first reading after it is sent even if unchanged.
+  Values stale long enough are dropped and listed in `removed`. `snapshot()` gives the current
+  values any time, so it can be ahead of the updates your listener has heard so far.
+- Updates arrive asynchronously, never inside the call that subscribed, and in one order for every
+  subscription of every consumer. The snapshot holds everything up to your subscription, and each
+  later change comes once, behind it. Anything your listener causes, such as another change, a
+  brick's end or a new subscription, arrives after the update you are handling, for you and for
+  everyone else. A listener that throws stops nothing but itself.
+- A subscription to a brick that is not the active one runs that brick's telemetry for you; each
+  telemetry command costs a program running on the brick about 2 ms, so ask for what you need.
+- **While a program runs on a brick, its telemetry slows down** to the user's
+  `ev3-cockpit.telemetry.programRunningTickMs` (200 ms unless changed; 0 turns it off) — for
+  everyone, your subscription included. Your grant stays; `effectiveIntervalMs` shows the slower
+  reads. The program comes first.
+
+## Following a program
+
+`onProgramStateChanged(brick, listener)` follows the brick's program through its telemetry
+(`program.user.running`), not a poll of its own, and only while someone listens. The listener hears
+each start and end once, asynchronously, never inside the call that subscribed. A lost link that
+comes back keeps following; it ends when the brick is disconnected or signed out, as telemetry
+subscriptions do — subscribe again after reconnecting. How often a brick you follow is asked is the
+user's `ev3-cockpit.programs.statusIntervalMs`; the active brick is asked at its own telemetry pace
+anyway. `isProgramRunning(brick)` asks the brick directly, now.
 
 ## Safe and full mode
 

@@ -667,14 +667,15 @@ It requires its own explicit models:
 - `ConnectedBrickSnapshot`,
 - `BrickStateChangeEvent`,
 - `ActiveBrickSnapshot`,
-- `TelemetryRow` — a row's identity and schema: stable id, value type, unit, raw type code,
-- `TelemetrySnapshot` — a set of row values, each with its own `sampledAt`,
-- `TelemetryEvent` — the rows that changed,
-- `TelemetrySubscription` — the handle plus the interval each row was actually granted,
+- `TelemetryRowInfo` — a row's identity and schema: stable id, tier, unit, port (`listTelemetryRows`),
+- `TelemetryValue` — one row's value with its own `sampledAt`, `effectiveIntervalMs` and `stale`,
+- `TelemetryUpdate` — a `snapshot` first, then each `change` (the rows that changed and the rows
+  dropped), and `ended` when the brick goes,
+- `TelemetrySubscription` — the handle, the interval each row was granted, and `snapshot()`,
 - `FilesystemEvent`.
 
-`TelemetrySnapshot` carries typed row values, not a `data: unknown` payload. A typed surface
-that gives up its type at the one point a consumer reads it is not a typed surface.
+A `TelemetryUpdate` carries typed `TelemetryValue`s, not a `data: unknown` payload. A typed
+surface that gives up its type at the one point a consumer reads it is not a typed surface.
 
 ## 6. State Model
 

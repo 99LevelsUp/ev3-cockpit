@@ -1,24 +1,12 @@
-.vscode/**
-.vscode-test/**
-src/**
-hooks/**
-# The pairing helper's C# source and its intermediate build output. What ships is the
-# published result in native/bin/ (exe plus its dependencies), which is deliberately not
-# excluded — without it the extension cannot pair a brick at all.
-native/bt-pairing-helper/**
-scripts/**
-tests/**
-out/__tests__/**
-node_modules/**
-.github/**
-.gitignore
-.gitattributes
-.eslintrc.json
-tsconfig*.json
-playwright.config.ts
-AGENTS.md
-CHANGELOG.md
-CLAUDE.md
-DESIGN.md
-IMPLEMENTATION_PLAN.md
-REQUIREMENTS.md
+# An allow-list: nothing ships unless named here (IMPLEMENTATION_PLAN 0.2.5). A deny-list let
+# review scratch, notes, logs and a junction to the firmware sources into the package.
+#
+# Releases are built per platform by `npm run package:vsix` (scripts/package-vsix.cjs), which
+# stages these same files with the native modules and the Windows pairing helper and checks the
+# result. This file only keeps a plain `vsce package` from shipping the repository.
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!out/extension.js

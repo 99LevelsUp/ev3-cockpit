@@ -1,5 +1,5 @@
 /**
- * Builds the cockpit's runtime: transports, discovery, sessions and the brick layer, wired.
+ * Builds the cockpit's runtime: transports, discovery, sessions, the brick layer and telemetry, wired.
  *
  * One function that the extension and the hardware harness both call, so a measurement on
  * the bench runs the shipped wiring rather than a hand-made copy of it (step-2 plan, KTD9). A
@@ -20,6 +20,9 @@ import { createHelperPairing, createHelperPresenceCheck, scanForBricks } from '.
 import { BtPresenceMonitor } from '../transports/btPresence';
 import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
+import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
+import { TelemetryService } from '../telemetry/telemetryService';
+import type { ProgramPresetSettings, TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
 import { BrickManager } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
@@ -55,6 +58,16 @@ export interface RuntimeOptions {
 	 * presence pieces are then not built.
 	 */
 	readonly providers?: readonly TransportProvider[];
+	/**
+	 * When a telemetry value counts as stale and when it goes (owner decision D9). The extension
+	 * reads them from the user's settings; code outside VS Code takes the defaults `package.json`
+	 * declares (`telemetrySettingsFromPackage`). The runtime has no values of its own.
+	 */
+	readonly telemetrySettings: TelemetrySettings;
+	/** How each brick's telemetry slows down when its round trips grow (U7); read as the stale settings are. */
+	readonly throttleSettings: ThrottleSettings;
+	/** How a running program slows its brick's telemetry (U9, D11): the user's settings, as above. */
+	readonly programPreset: ProgramPresetSettings;
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
@@ -72,6 +85,10 @@ export interface Runtime extends vscode.Disposable {
 	readonly btDiscovery?: BtClassicDiscovery;
 	/** Background Bluetooth presence. Absent when providers were injected. */
 	readonly btPresence?: BtPresenceMonitor;
+	/** One telemetry loop per brick someone wants read: the active one, and any a consumer claimed. */
+	readonly telemetry: TelemetryService;
+	/** What the loops read: per brick, each row's last value and whether it is fresh. */
+	readonly telemetryView: TelemetryReadModel;
 }
 
 export function createRuntime(options: RuntimeOptions): Runtime {
@@ -137,6 +154,40 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		log.info(`Active brick: ${label(e.previous)} → ${label(e.current)}`);
 	}));
 
+	// ── Telemetry ───────────────────────────────────────────────
+	// After the brick layer, so disposing the runtime (in reverse) stops the loops before the
+	// sessions they send over. The host gates on the pair (2.8.10a): a brick is read only while it is
+	// signed in and has a route.
+	const telemetry = services.add(new TelemetryService({
+		host: bricks.telemetryHost(), providerRegistry: registry, throttle: options.throttleSettings, programPreset: options.programPreset,
+	}));
+	const telemetryView = services.add(new TelemetryReadModel({ source: telemetry, settings: options.telemetrySettings }));
+	services.add(telemetry.onPlanChange((e) => {
+		const brick = brickLabel(aggregator, e.brickKey as BrickId);
+		if (e.intervals.size === 0) { log.info(`Telemetry: ${brick} no longer read`); return; }
+		const ticks = [...e.intervals.values()].filter((ms): ms is number => typeof ms === 'number');
+		log.info(`Telemetry: ${brick} ${telemetry.modeOf(e.brickKey)}, ${e.intervals.size} row(s) read, `
+			+ `fastest every ${ticks.length ? Math.min(...ticks) : 'once'} ms`);
+	}));
+	// Said when the tick moves, which is a window's decision, not a frame's.
+	services.add(telemetry.onThrottleChange((e) => {
+		const { state } = e;
+		log.info(`Telemetry: ${brickLabel(aggregator, e.brickKey as BrickId)} tick ${Math.round(state.periodMs)} ms `
+			+ `(${state.factor === 1 ? 'as planned' : `${Number(state.factor.toFixed(2))}x the plan`}; `
+			+ `p95 ${state.p95Ms ?? '-'} ms against ${state.limitMs} ms, ${state.stalls} stall(s))`);
+	}));
+	// A failing frame repeats every tick: said once per brick, and once more when frames come back.
+	const failing = new Set<string>();
+	services.add(telemetry.onError((e) => {
+		if (failing.has(e.brickKey)) { return; }
+		failing.add(e.brickKey);
+		log.warn(`Telemetry: frames for ${brickLabel(aggregator, e.brickKey as BrickId)} are failing: `
+			+ `${e.error instanceof Error ? e.error.message : String(e.error)}`);
+	}));
+	services.add(telemetry.onValues((e) => {
+		if (failing.delete(e.brickKey)) { log.info(`Telemetry: frames for ${brickLabel(aggregator, e.brickKey as BrickId)} work again`); }
+	}));
+
 	scheduler.start();
 	log.info('Discovery scheduler started');
 	refreshDiscovery = () => { void scheduler.scanOnce().catch(() => { /* reported by onScanFailed */ }); };
@@ -156,7 +207,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	});
 
 	return {
-		registry, sessionManager, scheduler, aggregator, bricks, btDiscovery, btPresence,
+		registry, sessionManager, scheduler, aggregator, bricks, btDiscovery, btPresence, telemetry, telemetryView,
 		dispose: () => services.dispose(),
 	};
 }

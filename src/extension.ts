@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DisposableStore } from './events';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
+import { setSweepConfirmation } from './fs/transferLedger';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
@@ -12,6 +13,7 @@ import { createNotifier } from './ui/notify';
 import { AccessMode } from './api/accessPolicy';
 import { CockpitApi, createCockpitApi } from './api/cockpitApi';
 import { NotConnectedError } from './errors/CockpitError';
+import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from './telemetry/telemetrySettings';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
@@ -42,6 +44,22 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		// Not in the extension test host: its suite must not page real bricks around the desk.
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
 		mockBricks: mockBricksWanted(context),
+		// The user's settings; VS Code hands back package.json's default for what nobody set (D9).
+		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+		programPreset: readProgramPresetSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+	}));
+	// A changed program status interval: every program followed now is followed again at it (U9 review 1).
+	const programStatusIntervalChanged = services.add(new vscode.EventEmitter<void>());
+	// A changed setting applies at once, no reload.
+	services.add(vscode.workspace.onDidChangeConfiguration((e) => {
+		if (e.affectsConfiguration('ev3-cockpit.programs')) { programStatusIntervalChanged.fire(); }
+		if (!e.affectsConfiguration('ev3-cockpit.telemetry')) { return; }
+		const section = vscode.workspace.getConfiguration('ev3-cockpit');
+		runtime.telemetryView.configure(readTelemetrySettings(section, (m) => logger.warn(m)));
+		runtime.telemetry.configureThrottle(readThrottleSettings(section, (m) => logger.warn(m)));
+		runtime.telemetry.configureProgramPreset(readProgramPresetSettings(section, (m) => logger.warn(m)));
+		logger.info('Telemetry settings changed');
 	}));
 	const { bricks, aggregator, btPresence } = runtime;
 	/** What a user calls a brick: its name, or its id until it has one. */
@@ -49,6 +67,17 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	// Every notification is written to the log too (owner, 09.11.2026), so the log alone says
 	// what the person was told while they watched the brick.
 	const notify = createNotifier(logger, vscode.window);
+	// A transfer whose first reply was lost may have left a slot, and its file's space, taken on the
+	// brick until a reboot. Releasing it means closing every open file there, another computer's
+	// live transfer included, so it is the user's call (4.6.17; owner decision 13.11.2026).
+	setSweepConfirmation(bricks, async () => {
+		const release = 'Release';
+		const pick = await notify.info(
+			'A file transfer to the brick was cut off before the brick said which file it opened, '
+			+ 'so its space may stay taken until the brick restarts. Release it now? This closes every '
+			+ 'file the brick has open, including a transfer another computer may be running.', release);
+		return pick === release;
+	});
 	const notificationProgress: ShowProgress = (title, task) => {
 		notify.progressShown(title);
 		return vscode.window.withProgress(
@@ -227,6 +256,19 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	const api = services.add(createCockpitApi({
 		bricks,
 		aggregator,
+		// Telemetry for consumers (step-6 U8): claims on the service, values from the read model.
+		telemetry: {
+			rows: () => runtime.telemetry.rows(),
+			claim: (brickId, request, owner) => runtime.telemetry.claim(brickId, request, owner),
+			release: (handle) => runtime.telemetry.release(handle),
+			onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
+			snapshot: (brickId, rowIds) => runtime.telemetryView.snapshot(brickId, rowIds),
+			onChange: (listener) => runtime.telemetryView.onChange(listener),
+			// Read when a follow starts; a change follows every program again (below), no reload.
+			programStatusIntervalMs: () => readProgramPresetSettings(
+				vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)).programStatusIntervalMs,
+			onProgramStatusIntervalChange: (listener) => programStatusIntervalChanged.event(listener),
+		},
 		connect: async (brickId) => {
 			await connectPickedBrick(brickId, connectUi());
 			if (!bricks.isSignedIn(brickId)) {

@@ -6,6 +6,8 @@
  */
 
 import assert from 'assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeBrickKey, Transport } from '../contracts';
@@ -18,6 +20,9 @@ import { SessionManager } from '../runtime/sessionManager';
 import { BrickManager } from '../runtime/brickManager';
 import { createCockpitApi } from '../api/cockpitApi';
 import type { AccessMode } from '../api/accessPolicy';
+import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
+import { TelemetryService } from '../telemetry/telemetryService';
+import { telemetrySettingsFromPackage } from '../telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const DEMO = '/home/root/lms2012/prjs/Demo/Demo.rbf';
@@ -37,13 +42,26 @@ async function world() {
 	const aggregator = new PresenceAggregator(scheduler, registry);
 	const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
 	const bricks = new BrickManager({ sessionManager, aggregator, providerRegistry: registry });
+	// Telemetry as the runtime wires it: a program is followed through its row (step-6 U9).
+	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
+	const telemetry = new TelemetryService({ host: bricks.telemetryHost(), providerRegistry: registry });
+	const view = new TelemetryReadModel({ source: telemetry, settings: telemetrySettingsFromPackage(manifest) });
 	let mode: AccessMode = 'safe';
 	const api = createCockpitApi({
 		bricks, aggregator,
 		connect: (brickId) => bricks.signIn(brickId),
 		accessMode: () => mode,
 		onAccessModeChange: () => ({ dispose: () => { /* not under test */ } }),
-		programOptions: { pollMs: 20, confirmTimeoutMs: 300, confirmStepMs: 10 },
+		programOptions: { confirmTimeoutMs: 300, confirmStepMs: 10 },
+		telemetry: {
+			rows: () => telemetry.rows(),
+			claim: (brickId, request, owner) => telemetry.claim(brickId, request, owner),
+			release: (handle) => telemetry.release(handle),
+			onClaimsEnded: (listener) => telemetry.onClaimsEnded(listener),
+			snapshot: (brickId, rowIds) => view.snapshot(brickId, rowIds),
+			onChange: (listener) => view.onChange(listener),
+			programStatusIntervalMs: () => 100,
+		},
 	});
 	await scheduler.scanOnce();
 	const brickId = aggregator.getDiscoveryList()[0].brickId;
@@ -51,7 +69,7 @@ async function world() {
 		mock, api, brickId, bricks,
 		setMode: (m: AccessMode) => { mode = m; },
 		done: () => {
-			api.dispose(); bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose();
+			api.dispose(); view.dispose(); telemetry.dispose(); bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose();
 			registry.dispose(); mock.dispose();
 		},
 	};
@@ -118,7 +136,8 @@ describe('Public API over the runtime (step-5 U7)', () => {
 		assert.deepEqual(await consumer.runProgram('active', DEMO), { brickId: w.brickId, running: true });
 		await waitFor(() => states.includes(true), 1000);
 		w.mock.endProgram(KEY);
-		await waitFor(() => states.at(-1) === false, 1000);
+		// Read from the program row the brick's loop carries, not from a poll of the service's own.
+		await waitFor(() => states.at(-1) === false, 3000);
 
 		await consumer.runProgram('active', DEMO);
 		assert.deepEqual(await consumer.emergencyStop('active'), { brickId: w.brickId, running: false });

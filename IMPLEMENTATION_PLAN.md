@@ -152,8 +152,8 @@ each item waits for a Linux host, because none of it can be built or verified wi
 - **USB read padding** — DESIGN line 240: the Linux libusb path is unverified;
   `READ_OVERRUN_SLACK` in `usbLibusbAdapter.ts` is set for Windows only and needs checking
   there.
-- **Registry** — the optional `regkey` dependency is Windows-only; nothing on Linux should
-  load it.
+- ~~**Registry** — the optional `regkey` dependency is Windows-only; nothing on Linux should
+  load it.~~ Removed 13.11.2026: nothing required it.
 
 ## 3. Phase Overview
 
@@ -185,7 +185,7 @@ Create a clean technical foundation on which further implementations can be laye
   - [x] 0.2.2 ESLint configuration (`npm run lint`)
   - [x] 0.2.3 Watch mode (`npm run watch`)
   - [x] 0.2.4 Production bundle via esbuild (`npm run package`)
-  - [x] 0.2.5 VSIX packaging (`npm run package:vsix`)
+  - [~] 0.2.5 VSIX packaging (`npm run package:vsix`) — **built 13.11.2026 (fd77076):** one checked VSIX per platform (win32-x64, linux-x64, linux-arm64) from an allow-list, the native modules at the tested versions with only their own platform's binaries, the pairing helper on Windows only; the build fails on a VSIX that lacks a binary or carries anything else; `.vscodeignore` an allow-list too. **linux-arm64 holds (HOSTC, 13.11.2026, 8816dd4):** installed as a normal user in VS Code arm64, activated in an untrusted folder, the native modules load in Electron (all `.node` files aarch64), AAA connected over USB (HID fallback until the libusb auto-detach from `linux-backend` lands) and its projects listed. A second window's beacon-port failure it found is fixed (68a8838). **Open:** win32-x64 in the U10 session; linux-x64 has no machine yet. Owner 13.11.2026: the MIT `LICENSE` added and shipped; `regkey`, which nothing required, removed. Was: **reopened 13.11.2026, blocks a release:** the VSIX ships none of the native modules. `.vscodeignore` excludes `node_modules/**`, esbuild leaves `usb`, `node-hid`, `serialport`, `koffi` and `regkey` external, and there is no `vscode:prepublish`; an installed build therefore has no USB, no Bluetooth and no TCP-independent discovery on any platform, Windows included — only running from source works. Found by the Linux session (HOSTC) while weighing a D-Bus dependency, confirmed on HOSTA. Needed: platform-specific VSIXes (`vsce package --target win32-x64 linux-x64 linux-arm64 …`), each carrying those modules' `node_modules` with the prebuilt binary for its target, and a check in 7.7.5 that installs each VSIX and opens a brick
 - [x] **0.3 Test infrastructure**
   - [x] 0.3.1 Node built-in test runner for unit tests (`npm run test:unit`)
   - [x] 0.3.2 VS Code extension host test runner (`npm run test:host`)
@@ -710,7 +710,7 @@ Build the source of truth for connected bricks.
     discovered. Sign-in has no persistence: it lives in the extension host's memory, so closing
     the cockpit signs everything out — which is what makes "nothing is signed in at startup" a
     rule rather than a habit.
-  - [ ] 2.8.10a **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
+  - [x] 2.8.10a **Done 13.11.2026 (step 6 U5 review + U6, 3bc10ee):** the telemetry host reports a session only for a signed-in brick and runs a loop only while it has a route; the service runs in the shipped runtime. **Gate telemetry on the pair.** §6.2's rule is stated but not yet enforced in
     one place: telemetry should run exactly while a brick is signed in *and* available, and
     stop the moment either drops. Belongs with the telemetry runtime wiring in 3.3
   - [x] 2.8.11 **Bluetooth cannot yet hold a session, and that blocks its scenarios.**
@@ -1135,7 +1135,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Occupancy is now a row (3.1.11), which frees the budget, but a user with eight populated
     ports on HID can still overrun a tick, so the rule holds regardless. A test must fill a
     tick past the HID budget and assert every row is eventually served
-  - [~] 3.1.10 (service side done in step 6 U5: the grant is the request clamped to the floor, fixed at claim time; the API returning it is U8) Effective interval = the fastest any subscriber asks for, **clamped to the
+  - [x] 3.1.10 (done: the grant is the request clamped to the floor, fixed at claim time (step 6 U5); `subscribeTelemetry` returns it, and every value carries `effectiveIntervalMs` (U8)) Effective interval = the fastest any subscriber asks for, **clamped to the
     transport floor** and reported back: `subscribeTelemetry` returns the interval each row was
     actually granted, because a request is not a guarantee — 10 Hz on Bluetooth would eat the
     brick's whole measured 10.7 commands/second. Subscribers hold an opaque handle, so
@@ -1465,10 +1465,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers — **not built as a row (11.11.2026):** free space is answered by the API's `storage()`; a row comes when a consumer needs to follow it
   - [x] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility — **done as rows** (step 6 U2): `system.bluetooth.on|visible|peers`, `system.wifi.on|present`; USB needs no row (it is present whenever the brick answers over it) and must never be asked `GET_ON_OFF` (FAILBREAK ends the frame, `c_com.c` 4296–4330); encodings verified on hardware in U10
 - [ ] **3.2 Telemetry data models**
-  - [ ] 3.2.1 `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
+  - [x] 3.2.1 **Done 13.11.2026 as rows (step 6 U6/U8):** a snapshot is a set of row values, each with its own `sampledAt` (`ReadValue`, the API's `TelemetryUpdate` of kind `snapshot`). As planned: `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
     a set of row values, each carrying its own `sampledAt`, because rows in one snapshot come
     from different ticks. Typed row values, not a `data: unknown` payload
-  - [ ] 3.2.2 `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
+  - [x] 3.2.2 **Done 13.11.2026 as rows (step 6 U6/U8):** the rows that changed (`TelemetryUpdate` of kind `change`), `TelemetryRowInfo`, and the subscription with what each row was granted. As planned: `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
     the rows that changed. Add `TelemetryRow` (id, value type, unit, raw type code) and
     `TelemetrySubscription` (handle plus the interval each row was granted)
   - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp). Port identity must
@@ -1539,30 +1539,30 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     (3.1.14 (3)): track claims on *rows* per brick, each keyed by an opaque subscriber handle,
     so releasing one claim recomputes the effective interval from those that remain. A registry
     keyed on categories cannot honour 3.1.10
-- [ ] **3.4 Adaptive Throttling** — **un-gated by the owner 11.11.2026; built in step 6 U7.** The degradation is recorded and reproduced in DESIGN §4.5 (Wi-Fi 4×, Port View stalls); the input is each brick's latency tail (p95, stalls), not queue depth. The gate as first written: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
-  - [ ] 3.4.1 Response latency measurement per command
+- [x] **3.4 Adaptive Throttling** — **done 13.11.2026 in step 6 U7** (08b110d, ab5cf5d, c9590e4; review converged 78a5896); thresholds re-checked on hardware in U10. **un-gated by the owner 11.11.2026; built in step 6 U7.** The degradation is recorded and reproduced in DESIGN §4.5 (Wi-Fi 4×, Port View stalls); the input is each brick's latency tail (p95, stalls), not queue depth. The gate as first written: before building this, record in DESIGN §4.5 the concrete degradation this prevents (brick count, subscription mix, observable symptom) and reproduce it. Both inputs the design names have near-zero dynamic range against the serial per-brick queue — latency sits at the transport's constant RTT and depth stays at 0 or 1 unless the scheduler out-runs the brick — so the throttler would mostly measure its own arrival rate. If it cannot be reproduced, that is a finding to take back to REQUIREMENTS §8 ("telemetry frequency must adapt to actual transport latency and queue depth") as a proposed change — not a licence to drop adaptivity unilaterally, since the phase gate and the requirement both still demand it
+  - [x] 3.4.1 Response latency measurement per command — each telemetry frame's round trip, queue wait included, into a per-brick window (p95, stalls)
   - [~] 3.4.2 ~~Queue depth monitoring from the command queue~~ **Retired:** measured pinned at 0–1 with one frame in flight (DESIGN §4.5)
-  - [ ] 3.4.3 Frequency scaling algorithm (increase the tick period when the latency tail grows)
-  - [ ] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
-  - [ ] 3.4.5 Diagnostic output — current telemetry speed observable for the UI
-- [ ] **3.5 Read model for the active brick**
-  - [ ] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots
-  - [ ] 3.5.2 Port state (A–D motors, 1–4 sensors)
-  - [ ] 3.5.3 Peripheral detection and type identification
-  - [ ] 3.5.4 Button state
-  - [ ] 3.5.5 Battery state
-  - [ ] 3.5.6 System information for config mode
-- [ ] **3.6 Stale snapshot policy**
-  - [ ] 3.6.1 After a subscription ends, hold last snapshot briefly as `stale`
-  - [ ] 3.6.2 Configurable stale timeout
-  - [ ] 3.6.3 Clear stale data after timeout
+  - [x] 3.4.3 (`TickThrottle`: p95 against tailFactor × the link's round trip; step up to maxSlowdown, back after calmWindows; all user settings) Frequency scaling algorithm (increase the tick period when the latency tail grows)
+  - [x] 3.4.4 Separate throttling per brick (one slow brick must not throttle others)
+  - [x] 3.4.5 Diagnostic output — current telemetry speed observable for the UI (`throttleOf()`, `onThrottleChange`: period, factor, p95, limit, stalls; the display itself is Phase 5)
+- [x] **3.5 Read model for the active brick** — done 13.11.2026 in step 6 U6; the panel that draws it is Phase 5
+  - [x] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.2 Port state (A–D motors, 1–4 sensors), layer 0 (D3) (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.3 Peripheral detection and type identification, raw code kept (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.4 Button state (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.5 Battery state (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [~] 3.5.6 System information for config mode — firmware version and Bluetooth visibility in the view (step 6 U6, ccb1ce1, `activeBrickView.ts`); the rows for Bluetooth on, Wi-Fi and the brick's name are read, and join the view when config mode (Phase 5) says what it shows
+- [x] **3.6 Stale snapshot policy** — done 13.11.2026 in step 6 U6, owner decision D9
+  - [x] 3.6.1 After a subscription ends, hold last snapshot briefly as `stale` — and when a value is `staleFactor` of its intervals old (step 6 U6, d64aab1, `telemetryReadModel.ts`)
+  - [x] 3.6.2 Configurable stale timeout — user settings `ev3-cockpit.telemetry.staleTimeoutMs` and `staleFactor`, defaults only in package.json, applied without a reload (step 6 U6, d64aab1, `telemetryReadModel.ts`)
+  - [x] 3.6.3 Clear stale data after timeout; at once when the session ends (step 6 U6, d64aab1, `telemetryReadModel.ts`)
 - [ ] **3.7 Unit tests**
   - [x] 3.7.1 Telemetry scheduler mode switching tests — `brickTelemetry.test.ts`: foreground
     vs minimal, hand-over on an active-brick change, stop when the brick disconnects
-  - [ ] 3.7.2 Adaptive throttling response to latency changes
+  - [x] 3.7.2 Adaptive throttling response to latency changes — `tickThrottle.test.ts`, `telemetryThrottle.test.ts`
   - [x] 3.7.3 ~~Category~~ Row-claim add/remove tests — `telemetryClaims.test.ts`, `telemetryServiceClaims.test.ts` (claims are on rows, not categories)
-  - [ ] 3.7.4 Stale snapshot expiry tests
-  - [ ] 3.7.5 Read model aggregation tests
+  - [x] 3.7.4 Stale snapshot expiry tests — `telemetryReadModel.test.ts`, mutations 17/17
+  - [x] 3.7.5 Read model aggregation tests — `telemetryReadModel.test.ts`, `activeBrickView.test.ts`, end to end in `createRuntime.test.ts`
   - [x] 3.7.6 Multi-brick concurrent telemetry tests — `telemetryServiceClaims.test.ts` (foreground and subscribed loops side by side, handles unique across bricks)
 - [ ] **3.8 Per-mode timing constants** — partially landed as `src/telemetry/telemetryConstants.ts`.
 
@@ -1605,8 +1605,8 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.1.1 `ConnectedBrickSnapshot` — public representation of a connected brick
   - [x] 4.1.2 `BrickStateChangeEvent` — state transition event for consumers
   - [x] 4.1.3 `ActiveBrickSnapshot` — currently active brick or null
-  - [ ] 4.1.4 `TelemetrySnapshot` (API version) — **reopened 11.11.2026:** the category-based type DESIGN §5.4 rejects; redone against rows in step 6 U8
-  - [ ] 4.1.5 `TelemetryEvent` (API version) — **reopened 11.11.2026**, as 4.1.4
+  - [x] 4.1.4 **Redone against rows 13.11.2026 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`).** `TelemetrySnapshot` (API version) — **reopened 11.11.2026:** the category-based type DESIGN §5.4 rejects; redone against rows in step 6 U8
+  - [x] 4.1.5 `TelemetryEvent` (API version) — **reopened 11.11.2026**, as 4.1.4; redone against rows 13.11.2026 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
   - [x] 4.1.6 `FilesystemEvent` — filesystem operation result
 - [x] **4.2 Consumer registration**
   - [x] 4.2.1 `registerConsumer(name)` — register a dependent extension, return consumer handle
@@ -1620,11 +1620,11 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.4.2 `onActiveBrickChanged(callback)` — subscribe to active brick switching
   - [x] 4.4.3 Disposable pattern for all subscriptions
 - [ ] **4.5 Telemetry subscriptions**
-  - [ ] 4.5.1 `subscribeTelemetry(brick, rows, intervalMs)` on the consumer — a brick by id or `'active'`, rows by id, `apiVersion` on the API object; returns a handle with the granted interval (DESIGN §9.3, §9.6; step 6 KTD6)
-  - [ ] 4.5.2 Initial snapshot delivery before events
-  - [ ] 4.5.3 Cancel a subscription by disposing its handle (releases exactly that claim)
-  - [ ] 4.5.4 Auto-cancel on brick disconnect
-  - [ ] 4.5.5 Integration with telemetry scheduler mode transitions
+  - [x] 4.5.1 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`) `subscribeTelemetry(brick, rows, intervalMs)` on the consumer — a brick by id or `'active'`, rows by id, `apiVersion` on the API object; returns a handle with the granted interval (DESIGN §9.3, §9.6; step 6 KTD6)
+  - [x] 4.5.2 Initial snapshot delivery before events — never inside the call that subscribes; nothing lost between (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.3 Cancel a subscription by disposing its handle (releases exactly that claim) (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.4 Auto-cancel on brick disconnect — an `ended` update, once (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.5 Integration with telemetry scheduler mode transitions — end to end over the shipped runtime and a mock brick (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
 - [ ] **4.6 Filesystem services** — scope and behaviour are settled in
   `docs/plans/2026-08-20-1740-feat-filesystem-layer-plan.md`; the protocol survey behind it is
   `docs/ideation/2026-08-20-filesystem-protocol-survey.md`. That contract replaces the five
@@ -1687,6 +1687,7 @@ Export a stable API for other extensions without giving them direct access to th
     are collected in §2, "What Linux needs". 11.11.2026: still not run — HOSTC had no USB to
     the bricks; the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`) come
     prebuilt for linux-arm64 and load (`docs/plans/linux-session-results/2026-11-11-hostc.md`)
+  - [ ] 4.6.17 **An interrupted upload leaks the brick's space until a reboot — release it after reconnect.** Measured on HOSTC (13.11.2026: 496 KB and 916 KB free, 4600 KB after a reboot) and traced in the firmware source (1.09D, the only version in `ev3-resources`; 1.09H differs only by a build flag): a system-command download holds a slot in one global table `ComInstance.Files[64]` with an open fd (`c_com.h` 1471–1482, 1541; `lms2012.h` 363), freed only at the end of the file, on the firmware's own errors, or by `CLOSE_FILEHANDLE` (`c_com.c` 1112–1116, 1229–1237, 2116–2150) — no timeout, nothing on a USB, Bluetooth or Wi-Fi disconnect (`c_com.c` 216–247, 2852). `DELETE_FILE` only `remove()`s the name (`c_com.c` 2195–2228), so the blocks stay allocated while the fd is open, and `statvfs` counts them (`c_memory.c` 119–125), which also refuses later uploads (`c_com.c` 947–998). A lost reply to `BEGIN_DOWNLOAD` leaves a slot the host never learns the number of. Releasing without a reboot: `CLOSE_FILEHANDLE <n>` closes the slot and its fd from any channel, after any reconnect; `SUCCESS` = it was held, `UNKNOWN_HANDLE` = it was free. Hazards: numbers are reused (lowest free), so a stale number can close someone else's live transfer; and the firmware reads `Files[n]` before checking the bound (`c_com.c` 529–531, `DATA8`), so **never send n ≥ 64**. `LIST_OPEN_HANDLES` is broken (`c_com.c` 2259: tests `State`, which is never set) and cannot find the leak. After 64 leaks uploads, downloads **and directory listing** fail with `NO_HANDLES_AVAILABLE`. To build: keep, per brick and across the lost link, the handle and path of a transfer that did not finish (or "BEGIN without a reply"); after the reconnect and before any other transfer, `CLOSE_FILEHANDLE` it, then `DELETE_FILE` the partial file; for a handle never learned, a sweep of 0..63 right after connect while nothing else is transferring — **owner decision 13.11.2026: only when the user agrees**: a notification offers to release the space left by an interrupted transfer and sweeps on confirmation, since a sweep can close another host's live transfer; a known handle is released automatically. Today `fileTransferService.ts` releases a handle only in the `catch` around `CONTINUE` and swallows the failure when the link is gone. Side trap, not reached today: a message over one buffer puts the channel in `RXFILEDL` and a pulled cable then writes the next packets into the file (`c_com.c` 1086/1198, 2799–2826); the cockpit's 1017-byte chunks stay under it — keep it so
   - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
     listed full paths, a shape no brick produces. It now returns bare names with kinds
     and sizes, tracks directories explicitly so an empty one is representable, and
@@ -1720,7 +1721,7 @@ Export a stable API for other extensions without giving them direct access to th
     argument order against `bytecodes.c`: `PAR16,PAR32,PAR32,PAR8`
   - [x] 4.7a.2 `stopProgram` — `opPROGRAM_STOP(slot)`
   - [x] 4.7a.3 `isProgramRunning` — `opPROGRAM_INFO` with `GET_STATUS` (subcode 22) per slot
-  - [x] 4.7a.4 Run-state change events — needs polling, so decide the interval against the — **done:** polled at about 1 s while anyone listens, and only then (owner, step-6 plan D5, 11.11.2026); step 6 moves it into the telemetry budget as a row
+  - [x] 4.7a.4 Run-state change events — needs polling, so decide the interval against the — **done:** polled at about 1 s while anyone listens, and only then (owner, step-6 plan D5, 11.11.2026); **since 13.11.2026 (step 6 U9) a telemetry row** `program.user.running` claimed while anyone listens, at the user's `ev3-cockpit.programs.statusIntervalMs`; and while a program runs its brick's telemetry slows to `ev3-cockpit.telemetry.programRunningTickMs` (owner decision D11)
     same per-transport command budget telemetry uses, and whether polling stops when nobody
     subscribes
   - [x] 4.7a.5 `emergencyStop` — decide whether it is `opPROGRAM_STOP` on every slot or the — **done:** the brick's own power-off sequence: PROGRAM_STOP user and debug slot, INPUT_DEVICE STOP_ALL -1 — never PROGRAM_STOP(0), which ends the VM
@@ -1735,7 +1736,7 @@ Export a stable API for other extensions without giving them direct access to th
 - [ ] **4.8 Integration tests**
   - [x] 4.8.1 Mock consumer registers and receives snapshot
   - [x] 4.8.2 Mock consumer receives state change events
-  - [ ] 4.8.3 Telemetry subscription lifecycle (subscribe → receive → unsubscribe)
+  - [x] 4.8.3 Telemetry subscription lifecycle (subscribe → receive → unsubscribe) (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
   - [x] 4.8.4 Filesystem operations against mock transport
   - [x] 4.8.5 Consumer cleanup on unregister
   - [x] 4.8.6 Multi-consumer concurrent access
@@ -1954,6 +1955,28 @@ Stabilize the system for long-term use and further development.
   - [ ] 7.7.4 Refactoring and coverage improvement cycle
   - [ ] 7.7.5 VSIX packaging and manual validation
   - [ ] 7.7.6 Documentation update checklist
+- [ ] **7.8 Repository hygiene: code outside TypeScript** (owner's question 13.11.2026; GitHub shows
+  TypeScript 88 %, JavaScript 10 %, C# 2 %, other 0.5 %)
+  - [ ] 7.8.1 The hardware probes and measurement scripts (`scripts/*-probe.js`, `*-sweep.js`, `*-matrix.js`,
+    `*scenario*.js`, `bt-backend-comparison.js`, `signal-monitor.js`; 20 files, about 3 900 lines) become
+    TypeScript compiled with the rest. They load the compiled cockpit from `out/` without types, and a probe
+    has disagreed with the shipped code five times, each time the probe being wrong; a type check would have
+    caught the signature drift. They stay in the repo: the plans cite them as evidence.
+  - [ ] 7.8.2 Remove `scripts/install-hooks.sh`: `install-hooks.cjs` replaced it and nothing calls it.
+  - [ ] 7.8.3 `scripts/presence-auth-probe.ps1` (cited by the step-4 plan): rewrite with the other probes
+    or move beside its plan as recorded evidence.
+  - [ ] 7.8.4 Stays as it is, on purpose: the C# `native/bt-pairing-helper` (WinRT custom pairing; no koffi
+    route to WinRT), `scripts/bench/Bench.lms` (runs on the brick), the `.cjs` build and test plumbing
+    (Node loads it before anything is compiled), the CI workflow, the git hook, the raw Linux session
+    evidence (`docs/plans/linux-session-results/hostc-raw/`).
+  - [ ] 7.8.5 Only if the owner wants the GitHub bar to show the product alone: evidence folders marked
+    `linguist-documentation` in `.gitattributes`. Cosmetic; it changes no file.
+- [ ] **7.9 Publishing on the VS Code Marketplace** — the very last step, after the UX (Phase 5)
+  (owner, 13.11.2026). Already there: one checked VSIX per platform (`npm run package:vsix`;
+  `vsce publish --target` takes platform packages), the MIT `LICENSE`, the publisher `99LevelsUp`,
+  `untrustedWorkspaces: limited`. Still to do then: the owner's publisher account and token (his;
+  never in the repository), an icon, the Marketplace README and gallery, a real CHANGELOG,
+  categories and keywords, and every VSIX installed and checked on a brick (7.7.5).
 
 ### Minimum Validation Set
 

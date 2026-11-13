@@ -266,10 +266,14 @@ export class BtWinsockAdapter implements TransportAdapter {
 				transport: 'BT Winsock',
 			});
 
+			let written = 0;
 			try {
-				this.writeAll(api, socket, packet);
+				this.writeAll(api, socket, packet, (n) => { written = n; });
 			} catch (error) {
 				this.doRejectPendingReply(error);
+				// Part of the packet is on its way to the brick: the next command would be read as
+				// its rest. Only a fresh link starts the stream clean again.
+				if (written > 0) { void this.close(); }
 				return;
 			}
 			// A reply cannot already be here, but the wait should run at the fast cadence
@@ -287,7 +291,7 @@ export class BtWinsockAdapter implements TransportAdapter {
 	 * full frame it will. Ignoring the return value would put a truncated command on the
 	 * wire, which the brick answers with a parse error at best and acts on at worst.
 	 */
-	private writeAll(api: Winsock2Api, socket: SocketHandle, packet: Uint8Array): void {
+	private writeAll(api: Winsock2Api, socket: SocketHandle, packet: Uint8Array, progress: (sent: number) => void): void {
 		let sent = 0;
 		while (sent < packet.length) {
 			const written = api.send(socket, packet.subarray(sent), packet.length - sent);
@@ -300,6 +304,7 @@ export class BtWinsockAdapter implements TransportAdapter {
 				);
 			}
 			sent += written;
+			progress(sent);
 		}
 	}
 

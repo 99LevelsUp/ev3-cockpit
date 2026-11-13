@@ -43,6 +43,8 @@ class FakeWinsock implements Winsock2Api {
 	/** Bytes `send` accepts per call; `undefined` accepts everything offered. */
 	acceptBytes?: number;
 	sendResult?: number;
+	/** After this many accepted `send` calls, the next one fails with SOCKET_ERROR. */
+	failAfterSends?: number;
 	/** Queued inbound chunks, delivered one per `recv`. */
 	inbound: Uint8Array[] = [];
 	/** Delivered once `inbound` runs dry: `0` is an orderly close. */
@@ -89,6 +91,7 @@ class FakeWinsock implements Winsock2Api {
 
 	send(_socket: SocketHandle, data: Uint8Array, length: number): number {
 		if (this.sendResult !== undefined) { return this.sendResult; }
+		if (this.failAfterSends !== undefined && this.sent.length >= this.failAfterSends) { return SOCKET_ERROR; }
 		const accepted = Math.min(this.acceptBytes ?? length, length);
 		this.sent.push(Uint8Array.from(data.subarray(0, accepted)));
 		return accepted;
@@ -366,7 +369,22 @@ describe('BtWinsockAdapter — exchanges', () => {
 		await adapter.open();
 
 		await assert.rejects(adapter.send(Uint8Array.from([2, 0, 1, 0])), /10054/);
+		assert.equal(adapter.isOpen, true, 'nothing reached the stream: the link is as good as before');
 		await adapter.close();
+	});
+
+	it('closes the link when the write fails part-way: a truncated command would join the next one', async () => {
+		const api = new FakeWinsock();
+		api.acceptBytes = 4;
+		api.failAfterSends = 1;
+		api.lastErrorCode = 10054;
+		const adapter = new BtWinsockAdapter({ mac: MAC, winsockApi: api });
+		await adapter.open();
+
+		await assert.rejects(adapter.send(Uint8Array.from([9, 0, 1, 0, 5, 6, 7, 8, 9, 10, 11])), /10054/);
+
+		assert.equal(adapter.isOpen, false);
+		assert.deepEqual(api.closed, [api.socketHandle]);
 	});
 
 	it('fails the exchange rather than spinning when the write stalls at zero', async () => {

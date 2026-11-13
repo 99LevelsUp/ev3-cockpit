@@ -81,7 +81,8 @@ KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle �
 Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floor, fixed when the claim is made (f85a939, D2); part 2 one loop per brick in `TelemetryService`, `modeOf` reports subscribed, claims wait out a lost link and end with the session via `onClaimsEnded` (adc826c, mutations 15/15); the session's own `activeMode` and categories removed (31b83eb, drift 3 closed). A static row claimed after it was read is not read again: its value comes from the read model (U6). Planned:
 3.3.5, 3.1.10, 3.3.2, 3.8 (subscribed interval), KTD4; one source for `ActivityMode` (drift 3); 3.7.3, 3.7.6. The category subscriptions in `sessionEntry` are removed.
 
-### U6. Read model, stale policy, wiring — planned in detail 11.11.2026
+### U6. Read model, stale policy, wiring — done 13.11.2026; review five rounds, converged (see Review)
+Part 1 read model + settings + service plan/session events (d64aab1, mutations 17/17 — the first run hung all night on a mutation that turned the timer into a busy loop; the test's fake timer now fails after 10 000 rounds and the mutation runner has a time limit); part 2 the view of the active brick (ccb1ce1, 9/9); part 3 wiring into `createRuntime` and `activate()` (3bc10ee, 4/4; end to end over the mock's interpreted frames; host tests 5/5). Planned:
 3.2.1, 3.2.2, 3.5.x, 3.6.x, 2.8.10a, 3.7.4, 3.7.5.
 
 **Goal.** What the loops read lands in one place a reader can ask: per brick, the last value of every row with `sampledAt`, its effective interval and whether it is still fresh. The panel's view of the active brick (Phase 5) and the API's snapshot and events (U8) both read it; neither talks to a loop. The service runs in the shipped extension, not only in tests.
@@ -103,7 +104,15 @@ Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floo
 - **D9. Stale and clearing — agreed, and parametrised:** stale = loop not running for the row, or older than `staleFactor` × its effective interval; kept for `staleTimeoutMs`, then dropped; session end clears at once; static rows stay for the session. Owner: *no fixed constants in the code* — both are user settings (`ev3-cockpit.telemetry.staleFactor`, default 3; `ev3-cockpit.telemetry.staleTimeoutMs`, default 10 000), whose only defaults live in `package.json`; the read model takes them as required options and follows a settings change without a restart; a value out of range falls back to the declared default with a warning.
 - **D10. Events carry changed rows only — agreed on the condition that no information is lost in an outage.** How that holds: during an outage there are no samples to lose; the values turn stale, and that is itself an event; when the link comes back, the first sample makes an event even if its value is unchanged, because the stale flag flips; a reader can take the whole snapshot at any time (U8 sends it before events). Every value carries `sampledAt`. Pinned by a test. A consumer that wants every sample (a graph) can be offered a flag in U8 if one asks.
 
-### U7. Adaptive throttling
+### U7. Adaptive throttling — done 13.11.2026; review converged (see Review)
+Part 1 `TickThrottle` and the settings (08b110d, mutations 17/17); part 2 into the service: round trips per frame, base × factor, re-announced plans, `throttleOf`/`onThrottleChange`, runtime and `activate()` (ab5cf5d, 8/8); part 3 rows by relative lateness on a tight budget (c9590e4, 5/6, a dead tie-break removed); phase offsets left out (libusb carries 1024 B on Linux too). Planned:
+**Design.** Per brick, a `TickThrottle` watches the round trip of every telemetry frame (send to reply, queue wait included: a brick busy with a file transfer is a brick to slow down for). Tumbling windows of `windowSize` frames; at the end of each, the p95 is set against a limit of `tailFactor` × the transport's measured round trip (`COMMAND_RTT_MS`: USB 10, TCP 60, Bluetooth 130 ms — measured data, not settings). Over the limit: the tick slows one `step` (× 1.5), never past `maxSlowdown` (× 4). Within it for `calmWindows` windows in a row: one step back, never faster than the plan's tick. Port View's 37 ms p95 on USB trips it (limit 30 ms); a quiet brick's does not. The factor multiplies the plan's period, so dividers and phases stay (§9.5); a re-plan keeps the factor; a restart on a new transport starts afresh. Every change re-announces the plan, so `effectiveIntervalMs` in the data moves with it (D2). The numbers — period, factor, p95, stalls (round trips over the limit), samples — are exposed per brick for the diagnostic display (3.4.5). Owner rule (D9): no tunable constant in code — `enabled`, `windowSize`, `tailFactor`, `step`, `maxSlowdown`, `calmWindows` are user settings `ev3-cockpit.telemetry.throttle.*`, defaults only in package.json, applied without a reload.
+
+**Deviation from KTD5's wording, for the owner:** KTD5 caps the tick so that "the slowest row's interval" stays inside the heartbeat window. On Bluetooth the foreground's event rows already run every 2.5 s against a 3 s heartbeat, so that cap would leave Bluetooth — where throttling matters most — almost no room. The cap here is `maxSlowdown` on the tick; the heartbeat is not throttled and does not depend on telemetry. Reversible if the owner wants KTD5 as written.
+
+**Not in U7:** the program-running preset (200 ms on USB/TCP) waits for U9, which makes "a program runs" a telemetry row; the HID ordering by relative lateness (below) is its own part. Thresholds are re-checked in U10 on hardware.
+
+Planned as written first:
 3.4.1 (a per-brick round-trip window with p95 and stall count), 3.4.3 (KTD5), 3.4.4 (per brick), 3.4.5 (the numbers for the diagnostic display, exposed for Phase 5), 3.7.2. Tests drive a fake clock and a brick whose latency tail grows and falls; one slow brick does not slow another.
 
 Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room the fast ones leave, the rest on the following ticks). That is already how truncation works, and it only bites on the 64-byte HID fallback; libusb, Bluetooth and TCP carry 1024 bytes and the whole set fits. Two refinements for the HID case:
@@ -111,11 +120,22 @@ Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room t
 - **Phase offsets** for rows with the same divider, so they do not all come due on one tick and burst the packet.
 "Fast / slow" stays a setting the cockpit offers; underneath, each row keeps its own divider, since what costs a running program is the number of commands (D8), not the rows in one.
 
-### U8. Telemetry on the public API
+### U8. Telemetry on the public API — done 13.11.2026; review five rounds, converged (see Review)
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
-### U9. The program run-state poll
-D5 (b). Done in step 5 already: the service polls only while someone listens; `following` and its failure count are gone. What is left here: the program status becomes a row the program service claims while someone listens, and the service's own timer goes.
+### U9. The program run-state row and the program-running preset — done 13.11.2026; review three rounds, converged (see Review)
+Part 1 the row (fbb2e4e, mutations 6/6); part 2 the preset in the service (e84cd8a, 8/8); parts 3–4 the program service follows the row, wiring, consumer guide (eb6bec2, 11/12, one caught by the compiler; end to end over the shipped wiring and the mock). Planned:
+D5 (b). Done in step 5 already: the service polls only while someone listens; `following` and its failure count are gone. What is left: the program status becomes a telemetry row, the program service follows it instead of its own timer, and telemetry slows down while a program runs (the measurement's consequence 1).
+
+**Owner decision D11 (13.11.2026): while a user program runs, the whole loop of that brick slows down — the panel's reads and every consumer's alike.** Each telemetry command costs the program about 2 ms whoever asked for it, and the program comes first. A consumer's grant does not change; what its rows really run at travels as `effectiveIntervalMs` (D2). The floor is a user setting, `ev3-cockpit.telemetry.programRunningTickMs` (default 200, as the rule decided; 0 turns the preset off), declared only in `package.json`.
+
+**Parts.**
+1. **The row.** `program.user.running`, tier `event`: `PROGRAM_INFO GET_STATUS` on the user slot into one byte of globals, read as a boolean (`RUNNING`), in the same command as every other row (D8). The foreground reads it with the event rows; any brick that is read carries it at no extra command. The mock's frame interpreter answers it from the mock's own program state.
+2. **The preset.** The service learns from its own loop's values whether a program runs on a brick, and while one does the tick is at least `programRunningTickMs`: period = max(plan × throttle factor, the floor). The plan announced to the read model follows, so `effectiveIntervalMs` shows the slower reads. The setting applies at once.
+3. **The program service follows the row.** `onStateChange` claims `program.user.running` on its brick through the telemetry service (interval: a setting, `ev3-cockpit.programs.statusIntervalMs`, default 1000, today's poll) and listens to the read model; the last listener gone releases the claim; the service's own timer goes. `run()` keeps its explicit `program:status` confirmation, which is a command, not telemetry. A value that turns stale or goes says nothing about the program, so it tells no listener.
+4. **Wiring.** The API builds program services with the telemetry service and read model; `activate()` reads the two new settings and applies changes at once.
+
+**Tests first (RED).** Row: bytecode, a running and a stopped reply, the HID budget. Mock: a program started on the mock shows in a frame. Preset: a program running slows the tick to the floor and announces it; a throttled tick slower than the floor stays; the program ending brings the tick back; 0 turns it off; a settings change applies at once. Program service: listening claims the row, the read model's change tells listeners, the last listener releases, no timer runs; a stale value tells nothing. End to end over the runtime and the mock: run a program, the loop slows, stop it, the loop returns. Mutations on each rule.
 
 ### U10. Hardware session (owner)
 3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. **Does a value read stall?** Per `c_input.c`, `opINPUT_READSI` never re-executes (U4 finding): plug a sensor in during a session with the value row ungated, and switch a UART sensor's mode, and measure the frame's round trip — a 1.2 s frame would mean the source reading is wrong. Re-measure the frame costs of 3.1.12 with the slow tier in its own command. **Real bricks against the mock** (owner, 11.11.2026; must not be skipped): the same composed frames from the full row catalogue go to each of the three bricks over USB and over Bluetooth and to the mock, with the same devices configured on the mock as plugged into the brick; compare type codes, modes, value layouts and the bytes a brick leaves unwritten, and every difference is either a mock fix or a recorded firmware variant. Results go into this plan with a verdict against the rule written beforehand.
@@ -183,6 +203,123 @@ Convergence gate met: no blocker or major survives. U4 is closed in code; U10 me
 | 2 | minor | a frame waiting in the chain still went out after its loop was retired by a further route change, or the service disposed | CONFIRMED | each loop has an identity; a waiting frame is refused unless its loop is still the brick's; a retired loop's values and errors are not reported; a frame with nothing ahead goes out at once. Mutations 4/5 killed; the fifth showed the `disposed` check dead (dispose stops every loop) and it was removed |
 
 Convergence gate: no blocker or major survives verification. U5 is closed in code; U8 builds the API on `claim`/`release`/`grantOf`/`onClaimsEnded`.
+
+### U6, round 1 (codex, inline packet `.review-out/step6-u6-packet.md`, 13.11.2026) — NOT-READY → fixed (f44b7d5)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a late reply for a row that left the plan revived it as fresh with its old interval, and put off its drop | CONFIRMED (a re-plan waits for the frame in flight) | a sample for a row not in the plan keeps it stale, with no interval, and keeps its drop time |
+| 2 | major | an unchanged sample processed before an overdue timer erased the outage without an event (D10) | CONFIRMED | each sample first runs the deadlines that have passed: stale is announced, then the recovery |
+| 3 | major | a value's stale time counted from when the timer ran, not from when it went stale; a lowered `staleFactor` granted extra time | CONFIRMED | stale from the deadline (`sampledAt + staleFactor × interval`); dropped against it in the same pass |
+| 4 | major | with `staleTimeoutMs` 0 the stale event was swallowed and only the removal told | CONFIRMED | stale and gone are two events, in that order |
+| 5 | major | a delay past Node's timer limit (2³¹−1 ms) fires after 1 ms, so a huge setting made the timer spin | CONFIRMED | the delay is capped at the platform's limit and the deadline checked again on waking; a huge `staleFactor` simply never stales by age |
+| 6 | major | a read model attached to a service already reading a brick never learned its plan | CONFIRMED as a contract gap (not reachable in today's wiring: no brick is active when the runtime is built) | `TelemetryService.currentPlans()`; the read model starts from it |
+| 7 | minor | the view gives no freshness for battery, buttons and Bluetooth visibility | CONFIRMED | recorded for Phase 5: the panel decides how stale system values show; the read model has the flag for each row |
+
+Mutations on the fixes 8/8; unit 957/957.
+
+### U6, round 2 — confirmation of round 1 (codex, `.review-out/step6-u6-r2-packet.md`, 13.11.2026) — NOT-READY → approach changed (5c551a7)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a row that left the plan kept its old effective interval in snapshots and events; one already stale got no event | CONFIRMED | leaving the plan clears the interval, and the change is told |
+| 2 | major | a plan change could still erase an overdue outage or put off a drop (round 1 fixed this for samples only) | CONFIRMED | see below |
+| 3 | major | a late reply after the session ended recreated its values, also when a listener ended the session during the stale news | CONFIRMED | a brick whose session ended takes no reply until a new plan says it is read again |
+
+Same area two rounds running, each finding an input that forgot a case: **the approach changed instead of a third patch.** Every input — sample, plan, session end, settings, timer — goes through one `run()`: time is brought up to now under the old state (stale told first, then what expired goes), the input applies, then time again under the new state. Events are no longer picked by hand: they are the difference between what readers were last told and what holds now. Mutations on the rebuilt model 19/19; unit 961/961.
+
+### U6, round 3 — audit of the rebuilt model (codex, `.review-out/step6-u6-r3-packet.md`, 13.11.2026) — NOT-READY → fixed (caf497f)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a late reply after a stopped row's stale time had run out recreated it for another `staleTimeoutMs` | CONFIRMED (realistic with a low timeout) | the model keeps, per brick and session, when each row stopped being read; a reply past that row's drop is not taken |
+| 2 | major | a static row whose first reply came after it left the plan went stale | CONFIRMED (the active brick changing just after sign-in) | the same history keeps that the row was planned static |
+
+Both came from one missing piece of state, not from the ordering the rebuild settled: what a plan said of a row was forgotten with its value. Mutations 5/6 — the survivor deletes the history at session end, which nothing observable depends on (a static row is static in every session; other rows are rewritten by the next plan). Unit 963/963.
+
+### U6, round 4 — confirmation of round 3 (codex, `.review-out/step6-u6-r4-packet.md`, 13.11.2026) — fixed (a304ff6)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a row stale by age before it left the plan came back from a late reply after its drop, for the gap between its stale time and its stop time | CONFIRMED (tens of ms in the reported sequence) | the history notes the drop; no reply for an unplanned row brings it back until a plan reads it again — a rule with no time to count, instead of one more time |
+
+Mutations 2/2; a plan check in the note proved dead and was removed. Unit 964/964.
+
+### U6, round 5 — confirmation of round 4 (codex, `.review-out/step6-u6-r5-packet.md`, 13.11.2026): READY, no findings
+
+Convergence gate met: no blocker or major survives. Majors per round 6 → 3 → 2 → 1 → 0; round 2 changed the read model's approach (one order for every input, events by difference) instead of a third patch. U6 is closed in code; U8 builds the API's snapshot and events on it.
+
+### U7, round 1 (codex, `.review-out/step6-u7-packet.md`, 13.11.2026) — no blocker or major; three minors fixed (78a5896)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | a smaller `windowSize` kept the oversized window in progress | CONFIRMED | new settings start from fresh evidence: window, calm count and last numbers dropped |
+| 2 | minor | a changed `tailFactor` left the display's stalls counted against the old limit | CONFIRMED | same reset |
+| 3 | minor | `configureThrottle` accepted bad settings with no loop running | CONFIRMED | it checks them itself |
+
+Convergence gate met: no blocker or major. The deviation from KTD5 (cap by `maxSlowdown`, not the heartbeat window) — **accepted by the owner 13.11.2026**.
+
+### U8, round 1 (codex, inline packet, 13.11.2026) — NOT-READY → fixed (7c5d86b)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a change between the claim and the snapshot was lost: the snapshot was taken when it went out, not at the claim | CONFIRMED | the snapshot is taken at the claim; changes after it queue until it has gone out |
+| 2 | major | a brick that went before the snapshot went out gave `ended` with no snapshot before it | CONFIRMED | `ended` queues behind the snapshot like any change |
+
+### U8, round 2 — confirmation of round 1 (codex, 13.11.2026) — NOT-READY → fixed (a173519)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a listener that ended the brick while hearing the snapshot made `ended` overtake a change still queued | CONFIRMED | while the queue is told, anything new joins its end |
+
+### U8, round 3 — confirmation of round 2 (codex, `.review-out/packet_u8r3.txt`, 13.11.2026) — NOT-READY → approach changed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | blocker | delivery was reentrant across subscriptions: one consumer's listener ending the brick or causing a change made another subscription lose the change it was being told, or hear a newer one first; a subscription made inside a listener heard again the change its snapshot held | CONFIRMED (updates went out from inside the source's dispatch) | see below |
+
+Same area three rounds running — the order of updates when a listener reacts — with each round patching one subscription's own ordering. **The approach changed instead of a fourth patch.** The order belongs to the stream of events, which no single subscription sees, so one owner keeps it: `TelemetryDelivery`, one per API. An event is queued for the subscriptions that exist when it happens. Updates go out only from its drain, never from inside the source's dispatch, so whatever a listener causes queues behind everything before it, for every subscription of every consumer. A snapshot is queued at its claim. Delivery is asynchronous, and one drain tells only what was queued when it began: a listener whose every update causes another cannot freeze the extension host. The consumer guide says so.
+
+Tests first: two consumers where one's listener ends the brick, a listener causing a newer change, a subscription made inside a listener, a claim that itself causes a change, a disposed subscription with an update on its way, a feedback loop (with a ceiling, so a regression cannot hang the run), one listener on the source for all. The test's stand-in source now fires like the product's emitter: a copy of the listeners, and a dispose that removes. Mutations 7/10. Three survive. Two are equivalent: an ended claim left among the recipients, and `ended` told without being marked done. Changes after `ended` queue behind it and are dropped at delivery either way. The third, the consumer's record cleaned after `ended`, is memory only and cannot be seen through the API. Unit 1022/1022.
+
+### U8, round 4 — audit of the rebuilt delivery (codex, `.review-out/tmp/packet_u8r4.txt`, 13.11.2026) — NOT-READY → fixed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major → **minor** | a claim that ends inside `claim()` is opened afterwards as live: it never hears `ended`, and its dispose releases a claim already gone | CONFIRMED as a fact, not reachable today | nothing inside `TelemetryService.claim()` can end a brick (it refreshes the plan; the read model's only listener is the delivery, which never tells synchronously), and `release` of a gone handle does nothing. **Trigger to revisit:** a second synchronous listener on the read model or the service, such as the Phase 5 panel |
+| 2 | major | a callback inside `claim()` that unregisters the consumer leaves its claim behind; a consumer registered after the API was disposed holds a claim nobody releases | CONFIRMED for the second part (an extension holding the API object after deactivate), the first not reachable today | the API refuses consumers once disposed, the flag set before anything else goes; after the claim the consumer is checked again and a claim it can no longer own is given back |
+| 3 | major → **minor** | the delivery keeps the order its callback is called in, which another `onChange` listener reacting synchronously could make differ from the read model's own | CONFIRMED as a fact, not reachable today | the delivery is the read model's only listener (`extension.ts`). **Same trigger as row 1:** then the order is fixed at the producer: the read model fires without reentrancy and stamps each change with a sequence number, which a subscription's snapshot records |
+| 4 | major | no test that nothing is told inside the call that subscribes, nor that a throwing listener harms no one else | CONFIRMED | both tested, the first also from inside a listener |
+
+Rows 2 and 4 tested and mutated, 5/5 caught. The delivery's approach stands: this round's findings are at its edges, at the claim, the API's lifetime and the source, not in the order it keeps.
+
+### U8, round 5 — confirmation of round 4 (codex, `.review-out/tmp/packet_u8r5.txt`, 13.11.2026): READY
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | the packet alone does not prove that round 4's two downgraded interleavings are unreachable in production | CONFIRMED as a gap in the packet; **verified against the production wiring** | the read model's only `onChange` listener is the delivery (`extension.ts` → `cockpitApi.ts`), which only queues; the service's `onPlanChange` has the read model and the runtime's log line, neither of which reaches back into a claim; so nothing inside `TelemetryService.claim()` can end a brick or reorder a change today. Both limitations stay recorded with their trigger: a second synchronous listener, such as the Phase 5 panel |
+
+Convergence gate met: READY, no blocker or major. Round 3 changed the delivery's approach (one `TelemetryDelivery` owns the order) instead of a fourth patch. U8 is closed in code.
+
+### U9, round 1 (codex, `.review-out/tmp/packet_u9.txt`, 13.11.2026) — NOT-READY → fixed (89b5266)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | following did not end with the brick's session: the follow stayed, a listener after a reconnect started no new claim, and old listeners could be revived | CONFIRMED (`followProgramRow` did not hear `onClaimsEnded`) | the follow hears its own claim end; the service drops it and its listeners; the next listener starts a new follow |
+| 2 | major | a cached telemetry value could undo a start `run()` had just confirmed: an end and a start that never happened | CONFIRMED | every state carries when it was observed (`sampledAt`, the status reply's arrival); an older one than the last taken is not taken |
+| 3 | major | a changed `programs.statusIntervalMs` reached only the next follow | CONFIRMED | the API follows every program again on the change, the new claim before the old one goes |
+
+Mutations 8/9, one caught by the compiler; unit 1055/1055.
+
+### U9, round 2 — confirmation of round 1 (codex, `.review-out/tmp/packet_u9r2.txt`, 13.11.2026) — fixed (a1ce9e4)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major → **minor** in effect | a claim ending inside `claim()` itself went unheard by the follow, whose listeners would wait on a dead claim | CONFIRMED as a fact, **not reachable today**: the read model's only synchronous listener is the delivery, which only queues, and the program follow defers too (the U8 round 4 limitation) | fixed anyway, being small: the follow listens before it claims, keeps endings that come during the claim, and a follow whose claim already ended is refused. Mutations 3/3; unit 1056/1056 |
+
+### U9, round 3 — confirmation of round 2 (codex, `.review-out/tmp/packet_u9r3.txt`, 13.11.2026): READY, no findings
+
+Convergence gate met: no blocker or major. Majors per round 3 → 1 (not reachable, fixed anyway) → 0. U9 is closed in code; step 6 is done in code except the hardware session U10.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 

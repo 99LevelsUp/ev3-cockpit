@@ -42,8 +42,3 @@ export enum ActivityMode {
     None = 'none',
 }
 
-export enum TelemetryCategory {
-    Ports = 'ports',
-    Filesystem = 'filesystem',
-    System = 'system',
-}
