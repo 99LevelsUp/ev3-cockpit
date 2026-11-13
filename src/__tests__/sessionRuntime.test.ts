@@ -547,6 +547,30 @@ describe('SessionManager', () => {
 			'the reason a reconnect failed has to survive somewhere a human can read it');
 	});
 
+	it('tells listeners about each failed reconnect attempt, with the reason and the next try', async () => {
+		// `lastError` alone reached no human: the product shows presence, not the session's error,
+		// and a Bluetooth channel sat in Reconnecting for eight minutes with nothing in the log
+		// (U10, 13.11.2026). Each failed attempt is an event the runtime can log.
+		(mockProvider as { recover?: unknown }).recover = undefined;
+		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
+		await manager.connect(keyA, Transport.Mock);
+		mockProvider.disconnect = () => Promise.resolve();
+		mockProvider.connect = () => Promise.reject(new Error('brick is still booting'));
+		const failures: { attempt: number; error: string; nextDelayMs: number | undefined }[] = [];
+		manager.onReconnectFailed((e) => {
+			assert.equal(e.brickKey, keyA);
+			failures.push({ attempt: e.attempt, error: e.error, nextDelayMs: e.nextDelayMs });
+		});
+
+		manager['handleHeartbeatFailure'](keyA, new Error('link went away'));
+		await new Promise((resolve) => setTimeout(resolve, 600));
+
+		// Three attempts allowed (50, 100, 200 ms): each reported, the last with no next try.
+		assert.deepEqual(failures.map((f) => f.attempt), [1, 2, 3]);
+		assert.ok(failures.every((f) => /still booting/.test(f.error)));
+		assert.deepEqual(failures.map((f) => f.nextDelayMs), [100, 200, undefined]);
+	});
+
 	it('connects a brick', async () => {
 		const keyA = makeBrickKey(Transport.Mock, 'brick-a');
 		await manager.connect(keyA, Transport.Mock, 'Brick Alpha');

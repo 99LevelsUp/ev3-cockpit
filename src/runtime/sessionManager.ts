@@ -31,6 +31,19 @@ export interface SessionStateChangeEvent {
 	readonly newState: ConnectionState;
 }
 
+/**
+ * One reconnect attempt that failed (U10, 13.11.2026: a channel sat in Reconnecting for eight
+ * minutes and the log said nothing, because the reason lived only in `lastError`).
+ */
+export interface ReconnectFailedEvent {
+	readonly brickKey: BrickKey;
+	/** Which attempt of this reconnect cycle failed, from 1. */
+	readonly attempt: number;
+	readonly error: string;
+	/** When the next attempt goes; undefined when there is none and the session ends. */
+	readonly nextDelayMs: number | undefined;
+}
+
 export interface ActiveBrickChangeEvent {
 	readonly previousBrickKey: BrickKey | undefined;
 	readonly newBrickKey: BrickKey | undefined;
@@ -76,6 +89,9 @@ export class SessionManager implements vscode.Disposable {
 
 	private readonly _onActiveBrickChange = new vscode.EventEmitter<ActiveBrickChangeEvent>();
 	readonly onActiveBrickChange = this._onActiveBrickChange.event;
+
+	private readonly _onReconnectFailed = new vscode.EventEmitter<ReconnectFailedEvent>();
+	readonly onReconnectFailed = this._onReconnectFailed.event;
 
 	private readonly heartbeatIntervalMs: number;
 	private readonly heartbeatMissThreshold: number;
@@ -300,6 +316,7 @@ export class SessionManager implements vscode.Disposable {
 		this.transportGuard.dispose();
 		this._onSessionStateChange.dispose();
 		this._onActiveBrickChange.dispose();
+		this._onReconnectFailed.dispose();
 	}
 
 	// ── Internal: Heartbeat ─────────────────────────────────────────
@@ -423,17 +440,18 @@ export class SessionManager implements vscode.Disposable {
 		}
 	}
 
-	private scheduleReconnect(brickKey: BrickKey): void {
+	/** Schedules the next attempt and returns its delay; undefined when there is none. */
+	private scheduleReconnect(brickKey: BrickKey): number | undefined {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
-			return;
+			return undefined;
 		}
 
 		const delay = resources.reconnect.nextDelay();
 		if (delay === undefined) {
 			// Exhausted — transition to disconnected
 			void this.disconnect(brickKey, false);
-			return;
+			return undefined;
 		}
 
 		// Two attempts can fail one after the other -- a backoff's and one discovery started --
@@ -443,6 +461,7 @@ export class SessionManager implements vscode.Disposable {
 			void this.attemptReconnect(brickKey);
 		}, delay);
 		resources.reconnectTimer.unref();
+		return delay;
 	}
 
 	private async attemptReconnect(brickKey: BrickKey): Promise<void> {
@@ -503,8 +522,11 @@ export class SessionManager implements vscode.Disposable {
 			// every attempt failed with the same message and left no trace anywhere, so a
 			// session stuck in Reconnecting looked like a brick that had not come back rather
 			// than like a bug.
-			resources.entry.setError(error instanceof Error ? error.message : String(error));
-			this.scheduleReconnect(brickKey);
+			const reason = error instanceof Error ? error.message : String(error);
+			resources.entry.setError(reason);
+			const attempt = resources.reconnect.attempts;
+			const nextDelayMs = this.scheduleReconnect(brickKey);
+			this._onReconnectFailed.fire({ brickKey, attempt, error: reason, nextDelayMs });
 		}
 	}
 
