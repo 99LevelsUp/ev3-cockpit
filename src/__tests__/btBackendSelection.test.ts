@@ -174,6 +174,29 @@ describe('BtTransportProvider — forgetting', () => {
 		assert.match(residue[1].reason, /restart/);
 	});
 
+	it('awaits an unpair that answers later, as BlueZ\'s RemoveDevice does (step-7 plan, KTD6)', async () => {
+		let settle!: (r: { ok: boolean; reason?: string }) => void;
+		const provider = new BtTransportProvider({
+			unpairDevice: () => new Promise((resolve) => { settle = resolve; }),
+		});
+		let done = false;
+		const forgetting = provider.forget(KEY).then((r) => { done = true; return r; });
+		await new Promise((r) => setTimeout(r, 10));
+		assert.equal(done, false, 'not before the unpair has answered');
+		settle({ ok: false, reason: 'BlueZ refused' });
+		await assert.rejects(forgetting, /BlueZ refused/);
+	});
+
+	it('reports the residue its platform names, in place of Windows\' (step-7 plan, KTD7)', async () => {
+		const asked: string[] = [];
+		const provider = new BtTransportProvider({
+			unpairDevice: async () => ({ ok: true }),
+			forgetResidue: (mac) => { asked.push(mac); return [{ location: `/var/lib/bluetooth/X/cache/${mac}`, reason: 'root' }]; },
+		});
+		assert.deepEqual(await provider.forget(KEY), [{ location: `/var/lib/bluetooth/X/cache/${MAC}`, reason: 'root' }]);
+		assert.deepEqual(asked, [MAC]);
+	});
+
 	it('reports no residue when it had no way to unpair', async () => {
 		// Without an unpair hook nothing reached Windows, so there is nothing to account for.
 		assert.deepEqual(await new BtTransportProvider({}).forget(KEY), []);
