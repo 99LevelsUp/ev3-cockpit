@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { BtBluezAdapter } from '../transports/btBluezAdapter';
 import {
 	LinuxBtSocketApi, AF_BLUETOOTH, BTPROTO_RFCOMM, SOCK_STREAM, SOCK_NONBLOCK, SOCK_CLOEXEC,
-	EINPROGRESS, EAGAIN, EBUSY, ECONNREFUSED, EHOSTDOWN, ETIMEDOUT,
+	EINPROGRESS, EAGAIN, EBUSY, ECONNREFUSED, EHOSTDOWN, ETIMEDOUT, EINTR,
 } from '../transports/linuxBluetoothSocket';
 import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../errors/CockpitError';
 
@@ -39,25 +39,51 @@ class FakeLibc implements LinuxBtSocketApi {
 	/** After `inbound` runs dry while data is reported: 0 an orderly close, -1 with {@link recvErrno}. */
 	recvAtEnd?: number;
 	recvErrno = EAGAIN;
+	sockets = 0;
+	blocking: [number, number][] = [];
+	setBlockingResult = 0;
+	/** Scripted answers for the next sends: bytes accepted, or -1 with an errno. */
+	sendScript: ({ accept: number } | { fail: number })[] = [];
+	/** recv answers -1 with EINTR this many times before reading. */
+	recvInterrupts = 0;
 
 	socket(family: number, type: number, protocol: number): number {
 		this.socketArgs = [family, type, protocol];
+		this.sockets += 1;
 		return this.fd;
+	}
+	setBlocking(fd: number, sendTimeoutMs: number): number {
+		this.blocking.push([fd, sendTimeoutMs]);
+		this.errnoNow = 9;
+		return this.setBlockingResult;
 	}
 	connect(_fd: number, address: Uint8Array): number {
 		this.lastAddress = Uint8Array.from(address);
 		this.errnoNow = this.connectErrno;
 		return this.connectResult;
 	}
-	connectState(): 'pending' | 'connected' | 'failed' { return this.state; }
-	socketError(): number { return this.soError; }
+	/** Like Linux: the pending error is handed back once, then cleared. */
+	connectState(): { state: 'pending' | 'connected' | 'failed'; error: number } {
+		if (this.state !== 'failed') { return { state: this.state, error: 0 }; }
+		const error = this.soError;
+		this.soError = 0;
+		return { state: 'failed', error };
+	}
 	send(_fd: number, data: Uint8Array, length: number): number {
+		const scripted = this.sendScript.shift();
+		if (scripted && 'fail' in scripted) { this.errnoNow = scripted.fail; return -1; }
+		if (scripted) {
+			const accepted = Math.min(scripted.accept, length);
+			this.sent.push(Uint8Array.from(data.subarray(0, accepted)));
+			return accepted;
+		}
 		if (this.sendResult !== undefined) { this.errnoNow = 104; return this.sendResult; }
 		const accepted = Math.min(this.acceptBytes ?? length, length);
 		this.sent.push(Uint8Array.from(data.subarray(0, accepted)));
 		return accepted;
 	}
 	recv(_fd: number, buffer: Uint8Array, length: number): number {
+		if (this.recvInterrupts > 0) { this.recvInterrupts -= 1; this.errnoNow = EINTR; return -1; }
 		const chunk = this.inbound.shift();
 		if (!chunk) {
 			const end = this.recvAtEnd ?? -1;
@@ -269,5 +295,82 @@ describe('BtBluezAdapter — exchanges', () => {
 		await assert.rejects(() => pending, /closed/);
 		assert.deepEqual(libc.closed, [20]);
 		await assert.rejects(() => adapter.send(request(2)), /not open/);
+	});
+});
+
+describe('BtBluezAdapter — who owns the socket while it opens (review of 6955f22)', () => {
+	it('makes a second open wait for the first: one socket, not two', async () => {
+		const libc = new FakeLibc();
+		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc, connectTimeoutMs: 2000 });
+		const first = adapter.open();
+		const second = adapter.open();
+		libc.state = 'connected';
+		await Promise.all([first, second]);
+		assert.equal(libc.sockets, 1);
+		await adapter.close();
+	});
+
+	it('closes the socket at once when closed during the connect, and does not come up open when it lands', async () => {
+		const libc = new FakeLibc();
+		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc, connectTimeoutMs: 2000 });
+		const opening = adapter.open().then(() => 'opened', (e: unknown) => e);
+		await tick(60);
+		await adapter.close();
+		assert.deepEqual(libc.closed, [20], 'the descriptor is released by the close itself');
+		libc.state = 'connected';
+		const outcome = await opening;
+		assert.ok(outcome instanceof TransportError, 'an open overtaken by a close must fail');
+		assert.match((outcome as Error).message, /closed while it was opening/);
+		assert.equal(adapter.isOpen, false);
+		assert.deepEqual(libc.closed, [20], 'and nothing is closed twice');
+	});
+
+	it('turns the socket blocking after the connect, with a 2 s send timeout, as Winsock does', async () => {
+		const { adapter, libc } = await opened();
+		assert.deepEqual(libc.blocking, [[20, 2000]]);
+		await adapter.close();
+	});
+
+	it('fails the open and releases the socket when it cannot turn blocking', async () => {
+		const libc = new FakeLibc();
+		libc.connectResult = 0;
+		libc.setBlockingResult = -1;
+		const adapter = new BtBluezAdapter({ mac: MAC, socketApi: libc });
+		await assert.rejects(() => adapter.open(), /errno 9/);
+		assert.deepEqual(libc.closed, [20]);
+		assert.equal(adapter.isOpen, false);
+	});
+});
+
+describe('BtBluezAdapter — a write that stops part-way (review of 6955f22)', () => {
+	it('closes the link when a packet is left half-sent: the brick would read the next one as its tail', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ accept: 3 }, { fail: EAGAIN }];
+		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 1000 }), /after 3 of/);
+		assert.equal(adapter.isOpen, false);
+		assert.deepEqual(libc.closed, [20]);
+	});
+
+	it('keeps the link when the write fails before its first byte', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ fail: EAGAIN }];
+		await assert.rejects(() => adapter.send(request(1), { timeoutMs: 1000 }), /send failed \(errno 11\)/);
+		assert.equal(adapter.isOpen, true);
+		libc.inbound.push(reply(2));
+		const answer = await adapter.send(request(2), { expectedMessageCounter: 2, timeoutMs: 1000 });
+		assert.equal(answer[2], 2);
+		await adapter.close();
+	});
+
+	it('retries a write and a read interrupted by a signal', async () => {
+		const { adapter, libc } = await opened();
+		libc.sendScript = [{ fail: EINTR }, { accept: 2 }, { fail: EINTR }];
+		libc.recvInterrupts = 2;
+		libc.inbound.push(reply(5));
+		const answer = await adapter.send(request(5), { expectedMessageCounter: 5, timeoutMs: 1000 });
+		assert.equal(answer[2], 5);
+		assert.deepEqual([...Buffer.concat(libc.sent.map((c) => Buffer.from(c)))], [...request(5)]);
+		assert.equal(adapter.isOpen, true);
+		await adapter.close();
 	});
 });

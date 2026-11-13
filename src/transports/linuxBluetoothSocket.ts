@@ -28,6 +28,9 @@ export const SOCK_CLOEXEC = 0o2000000;
 /** A send to a peer that went away fails with `EPIPE` instead of killing the process with SIGPIPE. */
 export const MSG_NOSIGNAL = 0x4000;
 
+export const EINTR = 4;
+export const EIO = 5;
+export const EBADF = 9;
 export const EAGAIN = 11;
 export const EBUSY = 16;
 export const ETIMEDOUT = 110;
@@ -40,14 +43,25 @@ export const POLLIN = 0x1;
 export const POLLOUT = 0x4;
 export const POLLERR = 0x8;
 export const POLLHUP = 0x10;
+export const POLLNVAL = 0x20;
 
 const SOL_SOCKET = 1;
 const SO_ERROR = 4;
+const SO_SNDTIMEO = 21;
+const F_GETFL = 3;
+const F_SETFL = 4;
+const O_NONBLOCK = 0o4000;
 
 /** `struct sockaddr_rc`: `sa_family_t`, `bdaddr_t` (6 bytes), `uint8_t` channel, padded to 10. */
 export const SOCKADDR_RC_SIZE = 10;
 
 // ── API surface ─────────────────────────────────────────────────────
+
+/** Where a non-blocking connect stands; `error` is the errno of a failed one, else 0. */
+export interface ConnectState {
+	readonly state: 'pending' | 'connected' | 'failed';
+	readonly error: number;
+}
 
 /**
  * The subset of libc this transport needs.
@@ -64,10 +78,18 @@ export interface LinuxBtSocketApi {
 	 * blocking connect on a worker: on Windows one could not be aborted (DESIGN §4.1.1).
 	 */
 	connect(fd: number, address: Uint8Array): number;
-	/** Where a non-blocking connect stands, without blocking: `poll` with a zero timeout. */
-	connectState(fd: number): 'pending' | 'connected' | 'failed';
-	/** The error a failed non-blocking connect ended with (`SO_ERROR`). */
-	socketError(fd: number): number;
+	/**
+	 * Where a non-blocking connect stands, without blocking: `poll` with a zero timeout, then
+	 * `SO_ERROR`. The state and the error come together because Linux clears `SO_ERROR` when it
+	 * is read: a second read would answer 0 and lose why the connect failed.
+	 */
+	connectState(fd: number): ConnectState;
+	/**
+	 * Turns a connected socket blocking for the exchange, as the Winsock adapter does after its
+	 * connect, with `SO_SNDTIMEO` so a send to a brick that stopped answering cannot hold the
+	 * extension host's thread for longer than `sendTimeoutMs`. 0, or -1 (see {@link lastError}).
+	 */
+	setBlocking(fd: number, sendTimeoutMs: number): number;
 	/** Bytes accepted, or -1. Never raises SIGPIPE ({@link MSG_NOSIGNAL}). */
 	send(fd: number, data: Uint8Array, length: number): number;
 	/** Bytes received, 0 at end of stream, or -1 ({@link EAGAIN} when nothing is waiting). */
@@ -82,14 +104,20 @@ export interface LinuxBtSocketApi {
 
 // ── Byte layouts ────────────────────────────────────────────────────
 
+/** Six hex bytes separated by one of `:` or `-` throughout, or not separated at all. */
+const MAC_FORMAT = /^[0-9A-Fa-f]{2}(?:([:-]?)[0-9A-Fa-f]{2})(?:\1[0-9A-Fa-f]{2}){4}$/;
+
 /**
  * A MAC address as `bdaddr_t` holds it: the six bytes reversed (`str2ba`).
  *
  * @returns The bytes, or `undefined` if the input is not six hex bytes.
  */
 export function macToBdaddr(mac: string): Uint8Array | undefined {
-	const hex = String(mac ?? '').replace(/[^0-9a-fA-F]/g, '');
-	if (hex.length !== 12) { return undefined; }
+	// The whole input, one separator throughout (or none): stripping what is not hex first would
+	// take `zz00:16:53:F0:0A:0B` for an address.
+	const text = String(mac ?? '');
+	if (!MAC_FORMAT.test(text)) { return undefined; }
+	const hex = text.replace(/[:-]/g, '');
 	const bytes = new Uint8Array(6);
 	for (let i = 0; i < 6; i += 1) {
 		bytes[5 - i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -144,6 +172,8 @@ export interface RawLibc {
 	send(fd: number, data: Uint8Array, length: number, flags: number): number | bigint;
 	recv(fd: number, buffer: Uint8Array, length: number, flags: number): number | bigint;
 	close(fd: number): number;
+	fcntl(fd: number, command: number, value: number): number;
+	setsockopt(fd: number, level: number, name: number, value: Buffer, length: number): number;
 }
 
 /**
@@ -151,30 +181,69 @@ export interface RawLibc {
  * Nothing here blocks: the extension host runs on this thread.
  */
 export function bindLinuxBtSocket(raw: RawLibc, errno: () => number): LinuxBtSocketApi {
-	/** `revents` of one zero-timeout poll; 0 when nothing happened. */
+	/**
+	 * `revents` of one zero-timeout poll; 0 when nothing happened. A failed poll answers its errno
+	 * as a negative number; an interrupted one counts as nothing yet.
+	 */
 	const pollNow = (fd: number, events: number): number => {
 		const pollFd = encodePollFd(fd, events);
-		return raw.poll(pollFd, 1, 0) > 0 ? decodeRevents(pollFd) : 0;
+		const ready = raw.poll(pollFd, 1, 0);
+		if (ready < 0) {
+			const code = errno();
+			return code === EINTR ? 0 : -(code || EIO);
+		}
+		return ready > 0 ? decodeRevents(pollFd) : 0;
 	};
-	const socketError = (fd: number): number => {
+	/** `SO_ERROR`, which reading clears; a failed read answers its own errno. */
+	const takeSocketError = (fd: number): number => {
 		const value = [0];
-		raw.getsockopt(fd, SOL_SOCKET, SO_ERROR, value, [4]);
+		if (raw.getsockopt(fd, SOL_SOCKET, SO_ERROR, value, [4]) < 0) { return errno() || EIO; }
 		return value[0];
+	};
+	/** A whole number of bytes within the buffer; anything else would let libc past its end. */
+	const checkLength = (buffer: Uint8Array, length: number, call: string): void => {
+		if (!Number.isSafeInteger(length) || length < 0 || length > buffer.byteLength) {
+			throw new RangeError(`${call}: length ${length} is not within the ${buffer.byteLength}-byte buffer.`);
+		}
 	};
 	return {
 		socket: (family, type, protocol) => raw.socket(family, type, protocol),
 		connect: (fd, address) => raw.connect(fd, address, address.length),
 		connectState: (fd) => {
 			const revents = pollNow(fd, POLLOUT);
-			if (revents === 0) { return 'pending'; }
-			// Writable, or an error or hang-up: SO_ERROR and the flags say which.
-			return socketError(fd) === 0 && (revents & (POLLERR | POLLHUP)) === 0 ? 'connected' : 'failed';
+			if (revents < 0) { return { state: 'failed', error: -revents }; }
+			if (revents === 0) { return { state: 'pending', error: 0 }; }
+			if (revents & POLLNVAL) { return { state: 'failed', error: EBADF }; }
+			const error = takeSocketError(fd);
+			if (error !== 0) { return { state: 'failed', error }; }
+			if (revents & (POLLERR | POLLHUP)) { return { state: 'failed', error: EIO }; }
+			return revents & POLLOUT ? { state: 'connected', error: 0 } : { state: 'pending', error: 0 };
 		},
-		socketError,
-		send: (fd, data, length) => Number(raw.send(fd, data, length, MSG_NOSIGNAL)),
-		recv: (fd, buffer, length) => Number(raw.recv(fd, buffer, length, 0)),
+		setBlocking: (fd, sendTimeoutMs) => {
+			const flags = raw.fcntl(fd, F_GETFL, 0);
+			if (flags < 0) { return -1; }
+			if (raw.fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) { return -1; }
+			// struct timeval: two longs, 64-bit on every Linux the cockpit ships.
+			const timeval = Buffer.alloc(16);
+			timeval.writeBigInt64LE(BigInt(Math.floor(sendTimeoutMs / 1000)), 0);
+			timeval.writeBigInt64LE(BigInt((sendTimeoutMs % 1000) * 1000), 8);
+			return raw.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, timeval, timeval.length) < 0 ? -1 : 0;
+		},
+		send: (fd, data, length) => {
+			checkLength(data, length, 'send');
+			return Number(raw.send(fd, data, length, MSG_NOSIGNAL));
+		},
+		recv: (fd, buffer, length) => {
+			checkLength(buffer, length, 'recv');
+			return Number(raw.recv(fd, buffer, length, 0));
+		},
 		close: (fd) => raw.close(fd),
-		hasPendingData: (fd) => (pollNow(fd, POLLIN) & (POLLIN | POLLHUP | POLLERR)) !== 0,
+		// A hang-up, an invalid descriptor or a failed poll count as something to read, so the
+		// read that follows surfaces the error; an interrupted poll is nothing yet.
+		hasPendingData: (fd) => {
+			const revents = pollNow(fd, POLLIN);
+			return revents < 0 || (revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) !== 0;
+		},
 		lastError: () => errno(),
 	};
 }
@@ -220,6 +289,8 @@ export function loadLinuxBtSocket(platform: NodeJS.Platform = os.platform()): Li
 			send: libc.func('intptr_t send(int, const uint8_t *, size_t, int)') as RawLibc['send'],
 			recv: libc.func('intptr_t recv(int, _Out_ uint8_t *, size_t, int)') as RawLibc['recv'],
 			close: libc.func('int close(int)') as RawLibc['close'],
+			fcntl: libc.func('int fcntl(int, int, int)') as RawLibc['fcntl'],
+			setsockopt: libc.func('int setsockopt(int, int, int, const uint8_t *, uint32_t)') as RawLibc['setsockopt'],
 		};
 		cached = bindLinuxBtSocket(raw, () => koffi.errno());
 		return cached;

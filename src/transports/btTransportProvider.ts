@@ -149,6 +149,8 @@ export class BtTransportProvider implements TransportProvider {
 	/** Paired bricks the last discovery listed, by MAC as Windows spells it. */
 	private lastPaired: string[] = [];
 	private disposed = false;
+	/** Adapters made and still opening, which a dispose must reach too. */
+	private readonly opening = new Set<TransportAdapter>();
 
 	constructor(options?: BtTransportProviderOptions) {
 		this.backends = options?.backends ?? new Map<BtBackend, BtAdapterFactory>();
@@ -355,6 +357,11 @@ export class BtTransportProvider implements TransportProvider {
 			void session.adapter.close();
 		}
 		this.sessions.clear();
+		// And every link still opening: its close overtakes the open.
+		for (const adapter of this.opening) {
+			void adapter.close().catch(() => { /* disposing */ });
+		}
+		this.opening.clear();
 		this.connectionQueue?.dispose();
 	}
 
@@ -382,15 +389,24 @@ export class BtTransportProvider implements TransportProvider {
 		const unavailable: string[] = [];
 
 		for (const [backend, factory] of ordered) {
+			let adapter: TransportAdapter | undefined;
 			try {
-				const adapter = factory(mac);
+				adapter = factory(mac);
+				// Tracked from the moment it exists, so a dispose reaches it mid-open (review of 6955f22).
+				this.opening.add(adapter);
 				await adapter.open();
+				if (this.disposed) {
+					// Landed after the dispose, which already closed it: adopt nothing.
+					throw new TransportError('BtTransportProvider has been disposed.');
+				}
 				return { adapter, backend };
 			} catch (error) {
 				if (!(error instanceof BackendUnavailableError)) {
 					throw error;
 				}
 				unavailable.push(`${backend}: ${error.message}`);
+			} finally {
+				if (adapter) { this.opening.delete(adapter); }
 			}
 		}
 

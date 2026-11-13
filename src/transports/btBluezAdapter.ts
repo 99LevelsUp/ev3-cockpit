@@ -6,9 +6,10 @@
  * koffi worker could not be aborted on Windows, DESIGN §4.1.1), a fast receive poll while an
  * exchange is outstanding and a slow one otherwise, and replies found by their length prefix.
  *
- * Nothing here paces connections: the 5-second gap after a close (`BT.RECONNECT_GAP_AFTER_CLOSE_MS`)
- * and the queue belong to `BtTransportProvider`. Measured on HOSTC (11.11.2026, three bricks): a
- * reconnect 0 s after a close answers `EBUSY`, within 2 s `ECONNREFUSED`, from 2.5 s it connects.
+ * Nothing here paces connections: the provider's per-brick gap after a close
+ * (`BT.RECONNECT_GAP_AFTER_CLOSE_MS`) and its `BtConnectionQueue`, with the queue's own gaps
+ * between connects, do. Measured on HOSTC (11.11.2026, three bricks): a reconnect 0 s after a
+ * close answers `EBUSY`, within 2 s `ECONNREFUSED`, from 2.5 s it connects.
  */
 
 import { describeAddress } from '../contracts';
@@ -32,6 +33,7 @@ import {
 	SOCK_NONBLOCK,
 	SOCK_CLOEXEC,
 	EINPROGRESS,
+	EINTR,
 	EAGAIN,
 	EBUSY,
 	ECONNREFUSED,
@@ -51,6 +53,9 @@ const ACTIVE_POLL_MS = 5;
 
 /** Receive poll with nothing outstanding (ms): the brick never speaks unprompted. */
 const IDLE_POLL_MS = 250;
+
+/** Longest a blocking send may hold the extension host's thread, `SO_SNDTIMEO` (ms). */
+const SEND_BLOCK_LIMIT_MS = 2000;
 
 /** Receive buffer per `recv`: twice the firmware's frame, so a full reply lands whole. */
 const RECV_CHUNK_BYTES = 2048;
@@ -84,6 +89,10 @@ export class BtBluezAdapter implements TransportAdapter {
 	private receiveBuffer: Buffer = Buffer.alloc(0);
 	private pendingReply?: PendingReply;
 	private pollTimer?: ReturnType<typeof setTimeout>;
+	/** The open in flight, which a second open() waits on rather than starting another. */
+	private opening?: Promise<void>;
+	/** Bumped by every close, so an open still waiting knows it was overtaken. */
+	private generation = 0;
 
 	constructor(options: BtBluezAdapterOptions) {
 		if (!options.mac?.trim()) {
@@ -108,7 +117,12 @@ export class BtBluezAdapter implements TransportAdapter {
 	 */
 	async open(): Promise<void> {
 		if (this._isOpen) { return; }
+		if (this.opening) { return this.opening; }
+		this.opening = this.openInternal().finally(() => { this.opening = undefined; });
+		return this.opening;
+	}
 
+	private async openInternal(): Promise<void> {
 		// Before anything else, because both fail without touching the radio.
 		const api = this.injectedApi ?? loadLinuxBtSocket();
 		const address = sockaddrRc(this.mac, this.channel);
@@ -123,20 +137,28 @@ export class BtBluezAdapter implements TransportAdapter {
 				+ 'Usually means there is no Bluetooth stack or radio, or it is switched off.'
 			);
 		}
+		// Owned from the moment it exists: a close() from here on releases it, and an open it
+		// overtook adopts nothing and closes nothing again.
+		this.api = api;
+		this.fd = fd;
+		const generation = this.generation;
+		const overtaken = (): boolean => generation !== this.generation;
 
 		const failed = (code: number): TransportError => {
-			api.close(fd);
+			this.releaseDescriptor();
 			const busy = code === EBUSY ? ' — its channel was closed a moment ago' : '';
 			const message = `BT connect to ${describeAddress(this.mac)} failed (errno ${code})${busy}.`;
 			return UNANSWERED.has(code) ? new BrickUnreachableError(message) : new TransportError(message);
 		};
+		const closedWhileOpening = (): TransportError =>
+			new TransportError(`BT connect to ${describeAddress(this.mac)} closed while it was opening.`);
 
 		let started: number;
 		try {
 			started = api.connect(fd, address);
 		} catch (error) {
 			// The FFI itself threw; a descriptor left open here would have nothing referencing it.
-			api.close(fd);
+			this.releaseDescriptor();
 			throw new TransportError(`BT connect to ${describeAddress(this.mac)} failed.`, error);
 		}
 		if (started !== 0) {
@@ -146,47 +168,57 @@ export class BtBluezAdapter implements TransportAdapter {
 
 			const deadline = Date.now() + this.connectTimeoutMs;
 			for (;;) {
-				const state = api.connectState(fd);
+				// State and error together: Linux clears SO_ERROR on reading it (review of 66cde2b).
+				const { state, error } = api.connectState(fd);
 				if (state === 'connected') { break; }
-				if (state === 'failed') { throw failed(api.socketError(fd)); }
+				if (state === 'failed') { throw failed(error); }
 				if (Date.now() >= deadline) {
-					api.close(fd);
+					this.releaseDescriptor();
 					throw new TimeoutError(
 						`BT connect to ${describeAddress(this.mac)} timed out after ${this.connectTimeoutMs} ms.`
 					);
 				}
-				// Never past the deadline: a connect that lands after it was given up on is not
-				// adopted, its descriptor is already closed by then.
 				const pause = Math.max(0, Math.min(CONNECT_POLL_MS, deadline - Date.now()));
 				await new Promise((resolve) => setTimeout(resolve, pause));
+				// The close that overtook this open has already released the descriptor.
+				if (overtaken()) { throw closedWhileOpening(); }
 			}
 		}
 
-		// The socket stays non-blocking: every read is preceded by a zero-timeout poll anyway.
-		this.api = api;
-		this.fd = fd;
+		// Blocking for the exchange, as the Winsock adapter does after its connect: a send either
+		// goes whole or fails, never "would block" half-way. SO_SNDTIMEO bounds how long a brick
+		// that stopped answering can hold this thread (review of 6955f22).
+		if (api.setBlocking(fd, SEND_BLOCK_LIMIT_MS) !== 0) {
+			throw failed(api.lastError());
+		}
+
 		this.receiveBuffer = Buffer.alloc(0);
 		this.closing = false;
 		this._isOpen = true;
 		this.schedulePoll();
 	}
 
-	/** Closes the descriptor. `close` returns at once (HOSTC: 0 ms). */
+	/** Closes the descriptor, including one still connecting. `close` returns at once (HOSTC: 0 ms). */
 	close(): Promise<void> {
+		this.generation += 1;
 		this.closing = true;
 		this._isOpen = false;
 
 		if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = undefined; }
 		this.doRejectPendingReply(new TransportError('BT BlueZ adapter closed while waiting for reply.'));
 		this.receiveBuffer = Buffer.alloc(0);
+		this.releaseDescriptor();
 
+		this.closing = false;
+		return Promise.resolve();
+	}
+
+	/** Closes the descriptor this adapter owns, once. */
+	private releaseDescriptor(): void {
 		const { api, fd } = this;
 		this.api = undefined;
 		this.fd = undefined;
 		if (api && fd !== undefined) { api.close(fd); }
-
-		this.closing = false;
-		return Promise.resolve();
 	}
 
 	async send(packet: Uint8Array, options?: SendOptions): Promise<Uint8Array> {
@@ -227,18 +259,24 @@ export class BtBluezAdapter implements TransportAdapter {
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	/** Writes the whole packet, however many calls that takes. */
+	/**
+	 * Writes the whole packet, however many calls that takes. A failure before the first byte
+	 * fails the exchange only; one after it closes the link, because the brick would read the
+	 * next packet as the tail of this one (review of 6955f22).
+	 */
 	private writeAll(api: LinuxBtSocketApi, fd: number, packet: Uint8Array): void {
 		let sent = 0;
 		while (sent < packet.length) {
 			const written = api.send(fd, packet.subarray(sent), packet.length - sent);
-			if (written < 0) {
-				throw new TransportError(`BT BlueZ send failed (errno ${api.lastError()}).`);
+			if (written < 0 && api.lastError() === EINTR) { continue; }
+			if (written > 0) { sent += written; continue; }
+			const why = written < 0 ? `send failed (errno ${api.lastError()})` : 'send stalled';
+			if (sent === 0) {
+				throw new TransportError(`BT BlueZ ${why}.`);
 			}
-			if (written === 0) {
-				throw new TransportError(`BT BlueZ send stalled after ${sent} of ${packet.length} bytes.`);
-			}
-			sent += written;
+			const error = new TransportError(`BT BlueZ ${why} after ${sent} of ${packet.length} bytes; link closed.`);
+			this.handleFailure(error);
+			throw error;
 		}
 	}
 
@@ -261,6 +299,7 @@ export class BtBluezAdapter implements TransportAdapter {
 
 			if (read < 0) {
 				const code = api.lastError();
+				if (code === EINTR) { continue; }
 				// The poll said readable and the read found nothing: nothing yet, not a failure.
 				if (code === EAGAIN) { break; }
 				this.handleFailure(new TransportError(`BT BlueZ receive failed (errno ${code}).`));
@@ -305,9 +344,6 @@ export class BtBluezAdapter implements TransportAdapter {
 		if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = undefined; }
 		this.doRejectPendingReply(error);
 		// The descriptor is useless now; release it rather than wait for a close nobody may send.
-		const { api, fd } = this;
-		this.api = undefined;
-		this.fd = undefined;
-		if (api && fd !== undefined) { api.close(fd); }
+		this.releaseDescriptor();
 	}
 }
