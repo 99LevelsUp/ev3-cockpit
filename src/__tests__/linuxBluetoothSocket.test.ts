@@ -101,7 +101,7 @@ describe('linuxBluetoothSocket — the loader', () => {
 	it('binds every call it promises on Linux', { skip: process.platform !== 'linux' }, () => {
 		resetLinuxBtSocketCache();
 		const api = loadLinuxBtSocket('linux');
-		for (const name of ['socket', 'connect', 'connectState', 'setBlocking', 'send', 'recv', 'close', 'hasPendingData', 'lastError'] as const) {
+		for (const name of ['socket', 'connect', 'connectState', 'canWrite', 'send', 'recv', 'close', 'hasPendingData', 'lastError'] as const) {
 			assert.equal(typeof api[name], 'function', name);
 		}
 		resetLinuxBtSocketCache();
@@ -116,8 +116,6 @@ describe('linuxBluetoothSocket — what the bindings make of the raw calls', () 
 		soError?: number;
 		/** getsockopt fails with this errno. */
 		getsockoptFails?: number;
-		/** fcntl fails with this errno. */
-		fcntlFails?: number;
 	}
 
 	function rawWith(setup: RawSetup): { raw: RawLibc; errno: () => number; calls: string[] } {
@@ -145,15 +143,6 @@ describe('linuxBluetoothSocket — what the bindings make of the raw calls', () 
 			send: (_fd, _data, length, flags) => { calls.push(`send ${length} ${flags}`); return length; },
 			recv: (_fd, _buffer, length) => { calls.push(`recv ${length}`); return 0; },
 			close: () => 0,
-			fcntl: (_fd, command, value) => {
-				calls.push(`fcntl ${command} ${value}`);
-				if (setup.fcntlFails) { errnoNow = setup.fcntlFails; return -1; }
-				return command === 3 ? (0o2 | 0o4000) : 0;
-			},
-			setsockopt: (_fd, level, name, value: Buffer) => {
-				calls.push(`setsockopt ${level} ${name} ${[...value].join(',')}`);
-				return 0;
-			},
 		};
 		return { raw, errno: () => errnoNow, calls };
 	}
@@ -221,28 +210,12 @@ describe('linuxBluetoothSocket — what the bindings make of the raw calls', () 
 		assert.equal(bind({ poll: { revents: 0 } }).api.hasPendingData(20), false);
 	});
 
-	it('turns blocking for the exchange, with a send timeout, keeping the other file flags', () => {
-		const { api, calls } = bind({});
-		assert.equal(api.setBlocking(20, 2000), 0);
-		// F_GETFL (3), then F_SETFL (4) with O_NONBLOCK cleared and O_RDWR kept; then SO_SNDTIMEO (21)
-		// as a struct timeval of two 64-bit longs: 2 s, 0 us.
-		assert.deepEqual(calls, [
-			'fcntl 3 0',
-			'fcntl 4 2',
-			'setsockopt 1 21 2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0',
-		]);
-	});
-
-	it('splits a send timeout into seconds and microseconds', () => {
-		const { api, calls } = bind({});
-		api.setBlocking(20, 1500);
-		assert.equal(calls[2], 'setsockopt 1 21 1,0,0,0,0,0,0,0,32,161,7,0,0,0,0,0');
-	});
-
-	it('answers -1 when fcntl fails, and goes no further', () => {
-		const { api, calls } = bind({ fcntlFails: EBADF });
-		assert.equal(api.setBlocking(20, 2000), -1);
-		assert.deepEqual(calls, ['fcntl 3 0']);
+	it('says whether the socket can take more bytes now, never blocking', () => {
+		assert.equal(bind({ poll: { revents: POLLOUT } }).api.canWrite(20), true);
+		assert.equal(bind({ poll: { revents: 0 } }).api.canWrite(20), false);
+		assert.equal(bind({ poll: { revents: POLLERR } }).api.canWrite(20), true, 'an error is for the write to surface');
+		assert.equal(bind({ poll: { fails: EBADF } }).api.canWrite(20), true);
+		assert.equal(bind({ poll: { fails: EINTR } }).api.canWrite(20), false);
 	});
 
 	it('passes errno through', () => {

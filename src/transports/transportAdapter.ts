@@ -27,9 +27,20 @@ export interface SendOptions {
  * Lifecycle: `open()` → `send()` (repeated) → `close()`.
  * Implementations must be safe to call `close()` even if `open()` was never called.
  */
+/** Options for {@link TransportAdapter.open}. */
+export interface OpenOptions {
+	/** Aborted when whoever asked for the link no longer wants it: a dispose, a close. */
+	signal?: AbortSignal;
+}
+
 export interface TransportAdapter {
-	/** Open the physical connection. */
-	open(): Promise<void>;
+	/**
+	 * Open the physical connection.
+	 *
+	 * An adapter that waits while opening checks `signal` after each wait; aborted, it gives back
+	 * what it took and rejects with the signal's reason (the provider's lifetime scope).
+	 */
+	open(options?: OpenOptions): Promise<void>;
 
 	/** Close the physical connection and release resources. */
 	close(): Promise<void>;

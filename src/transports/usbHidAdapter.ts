@@ -5,7 +5,7 @@
  * and EV3 packet reassembly from the receive buffer.
  */
 
-import { TransportAdapter, SendOptions } from './transportAdapter';
+import { TransportAdapter, SendOptions, OpenOptions } from './transportAdapter';
 import { TransportError } from '../errors/CockpitError';
 import {
 	PendingReply,
@@ -110,7 +110,7 @@ export class UsbHidAdapter implements TransportAdapter {
 		return USB.MAX_WRITE_PACKET_BYTES;
 	}
 
-	async open(): Promise<void> {
+	async open(_options?: OpenOptions): Promise<void> {
 		if (this._isOpen) {
 			return;
 		}

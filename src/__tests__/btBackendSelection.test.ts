@@ -333,3 +333,123 @@ describe('BtTransportProvider — dispose reaches a link still opening (review o
 		assert.ok(outcome instanceof Error, 'a connect that lands after dispose must fail');
 	});
 });
+
+describe('BtTransportProvider — one lifetime: nothing runs outside the scope (ownership audit, round 4)', () => {
+	interface Made { open: boolean; closed: boolean }
+	/** A backend whose adapters honour the open signal; `gate` holds their opens until landed. */
+	function backend(name: BtBackend, gate?: Promise<void>): { backends: Map<BtBackend, BtAdapterFactory>; made: Made[] } {
+		const made: Made[] = [];
+		const backends = new Map<BtBackend, BtAdapterFactory>([[name, () => {
+			const record: Made = { open: false, closed: false };
+			made.push(record);
+			return {
+				async open(o?: { signal?: AbortSignal }): Promise<void> {
+					if (gate) {
+						await new Promise<void>((resolve, reject) => {
+							void gate.then(resolve);
+							o?.signal?.addEventListener('abort', () => reject(o.signal!.reason), { once: true });
+						});
+					}
+					record.open = true;
+				},
+				close: () => { record.closed = true; return Promise.resolve(); },
+				send: () => Promise.reject(new TransportError('not used')),
+				get isOpen() { return record.open && !record.closed; },
+			};
+		}]]);
+		return { backends, made };
+	}
+	const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+	for (const name of ['bluez', 'winsock'] as const) {
+		it(`[${name}] ends a connect waiting out the reconnect gap, making no adapter`, async () => {
+			const { backends, made } = backend(name);
+			const provider = new BtTransportProvider({ backends, reconnectGapAfterCloseMs: 60_000 });
+			await provider.connect(KEY);
+			await provider.disconnect(KEY);
+			const reconnecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+			await tick(10);
+			const started = Date.now();
+			await provider.disposeAsync();
+			assert.ok(Date.now() - started < 1000, 'the gap does not hold the dispose');
+			assert.ok((await reconnecting) instanceof Error);
+			assert.equal(made.length, 1, 'no adapter made after the gap');
+		});
+
+		it(`[${name}] ends a connect waiting for the queue`, async () => {
+			const { backends, made } = backend(name);
+			const queue = new BtConnectionQueue();
+			const provider = new BtTransportProvider({ backends, connectionQueue: queue });
+			const held = await queue.acquire('someone-else');
+			const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+			await tick(10);
+			await provider.disposeAsync();
+			assert.ok((await connecting) instanceof Error);
+			assert.equal(made.length, 0);
+			held();
+		});
+
+		it(`[${name}] waits for an adapter mid-open, which closes, and keeps no session`, async () => {
+			const { backends, made } = backend(name, new Promise<void>(() => { /* never */ }));
+			const provider = new BtTransportProvider({ backends });
+			const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+			await tick(10);
+			await provider.disposeAsync();
+			assert.ok((await connecting) instanceof Error);
+			assert.deepEqual(made.map((m) => m.open), [false]);
+			await assert.rejects(() => provider.sendPacket(KEY, new Uint8Array(4)));
+		});
+
+		it(`[${name}] closes a link that finished opening as the dispose came`, async () => {
+			let land!: () => void;
+			const { backends, made } = backend(name, new Promise<void>((resolve) => { land = resolve; }));
+			const provider = new BtTransportProvider({ backends });
+			const connecting = provider.connect(KEY).catch(() => undefined);
+			await tick(10);
+			land();
+			const disposing = provider.disposeAsync();
+			await Promise.all([connecting, disposing]);
+			assert.ok(made.every((m) => !m.open || m.closed), 'every adapter that opened is closed');
+		});
+
+		it(`[${name}] resolves the dispose only once an aborted open has finished cleaning up`, async () => {
+			const events: string[] = [];
+			const backends = new Map<BtBackend, BtAdapterFactory>([[name, () => ({
+				open: (o?: { signal?: AbortSignal }) => new Promise<void>((_resolve, reject) => {
+					o?.signal?.addEventListener('abort', () => {
+						setTimeout(() => { events.push('cleanup done'); reject(o.signal!.reason); }, 30);
+					}, { once: true });
+				}),
+				close: () => Promise.resolve(),
+				send: () => Promise.reject(new TransportError('not used')),
+				get isOpen() { return false; },
+			})]]);
+			const provider = new BtTransportProvider({ backends });
+			const connecting = provider.connect(KEY).catch(() => undefined);
+			await tick(10);
+			await provider.disposeAsync();
+			events.push('dispose resolved');
+			await connecting;
+			assert.deepEqual(events, ['cleanup done', 'dispose resolved']);
+		});
+
+		it(`[${name}] answers two connects to one brick with one adapter (audit round 4, #7)`, async () => {
+			const { backends, made } = backend(name);
+			const provider = new BtTransportProvider({ backends });
+			const [a, b] = await Promise.all([provider.connect(KEY), provider.connect(KEY)]);
+			assert.deepEqual(a, b);
+			assert.equal(made.length, 1);
+			await provider.disposeAsync();
+			assert.equal(made[0].closed, true);
+		});
+
+		it(`[${name}] refuses connect and discover after the dispose, making nothing`, async () => {
+			const { backends, made } = backend(name);
+			const provider = new BtTransportProvider({ backends });
+			await provider.disposeAsync();
+			await assert.rejects(() => provider.connect(KEY), /disposed/);
+			await assert.rejects(() => provider.discover(), /disposed/);
+			assert.equal(made.length, 0);
+		});
+	}
+});

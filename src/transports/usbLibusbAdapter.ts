@@ -13,7 +13,7 @@
  * length prefix rather than by the size of the transfer that carried it.
  */
 
-import { TransportAdapter, SendOptions } from './transportAdapter';
+import { TransportAdapter, SendOptions, OpenOptions } from './transportAdapter';
 import { TransportError, TimeoutError, DevicePermissionError } from '../errors/CockpitError';
 import { extractLengthPrefixedPacket } from '../protocol/ev3Packet';
 import { getMessageCounter } from './pendingReply';
@@ -197,20 +197,6 @@ function reattachKernelDriver(iface: UsbInterfaceLike): void {
  * bricks). A clear-halt resets the toggle on both ends. Best effort: a brick that refuses it is
  * still worth trying.
  */
-function clearHalt(endpoint: UsbEndpointLike): Promise<void> {
-	return new Promise((resolve) => {
-		if (!endpoint.clearHalt) { resolve(); return; }
-		// A control transfer the brick never answers must not hold the open for ever.
-		const timer = setTimeout(resolve, CLEAR_HALT_MAX_MS);
-		const done = (): void => { clearTimeout(timer); resolve(); };
-		try {
-			endpoint.clearHalt(done);
-		} catch {
-			done();
-		}
-	});
-}
-
 /** Longest one clear-halt may take before the open goes on without it (ms). */
 const CLEAR_HALT_MAX_MS = 1000;
 
@@ -267,6 +253,8 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private detachedKernelDriver = false;
 	/** Bumped by every close, so an open still awaiting something knows it was overtaken. */
 	private generation = 0;
+	/** The close in progress, which a second close() waits on. */
+	private closingPromise?: Promise<void>;
 	private inEndpoint?: UsbEndpointLike;
 	private outEndpoint?: UsbEndpointLike;
 	private frameBytes = 0;
@@ -309,16 +297,27 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			: undefined;
 	}
 
-	async open(): Promise<void> {
+	async open(options?: OpenOptions): Promise<void> {
 		if (this._isOpen) { return; }
 		if (this.opening) { return this.opening; }
-		this.opening = this.openInternal().finally(() => {
+		this.opening = this.openInternal(options?.signal).finally(() => {
 			this.opening = undefined;
 		});
 		return this.opening;
 	}
 
-	async close(): Promise<void> {
+	/**
+	 * Releases the interface, gives the kernel driver back and closes the device. One close at a
+	 * time: a second call while the first still waits for libusb gets the same promise.
+	 */
+	close(): Promise<void> {
+		if (!this.closingPromise) {
+			this.closingPromise = this.closeInternal().finally(() => { this.closingPromise = undefined; });
+		}
+		return this.closingPromise;
+	}
+
+	private async closeInternal(): Promise<void> {
 		this.generation += 1;
 		this._isOpen = false;
 		const device = this.device;
@@ -392,14 +391,29 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 	// ── Internal ────────────────────────────────────────────────────
 
-	private async openInternal(): Promise<void> {
+	private async openInternal(signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
 		const usb = this.moduleLoader();
 		const generation = this.generation;
+		/**
+		 * After every wait: a close that overtook this open has already given everything back; an
+		 * abort has not, so this open does it before it rejects.
+		 */
+		const stillWanted = async (): Promise<void> => {
+			if (generation !== this.generation) {
+				throw new TransportError('USB link closed while it was opening.');
+			}
+			if (signal?.aborted) {
+				await this.close();
+				throw signal.reason;
+			}
+		};
 		const device = await this.findDevice(usb);
+		// The lookup has closed every device it opened; nothing is owned yet.
 		if (generation !== this.generation) {
-			// Closed while the lookup ran; the lookup has closed every device it opened.
 			throw new TransportError('USB link closed while it was opening.');
 		}
+		signal?.throwIfAborted();
 
 		try {
 			device.open();
@@ -455,13 +469,11 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		}
 
 		if (this.platform === 'linux') {
-			await clearHalt(inEndpoint);
-			await clearHalt(outEndpoint);
+			await this.clearHaltCounted(inEndpoint);
+			await stillWanted();
+			await this.clearHaltCounted(outEndpoint);
 		}
-		if (generation !== this.generation) {
-			// A close ran while the clear-halts were out, and has already released everything.
-			throw new TransportError('USB link closed while it was opening.');
-		}
+		await stillWanted();
 
 		this.frameBytes = frameBytes;
 		this.inEndpoint = inEndpoint;
@@ -643,6 +655,27 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			done();
 			reject(error);
 		}
+	}
+
+	/**
+	 * Clears an endpoint after the claim (Linux only), counted as a transfer in flight until libusb
+	 * really answers.
+	 *
+	 * Taking the interface from `usbhid` leaves the interrupt endpoints' data toggle out of step
+	 * with the brick's, and the first reply after every detach was dropped as a duplicate (HOSTC,
+	 * 13.11.2026). A clear-halt resets the toggle on both ends. Best effort, and the open waits at
+	 * most {@link CLEAR_HALT_MAX_MS} for it — but the request stays counted until libusb calls it
+	 * back, so a close waits for it rather than release the interface under it.
+	 */
+	private clearHaltCounted(endpoint: UsbEndpointLike): Promise<void> {
+		if (!endpoint.clearHalt) { return Promise.resolve(); }
+		return new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, CLEAR_HALT_MAX_MS);
+			timer.unref?.();
+			this.submit(() => { clearTimeout(timer); resolve(); }, (done) => {
+				endpoint.clearHalt!(() => { done(); clearTimeout(timer); resolve(); });
+			});
+		});
 	}
 
 	/** Resolves once libusb has called back every transfer, or after `maxMs`, whichever is first. */

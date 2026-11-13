@@ -10,7 +10,7 @@
  */
 
 import { describeAddress } from '../contracts';
-import { TransportAdapter, SendOptions } from './transportAdapter';
+import { TransportAdapter, SendOptions, OpenOptions } from './transportAdapter';
 import { TransportError, TimeoutError, BackendUnavailableError, BrickUnreachableError } from '../errors/CockpitError';
 import {
 	PendingReply,
@@ -122,8 +122,10 @@ export class BtWinsockAdapter implements TransportAdapter {
 	 *   tells the provider it may try the next one immediately. Every other failure touched
 	 *   the radio and leaves the channel settling.
 	 */
-	async open(): Promise<void> {
+	async open(options?: OpenOptions): Promise<void> {
 		if (this._isOpen) { return; }
+		const signal = options?.signal;
+		signal?.throwIfAborted();
 
 		// Before anything else, because both of these fail without touching the radio.
 		const api = this.injectedApi ?? loadWinsock2();
@@ -191,6 +193,11 @@ export class BtWinsockAdapter implements TransportAdapter {
 				// not adopted, because its socket is already closed by then.
 				const pause = Math.max(0, Math.min(CONNECT_POLL_MS, deadline - Date.now()));
 				await new Promise((resolve) => setTimeout(resolve, pause));
+				// Aborted by whoever asked (a dispose): give the socket back, adopt nothing.
+				if (signal?.aborted) {
+					api.closesocket(socket);
+					throw signal.reason;
+				}
 			}
 		}
 

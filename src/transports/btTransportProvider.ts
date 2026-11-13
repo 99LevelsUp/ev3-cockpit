@@ -24,6 +24,7 @@ import { TransportAdapter } from './transportAdapter';
 import { BtConnectionQueue } from './btConnectionQueue';
 import { BT } from './transportConstants';
 import type { PairedPresence, UnpairedSighting } from './btPresence';
+import { LifetimeScope, abortableDelay } from './lifetimeScope';
 
 // ── BT backend types ────────────────────────────────────────────────
 
@@ -148,9 +149,13 @@ export class BtTransportProvider implements TransportProvider {
 	private readonly presence?: BtPresenceSource;
 	/** Paired bricks the last discovery listed, by MAC as Windows spells it. */
 	private lastPaired: string[] = [];
-	private disposed = false;
-	/** Adapters made and still opening, which a dispose must reach too. */
+	/** Everything this provider starts runs here; a dispose aborts it and waits (audit round 4). */
+	private readonly scope = new LifetimeScope('BtTransportProvider');
+	/** Adapters made and still opening, which a dispose closes too. */
 	private readonly opening = new Set<TransportAdapter>();
+	/** Connects in flight, so a second connect to the same brick gets the same answer. */
+	private readonly connecting = new Map<BrickKey, Promise<SessionHandle>>();
+	private disposing?: Promise<void>;
 
 	constructor(options?: BtTransportProviderOptions) {
 		this.backends = options?.backends ?? new Map<BtBackend, BtAdapterFactory>();
@@ -167,8 +172,11 @@ export class BtTransportProvider implements TransportProvider {
 		};
 	}
 
-	async discover(): Promise<DiscoveryScanResult> {
-		this.assertNotDisposed();
+	discover(): Promise<DiscoveryScanResult> {
+		return this.scope.run((signal) => this.discoverInScope(signal));
+	}
+
+	private async discoverInScope(signal: AbortSignal): Promise<DiscoveryScanResult> {
 		const items: DiscoveryItem[] = [];
 		const now = Date.now();
 
@@ -178,6 +186,7 @@ export class BtTransportProvider implements TransportProvider {
 
 		try {
 			const devices = (await this.discoverDevices()).filter((dev) => isLegoMac(dev.mac));
+			signal.throwIfAborted();
 			this.lastPaired = devices.filter((dev) => dev.remembered).map((dev) => dev.mac);
 			for (const dev of devices) {
 				const brickKey = makeBrickKey(Transport.BT, dev.mac);
@@ -241,8 +250,19 @@ export class BtTransportProvider implements TransportProvider {
 		return this.lastPaired.filter((mac) => !inSession.has(normaliseMac(mac)));
 	}
 
-	async connect(brickKey: BrickKey): Promise<SessionHandle> {
-		this.assertNotDisposed();
+	connect(brickKey: BrickKey): Promise<SessionHandle> {
+		// A second connect to a brick already connecting waits for the same answer: two would each
+		// open an adapter, and the second session would orphan the first (audit round 4, #7).
+		const inFlight = this.connecting.get(brickKey);
+		if (inFlight) { return inFlight; }
+		const attempt = this.scope.run((signal) => this.connectInScope(brickKey, signal));
+		this.connecting.set(brickKey, attempt);
+		const forget = (): void => { if (this.connecting.get(brickKey) === attempt) { this.connecting.delete(brickKey); } };
+		attempt.then(forget, forget);
+		return attempt;
+	}
+
+	private async connectInScope(brickKey: BrickKey, signal: AbortSignal): Promise<SessionHandle> {
 		if (this.sessions.has(brickKey)) {
 			throw new ConnectionError(`${describeChannel(brickKey)} is already connected.`);
 		}
@@ -264,7 +284,7 @@ export class BtTransportProvider implements TransportProvider {
 		const closedAt = this.closedAt.get(mac);
 		if (closedAt !== undefined) {
 			const wait = closedAt + this.reconnectGapAfterCloseMs - Date.now();
-			if (wait > 0) { await new Promise((resolve) => setTimeout(resolve, wait)); }
+			if (wait > 0) { await abortableDelay(wait, signal); }
 		}
 
 		let queueRelease: ((error?: unknown) => void) | undefined;
@@ -273,7 +293,8 @@ export class BtTransportProvider implements TransportProvider {
 		}
 
 		try {
-			const { adapter, backend } = await this.connectWithFallback(mac);
+			signal.throwIfAborted();
+			const { adapter, backend } = await this.connectWithFallback(mac, signal);
 			this.sessions.set(brickKey, { adapter, backend, messageCounter: 0 });
 			this.preferredBackend.set(mac, backend);
 			queueRelease?.();
@@ -352,17 +373,40 @@ export class BtTransportProvider implements TransportProvider {
 	}
 
 	dispose(): void {
-		this.disposed = true;
+		void this.disposeAsync();
+	}
+
+	/**
+	 * Aborts every operation, closes every link, and resolves once all of it has settled.
+	 *
+	 * Abort first, so a connect waiting out the gap, the queue or an open stops at its next wait;
+	 * the queue's dispose ends the waits for a slot; then the sessions and the adapters still
+	 * opening are closed, and the operations — which close what they own — are waited for.
+	 */
+	disposeAsync(): Promise<void> {
+		if (!this.disposing) { this.disposing = this.disposeAll(); }
+		return this.disposing;
+	}
+
+	private async disposeAll(): Promise<void> {
+		const operations = this.scope.dispose();
+		this.connectionQueue?.dispose();
+		const closes: Promise<void>[] = [];
 		for (const [, session] of this.sessions) {
-			void session.adapter.close();
+			closes.push(session.adapter.close().catch(() => { /* disposing */ }));
 		}
 		this.sessions.clear();
-		// And every link still opening: its close overtakes the open.
 		for (const adapter of this.opening) {
-			void adapter.close().catch(() => { /* disposing */ });
+			closes.push(adapter.close().catch(() => { /* disposing */ }));
 		}
 		this.opening.clear();
-		this.connectionQueue?.dispose();
+		await operations;
+		// A connect may have adopted its link just before it saw the abort; close what is left.
+		for (const [, session] of this.sessions) {
+			closes.push(session.adapter.close().catch(() => { /* disposing */ }));
+		}
+		this.sessions.clear();
+		await Promise.all(closes);
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
@@ -380,7 +424,7 @@ export class BtTransportProvider implements TransportProvider {
 	 * from `BtSppAdapter`, wearing a different name. The caller waits out the queue's error
 	 * cooldown and tries again, which is where that recovery belongs.
 	 */
-	private async connectWithFallback(mac: string): Promise<{ adapter: TransportAdapter; backend: BtBackend }> {
+	private async connectWithFallback(mac: string, signal: AbortSignal): Promise<{ adapter: TransportAdapter; backend: BtBackend }> {
 		if (this.backends.size === 0) {
 			throw new ConnectionError('No BT backends configured.');
 		}
@@ -394,10 +438,11 @@ export class BtTransportProvider implements TransportProvider {
 				adapter = factory(mac);
 				// Tracked from the moment it exists, so a dispose reaches it mid-open (review of 6955f22).
 				this.opening.add(adapter);
-				await adapter.open();
-				if (this.disposed) {
-					// Landed after the dispose, which already closed it: adopt nothing.
-					throw new TransportError('BtTransportProvider has been disposed.');
+				await adapter.open({ signal });
+				if (signal.aborted) {
+					// Landed as the dispose came: give it back, adopt nothing.
+					await adapter.close().catch(() => { /* disposing */ });
+					throw signal.reason;
 				}
 				return { adapter, backend };
 			} catch (error) {
@@ -436,7 +481,7 @@ export class BtTransportProvider implements TransportProvider {
 	}
 
 	private assertNotDisposed(): void {
-		if (this.disposed) {
+		if (this.scope.disposed) {
 			throw new TransportError('BtTransportProvider has been disposed.');
 		}
 	}

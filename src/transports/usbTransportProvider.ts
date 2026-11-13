@@ -19,6 +19,7 @@ import {
 } from './usbLibusbAdapter';
 import { USB } from './transportConstants';
 import { listLegoUsbDevices } from './usbNodeUsb';
+import { LifetimeScope } from './lifetimeScope';
 import * as fs from 'fs';
 
 // ── node-hid discovery (duck-typed) ─────────────────────────────────
@@ -44,6 +45,19 @@ function defaultHidAccess(path: string): 'denied' | 'ok' | 'unknown' {
 		const code = (error as NodeJS.ErrnoException).code;
 		return code === 'EACCES' || code === 'EPERM' ? 'denied' : 'unknown';
 	}
+}
+
+/** Waits for `promise`, or rejects with the signal's reason as soon as it aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) { return Promise.reject(signal.reason); }
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = (): void => reject(signal.reason);
+		signal.addEventListener('abort', onAbort, { once: true });
+		promise.then(
+			(value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+			(error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+		);
+	});
 }
 
 /** Why the libusb link did not open; a refused device carries its permission error. */
@@ -145,11 +159,14 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly listHidDevices?: () => { path?: string; serialNumber?: string; product?: string }[];
 	private readonly platform: NodeJS.Platform;
 	private readonly hidAccess: (path: string) => 'denied' | 'ok' | 'unknown';
-	private disposed = false;
 	/** Every adapter made and not yet closed: sessions, probes, and links still opening. */
 	private readonly live = new Set<TransportAdapter>();
-	/** The closes {@link disposeAsync} started, for a second caller to wait on too. */
-	private disposing: Promise<void> = Promise.resolve();
+	/** Everything this provider starts runs here; a dispose aborts it and waits (audit round 4). */
+	private readonly scope = new LifetimeScope('UsbTransportProvider');
+	/** Connects in flight, so a second connect to the same brick gets the same answer. */
+	private readonly connecting = new Map<BrickKey, Promise<SessionHandle>>();
+	/** The dispose in progress, for a second caller to wait on too. */
+	private disposing?: Promise<void>;
 	/**
 	 * Probe links open now, with where each one sits. Their devices count as in use, so
 	 * discovery and a connect leave them alone until they close.
@@ -189,13 +206,13 @@ export class UsbTransportProvider implements TransportProvider {
 		}
 		this.discovering = true;
 		try {
-			return await this.doDiscover();
+			return await this.scope.run((signal) => this.doDiscover(signal));
 		} finally {
 			this.discovering = false;
 		}
 	}
 
-	private async doDiscover(): Promise<DiscoveryScanResult> {
+	private async doDiscover(signal: AbortSignal): Promise<DiscoveryScanResult> {
 		const hid = tryLoadNodeHid();
 		if (!hid) {
 			return { transport: Transport.USB, items: [] };
@@ -207,9 +224,11 @@ export class UsbTransportProvider implements TransportProvider {
 		// A brick with a live libusb session is skipped rather than reopened: discovery runs
 		// on a 1.2 s timer and would otherwise be prying at a device its own transport holds
 		// claimed. Such a brick keeps the HID product string, which is what it had before.
-		const nodeUsbDevices = await this.onBus(() => this.listUsbDevices({
-			skip: (location) => this.isInUse(location),
-		})).catch(() => []);
+		const nodeUsbDevices = await this.onBus(() => {
+			signal.throwIfAborted();
+			return this.listUsbDevices({ skip: (location) => this.isInUse(location) });
+		}).catch(() => []);
+		signal.throwIfAborted();
 
 		// Remember every name libusb manages to read, because a connected brick is skipped
 		// above and would otherwise fall back to the Windows cache — which is wrong on this
@@ -308,11 +327,22 @@ export class UsbTransportProvider implements TransportProvider {
 		return { transport: Transport.USB, items };
 	}
 
-	async connect(brickKey: BrickKey): Promise<SessionHandle> {
-		this.assertNotDisposed();
+	connect(brickKey: BrickKey): Promise<SessionHandle> {
+		// A second connect to a brick already connecting waits for the same answer, rather than
+		// open a second link whose session would overwrite the first (audit round 4).
+		const inFlight = this.connecting.get(brickKey);
+		if (inFlight) { return inFlight; }
+		const attempt = this.scope.run((signal) => this.connectInScope(brickKey, signal));
+		this.connecting.set(brickKey, attempt);
+		const forget = (): void => { if (this.connecting.get(brickKey) === attempt) { this.connecting.delete(brickKey); } };
+		attempt.then(forget, forget);
+		return attempt;
+	}
+
+	private async connectInScope(brickKey: BrickKey, signal: AbortSignal): Promise<SessionHandle> {
 		// Waits for a probe of this brick to close first. A connect that raced one would lose
 		// the libusb claim to it and land, silently, on 64-byte HID.
-		const release = await this.lock(brickKey);
+		const release = await this.lock(brickKey, signal);
 		try {
 			if (this.sessions.has(brickKey)) {
 				throw new ConnectionError(`${describeChannel(brickKey)} is already connected.`);
@@ -322,11 +352,13 @@ export class UsbTransportProvider implements TransportProvider {
 
 			// libusb first: it is the only path that carries a whole EV3 frame, and `copy` and
 			// `move` do not fit a HID write at all.
-			const libusbFailure = await this.tryLibusb(brickKey, serial);
+			const libusbFailure = await this.tryLibusb(brickKey, serial, signal);
 			if (libusbFailure === undefined) {
 				return { brickKey, transport: Transport.USB };
 			}
-			return await this.connectOverHid(brickKey, serial, libusbFailure);
+			// A libusb open the dispose aborted is not a reason to try HID.
+			signal.throwIfAborted();
+			return await this.connectOverHid(brickKey, serial, libusbFailure, signal);
 		} finally {
 			release();
 		}
@@ -340,9 +372,12 @@ export class UsbTransportProvider implements TransportProvider {
 	 * open costs tens of milliseconds and nothing shared. libusb only: a HID probe could not
 	 * carry the reply's 72 bytes in one packet, and is not worth a second path.
 	 */
-	async openProbe(brickKey: BrickKey): Promise<ProbeLink> {
-		this.assertNotDisposed();
-		const release = await this.lock(brickKey);
+	openProbe(brickKey: BrickKey): Promise<ProbeLink> {
+		return this.scope.run((signal) => this.openProbeInScope(brickKey, signal));
+	}
+
+	private async openProbeInScope(brickKey: BrickKey, signal: AbortSignal): Promise<ProbeLink> {
+		const release = await this.lock(brickKey, signal);
 		let opened: UsbLibusbAdapter;
 		try {
 			if (this.sessions.has(brickKey)) {
@@ -354,16 +389,17 @@ export class UsbTransportProvider implements TransportProvider {
 				inUse: (location) => this.isInUse(location),
 			});
 			opened = await this.onBus(async () => {
+				signal.throwIfAborted();
 				try {
-					await adapter.open();
+					await adapter.open({ signal });
 				} catch (error) {
 					await adapter.close().catch(() => { /* nothing to unwind */ });
 					throw error;
 				}
-				if (this.disposed) {
-					// Landed after the dispose, which could not see it: give the device back.
+				if (signal.aborted) {
+					// Landed as the dispose came: give the device back, adopt nothing.
 					await adapter.close().catch(() => { /* disposing */ });
-					throw new TransportError('UsbTransportProvider has been disposed.');
+					throw signal.reason;
 				}
 				this.probes.set(adapter, adapter.deviceLocation);
 				return adapter;
@@ -413,42 +449,52 @@ export class UsbTransportProvider implements TransportProvider {
 	}
 
 	/** Waits its turn among the connects and probes of one brick; resolves to a release. */
-	private async lock(brickKey: BrickKey): Promise<() => void> {
+	private async lock(brickKey: BrickKey, signal: AbortSignal): Promise<() => void> {
 		const previous = this.locks.get(brickKey) ?? Promise.resolve();
 		let release!: () => void;
 		const mine = new Promise<void>((resolve) => { release = resolve; });
 		const tail = previous.then(() => mine);
 		this.locks.set(brickKey, tail);
-		await previous;
-		return () => {
+		const unlock = (): void => {
 			release();
 			if (this.locks.get(brickKey) === tail) { this.locks.delete(brickKey); }
 		};
+		try {
+			// An abort ends the wait: a dispose must not wait on a lock some probe never gives back.
+			await untilAborted(previous, signal);
+		} catch (error) {
+			unlock();
+			throw error;
+		}
+		return unlock;
 	}
 
 	/** Opens the libusb link, returning the failure detail rather than throwing. */
 	private async tryLibusb(
 		brickKey: BrickKey,
 		serial: string | undefined,
+		signal: AbortSignal,
 	): Promise<LibusbFailure | undefined> {
 		const libusb = this.makeLibusbAdapter({
 			...(serial ? { serial } : {}),
 			inUse: (location) => this.isInUse(location),
 		});
 		const failure = await this.onBus(async () => {
+			signal.throwIfAborted();
 			try {
-				await libusb.open();
+				await libusb.open({ signal });
 			} catch (error) {
 				await libusb.close().catch(() => { /* nothing to unwind */ });
+				if (signal.aborted) { throw signal.reason; }
 				return {
 					message: error instanceof Error ? error.message : String(error),
 					...(error instanceof DevicePermissionError ? { permission: error } : {}),
 				};
 			}
-			if (this.disposed) {
-				// Landed after the dispose, which could not see it: give the device back.
+			if (signal.aborted) {
+				// Landed as the dispose came: give the device back, adopt nothing.
 				await libusb.close().catch(() => { /* disposing */ });
-				throw new TransportError('UsbTransportProvider has been disposed.');
+				throw signal.reason;
 			}
 			this.sessions.set(brickKey, {
 				adapter: libusb,
@@ -475,13 +521,15 @@ export class UsbTransportProvider implements TransportProvider {
 		brickKey: BrickKey,
 		serial: string | undefined,
 		libusbFailure: LibusbFailure,
+		signal: AbortSignal,
 	): Promise<SessionHandle> {
 		const hid = this.makeHidAdapter(
 			serial ? { path: `serial:${serial.toLowerCase()}` } : {}
 		);
 		try {
-			await hid.open();
+			await hid.open({ signal });
 		} catch (hidError) {
+			if (signal.aborted) { throw signal.reason; }
 			// Name both failures: "USB connect failed" against a working brick usually
 			// means the libusb claim lost to something, and only that message says so.
 			const hidMessage = hidError instanceof Error ? hidError.message : String(hidError);
@@ -503,6 +551,10 @@ export class UsbTransportProvider implements TransportProvider {
 				+ hidMessage,
 				hidError
 			);
+		}
+		if (signal.aborted) {
+			await hid.close().catch(() => { /* disposing */ });
+			throw signal.reason;
 		}
 		this.sessions.set(brickKey, { adapter: hid, backend: 'hid', messageCounter: 0 });
 		// Said only once the fallback has actually happened: while a cable is out, every
@@ -563,9 +615,16 @@ export class UsbTransportProvider implements TransportProvider {
 	 * extension host that exits right after leaves the brick with no driver (HOSTC, 13.11.2026:
 	 * one brick after every `npm run test:host`). A deactivate that awaits this does not.
 	 */
-	async disposeAsync(): Promise<void> {
-		if (this.disposed) { return this.disposing; }
-		this.disposed = true;
+	disposeAsync(): Promise<void> {
+		if (!this.disposing) { this.disposing = this.disposeAll(); }
+		return this.disposing;
+	}
+
+	private async disposeAll(): Promise<void> {
+		// Abort first, so every operation in flight stops at its next wait and cleans up what it
+		// owns; then close what is held, which also releases the locks an aborted connect could
+		// otherwise wait on; then wait for both.
+		const operations = this.scope.dispose();
 		const closes: Promise<void>[] = [];
 		const handled = new Set<TransportAdapter>([
 			...[...this.sessions.values()].map((session) => session.adapter),
@@ -583,10 +642,13 @@ export class UsbTransportProvider implements TransportProvider {
 		// And every link still opening: its close overtakes the open, which then adopts nothing.
 		for (const adapter of this.live) {
 			if (handled.has(adapter)) { continue; }
+			handled.add(adapter);
 			closes.push(adapter.close().catch(() => { /* disposing */ }));
 		}
-		this.disposing = Promise.all(closes).then(() => undefined);
-		return this.disposing;
+		await operations;
+		// An operation may have left an adapter open as it settled; close what nobody closed yet.
+		const leftOver = [...this.live].filter((adapter) => !handled.has(adapter));
+		await Promise.all([...closes, ...leftOver.map((adapter) => adapter.close().catch(() => { /* disposing */ }))]);
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
@@ -627,7 +689,7 @@ export class UsbTransportProvider implements TransportProvider {
 	}
 
 	private assertNotDisposed(): void {
-		if (this.disposed) {
+		if (this.scope.disposed) {
 			throw new TransportError('UsbTransportProvider has been disposed.');
 		}
 	}

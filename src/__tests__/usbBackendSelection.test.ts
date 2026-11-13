@@ -468,9 +468,13 @@ describe('USB provider — disposeAsync waits for links still opening (review of
 			createLibusbAdapter: () => {
 				let closed = false;
 				return {
-					async open(): Promise<void> {
+					// Like the real adapters: the open honours its signal (the provider's lifetime scope).
+					async open(options?: { signal?: AbortSignal }): Promise<void> {
 						events.push('open-start');
-						await gate;
+						await new Promise<void>((resolve, reject) => {
+							void gate.then(resolve);
+							options?.signal?.addEventListener('abort', () => reject(options.signal!.reason), { once: true });
+						});
 						if (closed) { events.push('open-overtaken'); throw new Error('closed while it was opening'); }
 						events.push('open-landed');
 					},
@@ -495,5 +499,93 @@ describe('USB provider — disposeAsync waits for links still opening (review of
 		land();
 		await connecting;
 		assert.ok(!events.includes('open-landed'), 'and its open did not land afterwards');
+	});
+});
+
+describe('USB provider — one lifetime: nothing runs outside the scope (ownership audit, round 4)', () => {
+	interface Made { id: string; kind: 'libusb' | 'hid'; opened: boolean; closed: boolean }
+	/** Adapters that honour the open signal; `gate` holds every libusb open until the test lands it. */
+	function scoped(options: { gate?: Promise<void>; libusbFails?: boolean; listGate?: Promise<void> } = {}) {
+		const made: Made[] = [];
+		const fake = (kind: 'libusb' | 'hid', fails: boolean) => {
+			const record: Made = { id: `${kind}${made.length + 1}`, kind, opened: false, closed: false };
+			made.push(record);
+			return {
+				async open(o?: { signal?: AbortSignal }): Promise<void> {
+					if (kind === 'libusb' && options.gate) {
+						await new Promise<void>((resolve, reject) => {
+							void options.gate!.then(resolve);
+							o?.signal?.addEventListener('abort', () => reject(o.signal!.reason), { once: true });
+						});
+					}
+					if (fails) { throw new Error('LIBUSB_ERROR_IO'); }
+					record.opened = true;
+				},
+				close: () => { record.closed = true; return Promise.resolve(); },
+				send: () => Promise.resolve(new Uint8Array()),
+				get isOpen(): boolean { return record.opened && !record.closed; },
+				maxPacketBytes: 1024,
+				deviceLocation: { busNumber: 2, deviceAddress: 10 },
+			};
+		};
+		const provider = new UsbTransportProvider({
+			createLibusbAdapter: (() => fake('libusb', Boolean(options.libusbFails))) as never,
+			createHidAdapter: (() => fake('hid', false)) as never,
+			listHidDevices: () => [],
+			listUsbDevices: (async () => { await options.listGate; return []; }) as never,
+		});
+		return { provider, made };
+	}
+	const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+	it('ends a connect waiting on a lock a probe holds, when disposed: nothing waits for ever', async () => {
+		const { provider, made } = scoped();
+		await provider.openProbe(KEY);
+		const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+		await tick();
+		await provider.disposeAsync();
+		assert.ok((await connecting) instanceof Error);
+		assert.deepEqual(made.map((m) => [m.id, m.closed]), [['libusb1', true]], 'the probe closed, no second link made');
+	});
+
+	it('does not fall back to HID when the dispose aborted the libusb open', async () => {
+		const { provider, made } = scoped({ gate: new Promise<void>(() => { /* never */ }) });
+		const connecting = provider.connect(KEY).then(() => 'connected', (e: unknown) => e);
+		await tick();
+		await provider.disposeAsync();
+		assert.ok((await connecting) instanceof Error);
+		assert.equal(made.filter((m) => m.kind === 'hid').length, 0);
+	});
+
+	it('waits for a discover still on the bus, and the discover does not come back as a result', async () => {
+		let land!: () => void;
+		const { provider } = scoped({ listGate: new Promise<void>((resolve) => { land = resolve; }) });
+		const discovering = provider.discover().then(() => 'listed', (e: unknown) => e);
+		await tick();
+		let disposed = false;
+		const disposing = provider.disposeAsync().then(() => { disposed = true; });
+		await tick();
+		assert.equal(disposed, false, 'the dispose waits for the discover on the bus');
+		land();
+		await disposing;
+		assert.ok((await discovering) instanceof Error);
+	});
+
+	it('refuses every operation after the dispose, making nothing', async () => {
+		const { provider, made } = scoped();
+		await provider.disposeAsync();
+		await assert.rejects(() => provider.connect(KEY), /disposed/);
+		await assert.rejects(() => provider.openProbe(KEY), /disposed/);
+		await assert.rejects(() => provider.discover(), /disposed/);
+		assert.equal(made.length, 0);
+	});
+
+	it('answers two connects to one brick with one link (audit round 4, #7 on USB)', async () => {
+		const { provider, made } = scoped();
+		const [a, b] = await Promise.all([provider.connect(KEY), provider.connect(KEY)]);
+		assert.deepEqual(a, b);
+		assert.equal(made.length, 1);
+		await provider.disposeAsync();
+		assert.equal(made[0].closed, true);
 	});
 });
