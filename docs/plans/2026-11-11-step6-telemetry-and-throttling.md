@@ -271,6 +271,17 @@ Same area three rounds running — the order of updates when a listener reacts �
 
 Tests first: two consumers where one's listener ends the brick, a listener causing a newer change, a subscription made inside a listener, a claim that itself causes a change, a disposed subscription with an update on its way, a feedback loop (with a ceiling, so a regression cannot hang the run), one listener on the source for all. The test's stand-in source now fires like the product's emitter: a copy of the listeners, and a dispose that removes. Mutations 7/10. Three survive. Two are equivalent: an ended claim left among the recipients, and `ended` told without being marked done. Changes after `ended` queue behind it and are dropped at delivery either way. The third, the consumer's record cleaned after `ended`, is memory only and cannot be seen through the API. Unit 1022/1022.
 
+### U8, round 4 — audit of the rebuilt delivery (codex, `.review-out/tmp/packet_u8r4.txt`, 13.11.2026) — NOT-READY → fixed
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major → **minor** | a claim that ends inside `claim()` is opened afterwards as live: it never hears `ended`, and its dispose releases a claim already gone | CONFIRMED as a fact, not reachable today | nothing inside `TelemetryService.claim()` can end a brick (it refreshes the plan; the read model's only listener is the delivery, which never tells synchronously), and `release` of a gone handle does nothing. **Trigger to revisit:** a second synchronous listener on the read model or the service, such as the Phase 5 panel |
+| 2 | major | a callback inside `claim()` that unregisters the consumer leaves its claim behind; a consumer registered after the API was disposed holds a claim nobody releases | CONFIRMED for the second part (an extension holding the API object after deactivate), the first not reachable today | the API refuses consumers once disposed, the flag set before anything else goes; after the claim the consumer is checked again and a claim it can no longer own is given back |
+| 3 | major → **minor** | the delivery keeps the order its callback is called in, which another `onChange` listener reacting synchronously could make differ from the read model's own | CONFIRMED as a fact, not reachable today | the delivery is the read model's only listener (`extension.ts`). **Same trigger as row 1:** then the order is fixed at the producer: the read model fires without reentrancy and stamps each change with a sequence number, which a subscription's snapshot records |
+| 4 | major | no test that nothing is told inside the call that subscribes, nor that a throwing listener harms no one else | CONFIRMED | both tested, the first also from inside a listener |
+
+Rows 2 and 4 tested and mutated, 5/5 caught. The delivery's approach stands: this round's findings are at its edges, at the claim, the API's lifetime and the source, not in the order it keeps.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.

@@ -198,6 +198,8 @@ export interface CockpitApiDeps {
 export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription {
 	const programs = new Map<BrickId, ProgramService>();
 	const consumers = new Set<CockpitConsumer>();
+	/** Set before anything is disposed, so nothing registered on the way out escapes it (review 4). */
+	let disposed = false;
 
 	const resolve = (brick: BrickTarget): BrickId => {
 		if (brick !== 'active') {
@@ -248,6 +250,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const on =async <T>(brick: BrickTarget, work: (brickId: BrickId) => Promise<T>): Promise<T> => work(resolve(brick));
 
 	const registerConsumer = (name: string): CockpitConsumer => {
+		if (disposed) { throw new ConsumerError(`The cockpit's API has been disposed; ${name} cannot register.`); }
 		const subscriptions = new Set<Subscription>();
 		let closed = false;
 		/** Refused once the consumer is gone: nothing could dispose it any more (review 11.11.2026). */
@@ -349,6 +352,8 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 					if (error instanceof CockpitError) { throw error; }
 					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
 				}
+				// Whatever ran inside the claim may have unregistered this consumer: give the claim back (review 4).
+				if (closed) { telemetry.release(claim.handle); open(); }
 				const rows = new Set(request.rows);
 				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
 				// The snapshot is the state at the claim and the subscription joins the delivery right there,
@@ -386,6 +391,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		apiVersion: API_VERSION,
 		registerConsumer,
 		dispose: () => {
+			disposed = true;
 			for (const consumer of [...consumers]) { consumer.dispose(); }
 			for (const service of programs.values()) { service.dispose(); }
 			programs.clear();
