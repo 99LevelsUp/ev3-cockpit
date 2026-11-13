@@ -246,7 +246,7 @@ Convergence gate met: no blocker or major survives. Majors per round 6 → 3 →
 | 2 | minor | a changed `tailFactor` left the display's stalls counted against the old limit | CONFIRMED | same reset |
 | 3 | minor | `configureThrottle` accepted bad settings with no loop running | CONFIRMED | it checks them itself |
 
-Convergence gate met: no blocker or major. The deviation from KTD5 (cap by `maxSlowdown`, not the heartbeat window) waits on the owner.
+Convergence gate met: no blocker or major. The deviation from KTD5 (cap by `maxSlowdown`, not the heartbeat window) — **accepted by the owner 13.11.2026**.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
