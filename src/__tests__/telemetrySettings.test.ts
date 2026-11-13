@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+	programPresetSettingsFromPackage, readProgramPresetSettings,
 	readThrottleSettings, readTelemetrySettings, telemetrySettingsFromPackage, throttleSettingsFromPackage,
 } from '../telemetry/telemetrySettings';
 
@@ -72,5 +73,18 @@ describe('telemetry settings (D9)', () => {
 
 		assert.deepEqual(settings, { enabled: true, windowSize: 20, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 5 });
 		assert.equal(warnings.length, 3, "'yes' for a switch, a window of 7.5 frames and a step that never slows are refused");
+	});
+	it('declares the program preset in package.json, 200 ms as the measurement decided (U9, D11)', () => {
+		assert.deepEqual(programPresetSettingsFromPackage(pkg), { programRunningTickMs: 200 });
+	});
+
+	it('reads 0 as the preset turned off, and refuses a negative tick (U9)', () => {
+		const declared = { 'telemetry.programRunningTickMs': 200 };
+		const warnings: string[] = [];
+		assert.deepEqual(readProgramPresetSettings(section({ 'telemetry.programRunningTickMs': 0 }, declared), (m) => warnings.push(m)),
+			{ programRunningTickMs: 0 });
+		assert.deepEqual(readProgramPresetSettings(section({ 'telemetry.programRunningTickMs': -5 }, declared), (m) => warnings.push(m)),
+			{ programRunningTickMs: 200 });
+		assert.equal(warnings.length, 1);
 	});
 });

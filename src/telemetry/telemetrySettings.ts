@@ -31,6 +31,12 @@ export interface ThrottleSettings {
 	readonly calmWindows: number;
 }
 
+/** How a running program slows its brick's telemetry (step-6 U9, owner decision D11). */
+export interface ProgramPresetSettings {
+	/** While a program runs, the tick is at least this, in milliseconds; 0 turns it off. 0 or more. */
+	readonly programRunningTickMs: number;
+}
+
 /** The part of a VS Code configuration section this needs: `getConfiguration('ev3-cockpit')`. */
 export interface SettingsSection {
 	get<T>(key: string): T | undefined;
@@ -62,6 +68,10 @@ const THROTTLE: Specs<ThrottleSettings> = {
 	calmWindows: { key: 'telemetry.throttle.calmWindows', kind: 'integer', min: 1 },
 };
 
+const PRESET: Specs<ProgramPresetSettings> = {
+	programRunningTickMs: { key: 'telemetry.programRunningTickMs', kind: 'number', min: 0 },
+};
+
 /** Throws, naming the setting, for stale settings out of range. */
 export function checkTelemetrySettings(settings: TelemetrySettings): void {
 	check(STALE, settings);
@@ -83,6 +93,21 @@ export function readTelemetrySettings(section: SettingsSection, warn: (message: 
 /** Reads the throttle settings, as {@link readTelemetrySettings} reads the stale ones. */
 export function readThrottleSettings(section: SettingsSection, warn: (message: string) => void): ThrottleSettings {
 	return readAll(THROTTLE, section, warn);
+}
+
+/** Throws, naming the setting, for a program preset out of range. */
+export function checkProgramPresetSettings(settings: ProgramPresetSettings): void {
+	check(PRESET, settings);
+}
+
+/** Reads the program preset, as {@link readTelemetrySettings} reads the stale settings. */
+export function readProgramPresetSettings(section: SettingsSection, warn: (message: string) => void): ProgramPresetSettings {
+	return readAll(PRESET, section, warn);
+}
+
+/** The declared program preset, read from a parsed `package.json`. */
+export function programPresetSettingsFromPackage(manifest: unknown): ProgramPresetSettings {
+	return fromPackage(PRESET, manifest);
 }
 
 /** The declared stale defaults, read from a parsed `package.json`: for code that runs outside VS Code. */
