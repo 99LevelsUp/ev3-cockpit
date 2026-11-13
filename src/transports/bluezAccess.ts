@@ -68,7 +68,7 @@ export async function offerBluetoothGroup(options: GroupFixOptions): Promise<Gro
 	const argv = ['usermod', '-aG', BLUETOOTH_GROUP, user] as const;
 	const command = `pkexec ${argv.join(' ')}`;
 	const confirmed = await options.confirm({
-		message: `This system lets only members of the "${BLUETOOTH_GROUP}" group use Bluetooth. `
+		message: `BlueZ refused this user. On many systems only members of the "${BLUETOOTH_GROUP}" group may use it. `
 			+ `Add ${user} to it? Your system will ask for your password.`,
 		command,
 	});

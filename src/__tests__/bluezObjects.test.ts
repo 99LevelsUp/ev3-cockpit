@@ -12,6 +12,7 @@ import { bluezListDevices, bluezRadioName } from '../transports/bluezDiscovery';
 import { Variant, type DBusValue } from '../transports/dbus/wire';
 import { MessageType, type DBusMessage } from '../transports/dbus/message';
 import { DBusError } from '../transports/dbus/connection';
+import { BtClassicDiscovery } from '../transports/btClassicDiscovery';
 
 const AAA = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';
 const BBB = '/org/bluez/hci0/dev_00_16_53_F0_0B_0B';
@@ -48,12 +49,27 @@ class FakeBus implements BusLike {
 	private closeHandlers = new Set<() => void>();
 	objects: DBusValue = managed();
 	failWith?: Error;
+	/** Signals the bus delivers in the same chunk, right after the GetManagedObjects reply. */
+	afterReply: [string, string, string, DBusValue[]][] = [];
+	/** Closes the bus in the same chunk, right after the reply. */
+	closeAfterReply = false;
+	get signalHandlers(): number { return this.handlers.size; }
+	get closeHandlerCount(): number { return this.closeHandlers.size; }
 
 	async call(o: { member: string; interface: string }): Promise<DBusValue[]> {
 		this.calls.push(`${o.interface}.${o.member}`);
 		this.order.push(o.member);
 		if (this.failWith) { throw this.failWith; }
-		return [this.objects];
+		if (!this.afterReply.length && !this.closeAfterReply) { return [this.objects]; }
+		// As connection.ts dispatches one chunk: the reply settles, then the signals run, all before
+		// the caller's await continues.
+		return new Promise<DBusValue[]>((resolve) => {
+			setTimeout(() => {
+				resolve([this.objects]);
+				for (const [path, iface, member, body] of this.afterReply) { this.signal(path, iface, member, body); }
+				if (this.closeAfterReply) { this.close(); }
+			}, 0);
+		});
 	}
 	async addMatch(rule: string): Promise<void> { this.matches.push(rule); this.order.push('AddMatch'); }
 	onSignal(handler: (m: DBusMessage) => void): () => void { this.handlers.add(handler); return () => this.handlers.delete(handler); }
@@ -175,5 +191,118 @@ describe('BlueZ discovery and the radio name (the seams BtClassicDiscovery takes
 		const none = new BluezObjectCache(empty);
 		await none.start();
 		assert.equal(bluezRadioName(none)(), undefined);
+	});
+});
+
+describe('BluezObjectCache — the start, the close and the end (U4 review)', () => {
+	it('applies signals that arrive with the snapshot after it, in bus order, never under it', async () => {
+		const bus = new FakeBus();
+		const CCC = '/org/bluez/hci0/dev_00_16_53_F0_0C_0C';
+		bus.objects = new Map([...managed(), [BBB, new Map([['org.bluez.Device1', device('BBB', '00:16:53:F0:0B:0B', false)]])]]);
+		bus.afterReply = [
+			['/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesRemoved', [AAA, ['org.bluez.Device1']]],
+			[BBB, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['Paired', new Variant('b', true)]]), []]],
+			['/', 'org.freedesktop.DBus.ObjectManager', 'InterfacesAdded', [CCC, new Map([['org.bluez.Device1', device('CCC', '00:16:53:F0:0C:0C', false)]])]],
+		];
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		const names = cache.devices().map((d) => d.name).sort();
+		assert.deepEqual(names, ['BBB', 'CCC'], 'AAA stays removed, CCC stays added');
+		assert.equal(cache.devices().find((d) => d.name === 'BBB')?.paired, true, 'the change is not lost');
+	});
+
+	it('is not ready, and start fails, when the bus closes between the reply and the continuation', async () => {
+		const bus = new FakeBus();
+		bus.closeAfterReply = true;
+		const cache = new BluezObjectCache(bus);
+		await assert.rejects(() => cache.start(), /closed/);
+		assert.equal(cache.ready, false);
+		assert.deepEqual(cache.devices(), []);
+	});
+
+	it('tells its listeners when the snapshot is in, and when the bus closes', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		let changes = 0;
+		cache.onChange(() => { changes += 1; });
+		await cache.start();
+		assert.equal(changes, 1);
+		bus.close();
+		assert.equal(changes, 2);
+	});
+
+	it('leaves no handler behind when start fails, and refuses a second start', async () => {
+		const bus = new FakeBus();
+		bus.failWith = new DBusError('org.freedesktop.DBus.Error.AccessDenied', 'Rejected send message');
+		const failed = new BluezObjectCache(bus);
+		await assert.rejects(() => failed.start());
+		assert.equal(bus.signalHandlers, 0);
+		assert.equal(bus.closeHandlerCount, 0);
+		const ok = new FakeBus();
+		const cache = new BluezObjectCache(ok);
+		await cache.start();
+		await assert.rejects(() => cache.start(), /already/);
+		assert.equal(ok.signalHandlers, 1);
+	});
+
+	it('lets go of the bus on dispose, once, and is no longer ready', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		cache.dispose();
+		cache.dispose();
+		assert.equal(bus.signalHandlers, 0);
+		assert.equal(bus.closeHandlerCount, 0);
+		assert.equal(cache.ready, false);
+		assert.deepEqual(cache.devices(), []);
+	});
+
+	it('keeps the last known value of a boolean BlueZ invalidates, and forgets any other', async () => {
+		const bus = new FakeBus();
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map([['RSSI', new Variant('n', -40)]]), []]);
+		bus.signal(AAA, 'org.freedesktop.DBus.Properties', 'PropertiesChanged', ['org.bluez.Device1', new Map(), ['Paired', 'RSSI']]);
+		const aaa = cache.devices()[0];
+		assert.equal(aaa.paired, true);
+		assert.equal(aaa.rssi, undefined);
+	});
+});
+
+describe('BlueZ discovery through BtClassicDiscovery — only bricks reach the list (U4)', () => {
+	it('drops headphones, a phone and an unpaired stranger; keeps a LEGO-OUI brick and a toy-class brick', async () => {
+		const bus = new FakeBus();
+		const dev = (name: string, mac: string, paired: boolean, cls: number): Map<string, Variant> => {
+			const m = device(name, mac, paired);
+			m.set('Class', new Variant('u', cls));
+			return m;
+		};
+		bus.objects = new Map([
+			['/org/bluez/hci0', new Map([['org.bluez.Adapter1', new Map<string, Variant>([['Alias', new Variant('s', 'HOSTC')]])]])],
+			['/p1', new Map([['org.bluez.Device1', dev('Headphones', 'AA:BB:CC:00:00:01', true, 0x240404)]])],
+			['/p2', new Map([['org.bluez.Device1', dev('Phone', 'AA:BB:CC:00:00:02', true, 0x5a020c)]])],
+			['/p3', new Map([['org.bluez.Device1', dev('Speaker', 'AA:BB:CC:00:00:03', false, 0x240414)]])],
+			['/b1', new Map([['org.bluez.Device1', dev('AAA', '00:16:53:F0:0A:0A', true, 0)]])],
+			['/b2', new Map([['org.bluez.Device1', dev('Robot', 'AA:BB:CC:00:00:04', true, 0x000804)]])],
+		]);
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		const discovery = new BtClassicDiscovery({ listDevices: bluezListDevices(cache) });
+		const bricks = await discovery.discover();
+		assert.deepEqual(bricks.map((b) => [b.mac, b.name]).sort(), [
+			['00:16:53:F0:0A:0A', 'AAA'],
+			['AA:BB:CC:00:00:04', 'Robot'],
+		]);
+	});
+
+	it('gives a device without a Name no name, not the dashed address BlueZ puts in Alias', async () => {
+		const bus = new FakeBus();
+		const nameless = device('x', '00:16:53:F0:0D:0D', true);
+		nameless.delete('Name');
+		nameless.set('Alias', new Variant('s', '00-16-53-F0-0D-0D'));
+		bus.objects = new Map([['/n', new Map([['org.bluez.Device1', nameless]])]]);
+		const cache = new BluezObjectCache(bus);
+		await cache.start();
+		assert.equal(bluezListDevices(cache)()[0].name, '');
 	});
 });

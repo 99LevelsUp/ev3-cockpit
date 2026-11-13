@@ -46,11 +46,13 @@ describe('BlueZ access — the bluetooth group, offered and run (D4)', () => {
 		assert.deepEqual(runs, []);
 	});
 
-	it('shows the exact command it would run, before running it', async () => {
+	it('shows the exact command it would run, before running it, without claiming the cause as certain', async () => {
 		const { spawn } = fakeSpawn({ exit: 0 });
 		let shown = '';
-		await offerBluetoothGroup({ confirm: async (prompt) => { shown = prompt.command; return false; }, spawn, username: () => 'alice' });
+		let message = '';
+		await offerBluetoothGroup({ confirm: async (prompt) => { shown = prompt.command; message = prompt.message; return false; }, spawn, username: () => 'alice' });
 		assert.equal(shown, 'pkexec usermod -aG bluetooth alice');
+		assert.match(message, /^BlueZ refused this user\. On many systems only members of the "bluetooth" group may use it\. Add alice to it\?/);
 	});
 
 	it('runs exactly pkexec usermod -aG bluetooth <user>, with no shell', async () => {
@@ -62,7 +64,7 @@ describe('BlueZ access — the bluetooth group, offered and run (D4)', () => {
 		assert.notEqual(runs[0].options.shell, true);
 	});
 
-	it('says the change applies after logging out and in, and offers to check again', async () => {
+	it('says the change applies after logging out and in', async () => {
 		const { spawn } = fakeSpawn({ exit: 0 });
 		const result = await offerBluetoothGroup({ confirm: yes, spawn, username: () => 'alice' });
 		assert.equal(result.kind, 'added');
