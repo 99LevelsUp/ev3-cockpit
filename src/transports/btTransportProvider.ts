@@ -111,7 +111,7 @@ export interface BtTransportProviderOptions {
 	/**
 	 * Removes the OS-level pairing.
 	 *
-	 * When present, `forget()` actually forgets, reports what Windows keeps, and
+	 * When present, `forget()` actually forgets, reports what the OS keeps, and
 	 * `capabilities.supportsForget` is true. Without it forget only drops the backend
 	 * preference, and the brick returns on the next scan as though nothing happened.
 	 */
@@ -354,9 +354,9 @@ export class BtTransportProvider implements TransportProvider {
 	 * Disconnects and removes the pairing, when this provider was given a way to, and drops
 	 * everything this provider remembers about the brick (step-3 plan, KTD7).
 	 *
-	 * @returns What Windows keeps after the unpair: the brick's `BTHPORT` registry key and
-	 *   Windows' in-memory device record. Empty when there was no unpair hook, because then
-	 *   nothing reached Windows.
+	 * @returns What the OS keeps after the unpair, from `forgetResidue`: on Windows the brick's
+	 *   `BTHPORT` registry key and Windows' in-memory device record, on Linux BlueZ's name cache.
+	 *   Empty when there was no unpair hook, because then nothing reached the OS.
 	 * @throws {TransportError} When the OS refused to remove the pairing. Reported rather
 	 *   than swallowed: a forget that silently left the pairing in place is what made this
 	 *   capability false in the first place.

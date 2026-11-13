@@ -75,6 +75,20 @@ describe('BlueZ unpair — RemoveDevice through the cache (U7, KTD6)', () => {
 		assert.match(result.reason!, /AccessDenied/);
 	});
 
+	it('removes only through the adapter that holds the brick, and says when another one does (U7 review #1)', async () => {
+		const w = new World();
+		const other = '/org/bluez/hci1/dev_00_16_53_F0_0A_0A';
+		w.known = [{ ...w.known[0], path: other }];
+		const result = await createBluezUnpair({ bus: w, cache: w })(MAC);
+		assert.equal(result.ok, false);
+		assert.match(result.reason!, /another adapter/);
+		assert.deepEqual(w.calls, []);
+		const both = new World();
+		both.known = [{ ...both.known[0], path: other }, both.known[0]];
+		assert.deepEqual(await createBluezUnpair({ bus: both, cache: both })(MAC), { ok: true });
+		assert.deepEqual(both.calls.map((c) => c.body), [[DEV]]);
+	});
+
 	it('refuses something that is not an address, and a computer without an adapter', async () => {
 		const w = new World();
 		assert.equal((await createBluezUnpair({ bus: w, cache: w })('zz')).ok, false);
