@@ -87,11 +87,47 @@ describe('BlueZ presence check — an L2CAP connect to PSM 1 (D2)', () => {
 		assert.deepEqual(fake.closed, [7]);
 	});
 
-	it('does not hear a brick that refuses the connect at once', async () => {
+	it('does not hear a brick on the errnos that mean it did not answer, at once or after the connect', async () => {
+		for (const errno of [EHOSTDOWN, 113, 111, 110, 104]) {
+			const now = new FakeSocket();
+			now.errno = errno;
+			assert.equal(await check(now)(MAC), false, `connect errno ${errno}`);
+			assert.deepEqual(now.closed, [7]);
+			const later = new FakeSocket();
+			later.states = [{ state: 'failed', error: errno }];
+			assert.equal(await check(later)(MAC), false, `SO_ERROR ${errno}`);
+		}
+	});
+
+	it('fails the round, not the brick, on any other errno: a local failure or the adapter down', async () => {
+		for (const errno of [11, 16, 12, 100, 101, 22, 0]) {
+			const now = new FakeSocket();
+			now.errno = errno;
+			await assert.rejects(() => check(now)(MAC), (e: Error) => !(e instanceof BackendUnavailableError) && e.message.includes(`errno ${errno}`), `connect errno ${errno}`);
+			assert.deepEqual(now.closed, [7]);
+			const later = new FakeSocket();
+			later.states = [{ state: 'failed', error: errno }];
+			await assert.rejects(() => check(later)(MAC), (e: Error) => e.message.includes(`errno ${errno}`), `SO_ERROR ${errno}`);
+			assert.deepEqual(later.closed, [7]);
+		}
+	});
+
+	it('measures its deadline on a monotonic clock', async () => {
 		const fake = new FakeSocket();
-		fake.errno = EHOSTDOWN;
-		assert.equal(await check(fake)(MAC), false);
-		assert.deepEqual(fake.closed, [7]);
+		fake.states = [{ state: 'pending', error: 0 }];
+		const realNow = Date.now;
+		// A wall clock that stands still (or is set back) must not stretch the check.
+		const frozen = realNow();
+		Date.now = () => frozen;
+		try {
+			const outcome = await Promise.race([
+				check(fake, 60)(MAC),
+				new Promise<string>((resolve) => { const t = setTimeout(() => resolve('still running'), 1000); t.unref(); }),
+			]);
+			assert.equal(outcome, false);
+		} finally {
+			Date.now = realNow;
+		}
 	});
 
 	it('gives up at its deadline, and closes the socket, which abandons the connect', async () => {
@@ -164,9 +200,13 @@ class World implements InquiryBus, InquiryCache {
 	failOn?: { member: string; error: Error };
 	/** What discovery brings in, applied after StartDiscovery. */
 	heard: BluezDevice[] = [];
+	/** Another client is already discovering. */
+	discovering = false;
+	/** BlueZ sends no signal for these: an RSSI change under its 8 dBm threshold. */
+	silent = false;
 
 	devices(): BluezDevice[] { return this.known; }
-	adapter() { return { path: '/org/bluez/hci0', address: undefined, alias: 'HOSTC', powered: true, discovering: false }; }
+	adapter() { return { path: '/org/bluez/hci0', address: undefined, alias: 'HOSTC', powered: true, discovering: this.discovering }; }
 	onChange(h: () => void): () => void { this.handlers.add(h); return () => this.handlers.delete(h); }
 	async call(o: { member: string; body?: DBusValue[] }): Promise<DBusValue[]> {
 		this.calls.push(o.member === 'SetDiscoveryFilter'
@@ -177,7 +217,7 @@ class World implements InquiryBus, InquiryCache {
 			setTimeout(() => {
 				for (const d of this.heard) {
 					this.known = [...this.known.filter((k) => k.path !== d.path), d];
-					for (const h of this.handlers) { h(); }
+					if (!this.silent) { for (const h of this.handlers) { h(); } }
 				}
 			}, 5);
 		}
@@ -229,5 +269,42 @@ describe('BlueZ inquiry — a BR/EDR discovery window (KTD9)', () => {
 		w.adapter = () => undefined as never;
 		await assert.rejects(() => createBluezInquiry({ bus: w, cache: w, windowMs: 30 })(), /adapter/);
 		assert.deepEqual(w.calls, []);
+	});
+	it('hears a brick whose RSSI holds steady while another client was already discovering (the desktop panel open)', async () => {
+		const w = new World();
+		w.discovering = true;
+		w.known = [device(MAC, 'AAA', false, -50)];
+		w.silent = true;
+		const heard = await createBluezInquiry({ bus: w, cache: w, windowMs: 30 })();
+		assert.deepEqual(heard.map((b) => b.mac), [MAC]);
+	});
+
+	it('does not count a same-value RSSI signal as a sighting when nobody else was discovering', async () => {
+		const w = new World();
+		w.known = [device(MAC, 'AAA', false, -50)];
+		w.heard = [device(MAC, 'AAA', false, -50)];
+		const heard = await createBluezInquiry({ bus: w, cache: w, windowMs: 30 })();
+		assert.deepEqual(heard, []);
+	});
+
+	it('names a brick without a Name nothing, not the dashed address BlueZ puts in Alias', async () => {
+		const w = new World();
+		const nameless = { ...device(MAC, 'x', false, -50), name: undefined, alias: '00-16-53-F0-0A-0A' };
+		w.heard = [nameless];
+		const heard = await createBluezInquiry({ bus: w, cache: w, windowMs: 30 })();
+		assert.equal(heard[0].name, '');
+	});
+
+	it('says so when StopDiscovery fails for any reason but "not discovering"', async () => {
+		const said: string[] = [];
+		const quiet = new World();
+		quiet.failOn = { member: 'StopDiscovery', error: new DBusError('org.bluez.Error.Failed', 'No discovery started') };
+		await createBluezInquiry({ bus: quiet, cache: quiet, windowMs: 10, log: (m) => said.push(m) })();
+		assert.equal(said.length, 0);
+		const loud = new World();
+		loud.failOn = { member: 'StopDiscovery', error: new DBusError('org.freedesktop.DBus.Error.NoReply', 'no reply') };
+		await createBluezInquiry({ bus: loud, cache: loud, windowMs: 10, log: (m) => said.push(m) })();
+		assert.equal(said.length, 1);
+		assert.match(said[0], /StopDiscovery.*NoReply/);
 	});
 });

@@ -4,7 +4,7 @@
  */
 
 import type { BluetoothDeviceInfo } from './windowsBluetooth';
-import type { BluezObjectCache } from './bluezObjects';
+import type { BluezDevice, BluezObjectCache } from './bluezObjects';
 
 /**
  * Lists what BlueZ knows in the shape the Windows device cache has, so `BtClassicDiscovery`
@@ -23,8 +23,7 @@ export function bluezListDevices(cache: BluezObjectCache): () => BluetoothDevice
 			if (!hex || !/^[0-9a-f]{12}$/.test(hex)) { continue; }
 			devices.push({
 				mac: hex,
-				// Name, or a user's own Alias; never the dashed address BlueZ puts in Alias without one.
-				name: device.name ?? (device.alias && !isAddressAlias(device.alias) ? device.alias : ''),
+				name: bluezDeviceName(device),
 				connected: device.connected,
 				remembered: device.paired,
 				authenticated: device.paired || device.bonded,
@@ -38,6 +37,11 @@ export function bluezListDevices(cache: BluezObjectCache): () => BluetoothDevice
 /** This computer's Bluetooth name: the adapter's `Alias`, which BlueZ defaults to the host name. */
 export function bluezRadioName(cache: BluezObjectCache): () => string | undefined {
 	return () => cache.adapter()?.alias || undefined;
+}
+
+/** A device's Name, or a user's own Alias; never the dashed address BlueZ puts in Alias without a Name. */
+export function bluezDeviceName(device: Pick<BluezDevice, 'name' | 'alias'>): string {
+	return device.name ?? (device.alias && !isAddressAlias(device.alias) ? device.alias : '');
 }
 
 /** BlueZ's default Alias for a device without a Name: its address, dashed. */
