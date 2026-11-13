@@ -212,6 +212,10 @@ Rounds of one setting agree within about 1 %. **Verdict against the rule:** 500 
 Not measured yet: Bluetooth and TCP carry their commands through other paths in the VM's communication handling; U10 repeats this over both.
 
 
+## Linux session on HOSTC (11.11.2026) — folded
+
+Results on master: `docs/plans/linux-session-results/2026-11-11-hostc.md` (branch `linux-session-rpi5-2026-11-11`, 412e026). L1 failed (47 tests cancelled: timers armed with `unref()`) → fixed 5488a11, 926/926 on HOSTC; L2 holds; L3 failed (Bluetooth cache warning every 3 s) → fixed dd34e41, holds; L4 not run (no USB); L5/L6 hold on all three bricks — the facts are in IMPLEMENTATION_PLAN 1.11.11, now unblocked. Left open: the picker's "Bluetooth presence unavailable, the list shows Windows' records only" is Windows-worded on Linux (minor). CCC runs firmware V1.09H, AAA and BBB V1.10E — a second firmware variant on the bench, as the owner said to expect.
+
 ## Open, decided later
 
 - ~~Two consumers want two modes of one sensor~~ — decided as D6/D7.

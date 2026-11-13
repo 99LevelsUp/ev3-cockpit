@@ -1,0 +1,19 @@
+pause 0.2 s:
+{"round": 1, "connect_ms": 998, "reply_ms": 96, "reply": "ok", "close_ms": 0}
+{"round": 2, "error": "ConnectionRefusedError: errno=111 Connection refused", "after_ms": 138, "close_ms": 0}
+pause 0.5 s:
+{"round": 1, "connect_ms": 1176, "reply_ms": 96, "reply": "ok", "close_ms": 0}
+{"round": 2, "error": "ConnectionRefusedError: errno=111 Connection refused", "after_ms": 146, "close_ms": 0}
+pause 1 s:
+{"round": 1, "connect_ms": 1179, "reply_ms": 74, "reply": "ok", "close_ms": 0}
+{"round": 2, "error": "ConnectionRefusedError: errno=111 Connection refused", "after_ms": 139, "close_ms": 0}
+pause 2 s:
+{"round": 1, "connect_ms": 1171, "reply_ms": 71, "reply": "ok", "close_ms": 0}
+{"round": 2, "error": "ConnectionRefusedError: errno=111 Connection refused", "after_ms": 152, "close_ms": 0}
+pause 3 s:
+{"round": 1, "connect_ms": 1306, "reply_ms": 51, "reply": "ok", "close_ms": 0}
+{"round": 2, "connect_ms": 957, "reply_ms": 43, "reply": "ok", "close_ms": 0}
+pause 2.5 s: {"round": 2, "connect_ms": 1502, "reply_ms": 71, "reply": "ok", "close_ms": 0}
+pause 2.5 s: {"round": 2, "connect_ms": 1379, "reply_ms": 46, "reply": "ok", "close_ms": 0}
+pause 3 s: {"round": 2, "connect_ms": 975, "reply_ms": 71, "reply": "ok", "close_ms": 0}
+pause 3 s: {"round": 2, "connect_ms": 988, "reply_ms": 42, "reply": "ok", "close_ms": 0}

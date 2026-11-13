@@ -559,7 +559,7 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     cache or completes fast enough to call synchronously, the same way `tcpSocketAdapter`
     already does for TCP. A second execution context would have nothing to do that koffi
     is not already doing — the same shape as 1.11.1 and 1.11.2, dropped for the same reason
-  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available. Everything else Linux needs is listed in §2, "What Linux needs"
+  - [ ] 1.11.11 `BtBluezBackend` — BlueZ D-Bus RFCOMM (Linux). DESIGN §4.1.1 commits to it and REQUIREMENTS §12 makes Linux a required platform, but no phase owned it. **Blocked by environment, 28.08.2026**: this repo's only hardware host is Windows; nothing here can build or run a D-Bus backend without a Linux host (or a WSL2 setup with working Bluetooth passthrough, which this machine does not have). Stays open until one is available. Everything else Linux needs is listed in §2, "What Linux needs". **Unblocked 11.11.2026** — a Linux host (HOSTC, Raspberry Pi 5, arm64, BlueZ 5.82) is available and measured (`docs/plans/linux-session-results/2026-11-11-hostc.md`, L5/L6 on all three bricks): the brick's only service is Serial Port `00001101`, RFCOMM channel 1; pairing is the brick's dialog then a PIN (`1234`) asked of a BlueZ agent, bonded in 3.4–5.4 s; an unanswered dialog ends after 60 s with `AuthenticationRejected` and stays open on the brick; connect 0.5–2.7 s, an `info` reply in 42–96 ms; a reconnect needs a pause of about 2.5 s (`EBUSY` at once, then `ECONNREFUSED`), on both firmware versions; discovery must scan BR/EDR only — a mixed LE + BR/EDR scan missed a visible brick for 40 s; and `koffi` opens an `AF_BLUETOOTH` RFCOMM socket from Node on arm64, so the backend can live in the extension with no helper process
 - [x] **1.12 Transport unit tests**
   - [x] 1.12.1 EV3 protocol encoding/decoding round-trip tests
   - [x] 1.12.2 Transport guard rate limiting tests
@@ -1684,7 +1684,9 @@ Export a stable API for other extensions without giving them direct access to th
       ranking a second time and in the opposite direction (DESIGN §4.1)
   - [ ] 4.6.16 Unverified on the libusb path: the Linux backend (padding should be
     harmless, but has not been run) and recovery from unplugging mid-transfer. Linux items
-    are collected in §2, "What Linux needs"
+    are collected in §2, "What Linux needs". 11.11.2026: still not run — HOSTC had no USB to
+    the bricks; the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`) come
+    prebuilt for linux-arm64 and load (`docs/plans/linux-session-results/2026-11-11-hostc.md`)
   - [x] 4.6.12 Mock parity — also corrected a divergence nothing had noticed: the mock
     listed full paths, a shape no brick produces. It now returns bare names with kinds
     and sizes, tracks directories explicitly so an empty one is representable, and

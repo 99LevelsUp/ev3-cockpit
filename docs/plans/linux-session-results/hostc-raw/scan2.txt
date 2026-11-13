@@ -1,0 +1,113 @@
+   0.0 Waiting to connect to bluetoothd...
+[bluetoothctl]> menu scan
+   0.0 Menu scan:
+   0.0 Available commands:
+   0.0 -------------------
+   0.0 uuids [all/uuid1 uuid2 ...]                       Set/Get UUIDs filter
+   0.0 rssi [rssi]                                       Set/Get RSSI filter, and clears pathloss
+   0.0 pathloss [pathloss]                               Set/Get Pathloss filter, and clears RSSI
+   0.0 transport [transport]                             Set/Get transport filter
+   0.0 duplicate-data [on/off]                           Set/Get duplicate data filter
+   0.0 discoverable [on/off]                             Set/Get discoverable filter
+   0.0 pattern [value]                                   Set/Get pattern filter
+   0.0 clear [uuids/rssi/pathloss/transport/duplicate-data/discoverable/pattern] Clears discovery filter.
+   0.0 back                                              Return to main menu
+   0.0 version                                           Display version
+   0.0 quit                                              Quit program
+   0.1 exit                                              Quit program
+   0.1 help                                              Display help about this program
+   0.1 export                                            Print environment variables
+   0.1 script <filename>                                 Run script
+   0.1 [bluetoothctl]> transport bredr
+   0.1 [bluetoothctl]> back
+   0.1 Menu main:
+   0.1 Available commands:
+   0.1 -------------------
+   0.1 advertise                                         Advertise Options Submenu
+   0.1 monitor                                           Advertisement Monitor Options Submenu
+   0.1 scan                                              Scan Options Submenu
+   0.1 gatt                                              Generic Attribute Submenu
+   0.1 admin                                             Admin Policy Submenu
+   0.1 player                                            Media Player Submenu
+   0.1 endpoint                                          Media Endpoint Submenu
+   0.1 transport                                         Media Transport Submenu
+   0.1 mgmt                                              Management Submenu
+   0.1 monitor                                           Advertisement Monitor Submenu
+   0.1 assistant                                         Media Assistant Submenu
+   0.1 hci                                               HCI Submenu
+   0.1 list                                              List available controllers
+   0.1 show [ctrl]                                       Controller information
+   0.1 select <ctrl>                                     Select default controller
+   0.1 devices [Paired/Bonded/Trusted/Connected]         List available devices, with an optional property as the filter
+   0.1 system-alias <name>                               Set controller alias
+   0.1 reset-alias                                       Reset controller alias
+   0.1 power <on/off>                                    Set controller power
+   0.1 pairable <on/off>                                 Set controller pairable mode
+   0.1 discoverable <on/off>                             Set controller discoverable mode
+   0.1 discoverable-timeout [value]                      Set discoverable timeout
+   0.1 agent <on/off/auto/capability>                    Enable/disable agent with given capability
+   0.1 default-agent                                     Set agent as the default one
+   0.1 advertise <on/off/type>                           Enable/disable advertising with given type
+   0.1 set-alias <alias>                                 Set device alias
+   0.1 scan <on/off/bredr/le>                            Scan for devices
+   0.1 info [dev/set]                                    Device/Set information
+   0.1 pair [dev]                                        Pair with device
+   0.1 cancel-pairing [dev]                              Cancel pairing with device
+   0.1 trust [dev]                                       Trust device
+   0.1 untrust [dev]                                     Untrust device
+   0.1 block [dev]                                       Block device
+   0.2 unblock [dev]                                     Unblock device
+   0.2 remove <dev>                                      Remove device
+   0.2 connect <dev> [uuid]                              Connect a device and all its profiles or optionally connect a single profile only
+   0.2 disconnect [dev] [uuid]                           Disconnect a device or optionally disconnect a single profile only
+   0.2 wake [dev] [on/off]                               Get/Set wake support
+   0.2 bearer <dev> [last-seen/bredr/le]                 Get/Set preferred bearer
+   0.2 menu <name>                                       Select submenu
+   0.2 version                                           Display version
+   0.2 quit                                              Quit program
+   0.2 exit                                              Quit program
+   0.2 help                                              Display help about this program
+   0.2 export                                            Print environment variables
+   0.2 script <filename>                                 Run script
+   0.2 [bluetoothctl]> scan on
+   0.2 [bluetoothctl]> 
+
+Agent registered
+   0.2 [bluetoothctl]> 
+
+SetDiscoveryFilter success
+   0.2 [bluetoothctl]> 
+
+Discovery started
+   0.2 [bluetoothctl]> 
+
+[CHG] Controller 00:00:00:00:00:00 Discovering: yes
+   1.3 [bluetoothctl]> 
+
+[NEW] Device <other-device-2> <other-device-2>
+   5.2 [bluetoothctl]> 
+
+[NEW] Device <other-device-3> <other-device-3>
+   6.7 [bluetoothctl]> 
+
+[NEW] Device 00:16:53:F0:0B:0B BBB
+   6.8 [bluetoothctl]> 
+
+[NEW] Device 00:16:53:F0:0A:0A AAA
+   7.0 [bluetoothctl]> 
+
+[NEW] Device 00:16:53:F0:0C:0C CCC
+  17.3 [bluetoothctl]> 
+
+[NEW] Device <other-device-7> <other-device-7>
+  31.2 [bluetoothctl]> 
+
+[DEL] Device <other-device-2> <other-device-2>
+  32.8 [bluetoothctl]> 
+
+[NEW] Device <other-device-2> <other-device-2>
+  57.1 [bluetoothctl]> 
+
+[CHG] Device 00:16:53:F0:0A:0A RSSI: 0xffffffdc (-36)
+  60.0 [bluetoothctl]> scan off
+  60.0 [bluetoothctl]> quit

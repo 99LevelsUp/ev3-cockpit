@@ -1,0 +1,156 @@
+   0.00 > agent KeyboardDisplay
+   0.05 > default-agent
+   0.10 > menu scan
+   0.15 > transport bredr
+   0.20 > back
+   0.25 > scan on
+   0.30 < Waiting to connect to bluetoothd...[bluetoothctl]> Agent registered
+   0.30 < [bluetoothctl]> agent KeyboardDisplay
+   0.30 < Agent is already registered
+   0.30 < [bluetoothctl]> default-agent
+   0.30 < [bluetoothctl]> Default agent request successful
+   0.30 < [bluetoothctl]> menu scan
+   0.30 < Menu scan:
+   0.30 < Available commands:
+   0.30 < -------------------
+   0.30 < uuids [all/uuid1 uuid2 ...]                       Set/Get UUIDs filter
+   0.30 < rssi [rssi]                                       Set/Get RSSI filter, and clears pathloss
+   0.30 < pathloss [pathloss]                               Set/Get Pathloss filter, and clears RSSI
+   0.30 < transport [transport]                             Set/Get transport filter
+   0.30 < duplicate-data [on/off]                           Set/Get duplicate data filter
+   0.30 < discoverable [on/off]                             Set/Get discoverable filter
+   0.30 < pattern [value]                                   Set/Get pattern filter
+   0.30 < clear [uuids/rssi/pathloss/transport/duplicate-data/discoverable/pattern] Clears discovery filter.
+   0.30 < back                                              Return to main menu
+   0.30 < version                                           Display version
+   0.30 < quit                                              Quit program
+   0.30 < exit                                              Quit program
+   0.30 < help                                              Display help about this program
+   0.30 < export                                            Print environment variables
+   0.30 < script <filename>                                 Run script
+   0.30 < [bluetoothctl]> transport bredr
+   0.30 < [bluetoothctl]> back
+   0.30 < Menu main:
+   0.30 < Available commands:
+   0.30 < -------------------
+   0.30 < advertise           
+   0.30 <                               Advertise Options Submenu
+   0.30 < monitor                                           Advertisement Monitor Options Submenu
+   0.30 < scan                                              Scan Options Submenu
+   0.30 < gatt                                              Generic Attribute Submenu
+   0.30 < admin                                             Admin Policy Submenu
+   0.30 < player                                            Media Player Submenu
+   0.30 < endpoint                                          Media Endpoint Submenu
+   0.30 < transport                                         Media Transport Submenu
+   0.30 < mgmt                                              Management Submenu
+   0.30 < monitor                                           Advertisement Monitor Submenu
+   0.30 < assistant                                         Media Assistant Submenu
+   0.30 < hci                                               HCI Submenu
+   0.30 < list                                              List available controllers
+   0.30 < show [ctrl]                                       Controller information
+   0.30 < select <ctrl>                                     Select default controller
+   0.30 < devices [Paired/Bonded/Trusted/Connected]         List available devices, with an optional property as the filter
+   0.30 < system-alias <name>                               Set controller alias
+   0.30 < reset-alias                                       Reset controller alias
+   0.30 < power <on/off>                                    Set controller power
+   0.30 < pairable <on/off>                                 Set controller pairable mode
+   0.30 < discoverable <on/off>                             Set controller discoverable mode
+   0.30 < discoverable-timeout [value]                      Set discoverable timeout
+   0.30 < agent <on/off/auto/capability>                    Enable/disable agent with
+   0.30 <  given capability
+   0.30 < default-agent                                     Set agent as the default one
+   0.30 < advertise <on/off/type>                           Enable/disable advertising with given type
+   0.30 < set-alias <alias>                                 Set device alias
+   0.30 < scan <on/off/bredr/le>                            Scan for devices
+   0.30 < info [dev/set]                                    Device/Set information
+   0.30 < pair [dev]                                        Pair with device
+   0.30 < cancel-pairing [dev]                              Cancel pairing with device
+   0.30 < trust [dev]                                       Trust device
+   0.30 < untrust [dev]                                     Untrust device
+   0.30 < block [dev]                                       Block device
+   0.30 < unblock [dev]                                     Unblock device
+   0.30 < remove <dev>                                      Remove device
+   0.30 < connect <dev> [uuid]                              Connect a device and all its profiles or optionally connect a single profile only
+   0.30 < disconnect [dev] [uuid]                           Disconnect a device or optionally disconnect a single profile only
+   0.30 < wake [dev] [on/off]                               Get/Set wake support
+   0.30 < bearer <dev> [last-seen/bredr/le]                 Get/Set preferred bearer
+   0.30 < menu <name>                                       Select submenu
+   0.30 < version                                           Display version
+   0.30 < quit                                              Quit program
+   0.30 < exit                                              Quit program
+   0.30 < help                                              Display help about this program
+   0.30 < export                                            Print environment variables
+   0.30 < script <filename>                                 R
+   0.30 < un script
+   0.30 < [bluetoothctl]> scan on
+   0.30 < [bluetoothctl]> SetDiscoveryFilter success
+   0.30 < [bluetoothctl]> 
+   0.31 < Discovery started
+   0.31 < [bluetoothctl]> [CHG] Controller 00:00:00:00:00:00 Discovering: yes
+   0.31 < [bluetoothctl]> 
+   0.54 < [NEW] Device <other-device-4> <other-device-4>
+   0.54 < [bluetoothctl]> 
+   0.63 < [NEW] Device <other-device-5> <other-device-5>
+   0.63 < [bluetoothctl]> 
+   2.55 < [NEW] Device <other-device-6> <other-device-6>
+   2.55 < [bluetoothctl]> 
+   5.69 < [CHG] Device 00:16:53:F0:0A:0A RSSI: 0xffffffd5 (-43)
+   5.69 < [bluetoothctl]> 
+  10.61 < [NEW] Device 00:16:53:F0:0C:0C CCC
+  10.61 < [bluetoothctl]> 
+  15.95 < [CHG] Device <other-device-4> RSSI: 0xffffffb1 (-79)
+  15.95 < [bluetoothctl]> 
+  25.24 < [NEW] Device 00:16:53:F0:0B:0B BBB
+  25.24 < [bluetoothctl]> 
+  32.96 < [CHG] Device <other-device-4> RSSI: 0xffffffc2 (-62)
+  32.96 < [bluetoothctl]> 
+  34.92 < [CHG] Device <other-device-6> RSSI: 0xffffffc2 (-62)
+  34.92 < [bluetoothctl]> 
+  40.31 # brick not seen in 40 s
+  40.31 > scan off
+  41.36 # pair start
+  41.36 > pair 00:16:53:F0:0B:0B
+  41.41 < scan off
+  41.41 < [bluetoothctl]> Discovery stopped
+  41.41 < [bluetoothctl]> [CHG] Device 00:16:53:F0:0B:0B RSSI is nil
+  41.41 < [bluetoothctl]> [CHG] Device 00:16:53:F0:0C:0C RSSI is nil
+  41.41 < [bluetoothctl]> [CHG] Device 00:16:53:F0:0A:0A RSSI is nil
+  41.41 < [bluetoothctl]> [CHG] Device <other-device-6> RSSI is nil
+  41.41 < [bluetoothctl]> [CHG] Device <other-device-4> RSSI is nil
+  41.41 < [bluetoothctl]> [CHG] Controller 00:00:00:00:00:00 Discovering: no
+  41.41 < [bluetoothctl]> pair 00:16:53:F0:0B:0B
+  41.41 < Attempting to pair with 00:16:53:F0:0B:0B
+  41.41 < [bluetoothctl]> 
+  44.11 < Request PIN code
+  44.11 < [bluetoothctl]> [agent] Enter PIN code: 
+  44.11 > 1234
+  44.16 < 1234
+  44.16 < 
+  44.16 < [bluetoothctl]> 
+  44.28 < [CHG] Device 00:16:53:F0:0B:0B Bonded: yes
+  44.28 < [bluetoothctl]> [BBB]> [CHG] Device 00:16:53:F0:0B:0B Connected: yes
+  44.28 < [BBB]> 
+  44.79 < [CHG] Device 00:16:53:F0:0B:0B ServicesResolved: yes
+  44.79 < [BBB]> [CHG] Device 00:16:53:F0:0B:0B Paired: yes
+  44.79 < [BBB]> 
+  44.79 < Pairing successful
+  44.79 < [BBB]> 
+  44.80 # pairing ended: Pairing successful
+  45.80 > info 00:16:53:F0:0B:0B
+  47.85 > quit
+  47.90 < info 00:16:53:F0:0B:0B
+  47.90 < Device 00:16:53:F0:0B:0B (public)
+  47.90 < 	Name: BBB
+  47.90 < 	Alias: BBB
+  47.90 < 	Class: 0x00000804 (2052)
+  47.90 < 	Paired: yes
+  47.90 < 	Bonded: yes
+  47.90 < 	Trusted: no
+  47.90 < 	Blocked: no
+  47.90 < 	Connected: yes
+  47.90 < 	LegacyPairing: no
+  47.90 < 	UUID: Serial Port               (00001101-0000-1000-8000-00805f9b34fb)
+  47.90 < [BBB]> 
+  47.90 < quit
+  47.90 < [BBB]> 
+  47.90 < 
