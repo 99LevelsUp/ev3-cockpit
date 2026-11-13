@@ -140,6 +140,40 @@ D5 (b). Done in step 5 already: the service polls only while someone listens; `f
 ### U10. Hardware session (owner)
 3.1.12 the TCP and Bluetooth columns; 3.1.13 the HID over-long reply; the new rows' encodings (U2); switch-and-settle timing for UART modes; throttle thresholds: Port View open, Wi-Fi on, three bricks with one slowed; 3.1.4f a motor type on layer 2 only if a second brick can be chained. **Does a value read stall?** Per `c_input.c`, `opINPUT_READSI` never re-executes (U4 finding): plug a sensor in during a session with the value row ungated, and switch a UART sensor's mode, and measure the frame's round trip — a 1.2 s frame would mean the source reading is wrong. Re-measure the frame costs of 3.1.12 with the slow tier in its own command. **Real bricks against the mock** (owner, 11.11.2026; must not be skipped): the same composed frames from the full row catalogue go to each of the three bricks over USB and over Bluetooth and to the mock, with the same devices configured on the mock as plugged into the brick; compare type codes, modes, value layouts and the bytes a brick leaves unwritten, and every difference is either a mock fix or a recorded firmware variant. Results go into this plan with a verdict against the rule written beforehand.
 
+#### U10 — the rule for real bricks against the mock (written 13.11.2026, before the probe)
+
+*Inputs.* The devices come from the owner's own description, never from what a brick reports, so
+a type comparison cannot pass by construction: AAA 1 touch, 3 colour, B large motor, D medium
+motor; BBB 2 infrared, 3 ultrasonic; CCC 2 colour, 4 gyro, A medium motor, C large motor. The mock
+is configured from that description and nothing else.
+
+*Frames.* The whole row catalogue (`allEv3Rows()`), assembled for the link's packet limit, sent
+through the shipped `PacketCommandChannel` to each brick over USB and over Bluetooth, and through
+`MockTransportProvider`'s own channel to the mock; one warm-up frame, then ten per side.
+
+*Compared, per row:*
+1. **Occupancy** (type code and mode): the brick must match the description, and the mock must
+   match the brick. A brick that differs from the description is a hardware state (as the gyro
+   that stayed "identifying" on 13.11), recorded, not a mock difference.
+2. **Value rows**: the class of the value — a number (integer or not, its sign), no value (NaN or
+   undefined), a string, a boolean. Not the value itself, which is physical. A port the
+   description calls empty gives no value on both sides.
+3. **System rows** (name, firmware, battery, Bluetooth and Wi-Fi flags, peers, program running):
+   the same class; the mock's values are configured, so they need not be equal.
+4. **Reply length** equals the declared globals on both sides.
+5. **Bytes a brick leaves unwritten**: the mock writes 0xA5 there, so raw bytes are not compared;
+   the parser's verdict is. A row read as no value on one side must be no value on the other.
+   The raw bytes of any row that differs are recorded.
+
+*Verdict per difference.* (a) All three bricks agree, or the firmware source (`ev3-resources`)
+says so → **mock fix**. (b) The bricks disagree among themselves → **firmware variant**, recorded
+with the firmware version; the cockpit must handle both (firmware is not final). (c) One brick
+only, and against the description → **hardware state**. USB and Bluetooth on one brick must agree;
+where they do not, it is a **transport defect** and a blocker.
+
+*Passes when* nothing differs under 1 or 4, and every difference under 2, 3 and 5 is classified
+and either fixed in the mock or recorded here.
+
 ## Review
 
 ### U4, round 1 (codex, inline packet, 11.11.2026) — NOT-READY → fixed
