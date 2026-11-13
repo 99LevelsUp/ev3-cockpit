@@ -120,7 +120,7 @@ Minor, agreed with the owner 11.11.2026 (his proposal: slow rows fill the room t
 - **Phase offsets** for rows with the same divider, so they do not all come due on one tick and burst the packet.
 "Fast / slow" stays a setting the cockpit offers; underneath, each row keeps its own divider, since what costs a running program is the number of commands (D8), not the rows in one.
 
-### U8. Telemetry on the public API
+### U8. Telemetry on the public API — done 13.11.2026; review five rounds, converged (see Review)
 4.5.1–4.5.5, 4.8.3, KTD6; `contracts/api.ts` rewritten (4.1.4/4.1.5 redone). `listTelemetryRows`, `subscribeTelemetry(brick, rows, intervalMs)` → handle with the granted interval, snapshot, then events with `effectiveIntervalMs` (D2). Integration test over the runtime and the mock (U3).
 
 ### U9. The program run-state poll
@@ -281,6 +281,14 @@ Tests first: two consumers where one's listener ends the brick, a listener causi
 | 4 | major | no test that nothing is told inside the call that subscribes, nor that a throwing listener harms no one else | CONFIRMED | both tested, the first also from inside a listener |
 
 Rows 2 and 4 tested and mutated, 5/5 caught. The delivery's approach stands: this round's findings are at its edges, at the claim, the API's lifetime and the source, not in the order it keeps.
+
+### U8, round 5 — confirmation of round 4 (codex, `.review-out/tmp/packet_u8r5.txt`, 13.11.2026): READY
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | minor | the packet alone does not prove that round 4's two downgraded interleavings are unreachable in production | CONFIRMED as a gap in the packet; **verified against the production wiring** | the read model's only `onChange` listener is the delivery (`extension.ts` → `cockpitApi.ts`), which only queues; the service's `onPlanChange` has the read model and the runtime's log line, neither of which reaches back into a claim; so nothing inside `TelemetryService.claim()` can end a brick or reorder a change today. Both limitations stay recorded with their trigger: a second synchronous listener, such as the Phase 5 panel |
+
+Convergence gate met: READY, no blocker or major. Round 3 changed the delivery's approach (one `TelemetryDelivery` owns the order) instead of a fourth patch. U8 is closed in code.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
