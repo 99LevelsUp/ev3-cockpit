@@ -58,6 +58,12 @@ export class BluezObjectCache {
 	private readonly objects = new Map<string, Map<string, Properties>>();
 	private readonly changeHandlers = new Set<() => void>();
 	private _ready = false;
+	private started = false;
+	private closed = false;
+	private disposed = false;
+	/** Signals heard before the snapshot is in, replayed over it in bus order. */
+	private pending: DBusMessage[] | undefined;
+	private removers: (() => void)[] = [];
 
 	constructor(private readonly bus: BusLike, private readonly options: BluezObjectCacheOptions = {}) {}
 
@@ -67,21 +73,56 @@ export class BluezObjectCache {
 
 	/**
 	 * Subscribes, then reads everything: subscribing first means no change falls between the read
-	 * and the subscription.
+	 * and the subscription. Signals heard meanwhile — including those the bus delivers in the same
+	 * chunk as the reply, before this continues — are held and replayed over the snapshot in order,
+	 * so a newer change is never overwritten by the older snapshot.
 	 *
-	 * @throws The bus's refusal (an `AccessDenied` where the policy keeps this user from BlueZ).
+	 * @throws The bus's refusal (an `AccessDenied` where the policy keeps this user from BlueZ), or
+	 *   the bus closing before the snapshot is in. A failed start leaves nothing attached.
 	 */
 	async start(): Promise<void> {
-		this.bus.onSignal((message) => this.onSignal(message));
-		this.bus.onClose(() => { this._ready = false; this.objects.clear(); });
-		await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${OBJECT_MANAGER}'`);
-		await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${PROPERTIES}',member='PropertiesChanged'`);
-		const [managed] = await this.bus.call({ destination: BLUEZ, path: '/', interface: OBJECT_MANAGER, member: 'GetManagedObjects' });
-		if (!(managed instanceof Map)) { throw new Error('BlueZ answered GetManagedObjects with something that is not a map.'); }
-		for (const [path, interfaces] of managed) {
-			this.addInterfaces(path, interfaces);
+		if (this.started) { throw new Error('The BlueZ object cache is already started.'); }
+		this.started = true;
+		this.pending = [];
+		this.removers.push(
+			this.bus.onSignal((message) => this.onSignal(message)),
+			this.bus.onClose(() => this.onBusClosed()),
+		);
+		try {
+			await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${OBJECT_MANAGER}'`);
+			await this.bus.addMatch(`type='signal',sender='${BLUEZ}',interface='${PROPERTIES}',member='PropertiesChanged'`);
+			const [managed] = await this.bus.call({ destination: BLUEZ, path: '/', interface: OBJECT_MANAGER, member: 'GetManagedObjects' });
+			if (this.closed || this.disposed) { throw new Error('The bus closed before BlueZ\'s objects were read.'); }
+			if (!(managed instanceof Map)) { throw new Error('BlueZ answered GetManagedObjects with something that is not a map.'); }
+			for (const [path, interfaces] of managed) {
+				this.addInterfaces(path, interfaces);
+			}
+			const held = this.pending;
+			this.pending = undefined;
+			for (const message of held) { this.apply(message); }
+			this._ready = true;
+		} catch (error) {
+			this.dispose();
+			throw error;
 		}
-		this._ready = true;
+		this.notify();
+	}
+
+	/**
+	 * Lets go of the bus and forgets everything; idempotent. The two match rules stay with the
+	 * connection (the client has no RemoveMatch); they go when it closes.
+	 */
+	dispose(): void {
+		if (this.disposed) { return; }
+		this.disposed = true;
+		for (const remove of this.removers.splice(0)) {
+			try { remove(); } catch { /* already gone */ }
+		}
+		this.pending = undefined;
+		const wasReady = this._ready;
+		this._ready = false;
+		this.objects.clear();
+		if (wasReady) { this.notify(); }
 	}
 
 	/** Every device BlueZ knows: paired, and heard by a discovery. */
@@ -133,18 +174,31 @@ export class BluezObjectCache {
 	private onSignal(message: DBusMessage): void {
 		const owner = this.options.bluezOwner?.();
 		if (owner !== undefined && message.sender !== owner) { return; }
+		if (this.pending) { this.pending.push(message); return; }
+		if (this.apply(message)) { this.notify(); }
+	}
+
+	private onBusClosed(): void {
+		this.closed = true;
+		const wasReady = this._ready;
+		this._ready = false;
+		this.objects.clear();
+		if (wasReady) { this.notify(); }
+	}
+
+	/** One signal applied to the cache. Returns true when it changed something. */
+	private apply(message: DBusMessage): boolean {
 		const [a, b, c] = message.body;
-		let changed = false;
 		if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesAdded') {
-			if (typeof a === 'string' && b instanceof Map) { changed = this.addInterfaces(a, b); }
+			if (typeof a === 'string' && b instanceof Map) { return this.addInterfaces(a, b); }
 		} else if (message.interface === OBJECT_MANAGER && message.member === 'InterfacesRemoved') {
-			if (typeof a === 'string' && Array.isArray(b)) { changed = this.removeInterfaces(a, b); }
+			if (typeof a === 'string' && Array.isArray(b)) { return this.removeInterfaces(a, b); }
 		} else if (message.interface === PROPERTIES && message.member === 'PropertiesChanged') {
 			if (message.path && typeof a === 'string' && b instanceof Map && Array.isArray(c)) {
-				changed = this.changeProperties(message.path, a, b, c);
+				return this.changeProperties(message.path, a, b, c);
 			}
 		}
-		if (changed) { this.notify(); }
+		return false;
 	}
 
 	private addInterfaces(path: DBusValue, interfaces: DBusValue): boolean {
@@ -171,7 +225,11 @@ export class BluezObjectCache {
 		const props = this.objects.get(path)?.get(iface);
 		if (!props) { return false; }
 		for (const [key, value] of unwrap(changed)) { props.set(key, value); }
-		for (const key of invalidated) { if (typeof key === 'string') { props.delete(key); } }
+		// BlueZ invalidates what it no longer knows, in practice RSSI and TxPower. A boolean it
+		// invalidates (Paired, Connected, Powered) keeps its last known value rather than read false.
+		for (const key of invalidated) {
+			if (typeof key === 'string' && typeof props.get(key) !== 'boolean') { props.delete(key); }
+		}
 		return true;
 	}
 
