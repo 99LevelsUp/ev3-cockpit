@@ -1,7 +1,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, ConnectionState, ActivityMode, TelemetryCategory, makeBrickKey, brickKeyTransport, brickKeyId, brickIdOf, describeChannel, describeAddress } from '../contracts/index';
+import { Transport, PresenceState, ConnectionState, ActivityMode, makeBrickKey, brickKeyTransport, brickKeyId, brickIdOf, describeChannel, describeAddress } from '../contracts/index';
 import {
 	CockpitError, ErrorCode,
 	TransportError, ConnectionError, TimeoutError,
@@ -46,13 +46,6 @@ describe('ActivityMode enum', () => {
 	});
 });
 
-describe('TelemetryCategory enum', () => {
-	it('has all three categories', () => {
-		assert.equal(TelemetryCategory.Ports, 'ports');
-		assert.equal(TelemetryCategory.Filesystem, 'filesystem');
-		assert.equal(TelemetryCategory.System, 'system');
-	});
-});
 
 describe('makeBrickKey', () => {
 	it('formats key as transport:id', () => {

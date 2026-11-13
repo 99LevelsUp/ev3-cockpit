@@ -17,8 +17,9 @@ import { ActivityMode, ConnectionState, Transport } from '../contracts/enums';
 import { ErrorCode } from '../errors/CockpitError';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { ClaimsEndedEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
+import { ClaimsEndedEvent, PlanChangeEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
 import type { TelemetryRow } from '../telemetry/telemetryRow';
+import type { ThrottleSettings } from '../telemetry/telemetrySettings';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;
@@ -111,7 +112,7 @@ function fakeBricks() {
 	};
 }
 
-function world(options: { tickPeriodMs?: number } = {}) {
+function world(options: { tickPeriodMs?: number; throttle?: ThrottleSettings } = {}) {
 	const bricks = fakeBricks();
 	const registry = new ProviderRegistry();
 	registry.register(provider(Transport.USB));
@@ -390,6 +391,76 @@ describe('telemetry service — loops for claims (step-6 U5)', () => {
 			await settle();
 			await settle();
 			assert.equal(bricks.sent.length, 3, 'nothing goes out for a disposed service');
+		} finally {
+			bricks.releaseSends();
+			service.dispose();
+		}
+	});
+
+	it('says which rows a brick reads and how often, whenever that changes, and nothing once it stops (U6)', () => {
+		const { bricks, service } = world();
+		const plans: PlanChangeEvent[] = [];
+		service.onPlanChange((event) => plans.push(event));
+		try {
+			bricks.connect(A);
+			bricks.setActive(A);
+			const foreground = plans.pop();
+			assert.equal(foreground?.brickKey, A);
+			assert.equal(foreground?.intervals.get('ports.motor.A.tacho'), 100);
+			assert.equal(foreground?.intervals.get('system.battery.level'), 500);
+			assert.equal(foreground?.intervals.get('system.firmwareVersion'), 'once');
+			assert.equal(service.currentPlans().get(A)?.get('ports.motor.A.tacho'), 100,
+				'a reader attached later learns it too (review of U6, round 1)');
+
+			bricks.moveRoute(A, Transport.USB);   // two events, nothing changed
+			assert.equal(plans.length, 0, 'a refresh that changes nothing announces nothing');
+
+			service.claim(A, { rowIds: ['ports.motor.A.tacho'], intervalMs: 50 }, 'ev3-c');
+			assert.equal(plans.pop()?.intervals.get('system.battery.level'), 500, 'still every 500 ms on a 50 ms tick');
+
+			bricks.setActive(undefined);
+			assert.deepEqual([...(plans.pop()?.intervals ?? [])], [['ports.motor.A.tacho', 50]]);
+
+			bricks.loseLink(A);
+			assert.deepEqual(plans.pop(), { brickKey: A, intervals: new Map() });
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it('says once that a brick it read has no session any more, and nothing for a brick it never read (U6)', () => {
+		const { bricks, service } = world();
+		const gone: unknown[] = [];
+		service.onSessionEnded((event) => gone.push(event.brickKey));
+		try {
+			bricks.connect(A);
+			bricks.connect(B);
+			bricks.setActive(A);
+
+			bricks.signOut(A);
+			bricks.disconnect(B);
+
+			assert.deepEqual(gone, [A]);
+		} finally {
+			service.dispose();
+		}
+	});
+
+	it('does not count a retired loop\'s round trip against the new link (U7)', async () => {
+		const { bricks, service } = world({
+			throttle: { enabled: true, windowSize: 5, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 2 },
+		});
+		try {
+			bricks.connect(B);
+			service.claim(B, { rowIds: ['ports.motor.A.tacho'], intervalMs: 200 }, 'ev3-c');
+			bricks.holdSends();
+			const retired = service.loopFor(B)?.runTick();
+			bricks.moveRoute(B, Transport.BT);
+
+			bricks.releaseSends();
+			await retired;
+
+			assert.equal(service.throttleOf(B)?.windowSamples, 0, 'the old link\'s frame is not this link\'s evidence');
 		} finally {
 			bricks.releaseSends();
 			service.dispose();

@@ -21,6 +21,7 @@ import {
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
 import { ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { TransferLedger } from './transferLedger';
 
 /** How the service reaches a brick. Narrower than a provider on purpose. */
 export type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
@@ -69,6 +70,16 @@ export interface TransferServiceOptions {
 	 * `maxPacketBytes` nor the service's own `send` is used for transfers.
 	 */
 	readonly pin?: () => PinnedLink;
+	/**
+	 * Where a slot this service could not release is owed, and settled before the next transfer
+	 * (4.6.17). Absent, nothing is owed: a slot the link took with it waits for the brick's reboot.
+	 */
+	readonly ledger?: TransferLedger;
+}
+
+/** A failure the brick answered: the command reached it. Anything else, it may not have. */
+function brickAnswered(error: unknown): boolean {
+	return error instanceof ProtocolError;
 }
 
 /** Chunk sizes for one link's packet size. */
@@ -175,9 +186,11 @@ async function withStallTimeout<T>(
 export class FileTransferService {
 	private readonly sizes?: LinkSizes;
 	private readonly pin?: () => PinnedLink;
+	private readonly ledger?: TransferLedger;
 
 	constructor(private readonly send: SendCommand, options?: TransferServiceOptions) {
 		this.pin = options?.pin;
+		this.ledger = options?.ledger;
 		// Checked here when the size is fixed, so a link too small to carry a transfer fails
 		// at construction rather than at the first file.
 		if (!this.pin) {
@@ -204,6 +217,16 @@ export class FileTransferService {
 	async writeFile(path: string, content: Uint8Array, options?: TransferOptions): Promise<void> {
 		assertPathFits(path);
 		const link = this.openLink();
+		// What an earlier transfer could not release is released first (4.6.17).
+		const end = await this.ledger?.begin(link.send);
+		try {
+			await this.write(link, path, content, options);
+		} finally {
+			end?.();
+		}
+	}
+
+	private async write(link: TransferLink, path: string, content: Uint8Array, options?: TransferOptions): Promise<void> {
 		const stallMs = options?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
 		const total = content.length;
 
@@ -218,7 +241,7 @@ export class FileTransferService {
 		}
 
 		let sent = 0;
-		const begin = await withStallTimeout(
+		const begin = await this.first(withStallTimeout(
 			link.send({
 				kind: 'fs:beginWrite',
 				path,
@@ -227,7 +250,7 @@ export class FileTransferService {
 			}),
 			stallMs,
 			0,
-		);
+		), path);
 		if (begin.kind !== 'fs:beginWrite') {
 			throw new ProtocolError(`Expected a fs:beginWrite reply, got ${begin.kind}.`);
 		}
@@ -260,8 +283,9 @@ export class FileTransferService {
 			}
 		} catch (error) {
 			// The firmware only frees the handle on end-of-file or its own error path, so an
-			// abandoned transfer would otherwise hold one until the brick restarts.
-			await this.releaseHandle(link, handle);
+			// abandoned transfer would otherwise hold one, and the file's space, until the brick
+			// restarts. The partial file goes too: it is not the file anyone sent (4.6.17).
+			await this.abandon(link, handle, path);
 			throw error;
 		}
 
@@ -286,14 +310,23 @@ export class FileTransferService {
 	async readFile(path: string, options?: TransferOptions): Promise<Uint8Array> {
 		assertPathFits(path);
 		const link = this.openLink();
+		const end = await this.ledger?.begin(link.send);
+		try {
+			return await this.read(link, path, options);
+		} finally {
+			end?.();
+		}
+	}
+
+	private async read(link: TransferLink, path: string, options?: TransferOptions): Promise<Uint8Array> {
 		const stallMs = options?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
 		const want = link.maxReadBytes;
 
-		const begin = await withStallTimeout(
+		const begin = await this.first(withStallTimeout(
 			link.send({ kind: 'fs:beginRead', path, wantBytes: want }),
 			stallMs,
 			0,
-		);
+		));
 		if (begin.kind !== 'fs:beginRead') {
 			throw new ProtocolError(`Expected a fs:beginRead reply, got ${begin.kind}.`);
 		}
@@ -333,7 +366,7 @@ export class FileTransferService {
 				options?.onProgress?.({ transferred: received, total });
 			}
 		} catch (error) {
-			await this.releaseHandle(link, handle);
+			await this.abandon(link, handle);
 			throw error;
 		}
 
@@ -354,6 +387,41 @@ export class FileTransferService {
 			// Thrown into the caller's try, which releases the handle before rethrowing.
 			void handle;
 			throw new TransportError('Transfer cancelled.');
+		}
+	}
+
+	/**
+	 * A transfer's first command. When it fails without the brick answering, the brick may have
+	 * opened a slot whose number never arrived: owed as a slot never learned (4.6.17).
+	 */
+	private async first<T>(work: Promise<T>, deletePath?: string): Promise<T> {
+		try {
+			return await work;
+		} catch (error) {
+			if (!brickAnswered(error)) { this.ledger?.owe({ kind: 'unknown', ...(deletePath !== undefined ? { deletePath } : {}) }); }
+			throw error;
+		}
+	}
+
+	/**
+	 * Releases a failed transfer's slot and, for an upload, deletes its partial file. What the link
+	 * took with it is owed, to be settled before the next transfer; a failure here must not mask the
+	 * original error.
+	 */
+	private async abandon(link: TransferLink, handle: number, deletePath?: string): Promise<void> {
+		try {
+			await link.send({ kind: 'fs:closeHandle', handle });
+		} catch (error) {
+			if (!brickAnswered(error)) {
+				this.ledger?.owe({ kind: 'slot', handle, ...(deletePath !== undefined ? { deletePath } : {}) });
+				return;
+			}
+		}
+		if (deletePath === undefined) { return; }
+		try {
+			await link.send({ kind: 'fs:delete', path: deletePath });
+		} catch (error) {
+			if (!brickAnswered(error)) { this.ledger?.owe({ kind: 'delete', path: deletePath }); }
 		}
 	}
 

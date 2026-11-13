@@ -40,3 +40,7 @@ CLAUDE.md
 /playwright/.auth/
 # Built from Bench.lms with the firmware's assembler
 scripts/bench/*.rbf
+
+# Platform VSIX builds (scripts/package-vsix.cjs): the staging folders and the packages.
+/.vsix-staging/
+/dist-vsix/

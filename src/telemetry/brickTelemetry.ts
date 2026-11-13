@@ -60,6 +60,12 @@ export interface BrickTelemetryOptions {
 	readonly floorMs?: number;
 	readonly onValues?: (values: readonly RowValue[]) => void;
 	readonly onError?: (error: unknown) => void;
+	/**
+	 * Each frame's round trip, from handing it to the sender to its answer or failure, in ms: the
+	 * throttle's input (U7). Queue wait is included on purpose — a brick busy with a transfer is a
+	 * brick to slow down for.
+	 */
+	readonly onRoundTrip?: (ms: number) => void;
 	readonly now?: () => number;
 }
 
@@ -121,7 +127,14 @@ export function createBrickTelemetry(options: BrickTelemetryOptions): BrickTelem
 		rows: options.rows ?? createEv3RowRegistry().all(),
 		limits: () => frameLimitsFor(sender, brickKey),
 		send: async (payload) => {
-			const response = await sender.send(brickKey, { kind: 'telemetry:frame', payload });
+			const now = options.now ?? Date.now;
+			const started = now();
+			let response: BrickResponse;
+			try {
+				response = await sender.send(brickKey, { kind: 'telemetry:frame', payload });
+			} finally {
+				options.onRoundTrip?.(now() - started);
+			}
 			if (response.kind !== 'telemetry:frame') {
 				// The queue answered a different command than the one that went in, which
 				// means the counter-to-reply pairing is wrong somewhere below. Coercing it

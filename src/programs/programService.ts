@@ -11,21 +11,32 @@
  * confirms the start by asking again (KTD2). Emergency stop is the brick's own power-off
  * sequence, never `PROGRAM_STOP(0)`, which stops the brick's UI and ends its VM (KTD3).
  *
- * The brick does not say when a program ends, so the state is polled — only while someone
- * listens (KTD4, owner decision D5 of the step-6 plan, 11.11.2026). Nothing reads a poll nobody
- * listens to, and keeping one alive for a started program was where review rounds 2 and 3 kept
- * finding defects. Step 6 moves the poll into the telemetry scheduler as a row.
+ * The brick does not say when a program ends, so the state is followed — only while someone
+ * listens (KTD4, owner decision D5 of the step-6 plan, 11.11.2026). Since step 6 U9 it is followed
+ * through the telemetry row `program.user.running` ({@link followProgramRow}), which rides in the
+ * frame a read brick sends anyway, instead of a poll of this service's own. Following ends with the
+ * brick's session, as every telemetry claim does; a lost link that comes back keeps it.
  */
 
-import { BrickCommand, BrickResponse } from '../contracts';
-import { ErrorCode, ProgramError, ProtocolError } from '../errors/CockpitError';
+import { BrickCommand, BrickId, BrickResponse } from '../contracts';
+import { ErrorCode, ProgramError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
+import { PROGRAM_RUNNING_ROW } from '../telemetry/ev3Rows';
+import type { ClaimRequest } from '../telemetry/telemetryClaims';
+import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 
 /** Sends one command to this service's brick, through its session. */
 export type ProgramSend = (command: BrickCommand) => Promise<BrickResponse>;
 
+/** Following a brick's program: started for the first listener, ended with the last or with the brick. */
+export interface ProgramFollow {
+	/**
+	 * Starts following; `onState` hears each program state with the time it was sampled, and
+	 * `onEnded` hears that the brick's session ended the follow. Throws when the brick cannot be followed.
+	 */
+	follow(onState: (running: boolean, at: number) => void, onEnded: () => void): { dispose(): void };
+}
+
 export interface ProgramServiceOptions {
-	/** How often the run state is asked while it is followed. */
-	readonly pollMs?: number;
 	/** How long a start may take to show the program running before it counts as refused. */
 	readonly confirmTimeoutMs?: number;
 	/** The gap between the confirmation's questions. */
@@ -37,28 +48,31 @@ export interface RunOptions {
 	readonly replace?: boolean;
 }
 
-/** Defaults: a human-scale poll, and a start that shows within a second on every transport. */
-const POLL_MS = 1000;
+/** Defaults: a start that shows within a second on every transport. */
 const CONFIRM_TIMEOUT_MS = 1500;
 const CONFIRM_STEP_MS = 100;
 
 export class ProgramService {
-	private readonly pollMs: number;
 	private readonly confirmTimeoutMs: number;
 	private readonly confirmStepMs: number;
 	private readonly listeners = new Set<(running: boolean) => void>();
 	/** The last state seen, or undefined before the first answer. */
 	private known: boolean | undefined;
-	private timer: NodeJS.Timeout | undefined;
-	private polling = false;
+	/** When the last state taken was observed: an older one is not taken (U9 review, round 1). */
+	private knownAt = Number.NEGATIVE_INFINITY;
+	/** The follow running for the listeners, while there are any. */
+	private following: { dispose(): void } | undefined;
 	private disposed = false;
 	/** The tail of the run/stop operations, so they take turns. */
 	private queue: Promise<void> = Promise.resolve();
 	/** Emergency stops asked so far: a run asked before one of them must not send its start. */
 	private emergencies = 0;
 
-	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}) {
-		this.pollMs = options.pollMs ?? POLL_MS;
+	/**
+	 * @param follow How the run state is followed for listeners — the telemetry row in the product.
+	 *   Absent, a listener is refused: there is nothing to follow with.
+	 */
+	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}, private readonly follow?: ProgramFollow) {
 		this.confirmTimeoutMs = options.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS;
 		this.confirmStepMs = options.confirmStepMs ?? CONFIRM_STEP_MS;
 	}
@@ -139,30 +153,81 @@ export class ProgramService {
 	async isRunning(): Promise<boolean> {
 		const reply = await this.send({ kind: 'program:status' });
 		if (reply.kind !== 'program:status') { throw new ProtocolError(`Expected program:status, got ${reply.kind}.`); }
-		this.note(reply.running);
+		this.note(reply.running, Date.now());
 		return reply.running;
 	}
 
-	/** Be told when a program starts or ends; the state is polled while anyone listens. */
+	/**
+	 * Be told when a program starts or ends; the state is followed while anyone listens. Throws when
+	 * it cannot be followed — no telemetry, or the brick cannot be read — and keeps no listener then.
+	 */
 	onStateChange(listener: (running: boolean) => void): { dispose(): void } {
+		if (!this.follow) { throw new SubscriptionError('Following a program needs the cockpit\'s telemetry, which is not available.'); }
+		if (this.disposed) { throw new SubscriptionError('This brick\'s program service has been disposed.'); }
+		if (!this.following) { this.following = this.startFollow(this.follow); }
 		this.listeners.add(listener);
-		this.schedulePoll();
+		let open = true;
 		return {
 			dispose: () => {
+				if (!open) { return; }
+				open = false;
 				this.listeners.delete(listener);
-				// The last listener gone: the poll already scheduled would ask for nobody.
-				if (this.listeners.size === 0 && this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+				// The last listener gone: nobody to follow for.
+				if (this.listeners.size === 0) { this.stopFollowing(); }
 			},
 		};
+	}
+
+	/**
+	 * Follows again, as when the user changed how often a program is read: the new follow starts
+	 * before the old one goes, so nothing falls between; the listeners stay. A brick that cannot be
+	 * followed now keeps the old follow.
+	 */
+	followAgain(): void {
+		if (!this.follow || !this.following) { return; }
+		const old = this.following;
+		try {
+			this.following = this.startFollow(this.follow);
+		} catch {
+			return;
+		}
+		old.dispose();
 	}
 
 	dispose(): void {
 		this.disposed = true;
 		this.listeners.clear();
-		if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+		this.stopFollowing();
 	}
 
-	private note(running: boolean): void {
+	private startFollow(follow: ProgramFollow): { dispose(): void } {
+		const following = follow.follow(
+			(running, at) => { if (this.following === following) { this.note(running, at); } },
+			() => { if (this.following === following) { this.sessionEnded(); } },
+		);
+		return following;
+	}
+
+	/**
+	 * The brick's session ended the follow (U9 review, round 1). Its listeners end with it, as
+	 * telemetry subscriptions do: one that subscribes after a reconnect starts a new follow, and a
+	 * listener of the ended session is not revived by it.
+	 */
+	private sessionEnded(): void {
+		this.following = undefined;
+		this.listeners.clear();
+	}
+
+	private stopFollowing(): void {
+		const following = this.following;
+		this.following = undefined;
+		following?.dispose();
+	}
+
+	/** Takes a state observed `at`, unless a newer one was taken already: a cached reading cannot undo a confirmed start. */
+	private note(running: boolean, at: number): void {
+		if (at < this.knownAt) { return; }
+		this.knownAt = at;
 		const first = this.known === undefined;
 		if (this.known === running) { return; }
 		this.known = running;
@@ -173,25 +238,74 @@ export class ProgramService {
 			try { listener(running); } catch { /* the consumer's own error; the others still hear */ }
 		}
 	}
+}
 
-	/** One poll at a time, and only while there is a reason to ask (KTD4). */
-	private schedulePoll(): void {
-		if (this.disposed || this.timer || this.polling) { return; }
-		if (this.listeners.size === 0) { return; }
-		this.timer = setTimeout(() => {
-			this.timer = undefined;
-			this.polling = true;
-			this.isRunning()
-				// A lost reply: the listeners asked to hear about this brick, so the poll goes on
-				// until they leave; the brick's disconnect is the session's to report.
-				.catch(() => undefined)
-				.finally(() => {
-					this.polling = false;
-					this.schedulePoll();
-				});
-		}, this.pollMs);
-		this.timer.unref?.();
-	}
+/** What following the program row needs of the telemetry: the API's own dependencies. */
+export interface ProgramRowTelemetry {
+	claim(brickId: BrickId, request: ClaimRequest, owner: string): { readonly handle: string };
+	release(handle: string): void;
+	snapshot(brickId: BrickId, rowIds?: readonly string[]): ReadValue[];
+	onChange(listener: (change: ReadModelChange) => void): { dispose(): void };
+	onClaimsEnded(listener: (event: { readonly brickKey: string; readonly handles: readonly string[] }) => void): { dispose(): void };
+}
+
+/**
+ * Follows a brick's program through its telemetry row (step-6 U9): claims `program.user.running`
+ * at `intervalMs()` and hears the read model. A stale or dropped value says nothing about the
+ * program and tells nothing. The state is told after the read model's dispatch, never inside it:
+ * the API's delivery is the read model's only listener that reacts synchronously (review of U8,
+ * round 4), and a consumer's program listener must not become a second one.
+ */
+export function followProgramRow(telemetry: ProgramRowTelemetry, brickId: BrickId, intervalMs: () => number): ProgramFollow {
+	return {
+		follow: (onState, onEnded) => {
+			// Listening before the claim is made: a claim that ends inside `claim()` itself — a
+			// synchronous listener ending the brick — is heard too (review of U9, round 2).
+			let handle: string | undefined;
+			const endedEarly = new Set<string>();
+			const ending = telemetry.onClaimsEnded((event) => {
+				if (event.brickKey !== brickId) { return; }
+				if (handle === undefined) { for (const ended of event.handles) { endedEarly.add(ended); } return; }
+				if (!open || !event.handles.includes(handle)) { return; }
+				close();
+				onEnded();
+			});
+			try {
+				handle = telemetry.claim(brickId, { rowIds: [PROGRAM_RUNNING_ROW], intervalMs: intervalMs() }, 'cockpit:programs').handle;
+			} catch (error) {
+				ending.dispose();
+				throw error;
+			}
+			if (endedEarly.has(handle)) {
+				ending.dispose();
+				throw new SubscriptionError(`Brick ${brickId} went while its program was being followed.`);
+			}
+			const claimed = handle;
+			let open = true;
+			const tell = (value: ReadValue | undefined): void => {
+				if (!value || value.stale || typeof value.value !== 'boolean') { return; }
+				const running = value.value;
+				const at = value.sampledAt;
+				queueMicrotask(() => { if (open) { onState(running, at); } });
+			};
+			const close = (): void => {
+				open = false;
+				listening.dispose();
+				ending.dispose();
+			};
+			const listening = telemetry.onChange((change) => {
+				if (change.brickKey === brickId) { tell(change.rows.find((row) => row.rowId === PROGRAM_RUNNING_ROW)); }
+			});
+			tell(telemetry.snapshot(brickId, [PROGRAM_RUNNING_ROW])[0]);
+			return {
+				dispose: () => {
+					if (!open) { return; }
+					close();
+					telemetry.release(claimed);
+				},
+			};
+		},
+	};
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

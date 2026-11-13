@@ -460,7 +460,9 @@ export class TcpSocketAdapter implements TransportAdapter {
 
 	private waitForBeaconAndAck(): Promise<TcpDiscoveryInfo> {
 		return new Promise<TcpDiscoveryInfo>((resolve, reject) => {
-			const socket = dgram.createSocket('udp4');
+			// Shared with any other listener on the port, another window's cockpit included: the
+			// beacon is a broadcast, which each socket bound with SO_REUSEADDR receives.
+			const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 			const timeout = setTimeout(() => {
 				cleanup();
 				reject(new TimeoutError(

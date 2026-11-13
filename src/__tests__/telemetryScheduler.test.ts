@@ -304,3 +304,70 @@ describe('scheduler — the occupancy gate', () => {
 		assert.equal(isReadableType(127), false, 'TYPE_ERROR: faulty');
 	});
 });
+
+describe('scheduler — order by relative lateness on a tight budget (step-6 U7, owner 11.11.2026)', () => {
+	const slow = (i: number) => row({ id: `slow${i}`, bytes: 4, lifetime: { kind: 'repeating', divider: 5 } });
+	const fast = (i: number) => row({ id: `fast${i}`, bytes: 4 });
+
+	it('keeps the fast rows on every tick while there is room, the slow ones filling what is left', async () => {
+		// HID carries 59 bytes of replies: twelve fast rows (48) fit with two slow ones beside them.
+		const rows = [...Array.from({ length: 6 }, (_, i) => slow(i)), ...Array.from({ length: 12 }, (_, i) => fast(i))];
+		const seen: string[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows, limits: HID, send: recordingSender(() => new Uint8Array(64)).send, tickPeriodMs: 10,
+			onValues: (values) => seen.push(values.map((v) => v.rowId)),
+		});
+
+		for (let i = 0; i < 5; i += 1) { await scheduler.runTick(); }
+
+		for (const [tick, ids] of seen.entries()) {
+			assert.equal(ids.filter((id) => id.startsWith('fast')).length, 12, `tick ${tick} dropped a fast row`);
+		}
+		const slowSeen = new Set(seen.flat().filter((id) => id.startsWith('slow')));
+		assert.equal(slowSeen.size, 6, 'every slow row read within its own interval of five ticks');
+	});
+
+	it('still lets a slow row in when the fast ones fill the packet: its lateness grows until it is first', async () => {
+		const rows = [...Array.from({ length: 14 }, (_, i) => fast(i)), slow(0)];   // 56 of 59 bytes, then 4 more
+		const seen: string[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows, limits: HID, send: recordingSender(() => new Uint8Array(64)).send, tickPeriodMs: 10,
+			onValues: (values) => seen.push(values.map((v) => v.rowId)),
+		});
+
+		for (let i = 0; i < 5; i += 1) { await scheduler.runTick(); }
+
+		const tick = seen.findIndex((ids) => ids.includes('slow0'));
+		assert.ok(tick >= 0 && tick < 5, `the slow row starved: ${JSON.stringify(seen.map((ids) => ids.length))}`);
+	});
+
+	it('lets a one-shot wait as patiently as the slowest row, not push fast ones out', async () => {
+		const once = row({ id: 'once', bytes: 4, lifetime: { kind: 'oneShot' } });
+		const rows = [once, ...Array.from({ length: 14 }, (_, i) => fast(i)), slow(0)];
+		const seen: string[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows, limits: HID, send: recordingSender(() => new Uint8Array(64)).send, tickPeriodMs: 10,
+			onValues: (values) => seen.push(values.map((v) => v.rowId)),
+		});
+
+		await scheduler.runTick();
+
+		assert.equal(seen[0].filter((id) => id.startsWith('fast')).length, 14);
+	});
+
+	it('counts a row\'s wait afresh once it has been sent', async () => {
+		// Thirteen fast rows (52 bytes) leave room for one slow row of two each fifth tick.
+		const rows = [...Array.from({ length: 13 }, (_, i) => fast(i)), slow(0), slow(1)];
+		const seen: string[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows, limits: HID, send: recordingSender(() => new Uint8Array(64)).send, tickPeriodMs: 10,
+			onValues: (values) => seen.push(values.map((v) => v.rowId)),
+		});
+
+		for (let i = 0; i < 6; i += 1) { await scheduler.runTick(); }
+
+		assert.ok(seen[0].includes('slow0') && seen[1].includes('slow1'), 'slow1 waited a tick');
+		assert.ok(seen[5].includes('slow0') && !seen[5].includes('slow1'),
+			'on tick 5 both are fresh again: slow1 is not still late from tick 0');
+	});
+});

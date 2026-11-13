@@ -16,17 +16,25 @@
  * - Connecting and disconnecting go through the brick layer's own paths — sign-in with pairing and
  *   the brick's dialog as consent, sign-out — so the connection lifecycle keeps one owner (KD4).
  * - A consumer's subscriptions end when it unregisters (R8).
+ * - Telemetry (step-6 U8): a consumer subscribes to rows of a brick at an interval and gets back what
+ *   each row was granted, then a snapshot, then only the rows that changed, each value with when it
+ *   was sampled, the interval it runs at now and whether it is stale (D2, D10). Disposing the handle
+ *   releases exactly that claim; a brick that goes ends its subscriptions with an `ended` update.
  */
 
 import {
 	BrickCommand, BrickEntry, BrickId, BrickResponse, ChannelState, FsEntry, SendCommandOptions,
 } from '../contracts';
-import { ConsumerError, NotConnectedError, ProtocolError } from '../errors/CockpitError';
+import { CockpitError, ConsumerError, NotConnectedError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
 import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
-import { ProgramService, ProgramServiceOptions } from '../programs/programService';
+import { ProgramService, ProgramServiceOptions, followProgramRow } from '../programs/programService';
+import type { RowDescriptor } from '../telemetry/rowRegistry';
+import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
+import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 import { AccessMode, assertAllowed } from './accessPolicy';
+import { TelemetryDelivery, toTelemetryValue } from './telemetryDelivery';
 
 export const API_VERSION = 1;
 
@@ -57,6 +65,50 @@ export interface ApiBrick {
 export interface ProgramState {
 	readonly brickId: string;
 	readonly running: boolean;
+}
+
+/** A row a consumer can subscribe to (4.5.1). */
+export type TelemetryRowInfo = RowDescriptor;
+
+/** What a consumer asks for: rows by id, how often, and a mode per sensor port (D6). */
+export interface TelemetryRequest {
+	readonly rows: readonly string[];
+	/** How often the rows are wanted, in milliseconds; the grant says what each row got. */
+	readonly intervalMs: number;
+	/** The mode to read a sensor port in, by port: `{ '1': 2 }`. The first claim on a port holds it (D7). */
+	readonly modes?: Readonly<Record<string, number>>;
+}
+
+/** One row's value: plain data. */
+export interface TelemetryValue {
+	readonly rowId: string;
+	readonly value: number | string | boolean | undefined;
+	readonly unit?: string;
+	readonly mode?: number;
+	/** When the reply carrying the value arrived, in ms since the epoch. */
+	readonly sampledAt: number;
+	/** How often the row is read now — slower than granted under throttling (D2); `'once'` for a static row. */
+	readonly effectiveIntervalMs?: number | 'once';
+	/** No newer reading came for a while, or the row is no longer read (D9). */
+	readonly stale: boolean;
+}
+
+/** What a subscription hears: a snapshot first, then changes, and `ended` when its brick goes. */
+export interface TelemetryUpdate {
+	readonly brickId: string;
+	readonly kind: 'snapshot' | 'change' | 'ended';
+	readonly values: readonly TelemetryValue[];
+	/** Rows whose values were dropped (stale long enough, D9). */
+	readonly removed: readonly string[];
+}
+
+/** A telemetry subscription (4.5.1): dispose it to release exactly this claim (4.5.3). */
+export interface TelemetrySubscription extends Subscription {
+	readonly brickId: string;
+	/** What each row was granted: at least this often, in ms, or `'once'` for a static row. */
+	readonly grant: Readonly<Record<string, number | 'once'>>;
+	/** The subscribed rows' values now. */
+	snapshot(): TelemetryValue[];
 }
 
 export interface ShellResult {
@@ -101,6 +153,9 @@ export interface CockpitConsumer extends Subscription {
 	runShell(brick: BrickTarget, command: string): Promise<ShellResult>;
 	getAccessMode(): AccessMode;
 	onAccessModeChanged(listener: (mode: AccessMode) => void): Subscription;
+	// Telemetry (step-6 U8)
+	listTelemetryRows(): TelemetryRowInfo[];
+	subscribeTelemetry(brick: BrickTarget, request: TelemetryRequest, listener: (update: TelemetryUpdate) => void): TelemetrySubscription;
 }
 
 export interface CockpitApi {
@@ -128,12 +183,27 @@ export interface CockpitApiDeps {
 	onAccessModeChange(listener: (mode: AccessMode) => void): Subscription;
 	readonly log?: { info(message: string): void; warn(message: string): void };
 	readonly programOptions?: ProgramServiceOptions;
+	/** The telemetry service and its read model; absent, telemetry is refused. */
+	readonly telemetry?: {
+		rows(): RowDescriptor[];
+		claim(brickId: BrickId, request: ClaimRequest, owner: string): { readonly handle: string; readonly grant: Grant };
+		release(handle: string): void;
+		onClaimsEnded(listener: (event: { readonly brickKey: string; readonly handles: readonly string[] }) => void): Subscription;
+		snapshot(brickId: BrickId, rowIds?: readonly string[]): ReadValue[];
+		onChange(listener: (change: ReadModelChange) => void): Subscription;
+		/** How often a followed program's state is read (the user's setting, U9). */
+		programStatusIntervalMs(): number;
+		/** The user changed that setting: every followed program is followed again at it (U9 review 1). */
+		onProgramStatusIntervalChange?(listener: () => void): Subscription;
+	};
 }
 
 /** Builds the API object; `dispose` ends every consumer and every program service. */
 export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription {
 	const programs = new Map<BrickId, ProgramService>();
 	const consumers = new Set<CockpitConsumer>();
+	/** Set before anything is disposed, so nothing registered on the way out escapes it (review 4). */
+	let disposed = false;
 
 	const resolve = (brick: BrickTarget): BrickId => {
 		if (brick !== 'active') {
@@ -151,12 +221,27 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const programsOf = (brickId: BrickId): ProgramService => {
 		let service = programs.get(brickId);
 		if (!service) {
-			service = new ProgramService((command) => deps.bricks.send(brickId, command), deps.programOptions);
+			// Its run state follows the telemetry row (U9); without telemetry it cannot be followed.
+			const telemetry = deps.telemetry;
+			service = new ProgramService((command) => deps.bricks.send(brickId, command), deps.programOptions,
+				telemetry ? followProgramRow(telemetry, brickId, () => telemetry.programStatusIntervalMs()) : undefined);
 			programs.set(brickId, service);
 		}
 		return service;
 	};
 	const filesOf = (brickId: BrickId) => createBrickFilesystem(deps.bricks as unknown as BrickSender, brickId);
+	// One delivery order for every consumer's subscriptions (review round 3).
+	const delivery = deps.telemetry
+		? new TelemetryDelivery(deps.telemetry, (message) => deps.log?.warn(message))
+		: undefined;
+	// A changed status interval applies to programs already followed, not only the next (U9 review 1).
+	const intervalWatch = deps.telemetry?.onProgramStatusIntervalChange?.(() => {
+		for (const service of programs.values()) { service.followAgain(); }
+	});
+	const telemetryOf = (): { telemetry: NonNullable<CockpitApiDeps['telemetry']>; delivery: TelemetryDelivery } => {
+		if (!deps.telemetry || !delivery) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
+		return { telemetry: deps.telemetry, delivery };
+	};
 	const toApiBrick = (entry: BrickEntry): ApiBrick => ({
 		brickId: entry.brickId,
 		name: entry.name.value,
@@ -176,6 +261,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const on =async <T>(brick: BrickTarget, work: (brickId: BrickId) => Promise<T>): Promise<T> => work(resolve(brick));
 
 	const registerConsumer = (name: string): CockpitConsumer => {
+		if (disposed) { throw new ConsumerError(`The cockpit's API has been disposed; ${name} cannot register.`); }
 		const subscriptions = new Set<Subscription>();
 		let closed = false;
 		/** Refused once the consumer is gone: nothing could dispose it any more (review 11.11.2026). */
@@ -261,6 +347,46 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			getAccessMode: () => deps.accessMode(),
 			onAccessModeChanged: (listener) => keep(deps.onAccessModeChange(listener)),
 
+			listTelemetryRows: () => telemetryOf().telemetry.rows().map((row) => ({ ...row })),
+			subscribeTelemetry: (brick, request, listener) => {
+				open();
+				const { telemetry, delivery } = telemetryOf();
+				const brickId = resolve(brick);
+				let claim: { readonly handle: string; readonly grant: Grant };
+				try {
+					claim = telemetry.claim(brickId, {
+						rowIds: [...request.rows], intervalMs: request.intervalMs,
+						...(request.modes ? { modes: { ...request.modes } } : {}),
+					}, name);
+				} catch (error) {
+					// Every refusal carries a stable code: a mode held by another claim keeps its own.
+					if (error instanceof CockpitError) { throw error; }
+					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
+				}
+				// Whatever ran inside the claim may have unregistered this consumer: give the claim back (review 4).
+				if (closed) { telemetry.release(claim.handle); open(); }
+				const rows = new Set(request.rows);
+				const snapshot = (): TelemetryValue[] => telemetry.snapshot(brickId, [...rows]).map(toTelemetryValue);
+				// The snapshot is the state at the claim and the subscription joins the delivery right there,
+				// with nothing told in between: what changed before is in the snapshot, what changes after
+				// comes in order behind it (D10, reviews 1-3).
+				const boundary = snapshot();
+				// `onEnded` runs only from the delivery's drain, after this call has returned.
+				const place = delivery.open({
+					brickId, handle: claim.handle, rows, listener, owner: name,
+					onEnded: () => { subscriptions.delete(record); },
+				}, boundary);
+				const record: Subscription = {
+					dispose: () => {
+						subscriptions.delete(record);
+						// A claim that ended with its brick is gone: releasing it again is not done.
+						if (place.close()) { telemetry.release(claim.handle); }
+					},
+				};
+				subscriptions.add(record);
+				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => record.dispose() };
+			},
+
 			dispose: () => {
 				closed = true;
 				for (const subscription of [...subscriptions]) { subscription.dispose(); }
@@ -276,9 +402,12 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		apiVersion: API_VERSION,
 		registerConsumer,
 		dispose: () => {
+			disposed = true;
 			for (const consumer of [...consumers]) { consumer.dispose(); }
 			for (const service of programs.values()) { service.dispose(); }
 			programs.clear();
+			intervalWatch?.dispose();
+			delivery?.dispose();
 		},
 	};
 }
