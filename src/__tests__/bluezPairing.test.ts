@@ -41,6 +41,11 @@ class World implements PairingBus, PairingCache {
 	pairOutcome?: () => Promise<void>;
 	/** CancelPairing is acknowledged but Pair keeps hanging. */
 	cancelIgnored = false;
+	/** Pair fails as the bus does when its own call timer runs out. */
+	pairHonoursTimeout = false;
+	/** This call answers only when the test says. */
+	deferMember?: string;
+	deferred?: () => void;
 	failOn?: { member: string; error: Error };
 	changeHandlers = new Set<() => void>();
 	discoveryFinds?: BluezDevice;
@@ -66,12 +71,19 @@ class World implements PairingBus, PairingCache {
 			this.registered = true;
 		}
 		if (o.member === 'UnregisterAgent') { this.registered = false; }
+		if (o.member === this.deferMember) {
+			await new Promise<void>((resolve) => { this.deferred = resolve; });
+		}
 		if (o.member === 'StartDiscovery' && this.discoveryFinds) {
 			const found = this.discoveryFinds;
 			setTimeout(() => { this.known = [found]; for (const h of this.changeHandlers) { h(); } }, 20);
 		}
 		if (o.member === 'Pair') {
 			if (this.pairOutcome) { await this.pairOutcome(); return []; }
+			if (this.pairHonoursTimeout) {
+				const ms = o.timeoutMs!;
+				return new Promise<DBusValue[]>((_resolve, reject) => { setTimeout(() => reject(new Error(`D-Bus call Pair timed out after ${ms} ms.`)), ms); });
+			}
 			return new Promise<DBusValue[]>((resolve, reject) => {
 				const entry = { resolve: () => resolve([]), reject };
 				this.pair = entry;
@@ -302,5 +314,45 @@ describe('BlueZ pairing (U5)', () => {
 		assert.deepEqual(await w.agent!.RequestPinCode.handler([DEV], { sender: ':1.2' } as never), ['1234']);
 		w.pair!.resolve();
 		await pairing;
+	});
+	it('owns the pairing deadline: the bus call waits longer, so a slow brick is a Timeout, not a bus error', async () => {
+		const w = new World();
+		w.known = [device(false)];
+		w.pairHonoursTimeout = true;
+		const result = await createBluezPairing({ bus: w, cache: w, pairTimeoutMs: 40 })(MAC);
+		assert.equal(result.status, 'Timeout');
+		assert.ok(w.calls.includes('CancelPairing'));
+	});
+
+	it('answers an abort while BlueZ has not yet answered StartDiscovery, and stops a discovery that starts late', async () => {
+		const w = new World();
+		w.deferMember = 'StartDiscovery';
+		const controller = new AbortController();
+		const started = Date.now();
+		const pairing = createBluezPairing({ bus: w, cache: w })(MAC, undefined, controller.signal);
+		await tick();
+		assert.deepEqual(w.calls.slice(-1), ['StartDiscovery']);
+		controller.abort();
+		assert.deepEqual(await pairing, { ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' });
+		assert.ok(Date.now() - started < 1000);
+		assert.ok(!w.calls.includes('StopDiscovery'), 'not yet: the discovery has not started');
+		w.deferred!();
+		await tick();
+		assert.equal(w.calls.at(-1), 'StopDiscovery');
+		assert.equal(w.changeHandlers.size, 0);
+	});
+	it('answers an abort while BlueZ has not yet answered SetDiscoveryFilter, and starts no discovery', async () => {
+		const w = new World();
+		w.deferMember = 'SetDiscoveryFilter';
+		const controller = new AbortController();
+		const started = Date.now();
+		const pairing = createBluezPairing({ bus: w, cache: w })(MAC, undefined, controller.signal);
+		await tick();
+		controller.abort();
+		assert.deepEqual(await pairing, { ok: false, reason: PAIRING_CANCELLED, status: 'Cancelled' });
+		assert.ok(Date.now() - started < 1000);
+		w.deferred!();
+		await tick();
+		assert.deepEqual(w.calls, ['SetDiscoveryFilter [["Transport","bredr"]]']);
 	});
 });

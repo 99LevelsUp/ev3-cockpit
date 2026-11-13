@@ -64,6 +64,9 @@ const REASONS: Record<string, string> = {
 
 type PairingFunction = (mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal) => Promise<HelperPairingResult>;
 
+/** The bus call outlives the local deadline, so a slow brick is a Timeout, not a bus error. */
+const PAIR_BUS_MARGIN_MS = 5_000;
+
 /** Pair ran longer than this side waits. */
 class PairTimeout extends Error {}
 
@@ -187,9 +190,11 @@ export function createBluezPairing(options: BluezPairingOptions): PairingFunctio
 	/**
 	 * Pair, bounded here by `pairTimeoutMs` whatever the bus does, and by an abort: either sends
 	 * CancelPairing. A Pair that resolves is a paired brick, whatever came after (the honest answer).
+	 * One race cannot be closed: an abort that lands after BlueZ has bonded the brick but before its
+	 * reply arrives answers Cancelled for a brick that is in fact paired; the cache shows it paired.
 	 */
 	async function pairBounded(devicePath: string, cancelAtBluez: () => void, signal: AbortSignal | undefined): Promise<void> {
-		const pair = bus.call({ destination: BLUEZ, path: devicePath, interface: DEVICE, member: 'Pair', timeoutMs: pairTimeoutMs });
+		const pair = bus.call({ destination: BLUEZ, path: devicePath, interface: DEVICE, member: 'Pair', timeoutMs: pairTimeoutMs + PAIR_BUS_MARGIN_MS });
 		let cleanup = (): void => { /* set below */ };
 		const stop = new Promise<never>((_resolve, reject) => {
 			const timer = setTimeout(() => reject(new PairTimeout()), pairTimeoutMs);
@@ -228,17 +233,26 @@ export function createBluezPairing(options: BluezPairingOptions): PairingFunctio
 			finish = (value) => { cleanup(); resolve(value); };
 			if (signal?.aborted) { finish(undefined); }
 		});
-		let started = false;
+		// Each setup call races `heard`, which an abort or the search time ends: neither waits for BlueZ.
+		const endedFirst = (call: Promise<unknown>): Promise<boolean> => Promise.race([call.then(() => false), heard.then(() => true)]);
+		let start: Promise<unknown> | undefined;
+		let startSettled = false;
 		try {
-			await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
-			if (signal?.aborted) { return undefined; }
-			await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StartDiscovery' });
-			started = true;
+			const filter = bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
+			filter.catch(() => { /* raced */ });
+			if (await endedFirst(filter)) { return await heard; }
+			start = bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StartDiscovery' });
+			start.then(() => { startSettled = true; }, () => { startSettled = true; });
+			await endedFirst(start);
 			return await heard;
 		} finally {
 			cleanup();
-			if (started) {
-				await bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StopDiscovery' }).catch(() => { /* not discovering */ });
+			const stopDiscovery = (): Promise<unknown> => bus.call({ destination: BLUEZ, path: adapterPath, interface: ADAPTER, member: 'StopDiscovery' }).catch(() => { /* not discovering */ });
+			if (start && startSettled) {
+				await start.then(stopDiscovery, () => { /* never started */ });
+			} else if (start) {
+				// A discovery that starts after we gave up is stopped when it does, without holding the caller.
+				void start.then(stopDiscovery, () => { /* never started */ });
 			}
 		}
 	}

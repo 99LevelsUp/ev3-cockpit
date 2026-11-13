@@ -110,7 +110,7 @@ KTD6, KTD7. `RemoveDevice` through the cache; the provider seam with Windows' de
 
 ### U8. The factory and the wiring note — `src/transports/bluezBluetooth.ts`
 
-KTD8. Tests: what the factory returns on `linux`; nothing loaded on `win32`. The note for the Windows session: the `createRuntime.ts` branch, the log lines on Linux ("BT transport registered (BlueZ RFCOMM; BlueZ discovery)", presence started on Linux too).
+KTD8. Tests: what the factory returns on `linux`; nothing loaded on `win32`. The factory also wires BlueZ's unique bus name: `GetNameOwner(org.bluez)` at start and `NameOwnerChanged` after, passed as `bluezOwner` both to `BluezObjectCache` and to `createBluezPairing` (the agent then answers no caller but BlueZ; U5 review, 2ac9948, finding 8). Until then the system bus policy is the only guard, and the PIN is the public 1234. The note for the Windows session: the `createRuntime.ts` branch, the log lines on Linux ("BT transport registered (BlueZ RFCOMM; BlueZ discovery)", presence started on Linux too).
 
 ### U9. Hardware session (owner at HOSTC)
 
