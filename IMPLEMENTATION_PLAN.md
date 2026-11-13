@@ -1135,7 +1135,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Occupancy is now a row (3.1.11), which frees the budget, but a user with eight populated
     ports on HID can still overrun a tick, so the rule holds regardless. A test must fill a
     tick past the HID budget and assert every row is eventually served
-  - [~] 3.1.10 (service side done in step 6 U5: the grant is the request clamped to the floor, fixed at claim time; the API returning it is U8) Effective interval = the fastest any subscriber asks for, **clamped to the
+  - [x] 3.1.10 (done: the grant is the request clamped to the floor, fixed at claim time (step 6 U5); `subscribeTelemetry` returns it, and every value carries `effectiveIntervalMs` (U8)) Effective interval = the fastest any subscriber asks for, **clamped to the
     transport floor** and reported back: `subscribeTelemetry` returns the interval each row was
     actually granted, because a request is not a guarantee — 10 Hz on Bluetooth would eat the
     brick's whole measured 10.7 commands/second. Subscribers hold an opaque handle, so
@@ -1465,10 +1465,10 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [ ] 3.1.2 `filesystem` category — filesystem state relevant to API consumers — **not built as a row (11.11.2026):** free space is answered by the API's `storage()`; a row comes when a consumer needs to follow it
   - [x] 3.1.3 `system` category — firmware version, battery, available transports, BT visibility — **done as rows** (step 6 U2): `system.bluetooth.on|visible|peers`, `system.wifi.on|present`; USB needs no row (it is present whenever the brick answers over it) and must never be asked `GET_ON_OFF` (FAILBREAK ends the frame, `c_com.c` 4296–4330); encodings verified on hardware in U10
 - [ ] **3.2 Telemetry data models**
-  - [ ] 3.2.1 `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
+  - [x] 3.2.1 **Done 13.11.2026 as rows (step 6 U6/U8):** a snapshot is a set of row values, each with its own `sampledAt` (`ReadValue`, the API's `TelemetryUpdate` of kind `snapshot`). As planned: `TelemetrySnapshot` — **rewrite against rows before implementing** (3.1.14 (3)):
     a set of row values, each carrying its own `sampledAt`, because rows in one snapshot come
     from different ticks. Typed row values, not a `data: unknown` payload
-  - [ ] 3.2.2 `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
+  - [x] 3.2.2 **Done 13.11.2026 as rows (step 6 U6/U8):** the rows that changed (`TelemetryUpdate` of kind `change`), `TelemetryRowInfo`, and the subscription with what each row was granted. As planned: `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
     the rows that changed. Add `TelemetryRow` (id, value type, unit, raw type code) and
     `TelemetrySubscription` (handle plus the interval each row was granted)
   - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp). Port identity must
@@ -1605,8 +1605,8 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.1.1 `ConnectedBrickSnapshot` — public representation of a connected brick
   - [x] 4.1.2 `BrickStateChangeEvent` — state transition event for consumers
   - [x] 4.1.3 `ActiveBrickSnapshot` — currently active brick or null
-  - [ ] 4.1.4 `TelemetrySnapshot` (API version) — **reopened 11.11.2026:** the category-based type DESIGN §5.4 rejects; redone against rows in step 6 U8
-  - [ ] 4.1.5 `TelemetryEvent` (API version) — **reopened 11.11.2026**, as 4.1.4
+  - [x] 4.1.4 **Redone against rows 13.11.2026 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`).** `TelemetrySnapshot` (API version) — **reopened 11.11.2026:** the category-based type DESIGN §5.4 rejects; redone against rows in step 6 U8
+  - [x] 4.1.5 `TelemetryEvent` (API version) — **reopened 11.11.2026**, as 4.1.4; redone against rows 13.11.2026 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
   - [x] 4.1.6 `FilesystemEvent` — filesystem operation result
 - [x] **4.2 Consumer registration**
   - [x] 4.2.1 `registerConsumer(name)` — register a dependent extension, return consumer handle
@@ -1620,11 +1620,11 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.4.2 `onActiveBrickChanged(callback)` — subscribe to active brick switching
   - [x] 4.4.3 Disposable pattern for all subscriptions
 - [ ] **4.5 Telemetry subscriptions**
-  - [ ] 4.5.1 `subscribeTelemetry(brick, rows, intervalMs)` on the consumer — a brick by id or `'active'`, rows by id, `apiVersion` on the API object; returns a handle with the granted interval (DESIGN §9.3, §9.6; step 6 KTD6)
-  - [ ] 4.5.2 Initial snapshot delivery before events
-  - [ ] 4.5.3 Cancel a subscription by disposing its handle (releases exactly that claim)
-  - [ ] 4.5.4 Auto-cancel on brick disconnect
-  - [ ] 4.5.5 Integration with telemetry scheduler mode transitions
+  - [x] 4.5.1 (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`) `subscribeTelemetry(brick, rows, intervalMs)` on the consumer — a brick by id or `'active'`, rows by id, `apiVersion` on the API object; returns a handle with the granted interval (DESIGN §9.3, §9.6; step 6 KTD6)
+  - [x] 4.5.2 Initial snapshot delivery before events — never inside the call that subscribes; nothing lost between (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.3 Cancel a subscription by disposing its handle (releases exactly that claim) (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.4 Auto-cancel on brick disconnect — an `ended` update, once (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
+  - [x] 4.5.5 Integration with telemetry scheduler mode transitions — end to end over the shipped runtime and a mock brick (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
 - [ ] **4.6 Filesystem services** — scope and behaviour are settled in
   `docs/plans/2026-08-20-1740-feat-filesystem-layer-plan.md`; the protocol survey behind it is
   `docs/ideation/2026-08-20-filesystem-protocol-survey.md`. That contract replaces the five
@@ -1736,7 +1736,7 @@ Export a stable API for other extensions without giving them direct access to th
 - [ ] **4.8 Integration tests**
   - [x] 4.8.1 Mock consumer registers and receives snapshot
   - [x] 4.8.2 Mock consumer receives state change events
-  - [ ] 4.8.3 Telemetry subscription lifecycle (subscribe → receive → unsubscribe)
+  - [x] 4.8.3 Telemetry subscription lifecycle (subscribe → receive → unsubscribe) (step 6 U8, bc41616; `cockpitApiTelemetry.test.ts`)
   - [x] 4.8.4 Filesystem operations against mock transport
   - [x] 4.8.5 Consumer cleanup on unregister
   - [x] 4.8.6 Multi-consumer concurrent access
