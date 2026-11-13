@@ -146,6 +146,8 @@ export class UsbTransportProvider implements TransportProvider {
 	private readonly platform: NodeJS.Platform;
 	private readonly hidAccess: (path: string) => 'denied' | 'ok' | 'unknown';
 	private disposed = false;
+	/** Every adapter made and not yet closed: sessions, probes, and links still opening. */
+	private readonly live = new Set<TransportAdapter>();
 	/** The closes {@link disposeAsync} started, for a second caller to wait on too. */
 	private disposing: Promise<void> = Promise.resolve();
 	/**
@@ -168,9 +170,12 @@ export class UsbTransportProvider implements TransportProvider {
 
 	constructor(options: UsbTransportProviderOptions = {}) {
 		this.log = options.log;
-		this.makeLibusbAdapter = options.createLibusbAdapter
-			?? ((o) => new UsbLibusbAdapter(o));
-		this.makeHidAdapter = options.createHidAdapter ?? ((o) => new UsbHidAdapter(o));
+		// Every adapter is tracked from the moment it is made until it is closed, so a dispose
+		// reaches one still in the middle of its open (review of 98bd795).
+		const createLibusb = options.createLibusbAdapter ?? ((o) => new UsbLibusbAdapter(o));
+		const createHid = options.createHidAdapter ?? ((o) => new UsbHidAdapter(o));
+		this.makeLibusbAdapter = (o) => this.track(createLibusb(o));
+		this.makeHidAdapter = (o) => this.track(createHid(o));
 		this.listUsbDevices = options?.listUsbDevices ?? listLegoUsbDevices;
 		this.listHidDevices = options?.listHidDevices;
 		this.platform = options.platform ?? process.platform;
@@ -562,6 +567,10 @@ export class UsbTransportProvider implements TransportProvider {
 		if (this.disposed) { return this.disposing; }
 		this.disposed = true;
 		const closes: Promise<void>[] = [];
+		const handled = new Set<TransportAdapter>([
+			...[...this.sessions.values()].map((session) => session.adapter),
+			...this.probes.keys(),
+		]);
 		for (const [, session] of this.sessions) {
 			closes.push(this.closeHeld(session.adapter, session.location).catch(() => { /* disposing */ }));
 		}
@@ -571,11 +580,26 @@ export class UsbTransportProvider implements TransportProvider {
 			closes.push(this.closeHeld(probe, location).catch(() => { /* disposing */ }));
 		}
 		this.probes.clear();
+		// And every link still opening: its close overtakes the open, which then adopts nothing.
+		for (const adapter of this.live) {
+			if (handled.has(adapter)) { continue; }
+			closes.push(adapter.close().catch(() => { /* disposing */ }));
+		}
 		this.disposing = Promise.all(closes).then(() => undefined);
 		return this.disposing;
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
+
+	/** Tracks an adapter until it is closed. */
+	private track<T extends TransportAdapter>(adapter: T): T {
+		this.live.add(adapter);
+		const close = adapter.close.bind(adapter);
+		adapter.close = async () => {
+			try { await close(); } finally { this.live.delete(adapter); }
+		};
+		return adapter;
+	}
 
 	/** Whether this user may open the brick's hidraw node, found by its serial. */
 	private hidNodeAccess(serial: string | undefined): 'denied' | 'ok' | 'unknown' {
