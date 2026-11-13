@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import { Transport, makeBrickKey } from '../contracts';
 import { UsbTransportProvider } from '../transports/usbTransportProvider';
 import { USB } from '../transports/transportConstants';
+import { ConnectionError, DevicePermissionError } from '../errors/CockpitError';
 
 const KEY = makeBrickKey(Transport.USB, '001653AABBCC');
 
@@ -268,6 +269,44 @@ describe('USB backend selection', () => {
 		await provider.connect(KEY);
 		await provider.disconnect(KEY);
 		assert.equal(provider.maxPacketBytes(KEY), undefined);
+		provider.dispose();
+	});
+});
+
+describe('USB connect — a device this user may not open', () => {
+	it('fails with the permission error, not "connect failed", when neither backend may open it', async () => {
+		const provider = new UsbTransportProvider({
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createLibusbAdapter: () => ({
+				...adapter({}),
+				open: () => Promise.reject(new DevicePermissionError('may not open (LIBUSB_ERROR_ACCESS); install the udev rule')),
+			}) as any,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: 'cannot open device with path /dev/hidraw3' }) as any,
+		});
+		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof DevicePermissionError, `got ${String(error)}`);
+		assert.ok(error instanceof ConnectionError, 'still a connection failure to everything that counts them');
+		assert.match((error as Error).message, /udev rule/);
+		assert.match((error as Error).message, /hidraw3/, 'the HID half stays in the message for the log');
+		provider.dispose();
+	});
+
+	it('still falls back to HID when HID may open it', async () => {
+		const log = { info: [] as string[], warn: [] as string[] };
+		const provider = new UsbTransportProvider({
+			log: { info: (m: string) => log.info.push(m), warn: (m: string) => log.warn.push(m) },
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createLibusbAdapter: () => ({
+				...adapter({}),
+				open: () => Promise.reject(new DevicePermissionError('may not open (LIBUSB_ERROR_ACCESS)')),
+			}) as any,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ maxPacketBytes: USB.MAX_WRITE_PACKET_BYTES }) as any,
+		});
+		await provider.connect(KEY);
+		assert.equal(provider.backendFor(KEY), 'hid');
+		assert.equal(log.warn.length, 1);
 		provider.dispose();
 	});
 });

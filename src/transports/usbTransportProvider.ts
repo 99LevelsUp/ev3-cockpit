@@ -11,7 +11,7 @@ import {
 	DiscoveryScanResult, DiscoveryItem, SendCommandOptions,
 	PresenceState, ProbeLink,
 } from '../contracts';
-import { TransportError, ConnectionError } from '../errors/CockpitError';
+import { TransportError, ConnectionError, DevicePermissionError } from '../errors/CockpitError';
 import { TransportAdapter } from './transportAdapter';
 import { UsbHidAdapter, UsbHidAdapterOptions } from './usbHidAdapter';
 import {
@@ -32,6 +32,12 @@ interface HidDeviceInfo {
 
 interface NodeHidModule {
 	devices(vendorId?: number, productId?: number): HidDeviceInfo[];
+}
+
+/** Why the libusb link did not open; a refused device carries its permission error. */
+interface LibusbFailure {
+	readonly message: string;
+	readonly permission?: DevicePermissionError;
 }
 
 function tryLoadNodeHid(): NodeHidModule | undefined {
@@ -217,6 +223,27 @@ export class UsbTransportProvider implements TransportProvider {
 			});
 		}
 
+		// A brick this provider holds is on the cable whatever node-hid says. On Linux the libusb
+		// claim takes the interface from `usbhid`, and the brick's hidraw node goes with it, so
+		// node-hid stops listing a brick the moment it is connected (HOSTC, 13.11.2026).
+		const listed = new Set(items.map((item) => item.brickKey));
+		for (const brickKey of this.sessions.keys()) {
+			if (listed.has(brickKey)) { continue; }
+			const serial = this.extractSerial(brickKey);
+			const knownName = serial ? this.nameBySerial.get(serial.toLowerCase()) : undefined;
+			items.push({
+				brickKey,
+				displayName: knownName ?? serial ?? brickKeyId(brickKey) ?? brickKey,
+				nameSource: knownName ? 'usb-descriptor' : 'fallback',
+				transport: Transport.USB,
+				presenceState: PresenceState.Available,
+				remembered: false,
+				connected: true,
+				favorite: false,
+				lastSeenAt: now,
+			});
+		}
+
 		return { transport: Transport.USB, items };
 	}
 
@@ -235,7 +262,7 @@ export class UsbTransportProvider implements TransportProvider {
 			// libusb first: it is the only path that carries a whole EV3 frame, and `copy` and
 			// `move` do not fit a HID write at all.
 			const libusbFailure = await this.tryLibusb(brickKey, serial);
-			if (!libusbFailure) {
+			if (libusbFailure === undefined) {
 				return { brickKey, transport: Transport.USB };
 			}
 			return await this.connectOverHid(brickKey, serial, libusbFailure);
@@ -337,7 +364,7 @@ export class UsbTransportProvider implements TransportProvider {
 	private async tryLibusb(
 		brickKey: BrickKey,
 		serial: string | undefined,
-	): Promise<string | undefined> {
+	): Promise<LibusbFailure | undefined> {
 		const libusb = this.makeLibusbAdapter({
 			...(serial ? { serial } : {}),
 			inUse: (location) => this.isInUse(location),
@@ -347,7 +374,10 @@ export class UsbTransportProvider implements TransportProvider {
 				await libusb.open();
 			} catch (error) {
 				await libusb.close().catch(() => { /* nothing to unwind */ });
-				return error instanceof Error ? error.message : String(error);
+				return {
+					message: error instanceof Error ? error.message : String(error),
+					...(error instanceof DevicePermissionError ? { permission: error } : {}),
+				};
 			}
 			this.sessions.set(brickKey, {
 				adapter: libusb,
@@ -373,7 +403,7 @@ export class UsbTransportProvider implements TransportProvider {
 	private async connectOverHid(
 		brickKey: BrickKey,
 		serial: string | undefined,
-		libusbFailure: string,
+		libusbFailure: LibusbFailure,
 	): Promise<SessionHandle> {
 		const hid = this.makeHidAdapter(
 			serial ? { path: `serial:${serial.toLowerCase()}` } : {}
@@ -383,9 +413,18 @@ export class UsbTransportProvider implements TransportProvider {
 		} catch (hidError) {
 			// Name both failures: "USB connect failed" against a working brick usually
 			// means the libusb claim lost to something, and only that message says so.
+			const hidMessage = hidError instanceof Error ? hidError.message : String(hidError);
+			if (libusbFailure.permission) {
+				// Without the udev rule HID is refused for the same reason; say what to do, and keep
+				// HID's own words for the log.
+				throw new DevicePermissionError(
+					`Connect failed for ${describeChannel(brickKey)}. ${libusbFailure.message} HID: ${hidMessage}`,
+					hidError
+				);
+			}
 			throw new ConnectionError(
-				`Connect failed for ${describeChannel(brickKey)}. libusb: ${libusbFailure}. HID: `
-				+ `${hidError instanceof Error ? hidError.message : String(hidError)}`,
+				`Connect failed for ${describeChannel(brickKey)}. libusb: ${libusbFailure.message}. HID: `
+				+ hidMessage,
 				hidError
 			);
 		}
@@ -394,7 +433,7 @@ export class UsbTransportProvider implements TransportProvider {
 		// reconnect attempt fails both ways, and warning about a fallback that never came
 		// filled the log with a cost nobody was paying.
 		this.log?.warn(
-			`${describeChannel(brickKey)}: libusb unavailable (${libusbFailure}). Fell back to HID, `
+			`${describeChannel(brickKey)}: libusb unavailable (${libusbFailure.message}). Fell back to HID, `
 			+ `which delivers ${USB.MAX_WRITE_PACKET_BYTES} bytes per packet — transfers run `
 			+ 'about forty times slower and copy/move cannot be sent at all.'
 		);

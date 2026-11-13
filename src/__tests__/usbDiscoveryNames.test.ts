@@ -97,3 +97,57 @@ describe('USB discovery — display names', () => {
 		}
 	});
 });
+
+describe('USB discovery — a brick libusb holds (Linux, HOSTC 13.11.2026)', () => {
+	// On Linux the libusb claim takes the interface from `usbhid`, and the brick's hidraw node
+	// goes with it: node-hid stops listing a brick the moment it is connected. Measured on HOSTC
+	// with the detach fix: "while AAA held: CCC, BBB", AAA back after the release.
+	it('still lists a connected brick that node-hid no longer sees, under its known name', async () => {
+		let hidSeesIt = true;
+		const provider = new UsbTransportProvider({
+			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
+			listHidDevices: () => (hidSeesIt ? [hidDevice] : []),
+			listUsbDevices: (() => Promise.resolve(hidSeesIt ? [usbDevice] : [])) as never,
+			createLibusbAdapter: (() => ({
+				open: () => Promise.resolve(), close: () => Promise.resolve(),
+				send: () => Promise.resolve(new Uint8Array()), isOpen: true, maxPacketBytes: 1024,
+				deviceLocation: usbDevice.location,
+			})) as never,
+		});
+		try {
+			const first = await provider.discover();
+			await provider.connect(first.items[0].brickKey);
+
+			hidSeesIt = false;
+			const held = await provider.discover();
+			assert.equal(held.items.length, 1, 'a connected brick must not vanish from discovery');
+			assert.equal(held.items[0].brickKey, first.items[0].brickKey);
+			assert.equal(held.items[0].displayName, 'AAA');
+			assert.equal(held.items[0].connected, true);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it('lists such a brick once when node-hid does still see it, as on Windows', async () => {
+		const provider = new UsbTransportProvider({
+			log: { info: () => { /* quiet */ }, warn: () => { /* quiet */ } },
+			listHidDevices: () => [hidDevice],
+			listUsbDevices: (() => Promise.resolve([usbDevice])) as never,
+			createLibusbAdapter: (() => ({
+				open: () => Promise.resolve(), close: () => Promise.resolve(),
+				send: () => Promise.resolve(new Uint8Array()), isOpen: true, maxPacketBytes: 1024,
+				deviceLocation: usbDevice.location,
+			})) as never,
+		});
+		try {
+			const first = await provider.discover();
+			await provider.connect(first.items[0].brickKey);
+			const again = await provider.discover();
+			assert.equal(again.items.length, 1);
+			assert.equal(again.items[0].connected, true);
+		} finally {
+			provider.dispose();
+		}
+	});
+});

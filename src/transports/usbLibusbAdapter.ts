@@ -14,7 +14,7 @@
  */
 
 import { TransportAdapter, SendOptions } from './transportAdapter';
-import { TransportError, TimeoutError } from '../errors/CockpitError';
+import { TransportError, TimeoutError, DevicePermissionError } from '../errors/CockpitError';
 import { extractLengthPrefixedPacket } from '../protocol/ev3Packet';
 import { getMessageCounter } from './pendingReply';
 import { USB } from './transportConstants';
@@ -31,6 +31,8 @@ interface UsbEndpointLike {
 	direction: 'in' | 'out';
 	descriptor: UsbEndpointDescriptor;
 	timeout: number;
+	/** Resets the endpoint's halt and data toggle on both ends (CLEAR_FEATURE ENDPOINT_HALT). */
+	clearHalt?(callback: (error?: Error) => void): void;
 	transfer(
 		lengthOrData: number | Buffer,
 		callback: (error: Error | undefined, data?: Buffer) => void,
@@ -41,6 +43,10 @@ interface UsbInterfaceLike {
 	endpoints: UsbEndpointLike[];
 	claim(): void;
 	release(closeEndpoints: boolean, callback: (error?: Error) => void): void;
+	/** Linux: whether a kernel driver (an EV3's is `usbhid`) holds the interface. */
+	isKernelDriverActive?(): boolean;
+	detachKernelDriver?(): void;
+	attachKernelDriver?(): void;
 }
 
 interface UsbDeviceLike {
@@ -54,6 +60,11 @@ interface UsbDeviceLike {
 		index: number,
 		callback: (error: Error | undefined, value?: string) => void,
 	): void;
+	/**
+	 * libusb's auto-detach: the claim detaches the kernel driver and the release gives it back.
+	 * Not on every platform libusb supports, so optional.
+	 */
+	setAutoDetachKernelDriver?(enable: boolean): void;
 }
 
 interface UsbModuleLike {
@@ -92,6 +103,8 @@ export interface UsbLibusbAdapterOptions {
 	readSlackBytes?: number;
 	/** Injection seam for tests, which have no brick to enumerate. */
 	moduleLoader?: () => UsbModuleLike;
+	/** The platform whose kernel-driver rules apply (default: this one). For tests. */
+	platform?: NodeJS.Platform;
 }
 
 /** Endpoint transfer type as encoded in `bmAttributes`. */
@@ -140,6 +153,79 @@ function loadUsbModule(): UsbModuleLike {
 // already counts as link loss — it treats anything that is not a ProtocolError as a lost
 // link. A second classifier for LIBUSB_ERROR_* codes would be a rule with no reader.
 
+/**
+ * Frees the interface from a kernel driver before the claim (Linux only).
+ *
+ * The kernel's `usbhid` binds an EV3's interface 0, so a bare claim fails with
+ * LIBUSB_ERROR_BUSY and the connect lands on 64-byte HID (HOSTC, 13.11.2026, all three bricks).
+ * Detaching needs no root. libusb's auto-detach is preferred: the release then gives the driver
+ * back by itself. Without it the driver is detached by hand, and the caller gives it back.
+ *
+ * @returns true when it detached by hand, so the caller must reattach after the release.
+ */
+function freeFromKernelDriver(device: UsbDeviceLike, iface: UsbInterfaceLike): boolean {
+	if (device.setAutoDetachKernelDriver) {
+		try {
+			device.setAutoDetachKernelDriver(true);
+			return false;
+		} catch {
+			// This libusb build cannot; detach by hand below.
+		}
+	}
+	if (iface.isKernelDriverActive?.() && iface.detachKernelDriver) {
+		iface.detachKernelDriver();
+		return true;
+	}
+	return false;
+}
+
+/** Gives the kernel driver back after a hand detach. A brick already unplugged has none to take. */
+function reattachKernelDriver(iface: UsbInterfaceLike): void {
+	try {
+		iface.attachKernelDriver?.();
+	} catch {
+		// Gone with the device; the kernel binds a fresh one when it is plugged back in.
+	}
+}
+
+/**
+ * Clears an endpoint after the claim (Linux only).
+ *
+ * Taking the interface from `usbhid` leaves the interrupt endpoints' data toggle out of step
+ * with the brick's, and the first reply after every detach was dropped as a duplicate: the
+ * first exchange of each connect timed out and the second worked (HOSTC, 13.11.2026, all three
+ * bricks). A clear-halt resets the toggle on both ends. Best effort: a brick that refuses it is
+ * still worth trying.
+ */
+function clearHalt(endpoint: UsbEndpointLike): Promise<void> {
+	return new Promise((resolve) => {
+		if (!endpoint.clearHalt) { resolve(); return; }
+		try {
+			endpoint.clearHalt(() => resolve());
+		} catch {
+			resolve();
+		}
+	});
+}
+
+/** The udev rule the extension ships, relative to its install folder. */
+export const LINUX_UDEV_RULE_PATH = 'native/linux/70-lego-ev3.rules';
+
+/** libusb's refusal to open a device for this user. */
+function isAccessDenied(error: unknown): boolean {
+	return /LIBUSB_ERROR_ACCESS|EACCES/.test(error instanceof Error ? error.message : String(error));
+}
+
+/** What a Linux user without the udev rule reads, with what to do about it. */
+function linuxPermissionError(detail: string, cause?: unknown): DevicePermissionError {
+	return new DevicePermissionError(
+		`This user may not open the EV3's USB device (${detail}). Install the udev rule that ships `
+		+ `with the extension, ${LINUX_UDEV_RULE_PATH} in its folder: copy it to /etc/udev/rules.d/, `
+		+ 'run "sudo udevadm control --reload", then plug the brick in again.',
+		cause,
+	);
+}
+
 function readStringDescriptor(device: UsbDeviceLike, index: number): Promise<string | undefined> {
 	return new Promise((resolve) => {
 		try {
@@ -167,9 +253,12 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private readonly moduleLoader: () => UsbModuleLike;
 	private readonly inUse: (location: UsbDeviceLocation) => boolean;
 	private readonly readSlack: number;
+	private readonly platform: NodeJS.Platform;
 
 	private device?: UsbDeviceLike;
 	private claimed?: UsbInterfaceLike;
+	/** Set when this adapter detached the kernel driver by hand; it gives it back on close. */
+	private detachedKernelDriver = false;
 	private inEndpoint?: UsbEndpointLike;
 	private outEndpoint?: UsbEndpointLike;
 	private frameBytes = 0;
@@ -188,6 +277,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.moduleLoader = options.moduleLoader ?? loadUsbModule;
 		this.inUse = options.inUse ?? (() => false);
 		this.readSlack = options.readSlackBytes ?? READ_OVERRUN_SLACK;
+		this.platform = options.platform ?? process.platform;
 	}
 
 	get isOpen(): boolean {
@@ -224,8 +314,10 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this._isOpen = false;
 		const device = this.device;
 		const claimed = this.claimed;
+		const reattach = this.detachedKernelDriver;
 		this.device = undefined;
 		this.claimed = undefined;
+		this.detachedKernelDriver = false;
 		this.inEndpoint = undefined;
 		this.outEndpoint = undefined;
 		this.frameBytes = 0;
@@ -251,6 +343,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 					resolve();
 				}
 			});
+			if (reattach) { reattachKernelDriver(claimed); }
 		}
 		try {
 			device.close();
@@ -294,12 +387,22 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		const usb = this.moduleLoader();
 		const device = await this.findDevice(usb);
 
-		device.open();
-		let claimed: UsbInterfaceLike;
+		try {
+			device.open();
+		} catch (error) {
+			if (this.platform === 'linux' && isAccessDenied(error)) {
+				throw linuxPermissionError(error instanceof Error ? error.message : String(error), error);
+			}
+			throw error;
+		}
+		let claimed: UsbInterfaceLike | undefined;
+		let detached = false;
 		try {
 			claimed = device.interface(this.interfaceNumber);
+			if (this.platform === 'linux') { detached = freeFromKernelDriver(device, claimed); }
 			claimed.claim();
 		} catch (error) {
+			if (detached && claimed) { reattachKernelDriver(claimed); }
 			try { device.close(); } catch { /* opening failed; nothing to unwind */ }
 			const detail = error instanceof Error ? error.message : String(error);
 			throw new TransportError(
@@ -316,6 +419,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		if (!inEndpoint || !outEndpoint) {
 			this.device = device;
 			this.claimed = claimed;
+			this.detachedKernelDriver = detached;
 			await this.close();
 			throw new TransportError(
 				`USB interface ${this.interfaceNumber} has no interrupt endpoint pair.`
@@ -331,12 +435,19 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		if (this.frameBytes <= 0) {
 			this.device = device;
 			this.claimed = claimed;
+			this.detachedKernelDriver = detached;
 			await this.close();
 			throw new TransportError('USB interrupt endpoint advertises no packet size.');
 		}
 
+		if (this.platform === 'linux') {
+			await clearHalt(inEndpoint);
+			await clearHalt(outEndpoint);
+		}
+
 		this.device = device;
 		this.claimed = claimed;
+		this.detachedKernelDriver = detached;
 		this.inEndpoint = inEndpoint;
 		this.outEndpoint = outEndpoint;
 		this._isOpen = true;
@@ -356,6 +467,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 		// Reading a serial means opening the device, so close every one that is not the
 		// brick we were asked for — leaving handles open would block a later connect.
+		let refused: unknown;
 		for (const candidate of candidates) {
 			// Never touch a brick another session is holding: opening and closing it drops
 			// the handle that session is using.
@@ -379,13 +491,18 @@ export class UsbLibusbAdapter implements TransportAdapter {
 					// LIBUSB_ERROR_IO — verified, and it cost a debugging round.
 					return candidate;
 				}
-			} catch {
-				// Inaccessible device: it cannot be the one we want.
+			} catch (error) {
+				// Inaccessible device: it cannot be the one we want — unless it was refused, in
+				// which case its serial was never read and it may be exactly that one.
+				if (isAccessDenied(error)) { refused = error; }
 			} finally {
 				if (opened) {
 					try { candidate.close(); } catch { /* already gone */ }
 				}
 			}
+		}
+		if (refused !== undefined && this.platform === 'linux') {
+			throw linuxPermissionError(refused instanceof Error ? refused.message : String(refused), refused);
 		}
 		throw new TransportError(
 			`No EV3 on the USB bus reports serial ${this.serial.toUpperCase()}.`
