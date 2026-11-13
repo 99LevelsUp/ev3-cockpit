@@ -29,6 +29,8 @@ interface Recorded {
 	heldReads: ((error: Error | undefined, data?: Buffer) => void)[];
 	/** What happened, in order: `read-callback`, `release`, `close`. */
 	events: string[];
+	/** Clear-halts held back by `holdClearHalt`, to call back when the test decides. */
+	heldClearHalts: (() => void)[];
 }
 
 /** A reply in the brick's framing: length prefix, message counter, then a body. */
@@ -68,12 +70,18 @@ interface FakeDeviceSpec {
 	autoDetach?: boolean;
 	/** `open()` throws this, as libusb does for a device the user may not open. */
 	openError?: string;
+	/** `clearHalt` holds its callback until the test calls {@link Recorded.heldClearHalts}. */
+	holdClearHalt?: boolean;
+	/** `clearHalt` never calls back at all. */
+	clearHaltNeverAnswers?: boolean;
+	/** `clearHalt` calls back with this error. */
+	clearHaltError?: string;
 }
 
 function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unknown[] }; log: Recorded } {
 	const log: Recorded = {
 		sent: [], requestedReadLengths: [], closed: 0, released: 0, claimed: 0,
-		openedDevices: [], closedDevices: [], heldReads: [], events: [],
+		openedDevices: [], closedDevices: [], heldReads: [], events: [], heldClearHalts: [],
 	};
 
 	const devices = specs.map((spec, index) => {
@@ -106,9 +114,14 @@ function fakeUsb(specs: FakeDeviceSpec[]): { module: { getDeviceList: () => unkn
 			},
 			timeout: 0,
 			clearHalt(callback: (error?: Error) => void): void {
-				toggleOutOfStep = false;
 				log.events.push(`clearHalt:${ep.direction}`);
-				setImmediate(() => callback());
+				if (spec.clearHaltNeverAnswers) { return; }
+				const answer = (): void => {
+					if (!spec.clearHaltError) { toggleOutOfStep = false; }
+					callback(spec.clearHaltError ? new Error(spec.clearHaltError) : undefined);
+				};
+				if (spec.holdClearHalt) { log.heldClearHalts.push(answer); return; }
+				setImmediate(answer);
 			},
 			transfer(
 				lengthOrData: number | Buffer,
@@ -575,6 +588,46 @@ describe('UsbLibusbAdapter — a stale packet after a fresh plug (Linux, HOSTC 1
 			() => adapter.send(new Uint8Array([0x00, 0x00]), { expectedMessageCounter: 1 }),
 			/shorter than the packet it declares/
 		);
+		await adapter.close();
+	});
+});
+
+describe('UsbLibusbAdapter — a close while the open is still clearing (review of 2dacf24)', () => {
+	async function settle(): Promise<void> {
+		for (let i = 0; i < 20; i += 1) { await new Promise((r) => setImmediate(r)); }
+	}
+	it('releases everything and does not come up open when closed during the clear-halt', async () => {
+		const { adapter, log } = adapterFor([{ kernelDriverActive: true, autoDetach: false, holdClearHalt: true }], undefined, 0, 'linux');
+		const opening = adapter.open().then(() => 'opened', (e: unknown) => e);
+		await settle();
+		assert.equal(log.heldClearHalts.length, 1, 'the open is waiting on the clear-halt');
+
+		await adapter.close();
+		assert.deepEqual(log.events.slice(-3), ['release', 'attach', 'close'], 'the interface and the kernel driver are given back at once');
+
+		for (const answer of log.heldClearHalts.splice(0)) { answer(); }
+		await settle();
+		for (const answer of log.heldClearHalts.splice(0)) { answer(); }
+		const outcome = await opening;
+		assert.ok(outcome instanceof Error, 'an open overtaken by a close must not resolve as open');
+		assert.match((outcome as Error).message, /closed while it was opening/);
+		assert.equal(adapter.isOpen, false);
+		assert.equal(log.released, 1, 'released once, not again by the abandoned open');
+	});
+
+	it('opens anyway when a clear-halt fails: it is best effort', async () => {
+		const { adapter } = adapterFor([{ kernelDriverActive: true, clearHaltError: 'LIBUSB_ERROR_PIPE' }], undefined, 0, 'linux');
+		await adapter.open();
+		assert.equal(adapter.isOpen, true);
+		await adapter.close();
+	});
+
+	it('does not wait for ever on a clear-halt that never answers', async () => {
+		const { adapter } = adapterFor([{ kernelDriverActive: true, clearHaltNeverAnswers: true }], undefined, 0, 'linux');
+		const started = Date.now();
+		await adapter.open();
+		assert.equal(adapter.isOpen, true);
+		assert.ok(Date.now() - started < 5000);
 		await adapter.close();
 	});
 });

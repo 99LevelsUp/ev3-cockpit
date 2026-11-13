@@ -200,13 +200,19 @@ function reattachKernelDriver(iface: UsbInterfaceLike): void {
 function clearHalt(endpoint: UsbEndpointLike): Promise<void> {
 	return new Promise((resolve) => {
 		if (!endpoint.clearHalt) { resolve(); return; }
+		// A control transfer the brick never answers must not hold the open for ever.
+		const timer = setTimeout(resolve, CLEAR_HALT_MAX_MS);
+		const done = (): void => { clearTimeout(timer); resolve(); };
 		try {
-			endpoint.clearHalt(() => resolve());
+			endpoint.clearHalt(done);
 		} catch {
-			resolve();
+			done();
 		}
 	});
 }
+
+/** Longest one clear-halt may take before the open goes on without it (ms). */
+const CLEAR_HALT_MAX_MS = 1000;
 
 /** The udev rule the extension ships, relative to its install folder. */
 export const LINUX_UDEV_RULE_PATH = 'native/linux/70-lego-ev3.rules';
@@ -259,6 +265,8 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private claimed?: UsbInterfaceLike;
 	/** Set when this adapter detached the kernel driver by hand; it gives it back on close. */
 	private detachedKernelDriver = false;
+	/** Bumped by every close, so an open still awaiting something knows it was overtaken. */
+	private generation = 0;
 	private inEndpoint?: UsbEndpointLike;
 	private outEndpoint?: UsbEndpointLike;
 	private frameBytes = 0;
@@ -311,6 +319,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	}
 
 	async close(): Promise<void> {
+		this.generation += 1;
 		this._isOpen = false;
 		const device = this.device;
 		const claimed = this.claimed;
@@ -410,6 +419,13 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			);
 		}
 
+		// Owned from here: whatever happens next, a close() releases the interface, gives the
+		// kernel driver back and closes the device — including a close while this open still waits.
+		this.device = device;
+		this.claimed = claimed;
+		this.detachedKernelDriver = detached;
+		const generation = this.generation;
+
 		const inEndpoint = claimed.endpoints.find(
 			(ep) => ep.direction === 'in' && (ep.descriptor.bmAttributes & 0x03) === TRANSFER_TYPE_INTERRUPT
 		);
@@ -417,9 +433,6 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			(ep) => ep.direction === 'out' && (ep.descriptor.bmAttributes & 0x03) === TRANSFER_TYPE_INTERRUPT
 		);
 		if (!inEndpoint || !outEndpoint) {
-			this.device = device;
-			this.claimed = claimed;
-			this.detachedKernelDriver = detached;
 			await this.close();
 			throw new TransportError(
 				`USB interface ${this.interfaceNumber} has no interrupt endpoint pair.`
@@ -428,14 +441,11 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 		// Both directions advertise the same size on an EV3, but take the smaller if a
 		// device ever disagrees: a transfer must match its endpoint exactly.
-		this.frameBytes = Math.min(
+		const frameBytes = Math.min(
 			outEndpoint.descriptor.wMaxPacketSize,
 			inEndpoint.descriptor.wMaxPacketSize,
 		);
-		if (this.frameBytes <= 0) {
-			this.device = device;
-			this.claimed = claimed;
-			this.detachedKernelDriver = detached;
+		if (frameBytes <= 0) {
 			await this.close();
 			throw new TransportError('USB interrupt endpoint advertises no packet size.');
 		}
@@ -444,10 +454,12 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			await clearHalt(inEndpoint);
 			await clearHalt(outEndpoint);
 		}
+		if (generation !== this.generation) {
+			// A close ran while the clear-halts were out, and has already released everything.
+			throw new TransportError('USB link closed while it was opening.');
+		}
 
-		this.device = device;
-		this.claimed = claimed;
-		this.detachedKernelDriver = detached;
+		this.frameBytes = frameBytes;
 		this.inEndpoint = inEndpoint;
 		this.outEndpoint = outEndpoint;
 		this._isOpen = true;
