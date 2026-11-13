@@ -538,3 +538,43 @@ describe('UsbLibusbAdapter — a device this user may not open (Linux, HOSTC 13.
 		assert.match((error as Error).message, /No EV3 on the USB bus reports serial AAA/);
 	});
 });
+
+describe('UsbLibusbAdapter — a stale packet after a fresh plug (Linux, HOSTC 13.11.2026)', () => {
+	// Plugged in and claimed, AAA had one packet of garbage waiting on its IN endpoint: read at
+	// once, before anything was sent. The first exchange then failed with "shorter than the
+	// packet it declares" and the next ones worked, on each of two re-plugs.
+	function bogus(): Buffer {
+		const frame = Buffer.alloc(FRAME);
+		frame.writeUInt16LE(4000, 0);
+		frame[600] = 0x7e;
+		return frame;
+	}
+
+	it('steps over an unreadable reply when it is waiting for a known counter', async () => {
+		const { adapter } = adapterFor([{ replies: [bogus(), paddedReply(1)] }], undefined, 0, 'linux');
+		await adapter.open();
+		const reply = await adapter.send(new Uint8Array([0x00, 0x00]), { expectedMessageCounter: 1 });
+		assert.equal(reply[2], 1);
+		await adapter.close();
+	});
+
+	it('still gives up on a channel that answers nothing readable', async () => {
+		const { adapter } = adapterFor([{ replies: Array.from({ length: 12 }, () => bogus()) }], undefined, 0, 'linux');
+		await adapter.open();
+		await assert.rejects(
+			() => adapter.send(new Uint8Array([0x00, 0x00]), { expectedMessageCounter: 1 }),
+			/stayed out of step/
+		);
+		await adapter.close();
+	});
+
+	it('keeps rejecting it on Windows', async () => {
+		const { adapter } = adapterFor([{ replies: [bogus(), paddedReply(1)] }], undefined, 0, 'win32');
+		await adapter.open();
+		await assert.rejects(
+			() => adapter.send(new Uint8Array([0x00, 0x00]), { expectedMessageCounter: 1 }),
+			/shorter than the packet it declares/
+		);
+		await adapter.close();
+	});
+});
