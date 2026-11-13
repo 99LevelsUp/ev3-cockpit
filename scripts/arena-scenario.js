@@ -34,7 +34,7 @@ Module._resolveFilename = function (request, ...rest) {
 const out = (dir) => path.join(REPO, 'out', dir);
 const { createRuntime } = require(out('runtime/createRuntime'));
 const { createBrickFilesystem } = require(out('fs/brickFilesystem'));
-const { TelemetryService } = require(out('telemetry/telemetryService'));
+const { telemetrySettingsFromPackage } = require(out('telemetry/telemetrySettings'));
 const { ChannelState, Transport } = require(out('contracts/enums'));
 
 const argAfter = (flag, fallback) => {
@@ -141,11 +141,13 @@ async function arena(runtime, id) {
 
 async function transfer(runtime, id) {
 	await signInBoth(runtime, id);
-	const telemetry = new TelemetryService({ host: runtime.bricks.telemetryHost(), providerRegistry: runtime.registry });
+	// The runtime's own telemetry: a second service would run a second loop on the same brick.
 	let frames = 0;
 	let frameErrors = 0;
-	telemetry.onValues(() => { frames += 1; });
-	telemetry.onError(() => { frameErrors += 1; });
+	const counting = [
+		runtime.telemetry.onValues(() => { frames += 1; }),
+		runtime.telemetry.onError(() => { frameErrors += 1; }),
+	];
 	try {
 		const fs = createBrickFilesystem(runtime.bricks, id);
 		const file = new Uint8Array(64 * 1024).map((_, i) => (i * 7) & 0xff);
@@ -160,7 +162,7 @@ async function transfer(runtime, id) {
 		await runtime.bricks.send(id, { kind: 'battery' });
 		log(`SUMMARY transfer: identical ${same}, ${frames} frames, ${frameErrors} frame errors, brick still answering`);
 	} finally {
-		telemetry.dispose();
+		for (const subscription of counting) { subscription.dispose(); }
 	}
 }
 
@@ -194,7 +196,11 @@ async function presence(runtime, id) {
 
 async function main() {
 	// Presence on, as in the extension: a Bluetooth join that fails waits for a presence answer.
-	const runtime = createRuntime({ extensionPath: REPO, log: quiet, startPresence: true });
+	const runtime = createRuntime({
+		extensionPath: REPO, log: quiet, startPresence: true,
+		// The defaults package.json declares, as an installed extension gets them.
+		telemetrySettings: telemetrySettingsFromPackage(require(path.join(REPO, 'package.json'))),
+	});
 	try {
 		const id = await findBrick(runtime);
 		log(`${BRICK} is ${id}; phase ${PHASE}`);
