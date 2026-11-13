@@ -209,6 +209,15 @@ Mutations on the fixes 8/8; unit 957/957.
 
 Same area two rounds running, each finding an input that forgot a case: **the approach changed instead of a third patch.** Every input — sample, plan, session end, settings, timer — goes through one `run()`: time is brought up to now under the old state (stale told first, then what expired goes), the input applies, then time again under the new state. Events are no longer picked by hand: they are the difference between what readers were last told and what holds now. Mutations on the rebuilt model 19/19; unit 961/961.
 
+### U6, round 3 — audit of the rebuilt model (codex, `.review-out/step6-u6-r3-packet.md`, 13.11.2026) — NOT-READY → fixed (caf497f)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a late reply after a stopped row's stale time had run out recreated it for another `staleTimeoutMs` | CONFIRMED (realistic with a low timeout) | the model keeps, per brick and session, when each row stopped being read; a reply past that row's drop is not taken |
+| 2 | major | a static row whose first reply came after it left the plan went stale | CONFIRMED (the active brick changing just after sign-in) | the same history keeps that the row was planned static |
+
+Both came from one missing piece of state, not from the ordering the rebuild settled: what a plan said of a row was forgotten with its value. Mutations 5/6 — the survivor deletes the history at session end, which nothing observable depends on (a static row is static in every session; other rows are rewritten by the next plan). Unit 963/963.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
