@@ -81,7 +81,7 @@ KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle �
 Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floor, fixed when the claim is made (f85a939, D2); part 2 one loop per brick in `TelemetryService`, `modeOf` reports subscribed, claims wait out a lost link and end with the session via `onClaimsEnded` (adc826c, mutations 15/15); the session's own `activeMode` and categories removed (31b83eb, drift 3 closed). A static row claimed after it was read is not read again: its value comes from the read model (U6). Planned:
 3.3.5, 3.1.10, 3.3.2, 3.8 (subscribed interval), KTD4; one source for `ActivityMode` (drift 3); 3.7.3, 3.7.6. The category subscriptions in `sessionEntry` are removed.
 
-### U6. Read model, stale policy, wiring — code done 13.11.2026; codex review pending
+### U6. Read model, stale policy, wiring — done 13.11.2026; review five rounds, converged (see Review)
 Part 1 read model + settings + service plan/session events (d64aab1, mutations 17/17 — the first run hung all night on a mutation that turned the timer into a busy loop; the test's fake timer now fails after 10 000 rounds and the mutation runner has a time limit); part 2 the view of the active brick (ccb1ce1, 9/9); part 3 wiring into `createRuntime` and `activate()` (3bc10ee, 4/4; end to end over the mock's interpreted frames; host tests 5/5). Planned:
 3.2.1, 3.2.2, 3.5.x, 3.6.x, 2.8.10a, 3.7.4, 3.7.5.
 
@@ -225,6 +225,10 @@ Both came from one missing piece of state, not from the ordering the rebuild set
 | 1 | major | a row stale by age before it left the plan came back from a late reply after its drop, for the gap between its stale time and its stop time | CONFIRMED (tens of ms in the reported sequence) | the history notes the drop; no reply for an unplanned row brings it back until a plan reads it again — a rule with no time to count, instead of one more time |
 
 Mutations 2/2; a plan check in the note proved dead and was removed. Unit 964/964.
+
+### U6, round 5 — confirmation of round 4 (codex, `.review-out/step6-u6-r5-packet.md`, 13.11.2026): READY, no findings
+
+Convergence gate met: no blocker or major survives. Majors per round 6 → 3 → 2 → 1 → 0; round 2 changed the read model's approach (one order for every input, events by difference) instead of a third patch. U6 is closed in code; U8 builds the API's snapshot and events on it.
 
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
