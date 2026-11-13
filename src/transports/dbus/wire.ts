@@ -29,19 +29,33 @@ const BASIC = 'ybnqiuxtdsog';
 
 const OBJECT_PATH = /^\/(?:[A-Za-z0-9_]+(?:\/[A-Za-z0-9_]+)*)?$/;
 
-/** The length of the one complete type at the start of `signature`. */
-function completeTypeLength(signature: string, at: number): number {
+/** The specification's limits: 32 nested arrays, 32 nested structs, 255 bytes of signature. */
+const MAX_ARRAY_DEPTH = 32;
+const MAX_STRUCT_DEPTH = 32;
+const MAX_SIGNATURE_BYTES = 255;
+
+/**
+ * The length of the one complete type at `at`.
+ *
+ * @param inArray The type is an array's element: the only place a dict entry `{..}` may stand.
+ */
+function completeTypeLength(signature: string, at: number, inArray = false, arrays = 0, structs = 0): number {
 	const c = signature[at];
 	if (c === undefined) { throw new Error(`D-Bus signature "${signature}" ends inside a type.`); }
 	if (BASIC.includes(c) || c === 'v') { return 1; }
-	if (c === 'a') { return 1 + completeTypeLength(signature, at + 1); }
+	if (c === 'a') {
+		if (arrays + 1 > MAX_ARRAY_DEPTH) { throw new Error(`D-Bus signature "${signature}" nests arrays too deep.`); }
+		return 1 + completeTypeLength(signature, at + 1, true, arrays + 1, structs);
+	}
 	if (c === '(' || c === '{') {
+		if (c === '{' && !inArray) { throw new Error(`D-Bus signature "${signature}" has a dict entry outside an array.`); }
+		if (structs + 1 > MAX_STRUCT_DEPTH) { throw new Error(`D-Bus signature "${signature}" nests structs too deep.`); }
 		const close = c === '(' ? ')' : '}';
 		let i = at + 1;
 		let fields = 0;
 		while (signature[i] !== close) {
 			if (signature[i] === undefined) { throw new Error(`D-Bus signature "${signature}" has an unclosed ${c}.`); }
-			i += completeTypeLength(signature, i);
+			i += completeTypeLength(signature, i, false, arrays, structs + 1);
 			fields += 1;
 		}
 		if (fields === 0 || (c === '{' && fields !== 2)) {
@@ -57,6 +71,9 @@ function completeTypeLength(signature: string, at: number): number {
 
 /** A signature as its complete types: `sa{sv}as` → `s`, `a{sv}`, `as`. */
 export function splitSignature(signature: string): string[] {
+	if (signature.length > MAX_SIGNATURE_BYTES) {
+		throw new Error(`D-Bus signature of ${signature.length} bytes; at most ${MAX_SIGNATURE_BYTES}.`);
+	}
 	const types: string[] = [];
 	for (let at = 0; at < signature.length;) {
 		const length = completeTypeLength(signature, at);
@@ -66,38 +83,55 @@ export function splitSignature(signature: string): string[] {
 	return types;
 }
 
+/** The inside of a dict entry, as its key and value types. */
+function entryTypes(type: string): string[] {
+	const inner = type.slice(1, -1);
+	const keyLength = completeTypeLength(inner, 0);
+	return [inner.slice(0, keyLength), inner.slice(keyLength)];
+}
+
 /** The fields of a struct or dict entry type, `(sa{sv})` → `s`, `a{sv}`. */
 function innerTypes(type: string): string[] {
-	return splitSignature(type.slice(1, -1));
+	return type[0] === '{' ? entryTypes(type) : splitSignature(type.slice(1, -1));
 }
 
 // ── Writing ─────────────────────────────────────────────────────────
 
 class Writer {
-	private chunks: Buffer[] = [];
+	private buf = Buffer.alloc(256);
 	length = 0;
 
 	constructor(private readonly start: number) {}
 
+	private reserve(n: number): void {
+		if (this.length + n <= this.buf.length) { return; }
+		let size = this.buf.length * 2;
+		while (size < this.length + n) { size *= 2; }
+		const grown = Buffer.alloc(size);
+		this.buf.copy(grown, 0, 0, this.length);
+		this.buf = grown;
+	}
+
 	align(n: number): void {
 		const pad = (n - ((this.start + this.length) % n)) % n;
-		if (pad) { this.push(Buffer.alloc(pad)); }
+		this.reserve(pad);
+		this.buf.fill(0, this.length, this.length + pad);
+		this.length += pad;
 	}
 
 	push(bytes: Buffer): void {
-		this.chunks.push(bytes);
+		this.reserve(bytes.length);
+		bytes.copy(this.buf, this.length);
 		this.length += bytes.length;
 	}
 
-	result(): Buffer {
-		return Buffer.concat(this.chunks, this.length);
+	/** Overwrites the 4 bytes at `at` with `n`, in place. */
+	patchUint32(at: number, n: number): void {
+		this.buf.writeUInt32LE(n, at);
 	}
 
-	/** Overwrites the 4 bytes at `at` (counted from this writer's first byte) with `n`. */
-	patchUint32(at: number, n: number): void {
-		const whole = this.result();
-		whole.writeUInt32LE(n, at);
-		this.chunks = [whole];
+	result(): Buffer {
+		return Buffer.from(this.buf.subarray(0, this.length));
 	}
 }
 
@@ -221,19 +255,33 @@ export function marshal(signature: string, values: DBusValue[], start = 0): Buff
 
 // ── Reading ─────────────────────────────────────────────────────────
 
+/** The specification's limit on one array's bytes. */
+const MAX_ARRAY_BYTES = 64 * 1024 * 1024;
+
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
 class Reader {
 	at = 0;
+	/** The end of the array being read, if any: nothing inside it may read past it. */
+	limit: number;
 
-	constructor(private readonly buf: Buffer, private readonly start: number) {}
+	constructor(private readonly buf: Buffer, private readonly start: number) {
+		this.limit = buf.length;
+	}
 
 	align(n: number): void {
-		this.at += (n - ((this.start + this.at) % n)) % n;
-		this.need(0);
+		const pad = (n - ((this.start + this.at) % n)) % n;
+		this.need(pad);
+		for (let i = 0; i < pad; i += 1) {
+			if (this.buf[this.at + i] !== 0) { throw new RangeError('D-Bus: alignment padding that is not zero.'); }
+		}
+		this.at += pad;
 	}
 
 	need(n: number): void {
-		if (this.at + n > this.buf.length) {
-			throw new RangeError(`D-Bus: read past the end of the data (${this.at + n} of ${this.buf.length} bytes).`);
+		if (this.at + n > this.limit) {
+			const where = this.limit < this.buf.length ? 'past the end of its array' : 'past the end of the data';
+			throw new RangeError(`D-Bus: read ${where} (${this.at + n} of ${this.limit} bytes).`);
 		}
 	}
 
@@ -245,12 +293,28 @@ class Reader {
 	}
 }
 
+/** A string's bytes, then its NUL: no NUL inside, and valid UTF-8. */
+function readText(r: Reader, length: number, type: string): string {
+	const bytes = r.take(length);
+	if (r.take(1)[0] !== 0) { throw new TypeError(`D-Bus ${type}: not terminated by a NUL.`); }
+	if (bytes.includes(0)) { throw new TypeError(`D-Bus ${type}: a NUL inside the string.`); }
+	try {
+		return UTF8.decode(bytes);
+	} catch {
+		throw new TypeError(`D-Bus ${type}: not valid UTF-8.`);
+	}
+}
+
 function readValue(r: Reader, type: string): DBusValue {
 	const c = type[0];
 	r.align(ALIGN[c]);
 	switch (c) {
 	case 'y': return r.take(1).readUInt8(0);
-	case 'b': return r.take(4).readUInt32LE(0) !== 0;
+	case 'b': {
+		const n = r.take(4).readUInt32LE(0);
+		if (n > 1) { throw new TypeError(`D-Bus boolean of ${n}; only 0 or 1.`); }
+		return n === 1;
+	}
 	case 'n': return r.take(2).readInt16LE(0);
 	case 'q': return r.take(2).readUInt16LE(0);
 	case 'i': return r.take(4).readInt32LE(0);
@@ -259,20 +323,18 @@ function readValue(r: Reader, type: string): DBusValue {
 	case 't': return r.take(8).readBigUInt64LE(0);
 	case 'd': return r.take(8).readDoubleLE(0);
 	case 's': case 'o': {
-		const length = r.take(4).readUInt32LE(0);
-		const s = r.take(length).toString('utf8');
-		r.take(1);
-		return s;
+		const text = readText(r, r.take(4).readUInt32LE(0), c);
+		if (c === 'o' && !OBJECT_PATH.test(text)) { throw new TypeError(`D-Bus: "${text}" is not an object path.`); }
+		return text;
 	}
 	case 'g': {
-		const length = r.take(1).readUInt8(0);
-		const s = r.take(length).toString('ascii');
-		r.take(1);
-		return s;
+		const text = readText(r, r.take(1).readUInt8(0), 'g');
+		try { splitSignature(text); } catch (error) { throw new TypeError(`D-Bus: invalid signature (${(error as Error).message}).`); }
+		return text;
 	}
 	case 'v': {
 		const signature = readValue(r, 'g') as string;
-		if (splitSignature(signature).length !== 1) { throw new TypeError(`D-Bus variant signature "${signature}" is not one type.`); }
+		if (splitSignature(signature).length !== 1) { throw new TypeError(`D-Bus variant signature "${signature}" is not one complete type.`); }
 		return new Variant(signature, readValue(r, signature));
 	}
 	case '(':
@@ -280,22 +342,29 @@ function readValue(r: Reader, type: string): DBusValue {
 	case 'a': {
 		const element = type.slice(1);
 		const length = r.take(4).readUInt32LE(0);
+		if (length > MAX_ARRAY_BYTES) { throw new RangeError(`D-Bus: an array of ${length} bytes is over the limit.`); }
 		r.align(ALIGN[element[0]]);
-		const end = r.at + length;
 		r.need(length);
-		if (element[0] === '{') {
-			const [keyType, valueType] = innerTypes(element);
-			const map = new Map<DBusValue, DBusValue>();
-			while (r.at < end) {
-				r.align(8);
-				const key = readValue(r, keyType);
-				map.set(key, readValue(r, valueType));
+		const end = r.at + length;
+		const outer = r.limit;
+		r.limit = end;
+		try {
+			if (element[0] === '{') {
+				const [keyType, valueType] = innerTypes(element);
+				const map = new Map<DBusValue, DBusValue>();
+				while (r.at < end) {
+					r.align(8);
+					const key = readValue(r, keyType);
+					map.set(key, readValue(r, valueType));
+				}
+				return map;
 			}
-			return map;
+			const items: DBusValue[] = [];
+			while (r.at < end) { items.push(readValue(r, element)); }
+			return items;
+		} finally {
+			r.limit = outer;
 		}
-		const items: DBusValue[] = [];
-		while (r.at < end) { items.push(readValue(r, element)); }
-		return items;
 	}
 	default:
 		throw new Error(`D-Bus type "${type}" cannot be read.`);
@@ -309,5 +378,9 @@ function readValue(r: Reader, type: string): DBusValue {
  */
 export function unmarshal(signature: string, buf: Buffer, start = 0): DBusValue[] {
 	const r = new Reader(buf, start);
-	return splitSignature(signature).map((type) => readValue(r, type));
+	const values = splitSignature(signature).map((type) => readValue(r, type));
+	if (r.at !== buf.length) {
+		throw new RangeError(`D-Bus: ${buf.length - r.at} bytes left over after "${signature}".`);
+	}
+	return values;
 }

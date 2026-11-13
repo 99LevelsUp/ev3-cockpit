@@ -46,6 +46,20 @@ const FIELD = {
 } as const;
 type FieldName = keyof typeof FIELD;
 
+/** The header fields each type of message must carry (the D-Bus specification, "Message Format"). */
+const REQUIRED: Record<MessageType, [FieldName, string][]> = {
+	[MessageType.MethodCall]: [['path', 'path'], ['member', 'member']],
+	[MessageType.MethodReturn]: [['replySerial', 'reply serial']],
+	[MessageType.Error]: [['errorName', 'error name'], ['replySerial', 'reply serial']],
+	[MessageType.Signal]: [['path', 'path'], ['interface', 'interface'], ['member', 'member']],
+};
+const MESSAGE_NAME: Record<MessageType, string> = {
+	[MessageType.MethodCall]: 'method call',
+	[MessageType.MethodReturn]: 'method return',
+	[MessageType.Error]: 'error',
+	[MessageType.Signal]: 'signal',
+};
+
 const LITTLE_ENDIAN = 0x6c; // 'l'
 const BIG_ENDIAN = 0x42; // 'B'
 const PROTOCOL_VERSION = 1;
@@ -56,6 +70,9 @@ const align8 = (n: number): number => Math.ceil(n / 8) * 8;
 
 /** The message as bytes. */
 export function encodeMessage(message: DBusMessage): Buffer {
+	if (!message.signature && message.body.length > 0) {
+		throw new TypeError('D-Bus: a message with a body needs its signature.');
+	}
 	const body = message.signature ? marshal(message.signature, message.body) : Buffer.alloc(0);
 	const fields: DBusValue[] = [];
 	for (const name of Object.keys(FIELD) as FieldName[]) {
@@ -90,11 +107,27 @@ export function decodeMessage(buf: Buffer): { message: DBusMessage; length: numb
 
 	const [, type, flags, , , serial, fields] = unmarshal('yyyyuua(yv)', buf.subarray(0, 16 + fieldsLength)) as
 		[number, MessageType, number, number, number, number, [number, Variant][]];
+	if (!Object.values(MessageType).includes(type)) { throw new Error(`D-Bus: a message of type ${type}.`); }
+	if (serial === 0) { throw new Error('D-Bus: a message with serial 0.'); }
 	const message: DBusMessage = { type, flags, serial, body: [] };
+	const seen = new Set<FieldName>();
 	for (const [code, variant] of fields) {
 		const name = (Object.keys(FIELD) as FieldName[]).find((key) => FIELD[key][0] === code);
 		// Unknown fields are skipped, as the specification asks.
-		if (name) { (message as unknown as Record<string, DBusValue>)[name] = variant.value; }
+		if (!name) { continue; }
+		if (seen.has(name)) { throw new Error(`D-Bus: header field ${name} given twice.`); }
+		seen.add(name);
+		if (variant.signature !== FIELD[name][1]) {
+			throw new Error(`D-Bus: header field ${name} of type "${variant.signature}", not "${FIELD[name][1]}".`);
+		}
+		(message as unknown as Record<string, DBusValue>)[name] = variant.value;
+	}
+	for (const [field, label] of REQUIRED[type]) {
+		if (message[field] === undefined) { throw new Error(`D-Bus: a ${MESSAGE_NAME[type]} without its ${label}.`); }
+	}
+	if (!message.signature && bodyLength > 0) { throw new Error('D-Bus: a body without a signature.'); }
+	if (buf.subarray(16 + fieldsLength, bodyStart).some((byte) => byte !== 0)) {
+		throw new Error('D-Bus: header padding that is not zero.');
 	}
 	if (message.signature) {
 		message.body = unmarshal(message.signature, buf.subarray(bodyStart, total));

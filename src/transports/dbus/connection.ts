@@ -19,6 +19,14 @@ export const SYSTEM_BUS_SOCKET = '/run/dbus/system_bus_socket';
 const BUS_NAME = 'org.freedesktop.DBus';
 const BUS_PATH = '/org/freedesktop/DBus';
 const DEFAULT_CALL_TIMEOUT_MS = 25_000;
+/** How long an exported method may take before the caller is told it timed out. */
+const DEFAULT_EXPORTED_CALL_TIMEOUT_MS = 30_000;
+/** Calls to exported objects answered at once; more are refused (a pairing prompt each). */
+const MAX_CONCURRENT_EXPORTED_CALLS = 4;
+/** The longest handshake line the bus may send; anything longer is not a D-Bus server. */
+const MAX_AUTH_LINE_BYTES = 1024;
+const UNIQUE_NAME = /^:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$/;
+const ERROR_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/;
 
 /** An error the other side answered with, or one this side answers with. */
 export class DBusError extends Error {
@@ -37,6 +45,8 @@ export interface DBusConnectionOptions {
 	uid?: number;
 	/** How long a call waits for its reply (default 25 s, the D-Bus convention). */
 	callTimeoutMs?: number;
+	/** How long an exported method may take before its caller gets a timeout (default 30 s). */
+	exportedCallTimeoutMs?: number;
 }
 
 export interface CallOptions {
@@ -73,8 +83,11 @@ export class DBusConnection {
 	/** The name the bus gave this connection (`:1.77`). */
 	uniqueName = '';
 
-	private buffer = Buffer.alloc(0);
+	/** What arrived and is not read yet, as received: joined only once a whole message is there. */
+	private chunks: Buffer[] = [];
+	private buffered = 0;
 	private serial = 0;
+	private exportedCallsInFlight = 0;
 	private closed = false;
 	private readonly pending = new Map<number, PendingCall>();
 	private readonly signalHandlers = new Set<(message: DBusMessage) => void>();
@@ -83,7 +96,11 @@ export class DBusConnection {
 	private authWaiter?: { line: (text: string) => void; fail: (error: Error) => void };
 	private authenticated = false;
 
-	private constructor(private readonly stream: Duplex, private readonly callTimeoutMs: number) {
+	private constructor(
+		private readonly stream: Duplex,
+		private readonly callTimeoutMs: number,
+		private readonly exportedCallTimeoutMs: number,
+	) {
 		stream.on('data', (chunk: Buffer) => this.onData(chunk));
 		const gone = (): void => this.shutDown(new Error('D-Bus connection closed.'));
 		stream.on('end', gone);
@@ -100,11 +117,18 @@ export class DBusConnection {
 		const uid = options.uid ?? process.getuid?.();
 		if (uid === undefined) { throw new Error('D-Bus: this platform has no uid to authenticate with.'); }
 		const stream = options.stream ?? net.createConnection(options.socketPath ?? systemBusSocketPath());
-		const connection = new DBusConnection(stream, options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
+		const connection = new DBusConnection(
+			stream,
+			options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
+			options.exportedCallTimeoutMs ?? DEFAULT_EXPORTED_CALL_TIMEOUT_MS,
+		);
 		try {
 			await connection.authenticate(uid);
-			const [name] = await connection.call({ destination: BUS_NAME, path: BUS_PATH, interface: BUS_NAME, member: 'Hello' });
-			connection.uniqueName = String(name);
+			const reply = await connection.call({ destination: BUS_NAME, path: BUS_PATH, interface: BUS_NAME, member: 'Hello' });
+			if (reply.length !== 1 || typeof reply[0] !== 'string' || !UNIQUE_NAME.test(reply[0])) {
+				throw new Error('D-Bus: the bus answered Hello without a unique name.');
+			}
+			connection.uniqueName = reply[0];
 			return connection;
 		} catch (error) {
 			connection.close();
@@ -210,31 +234,65 @@ export class DBusConnection {
 	}
 
 	private onData(chunk: Buffer): void {
-		this.buffer = Buffer.concat([this.buffer, chunk]);
+		this.chunks.push(chunk);
+		this.buffered += chunk.length;
 		if (!this.authenticated) {
-			const end = this.buffer.indexOf('\r\n');
-			if (end < 0 || !this.authWaiter) { return; }
-			const line = this.buffer.subarray(0, end).toString('latin1');
-			this.buffer = this.buffer.subarray(end + 2);
+			const pending = this.joined();
+			const end = pending.indexOf('\r\n');
+			if (end < 0) {
+				if (pending.length > MAX_AUTH_LINE_BYTES) {
+					this.authWaiter?.fail(new Error('D-Bus handshake: the bus sent a line too long to be one.'));
+					this.close();
+				}
+				return;
+			}
+			if (!this.authWaiter) { return; }
+			const line = pending.subarray(0, end).toString('latin1');
+			this.keep(pending.subarray(end + 2));
 			this.authWaiter.line(line);
 			return;
 		}
 		this.drainMessages();
 	}
 
+	/** Everything buffered, as one buffer (and kept as one chunk from now on). */
+	private joined(): Buffer {
+		if (this.chunks.length !== 1) { this.chunks = [Buffer.concat(this.chunks, this.buffered)]; }
+		return this.chunks[0] ?? Buffer.alloc(0);
+	}
+
+	private keep(rest: Buffer): void {
+		this.chunks = rest.length ? [rest] : [];
+		this.buffered = rest.length;
+	}
+
+	/** The total size of the message at the front, once its fixed header is in; else undefined. */
+	private nextMessageLength(): number | undefined {
+		if (this.buffered < 16) { return undefined; }
+		const head = this.chunks[0].length >= 16 ? this.chunks[0] : this.joined();
+		const bodyLength = head.readUInt32LE(4);
+		const fieldsLength = head.readUInt32LE(12);
+		return Math.ceil((16 + fieldsLength) / 8) * 8 + bodyLength;
+	}
+
 	private drainMessages(): void {
 		for (;;) {
+			// Joined only when a whole message is there: a message arriving in many pieces is
+			// copied once, not once per piece (review of 43b3e65, #2).
+			const needed = this.nextMessageLength();
+			if (needed === undefined || this.buffered < needed) { return; }
 			let next: ReturnType<typeof decodeMessage>;
 			try {
-				next = decodeMessage(this.buffer);
-			} catch (error) {
+				next = decodeMessage(this.joined());
+			} catch {
 				// A stream this client cannot read is a broken connection, not a message to skip.
 				this.close();
 				return;
 			}
 			if (!next) { return; }
-			this.buffer = this.buffer.subarray(next.length);
+			this.keep(this.joined().subarray(next.length));
 			this.dispatch(next.message);
+			if (this.closed) { return; }
 		}
 	}
 
@@ -259,7 +317,8 @@ export class DBusConnection {
 			}
 			return;
 		case MessageType.MethodCall:
-			void this.answer(message);
+			// The last boundary: whatever answering throws ends the connection, never the host.
+			this.answer(message).catch(() => this.close());
 			return;
 		}
 	}
@@ -273,18 +332,42 @@ export class DBusConnection {
 				replySerial: call.serial, ...(call.sender ? { destination: call.sender } : {}), body: [], ...fields,
 			});
 		};
-		const error = (name: string, text: string): void => reply({ type: MessageType.Error, errorName: name, signature: 's', body: [text] });
+		const error = (name: string, text: string): void => reply({
+			type: MessageType.Error,
+			errorName: ERROR_NAME.test(name) && name.length <= 255 ? name : 'org.freedesktop.DBus.Error.Failed',
+			signature: 's', body: [text],
+		});
 
 		const object = call.path !== undefined ? this.exported.get(call.path) : undefined;
 		if (!object) { error('org.freedesktop.DBus.Error.UnknownObject', `No object at ${call.path}.`); return; }
 		const method = (call.interface === undefined || call.interface === object.interface) ? object.methods[call.member ?? ''] : undefined;
 		if (!method) { error('org.freedesktop.DBus.Error.UnknownMethod', `No method ${call.interface}.${call.member} at ${call.path}.`); return; }
+		// Each call is a prompt in flight (a pairing waits on the brick): a few at once, then no.
+		if (this.exportedCallsInFlight >= MAX_CONCURRENT_EXPORTED_CALLS) {
+			error('org.freedesktop.DBus.Error.LimitsExceeded', `At most ${MAX_CONCURRENT_EXPORTED_CALLS} calls at once.`);
+			return;
+		}
+		this.exportedCallsInFlight += 1;
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const body = await method.handler(call.body, call);
+			const deadline = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new DBusError('org.freedesktop.DBus.Error.Timeout',
+					`${call.member} took longer than ${this.exportedCallTimeoutMs} ms.`)), this.exportedCallTimeoutMs);
+				timer.unref?.();
+			});
+			let body: DBusValue[];
+			try {
+				body = await Promise.race([Promise.resolve(method.handler(call.body, call)), deadline]);
+			} catch (thrown) {
+				if (thrown instanceof DBusError) { error(thrown.dbusName, thrown.detail); return; }
+				error('org.freedesktop.DBus.Error.Failed', thrown instanceof Error ? thrown.message : String(thrown));
+				return;
+			}
+			// Outside the handler's catch: a reply that cannot be written is the connection's fault.
 			reply(method.returns ? { signature: method.returns, body } : {});
-		} catch (thrown) {
-			if (thrown instanceof DBusError) { error(thrown.dbusName, thrown.detail); return; }
-			error('org.freedesktop.DBus.Error.Failed', thrown instanceof Error ? thrown.message : String(thrown));
+		} finally {
+			if (timer) { clearTimeout(timer); }
+			this.exportedCallsInFlight -= 1;
 		}
 	}
 
