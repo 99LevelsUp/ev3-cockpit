@@ -28,7 +28,13 @@ const B = 'BBB' as BrickId;
 const TACHO = 'ports.motor.A.tacho';
 const BATTERY = 'system.battery.level';
 const disposable = { dispose: () => undefined };
-const settle = () => new Promise((resolve) => setImmediate(resolve));
+const turn = () => new Promise((resolve) => setImmediate(resolve));
+/**
+ * Lets the delivery run out. Updates go out asynchronously, one batch per turn of the event loop,
+ * and what a listener causes goes out in the turn after (review 3); a few turns cover every chain
+ * these tests start.
+ */
+const settle = async () => { for (let i = 0; i < 5; i++) { await turn(); } };
 const codeOf = (error: unknown): unknown => (error as { code?: unknown }).code;
 
 const entry = (brickId: BrickId): BrickEntry => ({
@@ -48,6 +54,12 @@ function world() {
 	const values = new Map<BrickId, ReadValue[]>();
 	let next = 1;
 	let refuse: Error | undefined;
+	let duringClaim: (() => void) | undefined;
+	/** As the product's emitter does: listeners as they were at the fire, and a dispose that removes. */
+	const listen = <T>(list: T[], listener: T) => {
+		list.push(listener);
+		return { dispose: () => { const at = list.indexOf(listener); if (at >= 0) { list.splice(at, 1); } } };
+	};
 
 	const deps: CockpitApiDeps = {
 		bricks: {
@@ -68,27 +80,32 @@ function world() {
 				if (refuse) { throw refuse; }
 				const handle = `telemetry-${next++}`;
 				claims.push({ brickId: brickKey as BrickId, rowIds: request.rowIds, intervalMs: request.intervalMs, owner, handle });
+				duringClaim?.();
 				return { handle, grant: Object.fromEntries(request.rowIds.map((id) => [id, Math.max(request.intervalMs, 50)])) };
 			},
 			release: (handle) => { released.push(handle); },
-			onClaimsEnded: (listener) => { endedListeners.push(listener as (typeof endedListeners)[number]); return disposable; },
+			onClaimsEnded: (listener) => listen(endedListeners, listener as (typeof endedListeners)[number]),
 			snapshot: (brickKey, rowIds) => (values.get(brickKey as BrickId) ?? []).filter((v) => !rowIds || rowIds.includes(v.rowId)),
-			onChange: (listener) => { changeListeners.push(listener); return disposable; },
+			onChange: (listener) => listen(changeListeners, listener),
 		},
 	};
 	const api = createCockpitApi(deps);
 	return {
 		api, claims, released, values,
 		refuseWith(error: Error) { refuse = error; },
+		/** Runs inside the next claims, as a read model that announces on a claim would. */
+		onClaim(work: () => void) { duringClaim = work; },
+		/** How many listeners the API keeps on the telemetry source. */
+		listening: () => changeListeners.length + endedListeners.length,
 		/** As the read model does: the values move, then the listeners hear it. */
 		change(change: ReadModelChange) {
 			const brick = change.brickKey as BrickId;
 			const kept = (values.get(brick) ?? []).filter((v) => !change.removed.includes(v.rowId)
 				&& !change.rows.some((r) => r.rowId === v.rowId));
 			values.set(brick, [...kept, ...change.rows]);
-			for (const l of changeListeners) { l(change); }
+			for (const l of [...changeListeners]) { l(change); }
 		},
-		end(brickKey: BrickId, handles: string[]) { for (const l of endedListeners) { l({ brickKey, handles }); } },
+		end(brickKey: BrickId, handles: string[]) { for (const l of [...endedListeners]) { l({ brickKey, handles }); } },
 	};
 }
 
@@ -121,6 +138,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		w.change({ brickKey: B, rows: [value(TACHO, 1)], removed: [] });      // another brick
 		w.change({ brickKey: A, rows: [], removed: [BATTERY] });             // a row not subscribed here, dropped
 		w.change({ brickKey: A, rows: [], removed: [TACHO] });
+		await settle();
 
 		assert.deepEqual(updates.map((u) => [u.kind, u.values.map((v) => v.value), u.removed]), [
 			['snapshot', [90], []],
@@ -165,6 +183,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 		w.end(A, [w.claims[0].handle]);
 		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		await settle();
 		sub.dispose();
 
 		assert.deepEqual(updates.slice(1).map((u) => u.kind), ['ended']);
@@ -202,6 +221,115 @@ describe('Telemetry on the API (step-6 U8)', () => {
 			[['snapshot', [90]], ['change', [91]], ['ended', []]]);
 	});
 
+	it("does not let one consumer's listener cut another consumer's change short by ending the brick (review 3)", async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const heard: TelemetryUpdate[] = [];
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind === 'change') { w.end(A, w.claims.map((c) => c.handle)); }   // e.g. it signs the brick out
+		});
+		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
+		await settle();
+
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		await settle();
+
+		assert.deepEqual(heard.map((u) => [u.kind, u.values.map((v) => v.value)]),
+			[['snapshot', [90]], ['change', [91]], ['ended', []]]);
+	});
+
+	it("tells every subscription the older change first when a listener causes a newer one (review 3)", async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const heard: TelemetryUpdate[] = [];
+		const consumer = w.api.registerConsumer('ev3-c');
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind === 'change' && u.values[0].value === 91) { w.change({ brickKey: A, rows: [value(TACHO, 92)], removed: [] }); }
+		});
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
+		await settle();
+
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		await settle();
+
+		assert.deepEqual(heard.map((u) => [u.kind, u.values.map((v) => v.value)]),
+			[['snapshot', [90]], ['change', [91]], ['change', [92]]]);
+	});
+
+	it('gives a subscription made inside a listener the change in its snapshot, and not again (review 3)', async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const late: TelemetryUpdate[] = [];
+		const consumer = w.api.registerConsumer('ev3-c');
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind === 'change' && late.length === 0) {
+				consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (v) => late.push(v));
+			}
+		});
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		await settle();
+
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		await settle();
+
+		assert.deepEqual(late.map((u) => [u.kind, u.values.map((v) => v.value)]), [['snapshot', [91]]]);
+	});
+
+	it("does not tell a subscription the change its own claim caused twice (review 3)", async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const updates: TelemetryUpdate[] = [];
+		w.onClaim(() => w.change({ brickKey: A, rows: [value(TACHO, 95)], removed: [] }));
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+
+		await settle();
+
+		assert.deepEqual(updates.map((u) => [u.kind, u.values.map((v) => v.value)]), [['snapshot', [95]]]);
+	});
+
+	it('tells a disposed subscription nothing that was already on its way (review 3)', async () => {
+		const w = world();
+		const updates: TelemetryUpdate[] = [];
+		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		await settle();
+		updates.length = 0;
+
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
+		sub.dispose();
+		await settle();
+
+		assert.deepEqual(updates, []);
+	});
+
+	it('keeps the extension host responsive when every change a listener hears makes another (review 3)', async () => {
+		const w = world();
+		let heard = 0;
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind !== 'change' || ++heard >= 10_000) { return; }   // a ceiling, so a regression cannot hang the run
+			w.change({ brickKey: A, rows: [value(TACHO, heard)], removed: [] });
+		});
+		await settle();
+
+		w.change({ brickKey: A, rows: [value(TACHO, 0)], removed: [] });
+		await turn();
+
+		assert.ok(heard > 0 && heard < 100, `one turn of the event loop delivered ${heard} changes`);
+		w.api.dispose();   // ends the loop
+	});
+
+	it('listens to the telemetry source once for all subscriptions, and stops with the API (review 3)', () => {
+		const w = world();
+		const consumer = w.api.registerConsumer('ev3-c');
+		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		consumer.subscribeTelemetry(B, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		assert.equal(w.listening(), 2);
+
+		w.api.dispose();
+		assert.equal(w.listening(), 0);
+	});
+
 	it('releases nothing for a subscription disposed after its brick went, before its snapshot (review 1)', async () => {
 		const w = world();
 		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
@@ -222,6 +350,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		await settle();
 
 		w.end(A, [w.claims[0].handle]);
+		await settle();
 
 		assert.deepEqual(w.released, [], 'the claim ended with the brick: there is nothing to release');
 	});

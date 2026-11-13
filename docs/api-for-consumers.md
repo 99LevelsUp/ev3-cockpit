@@ -67,7 +67,12 @@ sub.dispose();  // releases exactly this subscription
 - After the snapshot you hear only rows whose value, mode, staleness or interval changed. Nothing is
   lost in an outage: values turn `stale`, and the first reading after it is sent even if unchanged.
   Values stale long enough are dropped and listed in `removed`. `snapshot()` gives the current
-  values any time.
+  values any time, so it can be ahead of the updates your listener has heard so far.
+- Updates arrive asynchronously, never inside the call that subscribed, and in one order for every
+  subscription of every consumer. The snapshot holds everything up to your subscription, and each
+  later change comes once, behind it. Anything your listener causes, such as another change, a
+  brick's end or a new subscription, arrives after the update you are handling, for you and for
+  everyone else. A listener that throws stops nothing but itself.
 - A subscription to a brick that is not the active one runs that brick's telemetry for you; each
   telemetry command costs a program running on the brick about 2 ms, so ask for what you need.
 
