@@ -91,6 +91,17 @@ interface Entry {
 }
 
 /**
+ * What a brick's plans said of a row this session, kept apart from its value: a value may be gone
+ * while a reply for it is still on its way (review of U6, round 3).
+ */
+interface RowPlan {
+	/** Planned as read once: its value stays fresh for the session, whenever its reply comes. */
+	static: boolean;
+	/** When it stopped being read; undefined while it is read. */
+	stoppedAt?: number;
+}
+
+/**
  * The longest delay Node's timers keep; a longer one fires after 1 ms. Not a setting: the platform's
  * limit. A deadline further out wakes the timer at this and is checked again (review of U6, round 1).
  */
@@ -111,6 +122,8 @@ export class TelemetryReadModel implements vscode.Disposable {
 	private readonly plans = new Map<BrickRef, ReadonlyMap<string, number | 'once'>>();
 	/** What readers were last told, per brick: events are the difference from it. */
 	private readonly told = new Map<BrickRef, Map<string, ReadValue>>();
+	/** Per brick, what its plans said of each row this session; cleared when the session ends. */
+	private readonly planned = new Map<BrickRef, Map<string, RowPlan>>();
 	/** Bricks whose session ended and that are not read again yet: their late replies are not taken. */
 	private readonly ended = new Set<BrickRef>();
 	private readonly subscriptions: vscode.Disposable[];
@@ -130,7 +143,7 @@ export class TelemetryReadModel implements vscode.Disposable {
 		this.timer = options.timer ?? realTimer;
 		const { source } = options;
 		for (const [brickKey, intervals] of source.currentPlans()) {
-			if (intervals.size > 0) { this.plans.set(brickKey, intervals); }
+			if (intervals.size > 0) { this.plans.set(brickKey, intervals); this.remember(brickKey, intervals); }
 		}
 		this.subscriptions = [
 			source.onValues((event) => this.run(() => this.take(event))),
@@ -169,6 +182,7 @@ export class TelemetryReadModel implements vscode.Disposable {
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.bricks.clear();
 		this.plans.clear();
+		this.planned.clear();
 		this.told.clear();
 		this._onChange.dispose();
 	}
@@ -228,12 +242,15 @@ export class TelemetryReadModel implements vscode.Disposable {
 				...(value.mode !== undefined ? { mode: value.mode } : {}),
 				sampledAt: value.sampledAt,
 			};
-			if (planned === 'once' || before?.interval === 'once') {
+			const history = this.planned.get(brickKey)?.get(value.rowId);
+			if (planned === 'once' || before?.interval === 'once' || history?.static === true) {
 				reading.interval = 'once';
 			} else if (planned === undefined) {
 				// Not read any more: the reply of a frame sent before the re-plan. Kept, but stale
-				// since it stopped being read, so its drop is not put off.
-				reading.staleSince = before?.staleSince ?? now;
+				// since it stopped being read, so its drop is not put off; past its drop, not taken.
+				const since = before?.staleSince ?? history?.stoppedAt ?? now;
+				if (now >= since + this.settings.staleTimeoutMs) { continue; }
+				reading.staleSince = since;
 			} else {
 				reading.interval = planned;
 			}
@@ -250,6 +267,7 @@ export class TelemetryReadModel implements vscode.Disposable {
 			// Read again: a new session's loop.
 			this.ended.delete(brickKey);
 		}
+		this.remember(brickKey, intervals);
 		const entries = this.bricks.get(brickKey);
 		if (!entries) { return; }
 		const now = this.now();
@@ -269,7 +287,21 @@ export class TelemetryReadModel implements vscode.Disposable {
 	private end(brickKey: BrickRef): void {
 		this.bricks.delete(brickKey);
 		this.plans.delete(brickKey);
+		this.planned.delete(brickKey);
 		this.ended.add(brickKey);
+	}
+
+	/** Notes what a plan says of each row: static or not, and when a row stopped being read. */
+	private remember(brickKey: BrickRef, intervals: ReadonlyMap<string, number | 'once'>): void {
+		let history = this.planned.get(brickKey);
+		if (!history) { history = new Map(); this.planned.set(brickKey, history); }
+		const now = this.now();
+		for (const [id, interval] of intervals) {
+			history.set(id, { static: interval === 'once' || history.get(id)?.static === true });
+		}
+		for (const [id, row] of history) {
+			if (!intervals.has(id) && !row.static) { row.stoppedAt ??= now; }
+		}
 	}
 
 	/** Tells readers what differs from what they were last told, per brick. */
