@@ -81,7 +81,8 @@ KTD2, KTD3, the rest of 3.1.8 (mode ownership across ticks, switch and settle �
 Part 1 `TelemetryClaims` (6243cbd); the grant is the request clamped to the floor, fixed when the claim is made (f85a939, D2); part 2 one loop per brick in `TelemetryService`, `modeOf` reports subscribed, claims wait out a lost link and end with the session via `onClaimsEnded` (adc826c, mutations 15/15); the session's own `activeMode` and categories removed (31b83eb, drift 3 closed). A static row claimed after it was read is not read again: its value comes from the read model (U6). Planned:
 3.3.5, 3.1.10, 3.3.2, 3.8 (subscribed interval), KTD4; one source for `ActivityMode` (drift 3); 3.7.3, 3.7.6. The category subscriptions in `sessionEntry` are removed.
 
-### U6. Read model, stale policy, wiring — planned in detail 11.11.2026
+### U6. Read model, stale policy, wiring — code done 13.11.2026; codex review pending
+Part 1 read model + settings + service plan/session events (d64aab1, mutations 17/17 — the first run hung all night on a mutation that turned the timer into a busy loop; the test's fake timer now fails after 10 000 rounds and the mutation runner has a time limit); part 2 the view of the active brick (ccb1ce1, 9/9); part 3 wiring into `createRuntime` and `activate()` (3bc10ee, 4/4; end to end over the mock's interpreted frames; host tests 5/5). Planned:
 3.2.1, 3.2.2, 3.5.x, 3.6.x, 2.8.10a, 3.7.4, 3.7.5.
 
 **Goal.** What the loops read lands in one place a reader can ask: per brick, the last value of every row with `sampledAt`, its effective interval and whether it is still fresh. The panel's view of the active brick (Phase 5) and the API's snapshot and events (U8) both read it; neither talks to a loop. The service runs in the shipped extension, not only in tests.
