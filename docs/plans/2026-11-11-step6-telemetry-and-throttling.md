@@ -218,6 +218,14 @@ Same area two rounds running, each finding an input that forgot a case: **the ap
 
 Both came from one missing piece of state, not from the ordering the rebuild settled: what a plan said of a row was forgotten with its value. Mutations 5/6 — the survivor deletes the history at session end, which nothing observable depends on (a static row is static in every session; other rows are rewritten by the next plan). Unit 963/963.
 
+### U6, round 4 — confirmation of round 3 (codex, `.review-out/step6-u6-r4-packet.md`, 13.11.2026) — fixed (a304ff6)
+
+| # | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 | major | a row stale by age before it left the plan came back from a late reply after its drop, for the gap between its stale time and its stop time | CONFIRMED (tens of ms in the reported sequence) | the history notes the drop; no reply for an unplanned row brings it back until a plan reads it again — a rule with no time to count, instead of one more time |
+
+Mutations 2/2; a plan check in the note proved dead and was removed. Unit 964/964.
+
 ## Measurement: does telemetry slow a running program? (owner's question, 11.11.2026)
 
 **Question.** The owner fears that telemetry read as fast as the foreground cadence splits the brick between the program and the reads, so a running program slows down.
