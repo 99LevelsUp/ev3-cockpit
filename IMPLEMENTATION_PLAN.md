@@ -1971,6 +1971,12 @@ Stabilize the system for long-term use and further development.
     evidence (`docs/plans/linux-session-results/hostc-raw/`).
   - [ ] 7.8.5 Only if the owner wants the GitHub bar to show the product alone: evidence folders marked
     `linguist-documentation` in `.gitattributes`. Cosmetic; it changes no file.
+- [ ] **7.9 Publishing on the VS Code Marketplace** — the very last step, after the UX (Phase 5)
+  (owner, 13.11.2026). Already there: one checked VSIX per platform (`npm run package:vsix`;
+  `vsce publish --target` takes platform packages), the MIT `LICENSE`, the publisher `99LevelsUp`,
+  `untrustedWorkspaces: limited`. Still to do then: the owner's publisher account and token (his;
+  never in the repository), an icon, the Marketplace README and gallery, a real CHANGELOG,
+  categories and keywords, and every VSIX installed and checked on a brick (7.7.5).
 
 ### Minimum Validation Set
 
