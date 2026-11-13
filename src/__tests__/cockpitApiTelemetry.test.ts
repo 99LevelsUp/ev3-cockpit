@@ -80,7 +80,14 @@ function world() {
 	return {
 		api, claims, released, values,
 		refuseWith(error: Error) { refuse = error; },
-		change(change: ReadModelChange) { for (const l of changeListeners) { l(change); } },
+		/** As the read model does: the values move, then the listeners hear it. */
+		change(change: ReadModelChange) {
+			const brick = change.brickKey as BrickId;
+			const kept = (values.get(brick) ?? []).filter((v) => !change.removed.includes(v.rowId)
+				&& !change.rows.some((r) => r.rowId === v.rowId));
+			values.set(brick, [...kept, ...change.rows]);
+			for (const l of changeListeners) { l(change); }
+		},
 		end(brickKey: BrickId, handles: string[]) { for (const l of endedListeners) { l({ brickKey, handles }); } },
 	};
 }
@@ -101,12 +108,12 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		assert.deepEqual(w.claims.map((c) => [c.brickId, c.rowIds, c.intervalMs, c.owner]), [[A, [TACHO], 20, 'ev3-c']]);
 	});
 
-	it('sends a snapshot first, then only the rows of this subscription that changed (4.5.2, D10)', async () => {
+	it('sends a snapshot first, then only the rows of this subscription that changed, losing none in between (4.5.2, D10)', async () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90), value(BATTERY, 80)]);
 		const updates: TelemetryUpdate[] = [];
 		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
-		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });   // before the snapshot went out
+		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });   // after the claim, before the snapshot went out
 
 		await settle();
 		w.change({ brickKey: A, rows: [value(TACHO, 92, { stale: true, effectiveIntervalMs: 150 })], removed: [] });
@@ -117,11 +124,12 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 		assert.deepEqual(updates.map((u) => [u.kind, u.values.map((v) => v.value), u.removed]), [
 			['snapshot', [90], []],
+			['change', [91], []],
 			['change', [92], []],
 			['change', [], [TACHO]],
 		]);
-		assert.equal(updates[1].brickId, A);
-		assert.deepEqual([updates[1].values[0].stale, updates[1].values[0].effectiveIntervalMs], [true, 150],
+		assert.equal(updates[2].brickId, A);
+		assert.deepEqual([updates[2].values[0].stale, updates[2].values[0].effectiveIntervalMs], [true, 150],
 			'the effective interval travels in the data (D2)');
 	});
 
@@ -161,6 +169,45 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 		assert.deepEqual(updates.slice(1).map((u) => u.kind), ['ended']);
 		assert.deepEqual(w.released, []);
+	});
+
+	it('says snapshot before ended even when the brick goes at once (review 1)', async () => {
+		const w = world();
+		w.values.set(A, [value(TACHO, 90)]);
+		const updates: TelemetryUpdate[] = [];
+		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		w.change({ brickKey: A, rows: [value(TACHO, 91, { stale: true })], removed: [] });
+		w.end(A, [w.claims[0].handle]);
+		w.change({ brickKey: A, rows: [value(TACHO, 92)], removed: [] });   // after the end: not this subscription's
+
+		await settle();
+
+		assert.deepEqual(updates.map((u) => u.kind), ['snapshot', 'change', 'ended']);
+		assert.deepEqual(w.released, []);
+	});
+
+	it('releases nothing for a subscription disposed after its brick went, before its snapshot (review 1)', async () => {
+		const w = world();
+		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		w.end(A, [w.claims[0].handle]);
+
+		sub.dispose();
+		await settle();
+
+		assert.deepEqual(w.released, []);
+	});
+
+	it('releases nothing twice when a listener disposes on hearing ended (review 1)', async () => {
+		const w = world();
+		const consumer = w.api.registerConsumer('ev3-c');
+		const sub = consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+			if (u.kind === 'ended') { sub.dispose(); consumer.dispose(); }
+		});
+		await settle();
+
+		w.end(A, [w.claims[0].handle]);
+
+		assert.deepEqual(w.released, [], 'the claim ended with the brick: there is nothing to release');
 	});
 
 	it('ends every subscription of a consumer that unregisters', () => {
