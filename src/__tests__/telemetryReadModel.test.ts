@@ -308,4 +308,61 @@ describe('Telemetry read model (step-6 U6)', () => {
 		w.advance(300);
 		assert.equal(w.model.valueOf(A, TACHO)?.stale, true);
 	});
+	it('says a row is no longer read the moment it leaves the plan, stale already or not (review 2)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100, [BATTERY]: 500 });
+		w.sample(A, [TACHO, 90], [BATTERY, 80]);
+		w.advance(300);                  // the tacho went stale by age
+		w.take();
+
+		w.plan(A, {});
+
+		const rows = w.take().flatMap((change) => change.rows);
+		assert.deepEqual(rows.map((row) => [row.rowId, row.stale, row.effectiveIntervalMs]).sort(),
+			[[TACHO, true, undefined], [BATTERY, true, undefined]]);
+	});
+
+	it('lets no plan change hide an overdue outage or put off a drop (review 2)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.take();
+
+		w.jump(400);                     // stale at 300; the timer has not run
+		w.plan(A, { [TACHO]: 1000 });    // a slower plan arrives first
+
+		assert.equal(w.model.valueOf(A, TACHO)?.stale, true, 'stale it went, and stays until a sample');
+		assert.equal(w.take()[0]?.rows[0]?.stale, true);
+		w.plan(A, {});
+		w.advance(900);                  // t = 1300: 1000 ms after it went stale
+		assert.equal(w.model.valueOf(A, TACHO), undefined);
+	});
+
+	it('takes no late reply for a brick whose session ended, until it is read again (review 2)', () => {
+		const w = world();
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+		w.end(A);
+		w.take();
+
+		w.sample(A, [TACHO, 91]);        // a frame that was on its way
+		assert.deepEqual(w.model.snapshot(A), []);
+		assert.deepEqual(w.take(), []);
+
+		w.plan(A, { [TACHO]: 100 });     // signed in again: a new loop
+		w.sample(A, [TACHO, 92]);
+		assert.equal(w.model.valueOf(A, TACHO)?.value, 92);
+	});
+
+	it('takes no sample for a brick a listener ended while hearing about it (review 2)', () => {
+		const w = world({ staleFactor: 3, staleTimeoutMs: 1000 });
+		w.model.onChange((change) => { if (change.rows.some((row) => row.stale)) { w.end(A); } });
+		w.plan(A, { [TACHO]: 100 });
+		w.sample(A, [TACHO, 90]);
+
+		w.jump(400);
+		w.sample(A, [TACHO, 91]);        // its stale news ends the session first
+
+		assert.deepEqual(w.model.snapshot(A), []);
+	});
 });
