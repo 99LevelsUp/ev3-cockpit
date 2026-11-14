@@ -40,7 +40,20 @@ export type GroupFixResult =
 	/** It could not run here; the command to copy, and why. */
 	| { kind: 'manual'; command: string; reason: string };
 
-type SpawnLike = (file: string, args: readonly string[], options: childProcess.SpawnOptions) => {
+/**
+ * What the runtime hands the extension when the bus refuses this user BlueZ (D4, U8 review #11):
+ * the command, the offer to run it, and "check again" for after the user joined the group.
+ */
+export interface BluetoothAccessFix {
+	/** What fixes it, for a user who would rather run it themselves. */
+	readonly command: string;
+	/** Asks through `confirm` and, on a yes, adds the user through `pkexec` (`offerBluetoothGroup`). */
+	offer(confirm: GroupFixOptions['confirm']): Promise<GroupFixResult>;
+	/** Starts Bluetooth over on a fresh bus, as after logging out and in. */
+	checkAgain(): Promise<void>;
+}
+
+type SpawnLike =(file: string, args: readonly string[], options: childProcess.SpawnOptions) => {
 	on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 	on(event: 'error', listener: (error: NodeJS.ErrnoException) => void): unknown;
 };

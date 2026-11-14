@@ -10,8 +10,9 @@ export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
 export { BtWinsockAdapter } from './btWinsockAdapter';
 export type { BtWinsockAdapterOptions } from './btWinsockAdapter';
-export { BtBluezAdapter } from './btBluezAdapter';
-export type { BtBluezAdapterOptions } from './btBluezAdapter';
+// Linux-only: the BlueZ factory imports the adapter itself, and a Windows host that imports this
+// index must load nothing of the Linux backend (step-7 U8 review #7).
+export type { BtBluezAdapter, BtBluezAdapterOptions } from './btBluezAdapter';
 export { BtSppAdapter } from './btSppAdapter';
 export type { BtSppAdapterOptions } from './btSppAdapter';
 export { BtSppBackend, macFromPnpId, formatMac } from './btSppDiscovery';

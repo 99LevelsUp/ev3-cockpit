@@ -18,6 +18,8 @@ import {
 import type { BtBackend, BtAdapterFactory } from '../transports';
 import { createHelperPairing, createHelperPresenceCheck, scanForBricks } from '../transports/btPairingHelper';
 import { BtPresenceMonitor } from '../transports/btPresence';
+import type { BluetoothAccessFix } from '../transports/bluezAccess';
+import type { BluezBluetoothOptions } from '../transports/bluezBluetooth';
 import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
@@ -68,6 +70,15 @@ export interface RuntimeOptions {
 	readonly throttleSettings: ThrottleSettings;
 	/** How a running program slows its brick's telemetry (U9, D11): the user's settings, as above. */
 	readonly programPreset: ProgramPresetSettings;
+	/**
+	 * Told when the system bus keeps this user from BlueZ (Linux, owner decision D4), with the fix to
+	 * offer: the extension asks, runs it on a yes and offers to check again (U8 review #11).
+	 */
+	readonly onBluetoothAccessDenied?: (fix: BluetoothAccessFix) => void;
+	/** The host whose Bluetooth is built (default this one's). For tests. */
+	readonly platform?: NodeJS.Platform;
+	/** For tests on Linux's wiring: a fake system bus, the user's name, shorter windows. */
+	readonly bluezForTests?: Pick<BluezBluetoothOptions, 'openBus' | 'username' | 'inquiryWindowMs' | 'searchMs' | 'reconnectMs'>;
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
@@ -98,12 +109,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
 	let btDiscovery: BtClassicDiscovery | undefined;
 	let btPresence: BtPresenceMonitor | undefined;
+	let presenceRuns = false;
 	let refreshDiscovery = (): void => { /* set once the scheduler exists */ };
 
 	if (options.providers) {
 		for (const provider of options.providers) { registry.register(provider); }
 	} else {
-		({ btDiscovery, btPresence } = registerRealProviders(services, registry, options, () => refreshDiscovery()));
+		({ btDiscovery, btPresence, presenceRuns } = registerRealProviders(services, registry, options, () => refreshDiscovery()));
 	}
 
 	// ── Discovery ───────────────────────────────────────────────
@@ -198,12 +210,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	log.info('Discovery scheduler started');
 	refreshDiscovery = () => { void scheduler.scanOnce().catch(() => { /* reported by onScanFailed */ }); };
 	if (btPresence && options.startPresence) {
-		if (process.platform === 'win32') {
+		if (presenceRuns) {
 			btPresence.start();
 			log.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
 		} else {
-			// Both jobs run the Windows Bluetooth helper; started here they would only report that (HOSTC, 11.11.2026).
-			log.info(`Bluetooth presence not started: it needs the Windows Bluetooth helper; this host is ${process.platform}`);
+			// Windows runs both jobs through its helper, Linux through BlueZ; elsewhere they would only report that.
+			log.info(`Bluetooth presence not started: no Bluetooth backend for ${options.platform ?? process.platform}`);
 		}
 	}
 	void scheduler.scanOnce().then(() => {
@@ -224,8 +236,9 @@ function registerRealProviders(
 	registry: ProviderRegistry,
 	options: RuntimeOptions,
 	refreshDiscovery: () => void,
-): { btDiscovery: BtClassicDiscovery; btPresence: BtPresenceMonitor } {
+): { btDiscovery: BtClassicDiscovery; btPresence: BtPresenceMonitor; presenceRuns: boolean } {
 	const { log } = options;
+	const platform = options.platform ?? process.platform;
 
 	// Mock transport: simulated bricks, for development only.
 	if (options.mockBricks) {
@@ -291,10 +304,13 @@ function registerRealProviders(
 	// other happens only when a backend cannot run on this host at all — a failed connect
 	// ends the attempt, because the channel it just disturbed needs the cooldown more than
 	// it needs another immediate try.
-	const btBackend = new BtSppBackend();
 	// One queue for the whole transport: connects, pairing attempts and the presence jobs all
 	// page the radio, so they take turns rather than race.
 	const btQueue = services.add(new BtConnectionQueue());
+	if (platform === 'linux') {
+		return { ...registerBluezBluetooth(services, registry, options, btQueue, refreshDiscovery, platform), presenceRuns: true };
+	}
+	const btBackend = new BtSppBackend();
 	const btHelperPath = path.join(options.extensionPath, 'native', 'bin', 'bt-pairing-helper.exe');
 	const btDiscovery = new BtClassicDiscovery({
 		portScan: btBackend.discover,
@@ -339,10 +355,87 @@ function registerRealProviders(
 		connectionQueue: btQueue,
 	}));
 	registry.register(btProvider);
-	log.info(process.platform === 'win32'
+	log.info(platform === 'win32'
 		? 'BT transport registered (Winsock RFCOMM, SPP fallback; bthprops discovery)'
 		// Its Winsock, bthprops and helper paths are Windows-only; only the serial-port fallback can run here.
-		: `BT transport registered (Windows backends unavailable on ${process.platform}; serial-port fallback only)`);
+		: `BT transport registered (Windows backends unavailable on ${platform}; serial-port fallback only)`);
 
+	return { btDiscovery, btPresence, presenceRuns: platform === 'win32' };
+}
+
+/**
+ * Bluetooth on Linux, through BlueZ (step-7 plan, the U8 wiring note): RFCOMM through libc, the
+ * devices from BlueZ's objects, pairing through an agent of the cockpit's own, presence by an
+ * L2CAP check and a BR/EDR inquiry. Pairing and the inquiry share the connection's discovery, so
+ * both go through `btQueue` (pairing via the discovery's enqueue, presence holding the queue).
+ *
+ * Required here rather than imported: a Windows host never loads the D-Bus client or BlueZ (U8
+ * review #7). The inquiry goes to the monitor as it is, with no timeout around it: its window is
+ * 15 s, plus the wait for a pairing's late stop and the bus calls, and the Windows helper's 30 s
+ * would cut it short (U8 review #10).
+ */
+function registerBluezBluetooth(
+	services: DisposableStore,
+	registry: ProviderRegistry,
+	options: RuntimeOptions,
+	btQueue: BtConnectionQueue,
+	refreshDiscovery: () => void,
+	platform: NodeJS.Platform,
+): { btDiscovery: BtClassicDiscovery; btPresence: BtPresenceMonitor } {
+	const { log } = options;
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const { createBluezBluetooth } = require('../transports/bluezBluetooth') as typeof import('../transports/bluezBluetooth');
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const { offerBluetoothGroup } = require('../transports/bluezAccess') as typeof import('../transports/bluezAccess');
+
+	const bluez = createBluezBluetooth({
+		log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
+		platform,
+		// D4: the extension asks, runs the fix on a yes, and offers to check again (U8 review #11).
+		onAccessDenied: (command) => options.onBluetoothAccessDenied?.({
+			command,
+			offer: (confirm) => offerBluetoothGroup({ confirm, ...(options.bluezForTests?.username ? { username: options.bluezForTests.username } : {}) }),
+			checkAgain: () => bluez.retry(),
+		}),
+		...options.bluezForTests,
+	});
+	services.add({ dispose: () => bluez.dispose() });
+
+	const btDiscovery = new BtClassicDiscovery({
+		listDevices: bluez.listDevices,
+		radioName: bluez.radioName,
+		pairDevice: bluez.pairDevice,
+		unpairDevice: bluez.unpairDevice,
+		// Asked on every scan; logged once, and again only if the reason changes.
+		onCacheUnavailable: (() => {
+			const warn = logOnChange((message) => log.warn(message));
+			return (reason: string) => warn(`BT devices unavailable: ${reason}`);
+		})(),
+		connectionQueue: btQueue,
+		onPairingEvent: (mac, event, elapsedMs) => log.info(`Pairing ${mac} +${elapsedMs} ms: ${JSON.stringify(event)}`),
+	});
+	const btPresence: BtPresenceMonitor = new BtPresenceMonitor({
+		queue: btQueue,
+		check: bluez.presenceCheck,
+		inquire: bluez.inquire,
+		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable, the list shows BlueZ's records only: ${reason}`),
+		onChange: refreshDiscovery,
+	});
+	services.add({ dispose: () => btPresence.dispose() });
+	// BlueZ's devices changed, or BlueZ went or came back: the list asks again.
+	services.add({ dispose: bluez.onChange(refreshDiscovery) });
+	const btProvider: BtTransportProvider = services.add(new BtTransportProvider({
+		presence: btPresence,
+		discoverDevices: btDiscovery.discover,
+		unpairDevice: btDiscovery.unpair,
+		forgetResidue: bluez.forgetResidue,
+		backends: bluez.backends,
+		connectionQueue: btQueue,
+	}));
+	registry.register(btProvider);
+	log.info('BT transport registered (BlueZ RFCOMM; BlueZ discovery)');
+	// Never rejects: what went wrong is logged, and the seams say not ready until BlueZ is read.
+	void bluez.start();
 	return { btDiscovery, btPresence };
 }
