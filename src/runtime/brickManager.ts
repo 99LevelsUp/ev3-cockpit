@@ -81,8 +81,13 @@ export interface BrickManagerOptions {
 	 * heartbeat's interval): a busy brick comes back to the route when it answers.
 	 */
 	readonly slowProbeRetryMs?: number;
+	/**
+	 * When the brick's list is read again after a pairing of this cockpit that the list does not
+	 * show yet (ms after the read before, one entry per read; default 2 s, 5 s, 10 s).
+	 */
+	readonly ownPairingRereadMs?: readonly number[];
 	/** Where a name that could not be read is reported, once per channel. */
-	readonly log?: { warn(message: string): void };
+	readonly log?: { warn(message: string): void; info?(message: string): void };
 	/**
 	 * Discovery, for {@link BrickManager.forget}: it stops tracking the brick's channels, drops
 	 * what a scan older than that lists for them, and scans once afterwards (step-3 plan, KTD1,
@@ -158,6 +163,20 @@ function isLinkFailure(error: unknown, options: SendCommandOptions | undefined):
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** How many of a brick's entries have no name. */
+const blanksOf = (peers: readonly BrickPeer[] | undefined): number =>
+	(peers ?? []).filter((peer) => isBlankPeerName(peer.name)).length;
+
+/**
+ * When the list is read again after an own pairing it does not show yet (ms after the read before).
+ *
+ * The brick adds the entry when the link key arrives and copies in the name its name request
+ * has brought by then, which may be none yet (`c_bt.c` 2984, 3314); the name is filled in when
+ * the request completes (`c_bt.c` 3200–3229). Read 2.8 s after BlueZ reported the pairing, AAA
+ * did not show HOSTD's name; the brick's display listed it later (HOSTD, 14.11.2026).
+ */
+const OWN_PAIRING_REREAD_MS: readonly number[] = [2000, 5000, 10000];
+
 const namesOf = (peers: readonly BrickPeer[]): string[] => peers.map((peer) => peer.name);
 
 const samePeers = (a: readonly BrickPeer[], b: readonly BrickPeer[]): boolean =>
@@ -177,6 +196,7 @@ export class BrickManager implements vscode.Disposable {
 	private readonly rejoinBaseMs: number;
 	private readonly rejoinMaxMs: number;
 	private readonly slowProbeRetryMs: number;
+	private readonly ownPairingRereadMs: readonly number[];
 
 	private readonly signedIn = new Map<BrickId, SignIn>();
 	/** Channels taken out of routing by a link failure, until they answer again. */
@@ -184,7 +204,7 @@ export class BrickManager implements vscode.Disposable {
 	private readonly routes = new Map<BrickId, BrickKey>();
 	private activeBrickId?: BrickId;
 	private disposed = false;
-	private readonly log?: { warn(message: string): void };
+	private readonly log?: { warn(message: string): void; info?(message: string): void };
 	/** Channels being asked their name without a session, so one sighting asks once. */
 	private readonly probing = new Set<BrickKey>();
 	/** Channels whose name probe has failed and been reported, so it is reported once. */
@@ -241,6 +261,13 @@ export class BrickManager implements vscode.Disposable {
 	 * finding is reported instead of showing the dialog again and again.
 	 */
 	private readonly repaired = new Set<BrickId>();
+	/**
+	 * Pairings this cockpit completed, until the brick's list has been judged after them: how many
+	 * unnamed entries the list held when each began, and how often it has been read again since.
+	 * The pairing is this cockpit's own write; a read right after it that lacks this computer is
+	 * not enough to undo it (the step-3 rule: an own write wins over a read older than it).
+	 */
+	private readonly ownPairings = new Map<BrickId, { readonly blanksBefore: number; rereads: number; timer?: ReturnType<typeof setTimeout> }>();
 
 	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
@@ -276,6 +303,7 @@ export class BrickManager implements vscode.Disposable {
 		this.rejoinBaseMs = options.rejoinBaseMs ?? FIRMWARE_SAFETY.RECONNECT_BASE_MS;
 		this.rejoinMaxMs = options.rejoinMaxMs ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
 		this.slowProbeRetryMs = options.slowProbeRetryMs ?? FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS;
+		this.ownPairingRereadMs = options.ownPairingRereadMs ?? OWN_PAIRING_REREAD_MS;
 		this.log = options.log;
 		this.discovery = options.discovery;
 		this.btPresence = options.btPresence;
@@ -488,6 +516,8 @@ export class BrickManager implements vscode.Disposable {
 		const abort = new AbortController();
 		const listeners: ((event: BtPairingEvent) => void)[] = [];
 		const holdsAtStart = this.guardHolds.get(brickId) ?? 0;
+		const blanksBefore = blanksOf(this.peerLists.get(brickId)?.peers);
+		this.dropOwnPairing(brickId);
 		const done = (async (): Promise<PairingResult> => {
 			// After the event below, so whoever shows progress hears the pairing from its start.
 			await Promise.resolve();
@@ -503,6 +533,7 @@ export class BrickManager implements vscode.Disposable {
 			}
 			this.aggregator.markPaired(btKey);
 			this.btPresence?.notePaired?.(mac);
+			this.ownPairings.set(brickId, { blanksBefore, rereads: 0 });
 			this.readPeerListAfter(brickId, 'pairing');
 			return result;
 		})().finally(() => {
@@ -767,6 +798,7 @@ export class BrickManager implements vscode.Disposable {
 		for (const brickId of [...this.signedIn.keys()]) { this.forgetSignIn(brickId); }
 		// A pairing would otherwise keep the radio and the brick's dialog after nobody listens.
 		for (const pairing of this.pairings.values()) { pairing.abort.abort(); }
+		for (const brickId of [...this.ownPairings.keys()]) { this.dropOwnPairing(brickId); }
 		for (const subscription of this.subscriptions) { subscription.dispose(); }
 		this.subscriptions.length = 0;
 		this._onRouteChange.dispose();
@@ -962,6 +994,7 @@ export class BrickManager implements vscode.Disposable {
 		for (const timer of signIn.retryTimers.values()) { clearTimeout(timer); }
 		this.signedIn.delete(brickId);
 		this.oneSidedPending.delete(brickId);
+		this.dropOwnPairing(brickId);
 		this.pairedBefore.delete(brickId);
 		// A Bluetooth join held for the check belongs to the sign-in that just ended: it gives up.
 		this.wakeBluetooth(brickId);
@@ -986,6 +1019,7 @@ export class BrickManager implements vscode.Disposable {
 		this.pairingSuspended.add(brickId);
 		// What a forget or clear reads is not checked (KTD6): it is about to change both halves.
 		this.oneSidedPending.delete(brickId);
+		this.dropOwnPairing(brickId);
 		const pairing = this.pairings.get(brickId);
 		if (!pairing) { return; }
 		pairing.abort.abort();
@@ -1133,7 +1167,12 @@ export class BrickManager implements vscode.Disposable {
 		const list: BrickPeerList = { peers: [...peers], over, readAt: Date.now() };
 		this.peerLists.set(brickId, list);
 		this.peerListNumber.set(brickId, ++this.peerReadsKept);
-		if (!previous || !samePeers(previous.peers, peers)) { this._onPeerListChange.fire({ brickId, current: list }); }
+		if (!previous || !samePeers(previous.peers, peers)) {
+			const names = peers.map((peer) => (isBlankPeerName(peer.name) ? '(no name)' : peer.name));
+			this.log?.info?.(`Bluetooth list of ${brickLabel(this.aggregator, brickId)} (${peers.length}): `
+				+ `${names.length > 0 ? names.join(', ') : 'empty'}`);
+			this._onPeerListChange.fire({ brickId, current: list });
+		}
 		return list;
 	}
 
@@ -1206,6 +1245,46 @@ export class BrickManager implements vscode.Disposable {
 	}
 
 	/**
+	 * Whether the check waits for the brick's list to catch up with a pairing this cockpit just
+	 * completed: Windows' side is paired, this computer's name is not on the list, and the list holds
+	 * more unnamed entries than when the pairing began, so one of them is most likely this computer
+	 * still without its name. The list is read again on a bounded schedule; when the name has not
+	 * come by the last read, the pairing is left as it is with a line in the log, and nothing is
+	 * removed. Without a new unnamed entry the brick does not hold this computer, and the repair
+	 * runs as before (R6).
+	 */
+	private awaitOwnPairing(brickId: BrickId, list: BrickPeerList): boolean {
+		const own = this.ownPairings.get(brickId);
+		if (!own || blanksOf(list.peers) <= own.blanksBefore) { return false; }
+		const delay = this.ownPairingRereadMs[own.rereads];
+		if (delay === undefined) {
+			this.dropOwnPairing(brickId);
+			this.log?.warn(`${brickLabel(this.aggregator, brickId)} lists an entry without a name since this computer `
+				+ 'paired it, and no entry under this computer\'s name; the pairing is left as it is.');
+			this.pairSighting(brickId);
+			this.wakeBluetooth(brickId);
+			return true;
+		}
+		own.rereads += 1;
+		// Still waiting: the read below is checked like the one before it.
+		this.oneSidedPending.set(brickId, this.peerReadsKept);
+		clearTimeout(own.timer);
+		own.timer = setTimeout(() => {
+			own.timer = undefined;
+			if (this.ownPairings.get(brickId) === own) { this.readPeerListAfter(brickId, 'pairing'); }
+		}, delay);
+		return true;
+	}
+
+	/** The brick's list has been judged after an own pairing, or that pairing no longer counts. */
+	private dropOwnPairing(brickId: BrickId): void {
+		const own = this.ownPairings.get(brickId);
+		if (!own) { return; }
+		clearTimeout(own.timer);
+		this.ownPairings.delete(brickId);
+	}
+
+	/**
 	 * The one-sided check (step-4 plan, KTD6, R6): once the brick's list has been read over USB or
 	 * TCP since such a channel joined, compare it, by this computer's exact radio name, with
 	 * Windows' pairing as discovery tracks it, and repair the half that is left.
@@ -1244,6 +1323,8 @@ export class BrickManager implements vscode.Disposable {
 		// until the scans that miss it expire it.
 		const windowsPaired = tracked?.paired === true && tracked.presenceState === PresenceState.Available;
 		const onBrick = list.peers.some((peer) => peer.name === name);
+		if (windowsPaired && !onBrick && this.awaitOwnPairing(brickId, list)) { return; }
+		this.dropOwnPairing(brickId);
 		if (windowsPaired === onBrick) {
 			this.pairSighting(brickId);
 			return;

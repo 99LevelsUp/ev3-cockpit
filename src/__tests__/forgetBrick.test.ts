@@ -322,19 +322,26 @@ function world(options: WorldOptions = {}) {
 		completesOnAbort: false,
 		/** The brick's list when each pairing started. */
 		peersAtStart: [] as string[][],
-		/** The name the brick stores this computer under when a pairing completes; the radio name by default. */
-		storedName: undefined as string | undefined,
+		/**
+		 * The name the brick stores this computer under when a pairing completes; the radio name by
+		 * default, `''` while its name request has not answered, `null` for no entry at all.
+		 */
+		storedName: undefined as string | null | undefined,
 	};
 	const completePairing = (): void => {
 		bt.paired = true;
+		if (pairing.storedName === null) { return; }
 		mock['bricks'].get(mockKey)!.bluetoothPeers.push(pairing.storedName ?? radio ?? THIS_PC);
 	};
 	/** What the brick layer warned about. */
 	const warnings: string[] = [];
+	/** What the brick layer logged as information. */
+	const infos: string[] = [];
 	const bricks = new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry,
 		rejoinBaseMs: options.rejoinBaseMs ?? 20, rejoinMaxMs: Math.max(40, 16 * (options.rejoinBaseMs ?? 0)),
-		log: { warn: (message) => { warnings.push(message); } },
+		log: { warn: (message) => { warnings.push(message); }, info: (message) => { infos.push(message); } },
+		ownPairingRereadMs: [40, 80, 160],
 		discovery: scheduler, ...(options.checkOneSided ? { windowsPairing: scheduler } : {}), btPresence: presence, radioName: options.radioName ?? (() => radio),
 		pair: async (_mac, _onEvent, signal) => {
 			pairing.calls += 1;
@@ -366,7 +373,7 @@ function world(options: WorldOptions = {}) {
 		.filter((r) => r.kind === 'brick:removeBluetoothPeer').map((r) => r.name);
 	return {
 		mock, brick, usb, bt, pairing, registry, scheduler, aggregator, sessionManager, bricks, presence, peerTraffic,
-		removals, warnings, done,
+		removals, warnings, infos, done,
 	};
 }
 
@@ -2026,6 +2033,82 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		const { message } = describeRepair(repairs[0], 'CCC');
 		assert.match(message, /OLD-PC/);
 		assert.match(message, /Clear a Brick's Bluetooth List/);
+		w.done();
+	});
+
+	it('says "this computer", not "Windows": the same repair runs on Linux (HOSTD, 14.11.2026)', () => {
+		for (const found of ['windows-only', 'brick-only'] as const) {
+			const repair: OneSidedRepair = { brickId: CCC, found, others: [], removal: { status: 'removed', channel: btKey } } as OneSidedRepair;
+			assert.doesNotMatch(describeRepair(repair, 'CCC').message, /Windows/, found);
+		}
+	});
+
+	/**
+	 * HOSTD, 14.11.2026: AAA paired over BlueZ, and the brick's list read 2.8 s later held this
+	 * computer without its name yet. A "Connect a Brick" during the pairing had armed the check,
+	 * which took the list for a pairing gone from the brick, unpaired AAA and paired it again.
+	 */
+	async function pairWhileConnectingAgain(w: World, afterPairing?: () => void): Promise<void> {
+		let release = (): void => { /* set below */ };
+		w.pairing.gate = new Promise<void>((resolve) => { release = resolve; });
+		w.bt.cachedAfterUnpair = true;   // seen over Bluetooth, unpaired: the brick pairs by itself
+		await signedIn(w);
+		await waitFor(() => w.pairing.calls === 1, 3000);
+		const again = connect(w).catch(() => undefined);
+		await settle(30);
+		w.pairing.gate = undefined;
+		release();
+		afterPairing?.();
+		await again;
+	}
+
+	it('waits for the brick to name this computer after a pairing of its own, and unpairs nothing', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['Office PC'] });
+		w.pairing.storedName = '';   // the brick's name request has not answered yet
+		const repairs = repairsOf(w);
+
+		await pairWhileConnectingAgain(w, () => {
+			// The name request answers a moment later, and the brick fills the name in.
+			setTimeout(() => {
+				const peers = w.mock['bricks'].get(makeBrickKey(Transport.Mock, 'CCC'))!.bluetoothPeers;
+				peers[peers.indexOf('')] = THIS_PC;
+			}, 60);
+		});
+		await settle(600);
+
+		assert.deepEqual(w.bt.unpairs, [], 'unpaired a pairing the brick had not named yet');
+		assert.deepEqual(repairs, []);
+		assert.equal(w.pairing.calls, 1);
+		assert.ok(!w.warnings.some((m) => m.includes('without a name')), w.warnings.join(' | '));
+		w.done();
+	});
+
+	it('leaves its own pairing alone, with one line in the log, when the brick never names this computer', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['Office PC'] });
+		w.pairing.storedName = '';   // the name request failed: the entry stays unnamed
+		const repairs = repairsOf(w);
+
+		await pairWhileConnectingAgain(w);
+		await settle(600);
+
+		assert.deepEqual(w.bt.unpairs, []);
+		assert.deepEqual(repairs, []);
+		assert.equal(w.warnings.filter((m) => m.includes('without a name')).length, 1, w.warnings.join(' | '));
+		// The whole list is in the log as read, the unnamed entry marked (owner, 14.11.2026).
+		assert.ok(w.infos.some((m) => /^Bluetooth list of CCC \[\w+\] \(2\): Office PC, \(no name\)$/.test(m)), w.infos.join(' | '));
+		w.done();
+	});
+
+	it('still repairs after its own pairing when the brick holds no new entry at all (R6)', async () => {
+		const w = world({ checkOneSided: true, paired: false, peers: ['Office PC'] });
+		w.pairing.storedName = null;   // the brick kept nothing of this pairing
+		const repairs = repairsOf(w);
+
+		await pairWhileConnectingAgain(w);
+		await waitFor(() => repairs.length >= 1, 3000);
+
+		assert.equal(repairs[0].found, 'windows-only');
+		assert.deepEqual(w.bt.unpairs, [btKey]);
 		w.done();
 	});
 
