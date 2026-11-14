@@ -64,6 +64,23 @@ describe('The runtime on Linux (step-7 plan, U8 wiring note)', () => {
 		}
 	});
 
+	it('does not warn that BlueZ is not ready while it is still being read at start (HOSTC dev host, 14.11.2026)', async () => {
+		const warnings: string[] = [];
+		const infos: string[] = [];
+		const runtime = createRuntime({
+			extensionPath: '.', log: { ...quiet, warn: (m: string) => { warnings.push(m); }, info: (m: string) => { infos.push(m); } },
+			startPresence: false, platform: 'linux', ...settings,
+			// The bus never answers: BlueZ is still being read when the first scan asks for devices.
+			bluezForTests: { openBus: () => new Promise<BluezBus>(() => { /* still opening */ }), username: () => 'someone' },
+		});
+		try {
+			await waitFor(() => infos.some((l) => /BlueZ not read yet/.test(l)), 3000);
+			assert.deepEqual(warnings.filter((w) => /BT devices unavailable/.test(w)), [], 'a start in progress is not a fault');
+		} finally {
+			runtime.dispose();
+		}
+	});
+
 	it('starts Bluetooth presence on Linux too', () => {
 		const lines: string[] = [];
 		const runtime = createRuntime({
