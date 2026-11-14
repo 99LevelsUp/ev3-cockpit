@@ -18,7 +18,7 @@ import { SessionEntry } from '../runtime/sessionEntry';
 import { SessionManager } from '../runtime/sessionManager';
 import { CommandQueue } from '../runtime/commandQueue';
 import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
-import { ConnectionAbandonedError, ProtocolError } from '../errors/CockpitError';
+import { ConnectionAbandonedError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { ReconnectStrategy } from '../runtime/reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { TransportGuard } from '../transports/transportGuard';
@@ -1357,5 +1357,112 @@ describe('SessionManager -- one link opening per channel at a time', () => {
 		assert.equal(connectCalls, 1, 'a connect nobody wanted any more reached the brick');
 		assert.equal(manager.getSession(key), undefined);
 		manager.dispose();
+	});
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// N2 (U10, 14.11.2026): on USB a slow reply is a busy brick, not a lost link
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('SessionManager — a busy brick on USB (N2, owner 14.11.2026)', () => {
+	/** A one-brick provider on `transport` whose battery reply fails with whatever `fail` holds. */
+	function provider(transport: Transport) {
+		const state: { fail?: Error; connects: number } = { connects: 0 };
+		const fake: TransportProvider = {
+			transport,
+			priority: 30,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: async () => ({ transport, items: [] }),
+			connect: async (brickKey: BrickKey): Promise<SessionHandle> => { state.connects += 1; return { brickKey, transport }; },
+			disconnect: async () => { /* nothing held */ },
+			dispose: () => { /* nothing held */ },
+			sendPacket: async () => { throw new Error('not used: commands go through the channel'); },
+			createCommandChannel: () => ({
+				execute: async (command) => {
+					if (state.fail) { throw state.fail; }
+					if (command.kind === 'battery') { return { kind: 'battery', level: 80, voltage: 7.5 }; }
+					throw new Error(`not answered: ${command.kind}`);
+				},
+			}),
+		} as TransportProvider;
+		return { fake, state };
+	}
+
+	async function connected(transport: Transport) {
+		const { fake, state } = provider(transport);
+		const registry = new ProviderRegistry();
+		registry.register(fake);
+		const manager = new SessionManager({
+			providerRegistry: registry, heartbeatIntervalMs: 60_000, heartbeatMissThreshold: 2,
+			reconnectBaseMs: 60_000, reconnectMaxMs: 60_000, reconnectMaxAttempts: 1,
+		});
+		const key = makeBrickKey(transport, '001653f00a0a');
+		await manager.connect(key, transport);
+		return { manager, key, state };
+	}
+
+	it('keeps a USB session connected when a check times out, counting it as one missed beat', async () => {
+		const { manager, key, state } = await connected(Transport.USB);
+		try {
+			state.fail = new TimeoutError('USB exchange exceeded its 1000 ms budget.');
+			assert.equal(await manager.probeNow(key), false, 'it did not answer');
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected, 'one slow reply is not a lost cable');
+
+			// The second missed beat is the heartbeat's own threshold: now it reconnects.
+			assert.equal(await manager.probeNow(key), false);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Reconnecting);
+		} finally {
+			manager.dispose();
+		}
+	});
+
+	it('counts libusb\'s own transfer timeout as a slow reply too', async () => {
+		const { manager, key, state } = await connected(Transport.USB);
+		try {
+			state.fail = new TransportError('USB receive failed: LIBUSB_TRANSFER_TIMED_OUT');
+			assert.equal(await manager.probeNow(key), false);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected);
+		} finally {
+			manager.dispose();
+		}
+	});
+
+	it('still reconnects a USB session at once when the link itself fails', async () => {
+		const { manager, key, state } = await connected(Transport.USB);
+		try {
+			state.fail = new TransportError('USB send failed: LIBUSB_ERROR_NO_DEVICE');
+			assert.equal(await manager.probeNow(key), false);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Reconnecting, 'a pulled cable reconnects at once');
+		} finally {
+			manager.dispose();
+		}
+	});
+
+	it('keeps the fast failover on Bluetooth: a timeout there reconnects at once (USB only, owner)', async () => {
+		const { manager, key, state } = await connected(Transport.BT);
+		try {
+			state.fail = new TimeoutError('BT Winsock send timed out after 12000 ms with no matching reply.');
+			assert.equal(await manager.probeNow(key), false);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Reconnecting);
+		} finally {
+			manager.dispose();
+		}
+	});
+
+	it('answers again once the brick is no longer busy, and the missed beat is forgotten', async () => {
+		const { manager, key, state } = await connected(Transport.USB);
+		try {
+			state.fail = new TimeoutError('USB exchange exceeded its 1000 ms budget.');
+			assert.equal(await manager.probeNow(key), false);
+			state.fail = undefined;
+			assert.equal(await manager.probeNow(key), true);
+			state.fail = new TimeoutError('USB exchange exceeded its 1000 ms budget.');
+			assert.equal(await manager.probeNow(key), false);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected,
+				'the answer in between reset the count: two misses in a row reconnect, not two in all');
+		} finally {
+			manager.dispose();
+		}
 	});
 });

@@ -13,7 +13,7 @@ import {
 	BrickKey, DiscoveryItem, BrickCommand, SendCommandOptions,
 } from '../contracts';
 import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
-import { ChannelChangedError, ConnectionAbandonedError, TransportError } from '../errors/CockpitError';
+import { ChannelChangedError, ConnectionAbandonedError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem } from '../fs/brickFilesystem';
 import { ClaimsEndedEvent, TelemetryService } from '../telemetry/telemetryService';
 import { cadenceFor } from '../telemetry/telemetryConstants';
@@ -37,6 +37,8 @@ interface FakeChannel {
 	connects: number;
 	/** Commands fail with a link error while true. */
 	failing: boolean;
+	/** Commands time out while true: a busy brick, joining Wi-Fi or with Port View open (N2). */
+	slow?: boolean;
 	/** Commands that reached this channel, by kind. */
 	readonly sent: string[];
 	/** Reads of the brick's list that reached this channel; not recorded in `sent`. */
@@ -122,6 +124,9 @@ function fakeChannel(
 		}
 		if (channel.failing) {
 			throw new TransportError(`${transport} send failed: LIBUSB_ERROR_IO`);
+		}
+		if (channel.slow) {
+			throw new TimeoutError(`${transport} exchange exceeded its 1000 ms budget.`);
 		}
 		switch (command.kind) {
 			case 'fs:beginWrite': return { kind: 'fs:beginWrite', handle: 1, endOfFile: false };
@@ -209,7 +214,7 @@ function world(frames = false) {
 		reconnectMaxMs: 40,
 	});
 	const bricks = new BrickManager({
-		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40,
+		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40, slowProbeRetryMs: 20,
 	});
 	const show = { usb: () => usb.seen.splice(0, usb.seen.length, item(usbKey, Transport.USB)),
 		bt: () => bt.seen.splice(0, bt.seen.length, item(btKey, Transport.BT)) };
@@ -329,6 +334,44 @@ describe('BrickManager — failing over', () => {
 
 		await waitFor(() => w.bricks.routeOf(CCC) === usbKey, 1000);
 		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+		w.done();
+	});
+
+	it('keeps a slow USB channel connected and routes it again once the brick answers (N2)', async () => {
+		const w = world();
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		await waitFor(() => w.usb.peerReads === 2, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		const usbStates: string[] = [];
+		w.sessionManager.onSessionStateChange((e) => { if (e.brickKey === usbKey) { usbStates.push(e.newState); } });
+
+		w.usb.slow = true;   // the brick is busy: replies come late, the cable is in
+		await assert.rejects(w.bricks.send(CCC, battery), /budget/);
+		assert.equal(w.bricks.routeOf(CCC), btKey, 'traffic goes over Bluetooth meanwhile');
+		assert.equal(w.sessionManager.getSession(usbKey)?.connectionState, ConnectionState.Connected);
+
+		w.usb.slow = false;  // no longer busy: the next check answers, with no heartbeat in between
+		await waitFor(() => w.bricks.routeOf(CCC) === usbKey, 1000);
+		assert.deepEqual(usbStates, [], 'the USB session never went to reconnecting');
+		w.done();
+	});
+
+	it('reconnects a USB channel that stays silent, at the heartbeat\'s own threshold (N2)', async () => {
+		const w = world();
+		w.show.usb(); w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.sessionManager.getSession(btKey)?.connectionState === ConnectionState.Connected, 1000);
+		await waitFor(() => w.usb.peerReads === 2, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		w.usb.slow = true;
+		await assert.rejects(w.bricks.send(CCC, battery));
+		await waitFor(() => w.sessionManager.getSession(usbKey)?.connectionState === ConnectionState.Reconnecting, 1000);
+		w.usb.slow = false;
 		w.done();
 	});
 

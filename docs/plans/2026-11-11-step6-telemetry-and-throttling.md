@@ -224,8 +224,11 @@ without an API consumer, so "three bricks with one slowed" needs a consumer and 
   the next try (4dd59be).
 - N2 — a busy brick (Wi-Fi joining) made the USB session reconnect every ~1 s: a post-connect read
   exceeded the 1000 ms budget and the link was dropped. On USB a pulled cable fails at once
-  (`NO_DEVICE`), so a timeout means slow, not gone. Open: needs a plan, in an area with a review
-  history.
+  (`NO_DEVICE`), so a timeout means slow, not gone. **Fixed 14.11.2026 (owner: USB only):** on USB a
+  slow reply (`TimeoutError`, libusb's `LIBUSB_TRANSFER_TIMED_OUT`) is one missed beat, not an
+  instant reconnect; the session reconnects at the heartbeat's own threshold (two in a row), a
+  link error still reconnects at once, and the brick layer asks the slow channel again until it
+  answers and routes it back. Bluetooth and TCP keep their fast failover.
 - N3 — Bluetooth from HOSTA is unreliable today: BBB never connected (10060), with visibility off
   and on; CCC and AAA connected most times but not always; AAA's Bluetooth fell away while its
   Wi-Fi was joining and came back by itself eight minutes later. HOSTC reaches all three. Open.

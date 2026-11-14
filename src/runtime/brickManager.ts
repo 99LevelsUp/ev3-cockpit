@@ -76,6 +76,11 @@ export interface BrickManagerOptions {
 	/** Backoff for retrying a failed join on a transport that allows timed retries. */
 	readonly rejoinBaseMs?: number;
 	readonly rejoinMaxMs?: number;
+	/**
+	 * How soon a channel dropped for a slow reply, still connected, is asked again (N2, default a
+	 * heartbeat's interval): a busy brick comes back to the route when it answers.
+	 */
+	readonly slowProbeRetryMs?: number;
 	/** Where a name that could not be read is reported, once per channel. */
 	readonly log?: { warn(message: string): void };
 	/**
@@ -171,6 +176,7 @@ export class BrickManager implements vscode.Disposable {
 	private readonly registry: ProviderRegistry;
 	private readonly rejoinBaseMs: number;
 	private readonly rejoinMaxMs: number;
+	private readonly slowProbeRetryMs: number;
 
 	private readonly signedIn = new Map<BrickId, SignIn>();
 	/** Channels taken out of routing by a link failure, until they answer again. */
@@ -269,6 +275,7 @@ export class BrickManager implements vscode.Disposable {
 		this.registry = options.providerRegistry;
 		this.rejoinBaseMs = options.rejoinBaseMs ?? FIRMWARE_SAFETY.RECONNECT_BASE_MS;
 		this.rejoinMaxMs = options.rejoinMaxMs ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
+		this.slowProbeRetryMs = options.slowProbeRetryMs ?? FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS;
 		this.log = options.log;
 		this.discovery = options.discovery;
 		this.btPresence = options.btPresence;
@@ -1721,10 +1728,26 @@ export class BrickManager implements vscode.Disposable {
 		// lost one into reconnecting (KTD4).
 		if (this.dropped.has(key) || this.forgetting.has(brickIdOf(key))) { return; }
 		this.dropped.add(key);
-		const brickId = brickIdOf(key);
-		this.recomputeRoute(brickId);
+		this.recomputeRoute(brickIdOf(key));
+		this.probeDropped(key);
+	}
+
+	/**
+	 * Asks a dropped channel whether it answers, and routes it again when it does. A check that fails
+	 * and leaves the session connected was a slow reply on USB, a busy brick (N2, 14.11.2026): it is
+	 * asked again until it answers, or its session leaves connected and the reconnect takes over.
+	 */
+	private probeDropped(key: BrickKey): void {
 		void this.sessionManager.probeNow(key).then((answered) => {
-			if (answered && this.dropped.delete(key)) { this.recomputeRoute(brickId); }
+			if (this.disposed || !this.dropped.has(key)) { return; }
+			if (answered) {
+				this.dropped.delete(key);
+				this.recomputeRoute(brickIdOf(key));
+				return;
+			}
+			if (this.sessionManager.getSession(key)?.connectionState !== ConnectionState.Connected) { return; }
+			const timer = setTimeout(() => this.probeDropped(key), this.slowProbeRetryMs);
+			timer.unref?.();
 		});
 	}
 
