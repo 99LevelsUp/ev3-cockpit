@@ -30,10 +30,13 @@ export interface BluetoothAccessLog {
 export function createBluetoothAccessOffer(ui: BluetoothAccessUi, log: BluetoothAccessLog): (fix: BluetoothAccessFix) => void {
 	let asking = false;
 	let answered = false;
+	/** Which question is the open one: an earlier one ending must not clear a later one's flag. */
+	let current = 0;
 
 	return (fix) => {
 		if (asking || answered) { return; }
 		asking = true;
+		const mine = ++current;
 		void (async () => {
 			try {
 				const result = await fix.offer(({ message, command }) => ui.confirm(message, command));
@@ -64,7 +67,7 @@ export function createBluetoothAccessOffer(ui: BluetoothAccessUi, log: Bluetooth
 				answered = true;
 				log.warn(`Bluetooth: could not offer the bluetooth group fix: ${error instanceof Error ? error.message : String(error)}`);
 			} finally {
-				asking = false;
+				if (current === mine) { asking = false; }
 			}
 		})();
 	};

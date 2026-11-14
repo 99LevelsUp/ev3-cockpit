@@ -73,6 +73,30 @@ describe('D4 in the extension: the bluetooth group (U8 review #11)', () => {
 		assert.equal(calls.filter((c) => c === 'offer').length, 1, `asked ${JSON.stringify(calls)}`);
 	});
 
+	it('never opens a second question while one is open, even when a check ends under it (wiring review)', async () => {
+		const calls: string[] = [];
+		let releaseSecond = (): void => { /* set below */ };
+		let asks = 0;
+		const offer = createBluetoothAccessOffer({
+			// The first question answers at once; the second stays open until released.
+			confirm: () => { asks += 1; return asks === 1 ? Promise.resolve(true) : new Promise((resolve) => { releaseSecond = () => resolve(false); }); },
+			added: async () => true,
+			manual: async () => { /* not reached */ },
+		}, quiet);
+		const fix: BluetoothAccessFix = {
+			...fixThatEnds({ kind: 'added', message: 'added' }, calls),
+			// The refusal comes back during the check, and the check ends while that question is open.
+			checkAgain: async () => { offer(fix); await tick(); },
+		};
+		offer(fix);
+		for (let i = 0; i < 8; i += 1) { await tick(); }
+		offer(fix);   // refused again while the second question is still open
+		for (let i = 0; i < 8; i += 1) { await tick(); }
+		assert.equal(asks, 2, 'a third question opened beside the second');
+		releaseSecond();
+		for (let i = 0; i < 4; i += 1) { await tick(); }
+	});
+
 	it('asks again when BlueZ still refuses during the check the user asked for', async () => {
 		const calls: string[] = [];
 		let rechecks = 0;
