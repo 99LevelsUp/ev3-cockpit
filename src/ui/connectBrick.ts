@@ -212,8 +212,8 @@ async function connectOver(
  */
 export function describeRepair(repair: OneSidedRepair, label: string): { message: string; warning: boolean } {
 	const found = repair.found === 'windows-only'
-		? `Windows was paired with ${label}, but ${label} no longer lists this computer.`
-		: `${label} still lists this computer, but Windows was not paired with it.`;
+		? `This computer has ${label} paired, but ${label} no longer lists this computer.`
+		: `${label} still lists this computer, but this computer does not have it paired.`;
 	const others = repair.others.length > 0
 		? ` ${label} also lists ${repair.others.join(', ')}; "Clear a Brick's Bluetooth List" removes every entry.`
 		: '';
@@ -224,7 +224,8 @@ export function describeRepair(repair: OneSidedRepair, label: string): { message
 				+ `Run "Forget a Brick" on ${label}, then "Connect a Brick".${others}`,
 		};
 	}
-	const half = repair.found === 'windows-only' ? 'Windows\' pairing' : `this computer's entry on ${label}`;
+	// Not "Windows": the same check runs over BlueZ on Linux (HOSTD, 14.11.2026).
+	const half = repair.found === 'windows-only' ? 'this computer\'s pairing' : `this computer's entry on ${label}`;
 	const removal = repair.removal;
 	if (removal?.status !== 'removed' && removal?.status !== 'confirmed') {
 		const why = removal?.status === 'refused' ? removal.reason : removal?.detail;
