@@ -19,6 +19,7 @@ import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import {
 	AlreadyConnectedError, ConnectionAbandonedError, NotConnectedError, NoProviderError, ProtocolError,
+	TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { TransportGuard } from '../transports/transportGuard';
@@ -432,9 +433,18 @@ export class SessionManager implements vscode.Disposable {
 		try {
 			await resources.commandQueue.send({ kind: 'battery' });
 			resources.entry.setHeartbeatState('ok');
+			resources.heartbeat.resetMisses();
 			return true;
 		} catch (error) {
 			if (error instanceof ProtocolError) { return true; }
+			if (isSlowUsbReply(resources.entry.transport, error)) {
+				// USB reports a lost cable at once (`NO_DEVICE`): a reply that only came late is a busy
+				// brick — joining Wi-Fi, Port View open — and reconnecting it every second helped
+				// nothing (N2, U10). One missed beat; the heartbeat's own threshold decides the rest.
+				resources.entry.setHeartbeatState('missed');
+				resources.heartbeat.recordMiss(error);
+				return false;
+			}
 			this.handleHeartbeatFailure(brickKey, error);
 			return false;
 		}
@@ -632,4 +642,14 @@ export class SessionManager implements vscode.Disposable {
 	): void {
 		this._onSessionStateChange.fire({ brickKey, previousState, newState });
 	}
+}
+
+/**
+ * A USB reply that came too late rather than a link that failed (N2, owner 14.11.2026, USB only):
+ * the adapter's own budget, or libusb's transfer timeout. Bluetooth and TCP keep their fast failover.
+ */
+function isSlowUsbReply(transport: Transport, error: unknown): boolean {
+	if (transport !== Transport.USB) { return false; }
+	if (error instanceof TimeoutError) { return true; }
+	return error instanceof TransportError && /LIBUSB_TRANSFER_TIMED_OUT/.test(error.message);
 }

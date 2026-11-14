@@ -98,6 +98,21 @@ export class HeartbeatMonitor {
 	}
 
 	/** Reset the miss counter (e.g. after successful command). */
+	/**
+	 * Counts a miss someone else saw, as a beat of its own would (N2, 14.11.2026: a check after a
+	 * slow USB reply). At the threshold the loop stops and reports the failure, as `tick` does.
+	 *
+	 * @returns Whether that miss reached the threshold.
+	 */
+	recordMiss(error: unknown): boolean {
+		if (!this._running) { return false; }
+		this.consecutiveMisses += 1;
+		if (this.consecutiveMisses < this.missThreshold) { return false; }
+		this.stop();
+		this.onFailure?.(error);
+		return true;
+	}
+
 	resetMisses(): void {
 		this.consecutiveMisses = 0;
 	}
