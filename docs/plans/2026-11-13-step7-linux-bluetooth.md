@@ -194,6 +194,10 @@ The owner puts AAA (the brick with the Wi-Fi dongle) and HOSTC on one network. `
 
 **U11 results (HOSTC, 13.11.2026).** The owner put HOSTC's Wi-Fi on AAA's network (HOSTC had been on a USB network link only). The beacon is heard and `hardware-matrix.js` passes every TCP check on AAA in both runs: transport (discovery, connect), protocol, filesystem, telemetry, session, contract. Nothing Linux-specific was needed beyond the shared beacon port (68a8838). Left: the dev host connecting over TCP from VS Code, and USB, Bluetooth and TCP to AAA at once (AAA's cable is on HOSTA).
 
+### linux-x64 on a second machine (HOSTD, 14.11.2026)
+
+Debian 13 x86_64 on an AMD E-450 (no AVX, no SSE4.1), runit, no systemd-logind or elogind; driven over SSH, the owner at the bricks. `test:ci` passes; the linux-x64 VSIX built there loads all four native modules from its staging folder and installs in VS Code x64 (Restricted Mode). Bluetooth through BlueZ: CCC paired from the picker and listed its projects; BBB showed no pairing dialog (N3, the same as from HOSTA). USB: with the shipped rule installed every EV3 node stayed `root:root 0660` and the connect failed with `LIBUSB_ERROR_ACCESS`, because `TAG+="uaccess"` is applied by logind. With `GROUP="plugdev"` added the nodes became `root:plugdev`, CCC connected over libusb with 1024-byte frames, the route moved from Bluetooth to USB, and its projects listed. The rule in the repo carries the group since, and the permission message names the rule's absolute path and the group.
+
 ## Risks
 
 - **A desktop agent answering instead of ours:** U0 (3) showed BlueZ asks the caller's agent with the RPi OS panel running; blueman and GNOME are not measured.

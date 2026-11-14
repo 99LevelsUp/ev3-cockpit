@@ -531,6 +531,17 @@ describe('UsbLibusbAdapter — a device this user may not open (Linux, HOSTC 13.
 		assert.match((error as Error).message, /\/etc\/udev\/rules\.d/);
 	});
 
+	it('names the rule where this install keeps it, and the plugdev group for systems without logind (HOSTD, 14.11.2026)', async () => {
+		const rule = '/home/user/.vscode/extensions/ev3-cockpit/native/linux/70-lego-ev3.rules';
+		const { module } = fakeUsb([{ serial: 'aaa', openError: 'LIBUSB_ERROR_ACCESS' }]);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const adapter = new UsbLibusbAdapter({ serial: 'aaa', platform: 'linux', udevRulePath: rule, moduleLoader: () => module as any });
+		const error = await adapter.open().then(() => undefined, (e: unknown) => e);
+		assert.ok(error instanceof DevicePermissionError, `got ${String(error)}`);
+		assert.ok((error as Error).message.includes(`copy ${rule} to /etc/udev/rules.d/`), (error as Error).message);
+		assert.match((error as Error).message, /group plugdev/);
+	});
+
 	it('says permission when the one brick it would take refuses to open', async () => {
 		const { adapter } = adapterFor([{ openError: 'LIBUSB_ERROR_ACCESS' }], undefined, 0, 'linux');
 		await assert.rejects(() => adapter.open(), DevicePermissionError);

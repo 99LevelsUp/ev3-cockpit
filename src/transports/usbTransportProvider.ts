@@ -15,7 +15,7 @@ import { TransportError, ConnectionError, DevicePermissionError } from '../error
 import { TransportAdapter } from './transportAdapter';
 import { UsbHidAdapter, UsbHidAdapterOptions } from './usbHidAdapter';
 import {
-	UsbLibusbAdapter, UsbLibusbAdapterOptions, UsbDeviceLocation, LINUX_UDEV_RULE_PATH
+	UsbLibusbAdapter, UsbLibusbAdapterOptions, UsbDeviceLocation, linuxUdevAdvice
 } from './usbLibusbAdapter';
 import { USB } from './transportConstants';
 import { listLegoUsbDevices } from './usbNodeUsb';
@@ -102,6 +102,8 @@ export interface UsbProviderLog {
 export interface UsbTransportProviderOptions {
 	/** Where to report which backend a connection ended up on, and why. */
 	log?: UsbProviderLog;
+	/** Where this install keeps the udev rule a Linux permission message points at (absolute). */
+	udevRulePath?: string;
 	/** Injection seam for tests, which have no brick on the bus. */
 	createLibusbAdapter?: (options: UsbLibusbAdapterOptions) => UsbLibusbAdapter;
 	/** Injection seam for tests. */
@@ -184,14 +186,17 @@ export class UsbTransportProvider implements TransportProvider {
 	private busTail: Promise<void> = Promise.resolve();
 	/** Guard against concurrent discover() calls overlapping on the same device. */
 	private discovering = false;
+	private readonly udevRulePath: string | undefined;
 
 	constructor(options: UsbTransportProviderOptions = {}) {
 		this.log = options.log;
+		this.udevRulePath = options.udevRulePath;
 		// Every adapter is tracked from the moment it is made until it is closed, so a dispose
 		// reaches one still in the middle of its open (review of 98bd795).
 		const createLibusb = options.createLibusbAdapter ?? ((o) => new UsbLibusbAdapter(o));
 		const createHid = options.createHidAdapter ?? ((o) => new UsbHidAdapter(o));
-		this.makeLibusbAdapter = (o) => this.track(createLibusb(o));
+		const udevRulePath = options.udevRulePath;
+		this.makeLibusbAdapter = (o) => this.track(createLibusb(udevRulePath ? { ...o, udevRulePath } : o));
 		this.makeHidAdapter = (o) => this.track(createHid(o));
 		this.listUsbDevices = options?.listUsbDevices ?? listLegoUsbDevices;
 		this.listHidDevices = options?.listHidDevices;
@@ -538,11 +543,13 @@ export class UsbTransportProvider implements TransportProvider {
 			// for another reason: then the rule is in place and something else is wrong.
 			const hid = this.platform === 'linux' ? this.hidNodeAccess(serial) : 'unknown';
 			if ((libusbFailure.permission || hid === 'denied') && hid !== 'ok') {
+				// libusb's refusal carries the same advice: name only its code, so it is said once.
+				const libusbDetail = libusbFailure.permission
+					? `refused (${/LIBUSB_ERROR_ACCESS|EACCES/.exec(libusbFailure.message)?.[0] ?? 'access'})`
+					: libusbFailure.message;
 				throw new DevicePermissionError(
 					`Connect failed for ${describeChannel(brickKey)}: this user may not open the EV3's USB `
-					+ `device. Install the udev rule that ships with the extension, ${LINUX_UDEV_RULE_PATH} in `
-					+ 'its folder: copy it to /etc/udev/rules.d/, run "sudo udevadm control --reload", then '
-					+ `plug the brick in again. libusb: ${libusbFailure.message}. HID: ${hidMessage}`,
+					+ `device. ${linuxUdevAdvice(this.udevRulePath)} libusb: ${libusbDetail}. HID: ${hidMessage}`,
 					hidError
 				);
 			}

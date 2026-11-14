@@ -13,7 +13,7 @@ import { DisposableStore } from '../events';
 import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
-	BtConnectionQueue, BtWinsockAdapter, BtClassicDiscovery,
+	BtConnectionQueue, BtWinsockAdapter, BtClassicDiscovery, LINUX_UDEV_RULE_PATH,
 } from '../transports';
 import type { BtBackend, BtAdapterFactory } from '../transports';
 import { createHelperPairing, createHelperPresenceCheck, scanForBricks } from '../transports/btPairingHelper';
@@ -249,7 +249,10 @@ function registerRealProviders(
 	// USB transport: discovery over node-hid, connections over libusb where it can claim
 	// the interface. The provider logs which backend each connection landed on, because a
 	// HID fallback is a degraded link rather than an equivalent one.
-	registry.register(services.add(new UsbTransportProvider({ log })));
+	registry.register(services.add(new UsbTransportProvider({
+		log,
+		udevRulePath: path.join(options.extensionPath, LINUX_UDEV_RULE_PATH),
+	})));
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
 		const hid = require('node-hid') as { devices(v: number, p: number): unknown[] };
