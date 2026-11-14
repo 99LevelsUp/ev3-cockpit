@@ -5,6 +5,7 @@ import { setSweepConfirmation } from './fs/transferLedger';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
 import { BrickId } from './contracts';
+import { createBluetoothAccessOffer } from './ui/bluetoothAccess';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
@@ -38,9 +39,24 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	const services = new DisposableStore();
 	context.subscriptions.push(services);
 
+	// Linux, D4: BlueZ refused this user (a distribution limiting it to the bluetooth group). Ask,
+	// let polkit run the fix, then offer to check again (step-7 plan, U8 review #11).
+	const offerBluetoothAccess = createBluetoothAccessOffer({
+		confirm: async (message, command) => (await vscode.window.showWarningMessage(
+			message, { modal: true, detail: `It runs: ${command}` }, 'Add me')) === 'Add me',
+		added: async (message) => (await vscode.window.showInformationMessage(message, 'Check again')) === 'Check again',
+		manual: async (command, reason) => {
+			const choice = await vscode.window.showWarningMessage(
+				`Bluetooth: BlueZ refused this user, and the fix cannot run here (${reason}). Run in a terminal: ${command}`,
+				'Copy command');
+			if (choice === 'Copy command') { await vscode.env.clipboard.writeText(command); }
+		},
+	}, logger);
+
 	const runtime = services.add(createRuntime({
 		extensionPath: context.extensionPath,
 		log: logger,
+		onBluetoothAccessDenied: offerBluetoothAccess,
 		// Not in the extension test host: its suite must not page real bricks around the desk.
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
 		mockBricks: mockBricksWanted(context),
