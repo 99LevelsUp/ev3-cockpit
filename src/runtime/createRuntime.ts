@@ -400,6 +400,9 @@ function registerBluezBluetooth(
 		...options.bluezForTests,
 	});
 	services.add({ dispose: () => bluez.dispose() });
+	// The first scan comes before BlueZ is read (~24 ms on HOSTC): while the start runs, "not
+	// ready" is said at info, not as a fault (dev host, 14.11.2026). After it, a warning again.
+	let starting = true;
 
 	const btDiscovery = new BtClassicDiscovery({
 		listDevices: bluez.listDevices,
@@ -409,7 +412,10 @@ function registerBluezBluetooth(
 		// Asked on every scan; logged once, and again only if the reason changes.
 		onCacheUnavailable: (() => {
 			const warn = logOnChange((message) => log.warn(message));
-			return (reason: string) => warn(`BT devices unavailable: ${reason}`);
+			const meanwhile = logOnChange((message) => log.info(message));
+			return (reason: string) => (starting
+				? meanwhile(`BT devices: BlueZ not read yet, still starting (${reason})`)
+				: warn(`BT devices unavailable: ${reason}`));
 		})(),
 		connectionQueue: btQueue,
 		onPairingEvent: (mac, event, elapsedMs) => log.info(`Pairing ${mac} +${elapsedMs} ms: ${JSON.stringify(event)}`),
@@ -436,6 +442,6 @@ function registerBluezBluetooth(
 	registry.register(btProvider);
 	log.info('BT transport registered (BlueZ RFCOMM; BlueZ discovery)');
 	// Never rejects: what went wrong is logged, and the seams say not ready until BlueZ is read.
-	void bluez.start();
+	void bluez.start().finally(() => { starting = false; });
 	return { btDiscovery, btPresence };
 }
