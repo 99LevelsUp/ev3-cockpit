@@ -102,4 +102,21 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		}
 		assert.ok(packaging.checkVsix('win32-x64', [entry]).unexpected.includes(entry), 'Windows does not carry it');
 	});
+
+	it('the udev rule opens the brick without logind too: group plugdev beside uaccess (HOSTD, 14.11.2026)', () => {
+		// `uaccess` is granted by systemd-logind or elogind. On a runit system with neither the nodes
+		// stayed root:root 0660 and the user got LIBUSB_ERROR_ACCESS with the rule installed.
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { LINUX_UDEV_RULE_PATH } = require('../transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
+		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_UDEV_RULE_PATH), 'utf8') as string;
+		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');
+		const rules = text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
+		assert.equal(rules.length, 2, 'one rule for the USB device, one for its hidraw node');
+		for (const rule of rules) {
+			assert.match(rule, /ATTRS\{idVendor\}=="0694", ATTRS\{idProduct\}=="0005"/);
+			assert.match(rule, /MODE="0660"/);
+			assert.match(rule, /GROUP="plugdev"/, `no logind: ${rule}`);
+			assert.match(rule, /TAG\+="uaccess"/, `logind: ${rule}`);
+		}
+	});
 });

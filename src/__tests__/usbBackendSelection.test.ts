@@ -397,6 +397,35 @@ describe('USB connect — permission from either backend, by its code (review of
 		provider.dispose();
 	});
 
+	it('gives the advice once, with the rule where this install keeps it (HOSTD, 14.11.2026)', async () => {
+		// The log carried the whole advice twice: the provider's own and libusb's inside it.
+		const rule = '/home/user/.vscode/extensions/ev3-cockpit/native/linux/70-lego-ev3.rules';
+		let given: string | undefined;
+		const provider = new UsbTransportProvider({
+			udevRulePath: rule,
+			createLibusbAdapter: (options) => {
+				given = options.udevRulePath;
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				return { ...adapter({}), open: () => Promise.reject(new DevicePermissionError(`This user may not open the EV3's USB device (LIBUSB_ERROR_ACCESS). Install the udev rule that ships with the extension: copy ${rule} …`)) } as any;
+			},
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createHidAdapter: () => adapter({ failWith: `cannot open device with path ${HID_PATH}` }) as any,
+			listHidDevices: () => [{ path: HID_PATH, serialNumber: '001653AABBCC', product: 'AAA' }],
+			listUsbDevices: (() => Promise.resolve([])) as never,
+			hidAccess: () => 'denied',
+			platform: 'linux',
+		});
+		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);
+		provider.dispose();
+		assert.equal(given, rule, 'the libusb adapter is told where the rule is');
+		assert.ok(error instanceof DevicePermissionError, `got ${String(error)}`);
+		const message = (error as Error).message;
+		assert.equal(message.split('Install the udev rule').length - 1, 1, message);
+		assert.ok(message.includes(`copy ${rule} to /etc/udev/rules.d/`), message);
+		assert.match(message, /group plugdev/);
+		assert.match(message, /libusb: refused \(LIBUSB_ERROR_ACCESS\)/);
+	});
+
 	it('says permission when only the hidraw node is refused, whatever libusb said', async () => {
 		const provider = permissionProvider({ libusbError: new Error('Could not claim USB interface 0 (LIBUSB_ERROR_IO)'), hidAccess: 'denied' });
 		const error = await provider.connect(KEY).then(() => undefined, (e: unknown) => e);

@@ -94,4 +94,20 @@ describe('The runtime on Linux (step-7 plan, U8 wiring note)', () => {
 			runtime.dispose();
 		}
 	});
+
+	it('tells the USB provider where this install keeps the udev rule (HOSTD, 14.11.2026)', () => {
+		const extensionPath = path.join('home', 'user', 'ext');
+		const runtime = createRuntime({
+			extensionPath, log: quiet, startPresence: false, platform: 'linux', ...settings,
+			bluezForTests: { openBus: () => Promise.resolve(refusingBus()), username: () => 'someone' },
+		});
+		try {
+			const usb = runtime.registry.all().find((p) => p.constructor.name === 'UsbTransportProvider');
+			assert.ok(usb, 'a USB provider is registered');
+			assert.equal((usb as unknown as { udevRulePath?: string }).udevRulePath,
+				path.join(extensionPath, 'native', 'linux', '70-lego-ev3.rules'));
+		} finally {
+			runtime.dispose();
+		}
+	});
 });

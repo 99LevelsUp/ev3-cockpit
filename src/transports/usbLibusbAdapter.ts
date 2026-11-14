@@ -81,6 +81,8 @@ export interface UsbDeviceLocation {
 export interface UsbLibusbAdapterOptions {
 	/** Brick serial to connect to. Omitted means the first EV3 on the bus. */
 	serial?: string;
+	/** Where this install keeps the udev rule a refused open points at (Linux). */
+	udevRulePath?: string;
 	/** USB vendor ID (default: LEGO 0x0694). */
 	vendorId?: number;
 	/** USB product ID (default: EV3 0x0005). */
@@ -208,12 +210,25 @@ function isAccessDenied(error: unknown): boolean {
 	return /LIBUSB_ERROR_ACCESS|EACCES/.test(error instanceof Error ? error.message : String(error));
 }
 
+/**
+ * What a Linux user who may not open the brick does about it.
+ *
+ * `rulePath` is where this install keeps the rule; without it the path is named relative to the
+ * extension's folder. The rule grants access two ways: `uaccess` to the user at the seat, which
+ * needs systemd-logind or elogind, and the group plugdev, which is all a system without either
+ * has (HOSTD, runit, 14.11.2026).
+ */
+export function linuxUdevAdvice(rulePath?: string): string {
+	return 'Install the udev rule that ships with the extension: copy '
+		+ `${rulePath ?? `${LINUX_UDEV_RULE_PATH} from the extension's folder`} to /etc/udev/rules.d/, `
+		+ 'run "sudo udevadm control --reload", then plug the brick in again. Where neither '
+		+ 'systemd-logind nor elogind runs, the user must also be in the group plugdev.';
+}
+
 /** What a Linux user without the udev rule reads, with what to do about it. */
-function linuxPermissionError(detail: string, cause?: unknown): DevicePermissionError {
+function linuxPermissionError(detail: string, cause: unknown, rulePath: string | undefined): DevicePermissionError {
 	return new DevicePermissionError(
-		`This user may not open the EV3's USB device (${detail}). Install the udev rule that ships `
-		+ `with the extension, ${LINUX_UDEV_RULE_PATH} in its folder: copy it to /etc/udev/rules.d/, `
-		+ 'run "sudo udevadm control --reload", then plug the brick in again.',
+		`This user may not open the EV3's USB device (${detail}). ${linuxUdevAdvice(rulePath)}`,
 		cause,
 	);
 }
@@ -246,6 +261,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	private readonly inUse: (location: UsbDeviceLocation) => boolean;
 	private readonly readSlack: number;
 	private readonly platform: NodeJS.Platform;
+	private readonly udevRulePath: string | undefined;
 
 	private device?: UsbDeviceLike;
 	private claimed?: UsbInterfaceLike;
@@ -274,6 +290,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 		this.inUse = options.inUse ?? (() => false);
 		this.readSlack = options.readSlackBytes ?? READ_OVERRUN_SLACK;
 		this.platform = options.platform ?? process.platform;
+		this.udevRulePath = options.udevRulePath;
 	}
 
 	get isOpen(): boolean {
@@ -419,7 +436,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			device.open();
 		} catch (error) {
 			if (this.platform === 'linux' && isAccessDenied(error)) {
-				throw linuxPermissionError(error instanceof Error ? error.message : String(error), error);
+				throw linuxPermissionError(error instanceof Error ? error.message : String(error), error, this.udevRulePath);
 			}
 			throw error;
 		}
@@ -530,7 +547,7 @@ export class UsbLibusbAdapter implements TransportAdapter {
 			}
 		}
 		if (refused !== undefined && this.platform === 'linux') {
-			throw linuxPermissionError(refused instanceof Error ? refused.message : String(refused), refused);
+			throw linuxPermissionError(refused instanceof Error ? refused.message : String(refused), refused, this.udevRulePath);
 		}
 		throw new TransportError(
 			`No EV3 on the USB bus reports serial ${this.serial.toUpperCase()}.`

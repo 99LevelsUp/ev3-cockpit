@@ -59,8 +59,8 @@ not fixed.
 
    ```
    # /etc/udev/rules.d/70-lego-ev3.rules
-   SUBSYSTEM=="usb", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", TAG+="uaccess"
-   KERNEL=="hidraw*", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", TAG+="uaccess"
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+   KERNEL=="hidraw*", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0005", MODE="0660", GROUP="plugdev", TAG+="uaccess"
    ```
 
    then `sudo udevadm control --reload && sudo udevadm trigger`, and replug the brick.

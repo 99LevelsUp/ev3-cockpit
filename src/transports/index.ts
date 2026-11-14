@@ -4,7 +4,7 @@ export { ProviderRegistry } from './providerRegistry';
 export type { TransportAdapter, SendOptions } from './transportAdapter';
 export { UsbHidAdapter } from './usbHidAdapter';
 export type { UsbHidAdapterOptions } from './usbHidAdapter';
-export { UsbLibusbAdapter } from './usbLibusbAdapter';
+export { UsbLibusbAdapter, LINUX_UDEV_RULE_PATH } from './usbLibusbAdapter';
 export type { UsbLibusbAdapterOptions, UsbDeviceLocation } from './usbLibusbAdapter';
 export { TcpSocketAdapter } from './tcpSocketAdapter';
 export type { TcpAdapterOptions, TcpDiscoveryInfo } from './tcpSocketAdapter';
