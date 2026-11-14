@@ -1226,9 +1226,10 @@ export class BrickManager implements vscode.Disposable {
 			this.oneSidedPending.set(brickId, this.peerReadsKept);
 		} else if (state === ConnectionState.Disconnected && !this.checkableChannelConnected(brickId)) {
 			// Over Bluetooth alone the check does not run (KTD6); the brick pairs as before. A held
-			// Bluetooth join is woken by the read in flight, which the disconnect fails; with no read
-			// in flight the check has already run.
-			this.oneSidedPending.delete(brickId);
+			// Bluetooth join is woken here: between two reads after an own pairing no read is in
+			// flight for the disconnect to fail (codex review of 301f4c4). The own pairing is kept:
+			// a cable back in time is checked knowing the brick may not have named this computer yet.
+			if (this.oneSidedPending.delete(brickId)) { this.wakeBluetooth(brickId); }
 		}
 	}
 
