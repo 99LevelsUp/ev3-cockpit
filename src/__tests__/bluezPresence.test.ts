@@ -211,6 +211,8 @@ class World implements InquiryBus, InquiryCache {
 	known: BluezDevice[] = [];
 	handlers = new Set<() => void>();
 	failOn?: { member: string; error: Error };
+	/** A second member that fails too. */
+	failToo?: { member: string; error: Error };
 	/** What discovery brings in, applied after StartDiscovery. */
 	heard: BluezDevice[] = [];
 	/** Another client is already discovering. */
@@ -227,6 +229,7 @@ class World implements InquiryBus, InquiryCache {
 			? `SetDiscoveryFilter ${JSON.stringify([...(o.body![0] as Map<string, Variant>)].map(([k, v]) => [k, v.value]))}`
 			: o.member);
 		if (this.failOn?.member === o.member) { throw this.failOn.error; }
+		if (this.failToo?.member === o.member) { throw this.failToo.error; }
 		if (o.member === 'StartDiscovery') {
 			setTimeout(() => {
 				for (const d of this.heard) {
@@ -325,9 +328,10 @@ describe('BlueZ inquiry — a BR/EDR discovery window (KTD9)', () => {
 });
 
 describe('BlueZ inquiry — tells whether the radio did what it was asked (HOSTD, 15.11.2026)', () => {
-	const run = async (failOn?: World['failOn']): Promise<{ outcomes: unknown[]; said: string[] }> => {
+	const run = async (failOn?: World['failOn'], failToo?: World['failToo']): Promise<{ outcomes: unknown[]; said: string[] }> => {
 		const w = new World();
 		w.failOn = failOn;
+		w.failToo = failToo;
 		const outcomes: unknown[] = [];
 		const said: string[] = [];
 		await createBluezInquiry({ bus: w, cache: w, windowMs: 10, log: (m) => said.push(m), onWindow: (o) => { outcomes.push(o); } })().catch(() => undefined);
@@ -347,6 +351,29 @@ describe('BlueZ inquiry — tells whether the radio did what it was asked (HOSTD
 	it('a discovery that would not start: stuck', async () => {
 		const { outcomes } = await run({ member: 'StartDiscovery', error: new DBusError('org.bluez.Error.Failed', 'Authentication Failed') });
 		assert.deepEqual(outcomes, [{ radio: 'stuck', detail: 'StartDiscovery: org.bluez.Error.Failed: Authentication Failed' }]);
+	});
+
+	it('a start refused as busy while no discovery of ours runs: stuck (HOSTD 22:13, a radio dead since a presence check)', async () => {
+		const busy = new DBusError('org.bluez.Error.InProgress', 'Operation already in progress');
+		const { outcomes, said } = await run(
+			{ member: 'StartDiscovery', error: busy },
+			{ member: 'StopDiscovery', error: new DBusError('org.bluez.Error.Failed', 'No discovery started') },
+		);
+		assert.deepEqual(outcomes, [{ radio: 'stuck', detail: 'StartDiscovery: org.bluez.Error.InProgress: Operation already in progress' }]);
+		assert.deepEqual(said, []);
+		// Busy because ours still ran from an earlier window: the stop goes through, nothing is said about the radio.
+		assert.deepEqual((await run({ member: 'StartDiscovery', error: busy })).outcomes, [{ radio: 'unclear' }]);
+		// Busy, and a stop that fails some other way: nothing known about the radio.
+		assert.deepEqual((await run({ member: 'StartDiscovery', error: busy },
+			{ member: 'StopDiscovery', error: new DBusError('org.freedesktop.DBus.Error.NoReply', 'no reply') })).outcomes, [{ radio: 'unclear' }]);
+		// Switched off, and nothing running: not busy, so not stuck.
+		assert.deepEqual((await run({ member: 'StartDiscovery', error: new DBusError('org.bluez.Error.NotReady', 'Resource Not Ready') },
+			{ member: 'StopDiscovery', error: new DBusError('org.bluez.Error.Failed', 'No discovery started') })).outcomes, [{ radio: 'unclear' }]);
+	});
+
+	it('a window whose stop finds nothing running is still one that answered, when its start went through', async () => {
+		const { outcomes } = await run(undefined, { member: 'StopDiscovery', error: new DBusError('org.bluez.Error.Failed', 'No discovery started') });
+		assert.deepEqual(outcomes, [{ radio: 'answered' }]);
 	});
 
 	it('an adapter switched off is not one that stopped answering', async () => {

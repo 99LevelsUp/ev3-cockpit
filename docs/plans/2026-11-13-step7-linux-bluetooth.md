@@ -227,6 +227,8 @@ The restart on the hardware (HOSTD, 15.11.2026, 0.2.343). The adapter had been d
 
 At 20:34:54, the fourth failure within 15 minutes, 0.2.343 left the radio alone for good: its message promised to look again "until it answers again", which a dead chip never does, and Bluetooth stayed dead until the owner replugged the adapter at 21:42:06. Hence the pause in point 5. The detection was right each time, so the fix is the pause, not the detection.
 
+A second way to die (HOSTD, 22:13, 0.2.344). The inquiry ended normally (Inquiry Complete at 22:13:32); the chip was reset on the bus at 22:13:41, during the presence check's connect to CCC that followed. From then on BlueZ refused every StartDiscovery with InProgress and answered the StopDiscovery after it with "No discovery started". 0.2.344 counted neither as stuck, said nothing, and left the radio dead. Now a start refused as busy counts as stuck when the stop then finds no discovery of ours running. Busy because ours still ran from an earlier window lets that stop through, and stays unclear.
+
 The moment of a crash, captured with btmon (HOSTD, 15.11.2026):
 - The inquiry started at 18:32:08.2. AAA, BBB and CCC answered between 08.7 and 14.1.
 - After that nothing came from the adapter, not even the Inquiry Complete due at about 18.4.

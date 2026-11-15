@@ -154,9 +154,11 @@ export interface BluezInquiryOptions {
 	 * Told after each window whether the radio did what it was asked (`BluezRadioWatch`), and
 	 * awaited: what it does about it happens inside the window, which holds the Bluetooth queue.
 	 * Only what a radio that stopped answering does counts (HOSTD, 15.11.2026): StartDiscovery
-	 * failing with org.bluez.Error.Failed (the kernel's start failed), or BlueZ refusing to stop
-	 * our own discovery with InProgress (the kernel's stop was rejected). Anything else (no
-	 * permission, not supported, switched off, the bus) says nothing about the radio (codex review).
+	 * failing with org.bluez.Error.Failed (the kernel's start failed), StartDiscovery refused with
+	 * InProgress while no discovery of ours runs (the stop says "No discovery started"), or BlueZ
+	 * refusing to stop our own discovery with InProgress (the kernel's stop was rejected). Anything
+	 * else (no permission, not supported, switched off, the bus) says nothing about the radio
+	 * (codex review).
 	 */
 	onWindow?: (outcome: InquiryOutcome) => void | Promise<void>;
 }
@@ -220,6 +222,8 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 		const stopListening = cache.onChange(look);
 		let attempted = false;
 		let started = false;
+		/** StartDiscovery refused with InProgress: stuck only if no discovery of ours turns out to run. */
+		let startBusy: unknown;
 		let outcome: InquiryOutcome = { radio: 'unclear' };
 		try {
 			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
@@ -231,6 +235,7 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 				if (error instanceof DBusError && error.dbusName === FAILED) {
 					outcome = { radio: 'stuck', detail: `StartDiscovery: ${dbusText(error)}` };
 				}
+				if (error instanceof DBusError && error.dbusName === IN_PROGRESS) { startBusy = error; }
 				throw error;
 			}
 			await new Promise((resolve) => setTimeout(resolve, windowMs));
@@ -241,6 +246,13 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 				const stopped = (): void => { if (started && outcome.radio === 'unclear') { outcome = { radio: 'answered' }; } };
 				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StopDiscovery' }).then(stopped, (error: unknown) => {
 					const notDiscovering = error instanceof DBusError && error.dbusName === FAILED && /No discovery started/.test(error.detail);
+					// Start refused as busy, yet no discovery of ours runs: the kernel's start never
+					// finished (HOSTD 22:13, 15.11.2026, a radio dead since a presence check). Busy
+					// because ours still ran from an earlier window would let this stop through.
+					if (notDiscovering && startBusy !== undefined) {
+						outcome = { radio: 'stuck', detail: `StartDiscovery: ${dbusText(startBusy)}` };
+						return;
+					}
 					if (notDiscovering) { stopped(); return; }
 					// Our own discovery, refused: the kernel could not stop it. Said once by the watch,
 					// not every minute (203 times on 14.11.2026).
