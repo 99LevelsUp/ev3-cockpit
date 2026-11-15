@@ -24,6 +24,7 @@ import { bluezListDevices, bluezRadioName, DiscoveryGate } from './bluezDiscover
 import { createBluezPairing } from './bluezPairing';
 import { createBluezUnpair, bluezForgetResidue } from './bluezForget';
 import { createBluezPresenceCheck, createBluezInquiry } from './bluezPresence';
+import { BluezRadioWatch, type RadioSysfs } from './bluezRadioWatch';
 import { isBluezAccessDenied, manualGroupCommand } from './bluezAccess';
 import { BtBluezAdapter } from './btBluezAdapter';
 import type { BtAdapterFactory, BtBackend, UnpairResult } from './btTransportProvider';
@@ -58,6 +59,11 @@ export interface BluezBluetoothOptions {
 	searchMs?: number;
 	/** For tests: the first reconnect's delay after the bus closed (default 1 s, doubling to 30 s). */
 	reconnectMs?: number;
+	/** The shipped rule that allows restarting the adapter, absolute, for the message (`LINUX_BT_RESTART_RULE_PATH`). */
+	btRestartRulePath?: string;
+	/** For tests: the adapter's sysfs, and the pause between taking it off and reading it again. */
+	radioSysfs?: RadioSysfs;
+	replugPauseMs?: number;
 }
 
 export interface BluezBluetooth {
@@ -330,6 +336,18 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		await readBluez();
 	}
 
+	// A radio that stopped answering is restarted, or left alone while it cannot be (HOSTD, 15.11.2026).
+	const radio = new BluezRadioWatch({
+		bus: liveBus, cache: live, log, rulePath: options.btRestartRulePath,
+		...(options.radioSysfs ? { sysfs: options.radioSysfs } : {}),
+		...(options.replugPauseMs !== undefined ? { replugPauseMs: options.replugPauseMs } : {}),
+	});
+	const check = createBluezPresenceCheck();
+	const inquire = createBluezInquiry({
+		bus: liveBus, cache: live, windowMs: options.inquiryWindowMs, log: (message) => log.warn(message), discoveryGate: gate,
+		onWindow: (outcome) => radio.noteWindow(outcome),
+	});
+
 	return {
 		backends: new Map<BtBackend, BtAdapterFactory>([['bluez', (mac) => new BtBluezAdapter({ mac })]]),
 		listDevices: bluezListDevices(live),
@@ -337,8 +355,10 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 		pairDevice: createBluezPairing({ bus: liveBus, cache: live, bluezOwner, searchMs: options.searchMs, discoveryGate: gate }),
 		unpairDevice: createBluezUnpair({ bus: liveBus, cache: live }),
 		forgetResidue: bluezForgetResidue(live),
-		presenceCheck: createBluezPresenceCheck(),
-		inquire: createBluezInquiry({ bus: liveBus, cache: live, windowMs: options.inquiryWindowMs, log: (message) => log.warn(message), discoveryGate: gate }),
+		// A dead radio is not asked: nothing is heard, as nothing can be (not a failed round,
+		// which would leave every brick heard as before).
+		presenceCheck: (mac) => (radio.checksHeld ? Promise.resolve(false) : check(mac)),
+		inquire: () => (radio.inquiryHeld ? Promise.resolve([]) : inquire()),
 		onChange: (handler) => live.onChange(handler),
 		start: () => connect(),
 		async retry(): Promise<void> {
@@ -352,6 +372,7 @@ export function createBluezBluetooth(options: BluezBluetoothOptions): BluezBluet
 			if (disposed) { return; }
 			disposed = true;
 			generation += 1;
+			radio.dispose();
 			cancelReconnect();
 			live.replace(undefined);
 			closeBus();

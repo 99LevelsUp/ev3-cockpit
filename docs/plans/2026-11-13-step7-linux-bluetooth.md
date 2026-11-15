@@ -198,6 +198,38 @@ The owner puts AAA (the brick with the Wi-Fi dongle) and HOSTC on one network. `
 
 Debian 13 x86_64 on an AMD E-450 (no AVX, no SSE4.1), runit, no systemd-logind or elogind; driven over SSH, the owner at the bricks. `test:ci` passes; the linux-x64 VSIX built there loads all four native modules from its staging folder and installs in VS Code x64 (Restricted Mode). Bluetooth through BlueZ: CCC paired from the picker and listed its projects; BBB showed no pairing dialog (N3, the same as from HOSTA). USB: with the shipped rule installed every EV3 node stayed `root:root 0660` and the connect failed with `LIBUSB_ERROR_ACCESS`, because `TAG+="uaccess"` is applied by logind. With `GROUP="plugdev"` added the nodes became `root:plugdev`, CCC connected over libusb with 1024-byte frames, the route moved from Bluetooth to USB, and its projects listed. The rule in the repo carries the group since, and the permission message names the rule's absolute path and the group.
 
+### A Bluetooth adapter that stops answering (HOSTD, 15.11.2026)
+
+The machine is antiX 26 (Debian 13 underneath). Its adapter is a Broadcom BCM2070 on USB (class e0/01/01). It stopped answering four times in one afternoon:
+
+- three times with no Bluetooth session open, each about 11 s into an inquiry window (about 1 s after the kernel's 10.24 s inquiry ends);
+- once during a pairing.
+
+Between those, as many as 26 windows passed cleanly. The kernel log shows `usb 4-4: reset full-speed USB device` and then `command 0x0402 tx timeout` every minute. btmon shows the commands going out and no event coming back. BlueZ refuses our StopDiscovery with InProgress, or the next StartDiscovery fails. Switching the adapter off through BlueZ fails the same way. On 14.11 the cockpit logged the refusal 203 times and kept inquiring into the dead radio for hours. What brings the adapter back is 0 and then 1 written to the USB device's `authorized` file: the kernel reads the device again and btusb starts it afresh.
+
+What the cockpit now does on Linux (`BluezRadioWatch`):
+
+1. Two inquiry windows in a row in which the radio refused count as stopped. An adapter switched off (NotReady) does not count.
+2. It first tries switching the adapter off and on through BlueZ.
+3. If that fails, it writes the `authorized` file. That needs the second shipped rule, `native/linux/71-ev3-cockpit-bluetooth-restart.rules`, which gives the group plugdev write access to that file of a USB Bluetooth adapter.
+4. Without the rule it says once what happened and how to install the rule. It then leaves the radio alone: no inquiry and no presence check, and one inquiry tried again every ten minutes, until the adapter comes back.
+5. Three restarts within 15 minutes mean a broken adapter, not a flaky one, and it is left alone.
+
+On HOSTD the rule is installed and a plain user can write the file.
+
+Still open:
+- The trigger is not known: no capture has the moment of the crash yet (a 45-minute btmon run is going).
+- Fewer inquiries would mean fewer crashes, but that conflicts with U7's "an unpaired brick appears without anyone opening a picker". This is an owner decision.
+- Not inquiring while a Bluetooth session is open targets the 60-second reconnects of CCC on 14.11. It does not target these crashes: all three no-pairing crashes came with no session open. It is to be measured on its own.
+
+**Owner rule (15.11.2026), all operating systems.** When the cockpit needs an administrative step, it says what it will do and why, and takes the step only with the user's consent. The consent is given either once (at installation, at the first start or at the first occurrence; on Linux, installing the udev rule) or each time (on Windows, the usual elevation prompt; a VS Code running as administrator already has the rights). Restarting the PC, or the Windows Bluetooth service, stays ruled out: a step aims at one device. The Windows restart of a Bluetooth device is not built yet, because no failure has been seen there.
+
+**The own-pairing check on Windows (HOSTA, 15.11.2026, 0.2.341).**
+- AAA's list was empty, so the cockpit undid this computer's pairing and paired again (R6). The brick asked for the PIN, the cockpit gave 1234, and the pairing finished.
+- AAA's list then read HOSTA's name, the session over Bluetooth opened, and nothing was undone.
+- The brick knew the computer's name at once, so the branch that reads the list again at 2, 5 and 10 s did not run on hardware; the unit tests cover it.
+- Side finding: on HOSTA, BBB shows up over USB as "Xfer data to and from EV3 brick", its USB interface string, not its name.
+
 ## Risks
 
 - **A desktop agent answering instead of ours:** U0 (3) showed BlueZ asks the caller's agent with the RPi OS panel running; blueman and GNOME are not measured.

@@ -390,10 +390,13 @@ function registerBluezBluetooth(
 	const { createBluezBluetooth } = require('../transports/bluezBluetooth') as typeof import('../transports/bluezBluetooth');
 	// eslint-disable-next-line @typescript-eslint/no-var-requires
 	const { offerBluetoothGroup } = require('../transports/bluezAccess') as typeof import('../transports/bluezAccess');
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const { LINUX_BT_RESTART_RULE_PATH } = require('../transports/bluezRadioWatch') as typeof import('../transports/bluezRadioWatch');
 
 	const bluez = createBluezBluetooth({
 		log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
 		platform,
+		btRestartRulePath: path.join(options.extensionPath, LINUX_BT_RESTART_RULE_PATH),
 		// D4: the extension asks, runs the fix on a yes, and offers to check again (U8 review #11).
 		onAccessDenied: (command) => options.onBluetoothAccessDenied?.({
 			command,

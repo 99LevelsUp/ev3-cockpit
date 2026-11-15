@@ -1,0 +1,10 @@
+# EVƎ Cockpit: lets members of the group plugdev restart a USB Bluetooth adapter that has stopped
+# answering. The cockpit writes 0 and then 1 to the adapter's "authorized" file; the kernel then
+# re-reads the adapter and its driver starts it afresh, as if it had been unplugged and plugged in.
+# Without this rule the cockpit can only tell the user that the adapter has stopped answering.
+# What it allows: switching off and on the whole USB device of a Bluetooth adapter (USB class
+# e0/01/01, the device itself declared a wireless controller). Every function of that device goes
+# off with it; a device that declares itself anything else is left out.
+# Install:  sudo cp 71-ev3-cockpit-bluetooth-restart.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# then plug the adapter in again (or restart the computer once).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTR{bInterfaceClass}=="e0", ATTR{bInterfaceSubClass}=="01", ATTR{bInterfaceProtocol}=="01", ATTRS{bDeviceClass}=="e0", RUN+="/bin/chgrp plugdev /sys%p/../authorized", RUN+="/bin/chmod g+w /sys%p/../authorized"

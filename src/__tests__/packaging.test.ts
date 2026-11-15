@@ -36,6 +36,7 @@ const LINUX_ARM64 = [
 	'extension/node_modules/koffi/index.js',
 	'extension/node_modules/serialport/dist/index.js',
 	'extension/native/linux/70-lego-ev3.rules',
+	'extension/native/linux/71-ev3-cockpit-bluetooth-restart.rules',
 ];
 
 describe('Platform VSIX packaging (0.2.5)', () => {
@@ -118,5 +119,28 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 			assert.match(rule, /GROUP="plugdev"/, `no logind: ${rule}`);
 			assert.match(rule, /TAG\+="uaccess"/, `logind: ${rule}`);
 		}
+	});
+
+	it('ships, on Linux only, the rule that lets the cockpit restart a Bluetooth adapter that stopped answering (HOSTD, 15.11.2026)', () => {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const { LINUX_BT_RESTART_RULE_PATH } = require('../transports/bluezRadioWatch') as { LINUX_BT_RESTART_RULE_PATH: string };
+		const entry = `extension/${LINUX_BT_RESTART_RULE_PATH}`;
+		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_BT_RESTART_RULE_PATH), 'utf8') as string;
+		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');
+		const rules = text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
+		assert.equal(rules.length, 1);
+		// A USB Bluetooth interface (class e0/01/01, as on HOSTD); its device's authorized file, group plugdev.
+		assert.match(rules[0], /ENV\{DEVTYPE\}=="usb_interface", ATTR\{bInterfaceClass\}=="e0", ATTR\{bInterfaceSubClass\}=="01", ATTR\{bInterfaceProtocol\}=="01"/);
+		// The whole device goes off: only one that declares itself a wireless controller (codex review).
+		assert.match(rules[0], /ATTRS\{bDeviceClass\}=="e0"/);
+		assert.match(text, /Every function of that device goes\s*\n# off with it/);
+		assert.match(rules[0], /RUN\+="\/bin\/chgrp plugdev \/sys%p\/\.\.\/authorized", RUN\+="\/bin\/chmod g\+w \/sys%p\/\.\.\/authorized"/);
+		assert.ok(packaging.SHIPPED_FILES_FOR('linux-x64').includes(LINUX_BT_RESTART_RULE_PATH), 'staged for Linux');
+		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(LINUX_BT_RESTART_RULE_PATH), 'not staged for Windows');
+		for (const target of ['linux-x64', 'linux-arm64']) {
+			const without = LINUX_ARM64.filter((e) => e !== entry);
+			assert.ok(packaging.checkVsix(target, without).missing.includes(entry), `${target} must carry ${entry}`);
+		}
+		assert.ok(packaging.checkVsix('win32-x64', [entry]).unexpected.includes(entry), 'Windows does not carry it');
 	});
 });

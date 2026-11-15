@@ -61,9 +61,13 @@ class FakeBus implements BluezBus {
 
 	/** Each call as `member path`. */
 	routes: string[] = [];
+	/** A member that fails with this error, as a dead radio's BlueZ does. */
+	fail = new Map<string, Error>();
 	async call(o: { member: string; path: string; body?: DBusValue[] }): Promise<DBusValue[]> {
 		this.calls.push(o.member);
 		this.routes.push(`${o.member} ${o.path}`);
+		const failure = this.fail.get(o.member);
+		if (failure) { throw failure; }
 		if (o.member === 'GetNameOwner') {
 			if (this.ownerError) { throw this.ownerError; }
 			if (!this.owner) { throw new DBusError('org.freedesktop.DBus.Error.NameHasNoOwner', 'no owner'); }
@@ -120,6 +124,34 @@ async function until(condition: () => boolean, limitMs = 2000): Promise<void> {
 	}
 }
 const readyNow = (bt: { listDevices(): unknown[] }): boolean => { try { bt.listDevices(); return true; } catch { return false; } };
+
+describe('createBluezBluetooth — a radio that stopped answering (HOSTD, 15.11.2026)', () => {
+	it('restarts the adapter after two refused inquiries, and asks the radio nothing while it does', async () => {
+		const bus = new FakeBus();
+		bus.fail.set('StopDiscovery', new DBusError('org.bluez.Error.InProgress', 'Operation already in progress'));
+		bus.fail.set('Set', new DBusError('org.bluez.Error.Failed', 'Failed'));
+		const writes: string[] = [];
+		const warns: string[] = [];
+		const bt = createBluezBluetooth({
+			log: { info: () => undefined, warn: (m) => warns.push(m) }, platform: 'linux', openBus: async () => bus,
+			inquiryWindowMs: 5, replugPauseMs: 80,
+			radioSysfs: { authorizedFile: () => '/sys/x/authorized', writable: () => true, write: (f, v) => { writes.push(v); } },
+		});
+		await bt.start();
+		await bt.inquire();
+		const second = bt.inquire();
+		await until(() => writes.length === 1);
+		assert.deepEqual(writes, ['0'], 'taken off; read again after the pause');
+		const starts = bus.calls.filter((c) => c === 'StartDiscovery').length;
+		assert.deepEqual(await bt.inquire(), [], 'nothing heard while restarting');
+		assert.equal(await bt.presenceCheck('00:16:53:F0:0A:0A'), false);
+		assert.equal(bus.calls.filter((c) => c === 'StartDiscovery').length, starts, 'no discovery started meanwhile');
+		await second;
+		assert.deepEqual(writes, ['0', '1'], 'the window that started the restart ends with it, still holding the queue');
+		assert.ok(!warns.some((m) => /StopDiscovery failed/.test(m)), 'the refusal is not logged every minute');
+		bt.dispose();
+	});
+});
 
 describe('createBluezBluetooth — the factory (U8)', () => {
 	it('is Linux-only', () => {

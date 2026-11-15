@@ -172,6 +172,10 @@ measures it on the `linux-backend` branch; the Bluetooth items are the step-7 pl
 - Bluetooth: nothing on Debian and Raspberry Pi OS. Where BlueZ is limited to the `bluetooth`
   group, the cockpit offers to add the user (D4): polkit asks for the password, and the group
   applies after logging out and in. Without `pkexec` the cockpit shows the command to run.
+- Bluetooth adapter restart (optional, 15.11.2026): install
+  `native/linux/71-ev3-cockpit-bluetooth-restart.rules` the same way. The cockpit can then restart
+  a USB Bluetooth adapter that has stopped answering; without the rule it says so once and names
+  the rule. See the step-7 plan, "A Bluetooth adapter that stops answering".
 - TCP and the mock: nothing.
 - VS Code as a Snap or Flatpak: the sandbox may block USB and Bluetooth; not measured.
 
