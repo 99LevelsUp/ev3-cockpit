@@ -217,8 +217,15 @@ What the cockpit now does on Linux (`BluezRadioWatch`):
 
 On HOSTD the rule is installed and a plain user can write the file.
 
+The moment of a crash, captured with btmon (HOSTD, 15.11.2026):
+- The inquiry started at 18:32:08.2. AAA, BBB and CCC answered between 08.7 and 14.1.
+- After that nothing came from the adapter, not even the Inquiry Complete due at about 18.4.
+- The computer sent the adapter no command between the last result and the silence.
+- At 23.3 the stop went out and got no answer.
+
+The adapter thus fails by itself as its own inquiry ends: a fault of the chip, not something the host sends. A different order of commands cannot avoid it; fewer inquiries can, and the restart above repairs it.
+
 Still open:
-- The trigger is not known: no capture has the moment of the crash yet (a 45-minute btmon run is going).
 - Fewer inquiries would mean fewer crashes, but that conflicts with U7's "an unpaired brick appears without anyone opening a picker". This is an owner decision.
 - Not inquiring while a Bluetooth session is open targets the 60-second reconnects of CCC on 14.11. It does not target these crashes: all three no-pairing crashes came with no session open. It is to be measured on its own.
 
