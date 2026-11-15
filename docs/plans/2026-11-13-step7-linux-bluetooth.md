@@ -213,9 +213,19 @@ What the cockpit now does on Linux (`BluezRadioWatch`):
 2. It first tries switching the adapter off and on through BlueZ.
 3. If that fails, it writes the `authorized` file. That needs the second shipped rule, `native/linux/71-ev3-cockpit-bluetooth-restart.rules`, which gives the group plugdev write access to that file of a USB Bluetooth adapter.
 4. Without the rule it says once what happened and how to install the rule. It then leaves the radio alone: no inquiry and no presence check, and one inquiry tried again every ten minutes, until the adapter comes back.
-5. Three restarts within 15 minutes mean a broken adapter, not a flaky one, and it is left alone.
+5. Past three restarts within 15 minutes it pauses: no inquiry and no presence check, and it says when it looks again. Ten minutes later one inquiry tries the adapter. If that finds it still dead and the oldest of the three restarts is 15 minutes old, it restarts it again; otherwise it waits another ten minutes, saying nothing more.
 
 On HOSTD the rule is installed and a plain user can write the file.
+
+The restart on the hardware (HOSTD, 15.11.2026, 0.2.343). The adapter had been dead since 18:32. Two minutes after the reload the cockpit restarted it through the `authorized` file (20:27:54, back at 20:27:59), and the bricks were heard over Bluetooth again. The chip then failed again one to two minutes after each restart; every failure the cockpit reported has its own `usb 4-4: reset full-speed USB device` and `0x0402 tx timeout` in the kernel log:
+
+| Restart by the cockpit | Reset in the kernel log |
+|---|---|
+| 20:27:59 | 20:28:49 |
+| 20:29:57 | 20:30:50 |
+| 20:31:57 | 20:33:50 |
+
+At 20:34:54, the fourth failure within 15 minutes, 0.2.343 left the radio alone for good: its message promised to look again "until it answers again", which a dead chip never does, and Bluetooth stayed dead until the owner replugged the adapter at 21:42:06. Hence the pause in point 5. The detection was right each time, so the fix is the pause, not the detection.
 
 The moment of a crash, captured with btmon (HOSTD, 15.11.2026):
 - The inquiry started at 18:32:08.2. AAA, BBB and CCC answered between 08.7 and 14.1.
