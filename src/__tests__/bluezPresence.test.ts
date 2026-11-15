@@ -324,6 +324,53 @@ describe('BlueZ inquiry — a BR/EDR discovery window (KTD9)', () => {
 	});
 });
 
+describe('BlueZ inquiry — tells whether the radio did what it was asked (HOSTD, 15.11.2026)', () => {
+	const run = async (failOn?: World['failOn']): Promise<{ outcomes: unknown[]; said: string[] }> => {
+		const w = new World();
+		w.failOn = failOn;
+		const outcomes: unknown[] = [];
+		const said: string[] = [];
+		await createBluezInquiry({ bus: w, cache: w, windowMs: 10, log: (m) => said.push(m), onWindow: (o) => { outcomes.push(o); } })().catch(() => undefined);
+		return { outcomes, said };
+	};
+
+	it('a window that went well: the radio answered', async () => {
+		assert.deepEqual((await run()).outcomes, [{ radio: 'answered' }]);
+	});
+
+	it('our own discovery refused a stop with InProgress: stuck, and not logged every minute (203 times on 14.11.2026)', async () => {
+		const { outcomes, said } = await run({ member: 'StopDiscovery', error: new DBusError('org.bluez.Error.InProgress', 'Operation already in progress') });
+		assert.deepEqual(outcomes, [{ radio: 'stuck', detail: 'StopDiscovery: org.bluez.Error.InProgress: Operation already in progress' }]);
+		assert.deepEqual(said, []);
+	});
+
+	it('a discovery that would not start: stuck', async () => {
+		const { outcomes } = await run({ member: 'StartDiscovery', error: new DBusError('org.bluez.Error.Failed', 'Authentication Failed') });
+		assert.deepEqual(outcomes, [{ radio: 'stuck', detail: 'StartDiscovery: org.bluez.Error.Failed: Authentication Failed' }]);
+	});
+
+	it('an adapter switched off is not one that stopped answering', async () => {
+		const { outcomes } = await run({ member: 'StartDiscovery', error: new DBusError('org.bluez.Error.NotReady', 'Resource Not Ready') });
+		assert.deepEqual(outcomes, [{ radio: 'unclear' }]);
+	});
+
+	it('no permission, no support, the bus, or a refused filter say nothing about the radio either way (codex review)', async () => {
+		const refusals: [string, Error][] = [
+			['StartDiscovery', new DBusError('org.bluez.Error.NotAuthorized', 'Not Authorized')],
+			['StartDiscovery', new DBusError('org.freedesktop.DBus.Error.AccessDenied', 'denied')],
+			['StartDiscovery', new DBusError('org.bluez.Error.NotSupported', 'Not Supported')],
+			['StartDiscovery', new DBusError('org.bluez.Error.InProgress', 'Operation already in progress')],
+			['StartDiscovery', new DBusError('org.freedesktop.DBus.Error.NoReply', 'no reply')],
+			['SetDiscoveryFilter', new DBusError('org.bluez.Error.Failed', 'Invalid arguments')],
+			['StopDiscovery', new DBusError('org.freedesktop.DBus.Error.NoReply', 'no reply')],
+		];
+		for (const [member, error] of refusals) {
+			const { outcomes } = await run({ member, error });
+			assert.deepEqual(outcomes, [{ radio: 'unclear' }], `${member} ${(error as DBusError).dbusName}`);
+		}
+	});
+});
+
 describe('BlueZ inquiry — its window outlasts the report cycle (U6 round 3)', () => {
 	it('defaults to a window above the measured 14 s report cycle', () => {
 		assert.ok(DEFAULT_INQUIRY_WINDOW_MS >= 15_000, `${DEFAULT_INQUIRY_WINDOW_MS}`);

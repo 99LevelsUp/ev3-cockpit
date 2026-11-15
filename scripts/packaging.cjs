@@ -27,10 +27,16 @@ const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', '
  * the extension's folder (`LINUX_UDEV_RULE_PATH`), so a Linux VSIX must carry it (13.11.2026).
  */
 const UDEV_RULE = 'native/linux/70-lego-ev3.rules';
+/**
+ * The udev rule that lets the cockpit restart a USB Bluetooth adapter that stopped answering
+ * (`LINUX_BT_RESTART_RULE_PATH`); the message about such an adapter names it (HOSTD, 15.11.2026).
+ */
+const BT_RESTART_RULE = 'native/linux/71-ev3-cockpit-bluetooth-restart.rules';
+const UDEV_RULES = [UDEV_RULE, BT_RESTART_RULE];
 
 /** The repository files a target's VSIX carries. */
 function SHIPPED_FILES_FOR(target) {
-	return TARGETS[target].udevRule ? [...SHIPPED_FILES, UDEV_RULE] : [...SHIPPED_FILES];
+	return TARGETS[target].udevRule ? [...SHIPPED_FILES, ...UDEV_RULES] : [...SHIPPED_FILES];
 }
 
 /**
@@ -76,7 +82,7 @@ function allowed(target, entry) {
 	const file = entry.slice('extension/'.length);
 	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
 	if (file.startsWith('native/bin/')) { return TARGETS[target].helper && !file.endsWith('.pdb'); }
-	if (file === UDEV_RULE) { return TARGETS[target].udevRule; }
+	if (UDEV_RULES.includes(file)) { return TARGETS[target].udevRule; }
 	if (!file.startsWith('node_modules/')) { return false; }
 	const prebuild = PREBUILD.exec(entry);
 	if (prebuild) { return keepPrebuild(prebuild[1], prebuild[2], target); }
@@ -99,7 +105,7 @@ function required(target) {
 		'extension/node_modules/serialport/',
 	];
 	if (TARGETS[target].helper) { needs.push('extension/native/bin/bt-pairing-helper.exe'); }
-	if (TARGETS[target].udevRule) { needs.push(`extension/${UDEV_RULE}`); }
+	if (TARGETS[target].udevRule) { needs.push(...UDEV_RULES.map((rule) => `extension/${rule}`)); }
 	return needs;
 }
 

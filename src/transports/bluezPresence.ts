@@ -150,7 +150,32 @@ export interface BluezInquiryOptions {
 	log?: (message: string) => void;
 	/** Shared with the pairing search: a window starts only once no discovery waits to be stopped (U8 review #5). */
 	discoveryGate?: DiscoveryGate;
+	/**
+	 * Told after each window whether the radio did what it was asked (`BluezRadioWatch`), and
+	 * awaited: what it does about it happens inside the window, which holds the Bluetooth queue.
+	 * Only what a radio that stopped answering does counts (HOSTD, 15.11.2026): StartDiscovery
+	 * failing with org.bluez.Error.Failed (the kernel's start failed), or BlueZ refusing to stop
+	 * our own discovery with InProgress (the kernel's stop was rejected). Anything else (no
+	 * permission, not supported, switched off, the bus) says nothing about the radio (codex review).
+	 */
+	onWindow?: (outcome: InquiryOutcome) => void | Promise<void>;
 }
+
+/** How one inquiry window went, as far as the radio is concerned. */
+export interface InquiryOutcome {
+	/**
+	 * `answered`: the discovery started and stopped. `stuck`: what a radio that stopped answering
+	 * does. `unclear`: anything else (switched off, no permission, the bus), which says nothing
+	 * either way, so it neither counts as stuck nor ends a hold on a dead radio (codex confirmation).
+	 */
+	radio: 'answered' | 'stuck' | 'unclear';
+	/** What BlueZ said, when it refused. */
+	detail?: string;
+}
+
+const FAILED = 'org.bluez.Error.Failed';
+const IN_PROGRESS = 'org.bluez.Error.InProgress';
+const dbusText = (error: unknown): string => (error instanceof DBusError ? `${error.dbusName}: ${error.detail}` : String(error));
 
 const LEGO_OUI = BT.LEGO_OUI.toUpperCase();
 const isLego = (mac: string | undefined): mac is string => !!mac && mac.replace(/[:-]/g, '').toUpperCase().startsWith(LEGO_OUI);
@@ -194,23 +219,39 @@ export function createBluezInquiry(options: BluezInquiryOptions): () => Promise<
 		};
 		const stopListening = cache.onChange(look);
 		let attempted = false;
+		let started = false;
+		let outcome: InquiryOutcome = { radio: 'unclear' };
 		try {
 			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'SetDiscoveryFilter', signature: 'a{sv}', body: [new Map([['Transport', new Variant('s', 'bredr')]])] });
 			attempted = true;
-			await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StartDiscovery' });
+			try {
+				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StartDiscovery' });
+				started = true;
+			} catch (error) {
+				if (error instanceof DBusError && error.dbusName === FAILED) {
+					outcome = { radio: 'stuck', detail: `StartDiscovery: ${dbusText(error)}` };
+				}
+				throw error;
+			}
 			await new Promise((resolve) => setTimeout(resolve, windowMs));
 			return [...heard.values()];
 		} finally {
 			stopListening();
 			if (attempted) {
-				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StopDiscovery' }).catch((error: unknown) => {
-					const notDiscovering = error instanceof DBusError && error.dbusName === 'org.bluez.Error.Failed' && /No discovery started/.test(error.detail);
-					if (!notDiscovering) {
-						const what = error instanceof DBusError ? `${error.dbusName}: ${error.detail}` : String(error);
-						options.log?.(`StopDiscovery failed; the radio may still be discovering. ${what}`);
+				const stopped = (): void => { if (started && outcome.radio === 'unclear') { outcome = { radio: 'answered' }; } };
+				await bus.call({ destination: BLUEZ, path: adapter.path, interface: 'org.bluez.Adapter1', member: 'StopDiscovery' }).then(stopped, (error: unknown) => {
+					const notDiscovering = error instanceof DBusError && error.dbusName === FAILED && /No discovery started/.test(error.detail);
+					if (notDiscovering) { stopped(); return; }
+					// Our own discovery, refused: the kernel could not stop it. Said once by the watch,
+					// not every minute (203 times on 14.11.2026).
+					if (error instanceof DBusError && error.dbusName === IN_PROGRESS) {
+						if (outcome.radio !== 'stuck') { outcome = { radio: 'stuck', detail: `StopDiscovery: ${dbusText(error)}` }; }
+						return;
 					}
+					options.log?.(`StopDiscovery failed; the radio may still be discovering. ${dbusText(error)}`);
 				});
 			}
+			await options.onWindow?.(outcome);
 		}
 	};
 }
