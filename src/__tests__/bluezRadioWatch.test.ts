@@ -201,6 +201,78 @@ describe('BluezRadioWatch — an adapter that stopped answering (HOSTD, 15.11.20
 		watch.dispose();
 	});
 
+	it('after the pause, restarts an adapter a probe finds still dead: a dead chip never answers by itself (HOSTD, 20:27–20:34)', async () => {
+		const w = new World();
+		const watch = w.watch();
+		const start = w.clock;
+		for (const minute of [0, 2, 4, 7]) {
+			w.clock = start + minute * 60_000;
+			await watch.noteWindow(STUCK);
+			await watch.noteWindow(STUCK);
+		}
+		assert.equal(w.writes.length, 6, 'three restarts, then the pause');
+		assert.match(w.warns.at(-1)!, /3 times within 15 minutes; the cockpit pauses: .* in 10 minutes it looks at the adapter again and restarts it/);
+		assert.deepEqual([watch.inquiryHeld, watch.checksHeld], [true, true]);
+		w.clock = start + 17 * 60_000;
+		assert.equal(watch.inquiryHeld, false, 'the probe may run');
+		await watch.noteWindow(STUCK);
+		assert.equal(w.writes.length, 8, 'one probe still dead is enough: it is known dead');
+		assert.match(w.warns.at(-1)!, /hci0 has stopped answering \(StopDiscovery/);
+		assert.equal(w.warns.filter((m) => /within 15 minutes/.test(m)).length, 1);
+		assert.deepEqual([watch.inquiryHeld, watch.checksHeld], [false, false]);
+		watch.dispose();
+	});
+
+	it('a probe while the budget is still full waits another while, saying nothing again (advisor)', async () => {
+		const w = new World();
+		const watch = w.watch();
+		const start = w.clock;
+		for (const minute of [0, 1, 2, 3]) {
+			w.clock = start + minute * 60_000;
+			await watch.noteWindow(STUCK);
+			await watch.noteWindow(STUCK);
+		}
+		assert.equal(w.writes.length, 6);
+		w.clock = start + 13 * 60_000;
+		assert.equal(watch.inquiryHeld, false);
+		await watch.noteWindow(STUCK);
+		assert.equal(w.writes.length, 6, 'the oldest restart is 13 minutes old: no room yet');
+		assert.deepEqual([watch.inquiryHeld, watch.checksHeld], [true, true], 'the probe interval renewed');
+		assert.equal(w.warns.filter((m) => /within 15 minutes/.test(m)).length, 1, 'said once');
+		w.clock = start + 23 * 60_000;
+		await watch.noteWindow(UNCLEAR);
+		assert.equal(w.writes.length, 6, 'a probe that found out nothing restarts nothing');
+		await watch.noteWindow(STUCK);
+		assert.equal(w.writes.length, 8);
+		watch.dispose();
+	});
+
+	it('only the pause for the budget restarts again: not a USB adapter, or a restart that failed, is left alone', async () => {
+		const notUsb = new World();
+		notUsb.file = undefined;
+		const a = notUsb.watch();
+		await a.noteWindow(STUCK);
+		await a.noteWindow(STUCK);
+		notUsb.clock += 600_000;
+		await a.noteWindow(STUCK);
+		assert.equal(notUsb.warns.filter((m) => /restarting it/.test(m)).length, 1, 'no second try');
+		assert.equal(a.checksHeld, true);
+		a.dispose();
+
+		const failing = new World();
+		const b = failing.watch({
+			sysfs: { ...failing.sysfs, write: (file, value) => { failing.writes.push(`${file}=${value}`); throw new Error('EIO'); } },
+		});
+		await b.noteWindow(STUCK);
+		await b.noteWindow(STUCK);
+		assert.match(failing.warns.at(-1)!, /Restarting the Bluetooth adapter hci0 failed \(EIO\)/);
+		failing.clock += 600_000;
+		await b.noteWindow(STUCK);
+		assert.deepEqual(failing.writes, [`${AUTH}=0`], 'not written again');
+		assert.equal(b.checksHeld, true);
+		b.dispose();
+	});
+
 	it('keeps restarting an adapter that stops now and then, as HOSTD\'s did six to twenty-six minutes apart', async () => {
 		const w = new World();
 		const watch = w.watch();

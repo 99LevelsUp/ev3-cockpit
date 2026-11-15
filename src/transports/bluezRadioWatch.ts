@@ -17,6 +17,12 @@
  * client); then switching it off and on through BlueZ, which costs nothing when it works; then the
  * `authorized` file. While the adapter is known dead and cannot be restarted the radio is left
  * alone, an inquiry tried again every ten minutes, until the adapter goes and comes back.
+ *
+ * Past three restarts within fifteen minutes the radio is left alone too, but only for a while:
+ * a dead chip never answers by itself, so a probe that finds it still dead restarts it again once
+ * the oldest of those restarts is fifteen minutes old (HOSTD, 15.11.2026 at 20:27–20:34: three
+ * restarts each followed by a real reset in the kernel log within one to two minutes, then a
+ * fourth; the cockpit had given up for good, and only a replug by hand brought Bluetooth back).
  */
 
 import * as fs from 'fs';
@@ -77,9 +83,9 @@ export interface BluezRadioWatchOptions {
 	/** Between writing 0 and 1 (default 3 s, as measured on HOSTD). */
 	replugPauseMs?: number;
 	/**
-	 * Restarts allowed within `RESTART_SPAN_MS`; past them the adapter is left alone (default 3).
-	 * An adapter that stops again right after each restart is broken, not flaky: HOSTD's stopped
-	 * six to twenty-six minutes apart, a broken one would every two (two refused windows).
+	 * Restarts allowed within `RESTART_SPAN_MS` (default 3); past them the adapter is left alone
+	 * until a probe finds it still dead and the budget has room again. HOSTD's stopped six to
+	 * twenty-six minutes apart for hours, then one to two minutes after each of three restarts.
 	 */
 	restartsPerSpan?: number;
 	/** While left alone, how often an inquiry is tried again (default 10 min). */
@@ -101,6 +107,11 @@ export class BluezRadioWatch {
 	/** Why the radio is being left alone, when it is. */
 	private leftAlone: string | undefined;
 	private leftAloneAt = 0;
+	/**
+	 * Left alone for the restart budget only: a probe that finds it still dead may restart it.
+	 * Read only while `leftAlone` is set, and every `leaveAlone` sets it.
+	 */
+	private leftForBudget = false;
 	private restarts: number[] = [];
 	private switchTriedAt: number | undefined;
 	private ownReplugAt: number | undefined;
@@ -144,7 +155,13 @@ export class BluezRadioWatch {
 			return;
 		}
 		if (this.leftAlone !== undefined) {
-			// A probe that found it still dead, or found out nothing: wait another while.
+			// Still dead after a pause for the budget: restart it once the budget has room again.
+			if (outcome.radio === 'stuck' && this.leftForBudget && this.budgetHasRoom()) {
+				this.leftAlone = undefined;
+				await this.restart(outcome.detail ?? 'it refused a discovery');
+				return;
+			}
+			// A probe that found it still dead, or found out nothing: wait another while, quietly.
 			this.leftAloneAt = this.now();
 			return;
 		}
@@ -167,10 +184,11 @@ export class BluezRadioWatch {
 		if (!adapter) { return; }
 		const hci = adapter.path.split('/').pop() ?? adapter.path;
 		const now = this.now();
-		this.restarts = this.restarts.filter((at) => now - at < RESTART_SPAN_MS);
-		if (this.restarts.length >= (this.options.restartsPerSpan ?? 3)) {
+		if (!this.budgetHasRoom()) {
+			const minutes = Math.round((this.options.probeEveryMs ?? 600_000) / 60_000);
 			this.leaveAlone(`The Bluetooth adapter ${hci} has stopped answering again, ${this.restarts.length} times within 15 minutes; `
-				+ 'the cockpit leaves it alone and does not look for Bluetooth bricks until it answers again.');
+				+ `the cockpit pauses: no Bluetooth bricks are looked for, and in ${minutes} minutes it looks at the adapter again `
+				+ 'and restarts it if it is still not answering.', true);
 			return;
 		}
 		this.restarting = true;
@@ -233,9 +251,20 @@ export class BluezRadioWatch {
 		}
 	}
 
-	/** Said once: while left alone no restart is tried, so nothing comes here again until it is back. */
-	private leaveAlone(message: string): void {
+	/** Fewer restarts than allowed within the span, counting from now. */
+	private budgetHasRoom(): boolean {
+		const now = this.now();
+		this.restarts = this.restarts.filter((at) => now - at < RESTART_SPAN_MS);
+		return this.restarts.length < (this.options.restartsPerSpan ?? 3);
+	}
+
+	/**
+	 * Said once: while left alone a restart is tried only when the budget has room again, so
+	 * nothing comes here again until it is back or restarted.
+	 */
+	private leaveAlone(message: string, forBudget = false): void {
 		this.leftAlone = message;
+		this.leftForBudget = forBudget;
 		this.leftAloneAt = this.now();
 		this.options.log.warn(message);
 	}
