@@ -121,6 +121,22 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 
 **The API check on HOSTA found a defect the matrix could not.** On cockpit 0.2.341 the 100 000-byte write over USB failed with "Rate limit: 200 commands/sec exceeded", and so did the listing, the removal and the program list behind it: libusb on Windows moves file chunks at about 380 a second, and the transport guard refused the 201st inside a second. HOSTD's 19/19 had stayed just under the line. The matrix talks to the providers and never passes the guard, so only a check through the API meets it. Fixed in e9a3da4 (DESIGN §4.1): a full window holds the next command instead of refusing it, and the ceiling is 1000 per brick. On 0.2.354 the API check on AAA over USB: 19 of 19, 100 000 B written in 0.40 s and read in 0.35 s, emergency stop with the motor turning seen to stop.
 
+### Review of the rate-guard fix (codex, inline packet, 16.11.2026)
+
+| Round | Sev | Finding | Verdict | Outcome |
+|---|---|---|---|---|
+| 1 (e9a3da4) | major | a command waiting in the executor runs after its session is disconnected, or on the link a reconnect opened | CONFIRMED | link token checked after the wait (aaaf38c) |
+| 1 | major | no test pins the default ceiling | CONFIRMED | 1000 admitted across two channels, the 1001st held (aaaf38c) |
+| 2 (aaaf38c) | major | `disconnect()` awaits the provider before deleting the session; a command resuming then still matches | CONFIRMED | cleanup drops the token first (8d089f9) |
+| 3 (8d089f9) | major | the same gap during an automatic reconnect | CONFIRMED | **third round in one area: approach changed, not patched** |
+| audit (26d99b9) | major | after a drain during a wait, the wait's outcome is applied to a command queued since | CONFIRMED | the drain keeps the head it asked for and asks again (0b53305) |
+| audit | major ×2 | the lifecycle tests look before the window turns; the refusal test does not show the same drain carrying a queued successor | CONFIRMED | both rewritten (0b53305) |
+| 4 (0b53305) | — | none | — | READY |
+
+Why the approach changed: rounds 1–3 each found a held command slipping past one more lifecycle path, because the wait sat in the executor, after the queue had handed the command over. The rewrite (26d99b9) waits in `CommandQueue` before the command leaves it (`setExecutor(executor, admit)`), so every drain reaches it and the tokens are gone. Every new test was seen to fail on the code before its fix.
+
+Out of scope, noted for the backend list: `send()` does not look at the connection state, so a command sent while a session is reconnecting goes to the current executor, on the old link, until the reconnect rewires it. A command held through a reconnect now does the same; that predates this change.
+
 
 ## Review (codex, inline packet)
 
