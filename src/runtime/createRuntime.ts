@@ -25,7 +25,7 @@ import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
 import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
 import { TelemetryService } from '../telemetry/telemetryService';
 import type { ProgramPresetSettings, TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
-import { BrickManager } from './brickManager';
+import { BrickManager, BrickManagerOptions } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
 import { logOnChange } from './logOnChange';
@@ -70,6 +70,11 @@ export interface RuntimeOptions {
 	readonly throttleSettings: ThrottleSettings;
 	/** How a running program slows its brick's telemetry (U9, D11): the user's settings, as above. */
 	readonly programPreset: ProgramPresetSettings;
+	/**
+	 * The packet a file transfer uses over TCP or Bluetooth, read at each transfer's start so a
+	 * changed setting applies to the next one (4.6.4). Absent: the link's own size, 1024.
+	 */
+	readonly transferPacketBytes?: BrickManagerOptions['transferPacketBytes'];
 	/**
 	 * Told when the system bus keeps this user from BlueZ (Linux, owner decision D4), with the fix to
 	 * offer: the extension asks, runs it on a yes and offers to check again (U8 review #11).
@@ -161,7 +166,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	const bricks = services.add(new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, log,
 		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName, pair: btDiscovery?.pair,
-		windowsPairing: scheduler,
+		windowsPairing: scheduler, transferPacketBytes: options.transferPacketBytes,
 	}));
 	services.add(bricks.onRouteChange(e => {
 		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');

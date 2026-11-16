@@ -4,7 +4,7 @@ import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { setSweepConfirmation } from './fs/transferLedger';
 import { createRuntime } from './runtime/createRuntime';
 import { brickLabel } from './runtime/brickLabels';
-import { BrickId } from './contracts';
+import { BrickId, Transport } from './contracts';
 import { createBluetoothAccessOffer } from './ui/bluetoothAccess';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
@@ -64,6 +64,13 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 		programPreset: readProgramPresetSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
+		// Read at each transfer's start, so a changed setting applies to the next one (4.6.4).
+		// A value outside the declared range (settings.json is not checked against it) keeps the link's size.
+		transferPacketBytes: (transport) => {
+			const bytes = vscode.workspace.getConfiguration('ev3-cockpit.transfer')
+				.get<number>(transport === Transport.BT ? 'btPacketBytes' : 'tcpPacketBytes');
+			return Number.isInteger(bytes) && bytes! >= 64 && bytes! <= 65535 ? bytes : undefined;
+		},
 	}));
 	// A changed program status interval: every program followed now is followed again at it (U9 review 1).
 	const programStatusIntervalChanged = services.add(new vscode.EventEmitter<void>());

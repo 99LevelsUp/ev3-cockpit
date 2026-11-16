@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.362",
+  "version": "0.2.363",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -135,6 +135,20 @@
           "default": 200,
           "minimum": 0,
           "markdownDescription": "While a program runs on a brick, its telemetry is read **no more often than this**, in milliseconds - for the panel and for every extension that subscribed. Each telemetry command costs a running program about 2 ms of the brick (measured). `0` turns this off."
+        },
+        "ev3-cockpit.transfer.tcpPacketBytes": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 64,
+          "maximum": 65535,
+          "markdownDescription": "Largest packet a file transfer sends to a brick over **Wi-Fi**, in bytes. The stock firmware takes **1024**: raise it only for a firmware that takes more. On the stock firmware a larger packet switches the brick into receiving a file, and a link lost then writes the next packets into that file. Applies from the next transfer. USB always uses its own packet size."
+        },
+        "ev3-cockpit.transfer.btPacketBytes": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 64,
+          "maximum": 65535,
+          "markdownDescription": "Largest packet a file transfer sends to a brick over **Bluetooth**, in bytes. The stock firmware takes **1024**: raise it only for a firmware that takes more. On the stock firmware a larger packet switches the brick into receiving a file, and a link lost then writes the next packets into that file. Applies from the next transfer. USB always uses its own packet size."
         },
         "ev3-cockpit.programs.statusIntervalMs": {
           "type": "number",

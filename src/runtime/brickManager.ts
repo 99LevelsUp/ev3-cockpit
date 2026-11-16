@@ -89,6 +89,13 @@ export interface BrickManagerOptions {
 	/** Where a name that could not be read is reported, once per channel. */
 	readonly log?: { warn(message: string): void; info?(message: string): void };
 	/**
+	 * The packet a file transfer uses over a transport, when the user set one (IMPLEMENTATION_PLAN
+	 * 4.6.4, owner 16.11.2026: for a firmware that takes more than 1024). Asked at each transfer's
+	 * start; undefined keeps the link's own size. Transfers only: telemetry frames stay at the link's
+	 * size, which the stock firmware's direct commands need.
+	 */
+	readonly transferPacketBytes?: (transport: Transport) => number | undefined;
+	/**
 	 * Discovery, for {@link BrickManager.forget}: it stops tracking the brick's channels, drops
 	 * what a scan older than that lists for them, and scans once afterwards (step-3 plan, KTD1,
 	 * KTD7). Absent, a forget does none of that.
@@ -205,6 +212,7 @@ export class BrickManager implements vscode.Disposable {
 	private activeBrickId?: BrickId;
 	private disposed = false;
 	private readonly log?: { warn(message: string): void; info?(message: string): void };
+	private readonly transferPacketBytes?: (transport: Transport) => number | undefined;
 	/** Channels being asked their name without a session, so one sighting asks once. */
 	private readonly probing = new Set<BrickKey>();
 	/** Channels whose name probe has failed and been reported, so it is reported once. */
@@ -305,6 +313,7 @@ export class BrickManager implements vscode.Disposable {
 		this.slowProbeRetryMs = options.slowProbeRetryMs ?? FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS;
 		this.ownPairingRereadMs = options.ownPairingRereadMs ?? OWN_PAIRING_REREAD_MS;
 		this.log = options.log;
+		this.transferPacketBytes = options.transferPacketBytes;
 		this.discovery = options.discovery;
 		this.btPresence = options.btPresence;
 		this.radioName = options.radioName;
@@ -694,8 +703,13 @@ export class BrickManager implements vscode.Disposable {
 		if (!key) {
 			throw new NotConnectedError(`Brick ${brickId} has no connected channel.`);
 		}
+		// USB's packet is its link's report size, which no firmware changes; the user's size is for
+		// the transports whose packet the firmware's buffer bounds (4.6.4).
+		const transport = this.transportOf(key);
+		const chosen = transport === Transport.TCP || transport === Transport.BT
+			? this.transferPacketBytes?.(transport) : undefined;
 		return {
-			maxPacketBytes: this.sessionManager.maxPacketBytes(key),
+			maxPacketBytes: chosen ?? this.sessionManager.maxPacketBytes(key),
 			send: async (command) => {
 				if (this.sessionManager.getSession(key)?.connectionState !== ConnectionState.Connected
 					|| this.dropped.has(key)) {
