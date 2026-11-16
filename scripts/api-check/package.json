@@ -1,0 +1,19 @@
+{
+  "name": "ev3-cockpit-api-check",
+  "displayName": "EVƎ Cockpit API check",
+  "description": "A consumer of the cockpit's public API for hardware sessions (step-5 plan, U9). Not shipped.",
+  "version": "0.0.1",
+  "publisher": "99LevelsUp",
+  "private": true,
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/99LevelsUp/ev3-cockpit" },
+  "engines": { "vscode": "^1.90.0" },
+  "extensionDependencies": ["99LevelsUp.ev3-cockpit"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "ev3-cockpit-api-check.run", "title": "EVƎ Cockpit: API check on real bricks (U9)" }
+    ]
+  }
+}

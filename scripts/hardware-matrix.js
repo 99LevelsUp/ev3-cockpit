@@ -40,7 +40,7 @@ const {
 } = require(out('protocol/ev3Packet'));
 const { buildCommand, FIRMWARE_BUFFER_BYTES } = require(out('protocol/ev3Commands'));
 const { parseResponse } = require(out('protocol/ev3Responses'));
-const { maxPacketBytesFor } = require(out('fs/brickFilesystem'));
+const { maxPacketBytesFor, createBrickFilesystem } = require(out('fs/brickFilesystem'));
 const { brickKeyTransport } = require(out('contracts/brickKey'));
 const { assembleFrame, buildTelemetryFrame, parseFrame } = require(out('telemetry/frameAssembler'));
 const { TelemetryScheduler } = require(out('telemetry/telemetryScheduler'));
@@ -183,6 +183,54 @@ async function checkFilesystem(transport, brick, provider, key, timeoutMs) {
 			`free ${response.freeKb} of ${response.totalKb} kB makes no sense`);
 		return `${response.freeKb} kB free of ${response.totalKb} kB`;
 	});
+
+	await checkTransfer(transport, brick, provider, key, timeoutMs);
+}
+
+/** Where the transfer checks write, inside the projects folder safe mode allows; removed after. */
+const TRANSFER_DIR = '/home/root/lms2012/prjs/cockpit-matrix';
+
+/**
+ * Files of 1, 1000 and 100 000 bytes written and read back through the shipped transfer service,
+ * chunked at this link's packet size (IMPLEMENTATION_PLAN 4.6.4, step-5 U9). Each byte differs
+ * from its neighbours, so a chunk dropped, repeated or shifted shows in the comparison.
+ */
+async function checkTransfer(transport, brick, provider, key, timeoutMs) {
+	const sender = {
+		send: async (_ref, command, options) =>
+			(await sendCommand(provider, key, command, options?.timeoutMs ?? timeoutMs * 2)).response,
+		maxPacketBytes: () => packetCeiling(provider, key),
+	};
+	const fs = createBrickFilesystem(sender, key);
+	const made = await check(transport, brick, 'transfer', 'a folder in the projects area', async () => {
+		if (!(await fs.files.exists(TRANSFER_DIR))) { await fs.files.makeDirectory(TRANSFER_DIR); }
+		return TRANSFER_DIR;
+	});
+	if (!made) { return; }
+	try {
+		for (const bytes of [1, 1000, 100_000]) {
+			await check(transport, brick, 'transfer', `${bytes} B written and read back`, async () => {
+				const content = new Uint8Array(bytes).map((_, i) => (i * 7 + bytes) & 0xff);
+				const file = `${TRANSFER_DIR}/t${bytes}.bin`;
+				const started = Date.now();
+				await fs.transfer.writeFile(file, content);
+				const wrote = Date.now() - started;
+				const back = await fs.transfer.readFile(file);
+				const read = Date.now() - started - wrote;
+				assert(back.length === bytes, `read back ${back.length} B`);
+				const first = back.findIndex((b, i) => b !== content[i]);
+				assert(first < 0, `byte ${first} differs`);
+				await fs.files.remove(file);
+				return `write ${wrote} ms, read ${read} ms, ${packetCeiling(provider, key)} B packets`;
+			});
+		}
+	} finally {
+		await check(transport, brick, 'transfer', 'the folder removed again', async () => {
+			await fs.files.removeTree(TRANSFER_DIR);
+			assert(!(await fs.files.exists(TRANSFER_DIR)), 'still there');
+			return 'gone';
+		});
+	}
 }
 
 async function checkTelemetry(transport, brick, provider, key, timeoutMs) {
