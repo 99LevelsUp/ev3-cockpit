@@ -135,7 +135,7 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 
 Why the approach changed: rounds 1–3 each found a held command slipping past one more lifecycle path, because the wait sat in the executor, after the queue had handed the command over. The rewrite (26d99b9) waits in `CommandQueue` before the command leaves it (`setExecutor(executor, admit)`), so every drain reaches it and the tokens are gone. Every new test was seen to fail on the code before its fix.
 
-Out of scope, noted for the backend list: `send()` does not look at the connection state, so a command sent while a session is reconnecting goes to the current executor, on the old link, until the reconnect rewires it. A command held through a reconnect now does the same; that predates this change.
+Out of scope, noted for the backend list: `send()` does not look at the connection state, so a command sent while a session is reconnecting goes to the current executor, on the old link, until the reconnect rewires it. A command held through a reconnect now does the same; that predates this change. The brick layer is not affected (it routes only over connected channels and drops a failing one at once, `brickManager.ts` `send`); what is left are the commands already queued on a session when its link drops, each sent on the dead link and failing on its own timeout. **Decided by the owner, 16.11.2026: refuse them at once** — when a session goes to reconnecting, its queue is drained with a link-lost error, and the reconnect's own probes go on. Holding them for the new link was rejected: a late motor command is worse than a refused one.
 
 
 ## Review (codex, inline packet)
