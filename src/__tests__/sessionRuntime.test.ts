@@ -116,6 +116,32 @@ describe('SessionEntry', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('CommandQueue', () => {
+	it('keeps a command waiting for admission in the queue, where a drain rejects it unsent', async () => {
+		const executed: string[] = [];
+		let open: () => void = () => { /* set below */ };
+		const queue = new CommandQueue();
+		queue.setExecutor(async (cmd) => { executed.push(cmd.kind); return { kind: 'battery', level: 50 } as const; },
+			() => new Promise<void>((resolve) => { open = resolve; }));
+
+		const waiting = queue.send({ kind: 'battery' });
+		assert.equal(queue.depth, 1, 'a command waiting for admission is still queued');
+		queue.drainWith(new Error('Session disconnected.'));
+		open();
+		await assert.rejects(waiting, /disconnected/);
+		await new Promise<void>((r) => setImmediate(r));
+		assert.deepEqual(executed, []);
+	});
+
+	it('fails the head command when admission refuses it, and goes on with the next', async () => {
+		const queue = new CommandQueue();
+		let refuse = true;
+		queue.setExecutor(async () => ({ kind: 'battery', level: 50 } as const),
+			() => { if (refuse) { refuse = false; throw new Error('degraded'); } return undefined; });
+
+		await assert.rejects(queue.send({ kind: 'battery' }), /degraded/);
+		assert.deepEqual(await queue.send({ kind: 'battery' }), { kind: 'battery', level: 50 });
+	});
+
 	it('executes commands in FIFO order', async () => {
 		const order: string[] = [];
 		const queue = new CommandQueue();

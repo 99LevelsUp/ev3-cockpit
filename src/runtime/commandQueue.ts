@@ -24,12 +24,19 @@ export type CommandExecutor = (
 ) => Promise<BrickResponse>;
 
 /**
+ * Asked before each command leaves the queue. A promise holds the queue until it settles; a throw
+ * or a rejection fails the command at the head.
+ */
+export type CommandAdmission = () => Promise<void> | undefined;
+
+/**
  * FIFO command queue for a single brick.
  */
 export class CommandQueue {
 	private readonly queue: QueuedCommand[] = [];
 	private processing = false;
 	private executor?: CommandExecutor;
+	private admit?: CommandAdmission;
 	private _disposed = false;
 
 	/** Current number of pending commands. */
@@ -42,9 +49,15 @@ export class CommandQueue {
 		return this.processing;
 	}
 
-	/** Set the executor that sends commands to the brick. */
-	setExecutor(executor: CommandExecutor): void {
+	/**
+	 * Set the executor that sends commands to the brick, and what a command must wait for first.
+	 *
+	 * The wait happens while the command is still queued, so a disconnect that drains the queue
+	 * rejects a waiting command like any other: once the executor has it, nothing can call it back.
+	 */
+	setExecutor(executor: CommandExecutor, admit?: CommandAdmission): void {
 		this.executor = executor;
+		this.admit = admit;
 	}
 
 	/** Enqueue a command. Returns a promise that resolves with the response. */
@@ -87,6 +100,15 @@ export class CommandQueue {
 
 		try {
 			while (this.queue.length > 0 && !this._disposed) {
+				try {
+					const wait = this.admit?.();
+					if (wait) { await wait; }
+				} catch (error) {
+					this.queue.shift()?.reject(error);
+					continue;
+				}
+				// A drain or a dispose during the wait has already rejected what was waiting.
+				if (this._disposed || this.queue.length === 0) { break; }
 				const entry = this.queue.shift()!;
 				try {
 					const response = await this.executor!(entry.command, entry.options);
