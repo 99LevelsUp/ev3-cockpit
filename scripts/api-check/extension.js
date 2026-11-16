@@ -90,14 +90,20 @@ async function pickBrick(consumer) {
 	return picked?.brick;
 }
 
-/** The .rbf programs in the projects folder, one level of project folders deep. */
+/**
+ * The programs in the projects folder and one level of project folders below it: .rbf from the PC tools
+ * and MakeCode, .rpf from the brick's own Brick Program app (BrkProg_SAVE). The firmware runs
+ * both the same way (ui.lms, RunBytecodefile).
+ */
 async function findPrograms(consumer, brickId) {
 	const programs = [];
+	const isProgram = (file) => file.kind === 'file' && /\.r[bp]f$/i.test(file.name);
 	for (const entry of await consumer.list(brickId, PROJECTS)) {
+		if (isProgram(entry)) { programs.push(`${PROJECTS}/${entry.name}`); continue; }
 		if (entry.kind !== 'directory' || entry.name.startsWith('.')) { continue; }
 		const folder = `${PROJECTS}/${entry.name}`;
 		for (const file of await consumer.list(brickId, folder).catch(() => [])) {
-			if (file.kind === 'file' && file.name.toLowerCase().endsWith('.rbf')) { programs.push(`${folder}/${file.name}`); }
+			if (isProgram(file)) { programs.push(`${folder}/${file.name}`); }
 		}
 	}
 	return programs;
