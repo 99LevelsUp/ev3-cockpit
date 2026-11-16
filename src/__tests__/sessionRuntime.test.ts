@@ -1075,6 +1075,43 @@ describe('SessionManager -- one brick over two channels', () => {
 		manager.dispose();
 	});
 
+	it('drops a held command that resumes while the provider is still letting go of its link', async () => {
+		const executed: string[] = [];
+		let letGo: () => void = () => { /* set below */ };
+		const provider: TransportProvider = {
+			transport: Transport.USB,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.USB, items: [] }),
+			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.USB }),
+			disconnect: () => new Promise<void>((resolve) => { letGo = resolve; }),
+			sendPacket: () => Promise.reject(new Error('not used: the channel below answers commands')),
+			createCommandChannel: () => ({
+				execute: () => { executed.push('sent'); return Promise.resolve({ kind: 'battery', level: 80 }); },
+			}),
+			dispose: () => { /* nothing to release */ },
+		};
+		const registry = new ProviderRegistry();
+		registry.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 60_000,
+			transportGuard: new TransportGuard({ maxCommandsPerSec: 2 }),
+		});
+		await manager.connect(usbKey, Transport.USB);
+		await manager.send(usbKey, { kind: 'battery' });
+		await manager.send(usbKey, { kind: 'battery' });
+		const held = manager.send(usbKey, { kind: 'battery' });
+		await new Promise<void>((r) => setImmediate(r));
+
+		const closing = manager.disconnect(usbKey);   // the provider holds on past the window's turn
+		await assert.rejects(held, /disconnected/i);
+		assert.deepEqual(executed, ['sent', 'sent'], 'the held command went out during the disconnect');
+		letGo();
+		await closing;
+		manager.dispose();
+	});
+
 	it('carries a burst of 300 sends in under a second at the default ceiling, none refused', async () => {
 		// U9 on HOSTA: a 100 000-byte file through libusb ran at about 380 chunks per second
 		// and the guard, then at 200 and refusing, failed the write halfway and the listing
