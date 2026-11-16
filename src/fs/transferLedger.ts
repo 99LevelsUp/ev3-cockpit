@@ -68,8 +68,13 @@ export class TransferLedger {
 	 * counts it out again.
 	 */
 	async begin(send: SendCommand): Promise<() => void> {
-		if (this.active === 0 && this.debts.length > 0) {
-			this.settling ??= this.settle(send).finally(() => { this.settling = undefined; });
+		// A settlement under way owns the brick until it ends, whatever is left owed: a transfer
+		// let in now could have its fresh slot swept or its file deleted (review of 6188670). One
+		// settlement per begin at most, so debts that wait for the user do not spin.
+		if (this.settling) {
+			await this.settling;
+		} else if (this.active === 0 && this.debts.length > 0) {
+			this.settling = this.settle(send).finally(() => { this.settling = undefined; });
 			await this.settling;
 		}
 		this.active += 1;
@@ -122,9 +127,18 @@ export class TransferLedger {
 		}
 
 		if (unknown.length > 0) {
-			if (linkError !== undefined || !this.options.confirmSweep) {
+			let agreed: boolean | undefined;
+			if (linkError === undefined && this.options.confirmSweep) {
+				try {
+					agreed = await this.options.confirmSweep();
+				} catch {
+					// Not an answer: the question failed. Kept, to be asked again (review of 6188670).
+					agreed = undefined;
+				}
+			}
+			if (agreed === undefined) {
 				kept.push(...unknown);
-			} else if (await this.options.confirmSweep()) {
+			} else if (agreed) {
 				try {
 					for (let handle = 0; handle < FILE_HANDLE_SLOTS; handle += 1) { await close(handle); }
 					for (const debt of unknown) {
@@ -140,6 +154,18 @@ export class TransferLedger {
 
 		this.debts = [...kept, ...this.debts];
 		if (linkError !== undefined) { throw linkError; }
+	}
+
+	/**
+	 * A write to `path` completed: no debt may delete what is now a whole file. A debt to delete
+	 * the path goes, and a slot owed keeps its slot but no longer deletes (review of 6188670).
+	 */
+	written(path: string): void {
+		this.debts = this.debts.flatMap((debt): TransferDebt[] => {
+			if (debt.kind === 'delete') { return debt.path === path ? [] : [debt]; }
+			if (debt.deletePath !== path) { return [debt]; }
+			return [debt.kind === 'slot' ? { kind: 'slot', handle: debt.handle } : { kind: 'unknown' }];
+		});
 	}
 }
 
