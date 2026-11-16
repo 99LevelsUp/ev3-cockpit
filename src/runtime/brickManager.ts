@@ -15,8 +15,8 @@ import {
 	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyId, brickKeyTransport, describeChannel, makeBrickKey,
 } from '../contracts';
 import {
-	ChannelChangedError, ConnectionAbandonedError, ConnectionError, NotConnectedError, ProtocolError, TimeoutError,
-	TransportError,
+	ChannelChangedError, ConnectionAbandonedError, ConnectionError, LinkLostError, NotConnectedError, ProtocolError,
+	TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { PinnedLink } from '../fs/fileTransferService';
 import { isBlankPeerName } from '../protocol/ev3Commands';
@@ -1454,7 +1454,9 @@ export class BrickManager implements vscode.Disposable {
 		try {
 			await this.sessionManager.send(key, { kind: 'brick:removeBluetoothPeer', name });
 		} catch (error) {
-			return isLinkFailure(error, undefined)
+			// A link lost before the command left proves it never ran (2.8.14); any other link
+			// failure may have come after the brick took it.
+			return isLinkFailure(error, undefined) && !(error instanceof LinkLostError)
 				? { status: 'sent', name, over: key, detail: messageOf(error) }
 				: { status: 'failed', name, over: key, detail: messageOf(error) };
 		}
@@ -1667,7 +1669,8 @@ export class BrickManager implements vscode.Disposable {
 	 * would never be sent.
 	 *
 	 * A link lost on a removal, or a list that cannot be read back after one, ends it: that
-	 * removal counts as sent, and the entries not yet removed as not sent. `left` is the list as
+	 * removal counts as sent, and the entries not yet removed as not sent. A link already lost
+	 * before the removal left ({@link LinkLostError}) ends it too, with that removal not sent. `left` is the list as
 	 * last read back, less the one entry whose removal counts as sent.
 	 */
 	private async removeEntries(key: BrickKey, list: readonly BrickPeer[], last: {
@@ -1682,6 +1685,8 @@ export class BrickManager implements vscode.Disposable {
 		const lastFailure = new Map<string, string>();
 		let current: readonly BrickPeer[] = list;
 		let sent: { name: string; detail: string } | undefined;
+		/** Why the link was gone before a removal left: nothing was sent from then on. */
+		let lost: string | undefined;
 
 		const phases: ((name: string) => boolean)[] = last === undefined
 			? [() => true]
@@ -1691,7 +1696,7 @@ export class BrickManager implements vscode.Disposable {
 				(name) => last.linked.has(name),
 			];
 		for (const inPhase of phases) {
-			for (let pass = 0; pass < peers.length && !sent; pass++) {
+			for (let pass = 0; pass < peers.length && !sent && lost === undefined; pass++) {
 				const names = [...toGo].filter(([name, left]) => left > 0 && inPhase(name)).map(([name]) => name);
 				if (names.length === 0) { break; }
 				let progress = false;
@@ -1700,6 +1705,8 @@ export class BrickManager implements vscode.Disposable {
 					try {
 						await this.sessionManager.send(key, { kind: 'brick:removeBluetoothPeer', name });
 					} catch (error) {
+						// Lost before it left (2.8.14): this one did not go either, and nothing more can.
+						if (error instanceof LinkLostError) { lost = messageOf(error); break; }
 						if (isLinkFailure(error, undefined)) { sent = { name, detail: messageOf(error) }; break; }
 						lastFailure.set(name, messageOf(error));
 						continue;
@@ -1736,14 +1743,16 @@ export class BrickManager implements vscode.Disposable {
 			}
 			return {
 				status: 'failed', name,
-				detail: lastFailure.get(name) ?? (sent ? `Not sent: ${sent.detail}` : 'Not sent.'),
+				detail: lastFailure.get(name)
+					?? (sent ? `Not sent: ${sent.detail}` : lost !== undefined ? `Not sent: ${lost}` : 'Not sent.'),
 			};
 		});
 		const left = current.slice();
 		const sentName = sent?.name;
 		const sentAt = sentName === undefined ? -1 : left.findIndex((peer) => peer.name === sentName);
 		if (sentAt !== -1) { left.splice(sentAt, 1); }
-		return { entries, linkCut: sent !== undefined, left };
+		// A lost link is gone as surely as one the removal cut.
+		return { entries, linkCut: sent !== undefined || lost !== undefined, left };
 	}
 
 	/**
