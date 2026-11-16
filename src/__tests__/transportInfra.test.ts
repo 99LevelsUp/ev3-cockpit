@@ -111,6 +111,15 @@ describe('TransportGuard', () => {
 		assert.equal(guard.acquire(brick, usb), undefined);
 	});
 
+	it('admits 1000 sends a second per brick by default, across its channels, and holds the next', () => {
+		const ceiling = new TransportGuard();
+		for (let i = 0; i < 1000; i += 1) {
+			assert.equal(ceiling.acquire(brick, i % 2 ? usb : bt), undefined, `send ${i + 1} was held`);
+		}
+		assert.ok(ceiling.acquire(brick, usb), 'send 1001 inside the second must wait');
+		ceiling.dispose();
+	});
+
 	it('does not block another channel to the same brick when one degrades', async () => {
 		// A pulled cable fails every USB send; the Bluetooth standby must stay usable.
 		guard.recordFailure(usb);
