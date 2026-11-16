@@ -229,7 +229,11 @@ At 20:34:54, the fourth failure within 15 minutes, 0.2.343 left the radio alone 
 
 A second way to die (HOSTD, 22:13, 0.2.344). The inquiry ended normally (Inquiry Complete at 22:13:32); the chip was reset on the bus at 22:13:41, during the presence check's connect to CCC that followed. From then on BlueZ refused every StartDiscovery with InProgress and answered the StopDiscovery after it with "No discovery started". 0.2.344 counted neither as stuck, said nothing, and left the radio dead. Now a start refused as busy counts as stuck when the stop then finds no discovery of ours running. Busy because ours still ran from an earlier window lets that stop through, and stays unclear. On the hardware (0.2.345, the radio dead in this way since 22:13): started at 22:39:11, "stopped answering (StartDiscovery: org.bluez.Error.InProgress …); restarting it" at 22:41:13, restarted at 22:41:18, BBB and AAA heard over Bluetooth at 22:42:12 and 22:42:15.
 
-Not yet seen on the hardware: the pause past three restarts and the restart after it (point 5); covered by tests only.
+A night unattended (HOSTD, 15.11. 22:39 to 16.11. 16:24, 0.2.345). The cockpit reported the radio stopped 62 times and restarted it 62 times: 32 times on a refused StartDiscovery, 30 on a refused StopDiscovery. Each restart took 3 to 5 seconds, and the next window answered every time. The owner switched the bricks off at 23:29; 4 of the failures came before that and 58 after, about one every 17 minutes, with gaps from 3 to 65 minutes. So the chip fails on the inquiry and presence check themselves, not on bricks answering. With the bricks switched on again (16.11. 17:29, after two more restarts at 17:03 and 17:22), all three were heard over Bluetooth within a minute.
+
+The pause was not reached that night. There were never four restarts within 15 minutes; the closest were 08:47, 08:54, 09:00 and 09:03, and by 09:03 the first had just left the 15-minute window. So the pause past three restarts and the restart after it (point 5) are still covered by tests only.
+
+Decided (16.11.2026): the inquiry stays every minute, without any adaptive slowing. On this adapter that means about three and a half restarts an hour, each healed in seconds, and a warning in the cockpit's output channel only, not a notification. It is a known limitation of an old Broadcom BCM2070, not worth a scheduler that would slow how fast every other user sees a brick appear.
 
 The moment of a crash, captured with btmon (HOSTD, 15.11.2026):
 - The inquiry started at 18:32:08.2. AAA, BBB and CCC answered between 08.7 and 14.1.
@@ -240,7 +244,7 @@ The moment of a crash, captured with btmon (HOSTD, 15.11.2026):
 The adapter thus fails by itself as its own inquiry ends: a fault of the chip, not something the host sends. A different order of commands cannot avoid it; fewer inquiries can, and the restart above repairs it.
 
 Still open:
-- Fewer inquiries would mean fewer crashes, but that conflicts with U7's "an unpaired brick appears without anyone opening a picker". This is an owner decision.
+- Fewer inquiries would mean fewer crashes, but that conflicts with U7's "an unpaired brick appears without anyone opening a picker". Decided 16.11.2026: not done (see the night above).
 - Not inquiring while a Bluetooth session is open targets the 60-second reconnects of CCC on 14.11. It does not target these crashes: all three no-pairing crashes came with no session open. It is to be measured on its own.
 
 **Owner rule (15.11.2026), all operating systems.** When the cockpit needs an administrative step, it says what it will do and why, and takes the step only with the user's consent. The consent is given either once (at installation, at the first start or at the first occurrence; on Linux, installing the udev rule) or each time (on Windows, the usual elevation prompt; a VS Code running as administrator already has the rights). Restarting the PC, or the Windows Bluetooth service, stays ruled out: a step aims at one device. The Windows restart of a Bluetooth device is not built yet, because no failure has been seen there.
