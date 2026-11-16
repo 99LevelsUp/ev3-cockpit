@@ -71,8 +71,6 @@ interface SessionResources {
 	heartbeat: HeartbeatMonitor;
 	reconnect: ReconnectStrategy;
 	reconnectTimer?: NodeJS.Timeout;
-	/** The link the executor was last wired to; a reconnect wires a new one. */
-	link?: object;
 }
 
 /**
@@ -612,19 +610,7 @@ export class SessionManager implements vscode.Disposable {
 				(packet, options) => provider.sendPacket(brickKey, packet, options),
 				provider.transport,
 			);
-		const link = {};
-		resources.link = link;
 		resources.commandQueue.setExecutor(async (cmd, options) => {
-			const full = this.transportGuard.acquire(brickId, brickKey);
-			if (full) {
-				await full;
-				// The queue has already handed this command over, so a disconnect while it waited
-				// for the window could not drain it. It must not go out on a closed session, nor
-				// on the link a reconnect opened in the meantime.
-				if (this.sessions.get(brickKey) !== resources || resources.link !== link) {
-					throw new Error('Session disconnected.');
-				}
-			}
 			const startedAt = Date.now();
 			try {
 				const response = await channel.execute(cmd, options);
@@ -634,13 +620,11 @@ export class SessionManager implements vscode.Disposable {
 				this.transportGuard.recordFailure(brickKey);
 				throw error;
 			}
-		});
+		// A full rate window holds the command in the queue, where a disconnect still reaches it.
+		}, () => this.transportGuard.acquire(brickId, brickKey));
 	}
 
 	private cleanupSession(resources: SessionResources): void {
-		// First, before anyone awaits the provider: a command held by the rate window checks this
-		// when it resumes, and the session is deleted only after the provider has let go.
-		resources.link = undefined;
 		resources.heartbeat.stop();
 		resources.commandQueue.drainWith(new Error('Session disconnected.'));
 		resources.commandQueue.dispose();
