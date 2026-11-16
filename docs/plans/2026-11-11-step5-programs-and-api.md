@@ -115,7 +115,10 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 
 - API check on AAA over USB (firmware V1.10E, a program made in EV3 Classroom turning a motor on B): 19 of 19. Folder, 1 B / 1000 B / 100 000 B written and read back byte for byte (100 000 B: write 0.66 s, read 0.49 s), the listing's sizes, a write to `sys/` refused in safe mode, the folder removed; run, a second run refused `program_running`, run with `replace`, stop, emergency stop with the motor turning (the person saw it stop and the menu back); the shell refused in safe mode, `echo` with status 0 and the file read back in full mode, the setting restored; disconnect and connect.
 - Matrix: 78 passed, 1 failed. Files of 1, 1000 and 100 000 B with 1024-byte packets, every byte compared: USB on AAA, BBB (V1.10E) and CCC (V1.09H), 100 000 B written in 0.41–0.49 s and read in 0.40–0.42 s; Bluetooth on CCC, the only brick paired there, 100 000 B written in 4.6 s and read in 4.6 s. TCP: nothing announced at first, no brick was on Wi-Fi. With Wi-Fi switched on at AAA the run again: 98 passed, 0 failed; over TCP 100 000 B written in 1.6 s and read in 1.6 s.
-- Still open: the same on HOSTA (Windows). The 1024-byte chunk works over Bluetooth and TCP; whether the firmware takes a larger one was not tried.
+- The 1024-byte chunk works over Bluetooth and TCP; whether the firmware takes a larger one was not tried.
+
+**HOSTA (Windows), 16.11.2026, 0.2.352.** Matrix: 115 passed, 3 failed. USB on all three and TCP on AAA as on HOSTD (100 000 B: USB written in 0.26–0.46 s and read in 0.20–0.32 s, TCP 1.6 s and 1.4 s). Bluetooth: CCC and BBB connected and every file came back byte for byte, slower than on HOSTD (100 000 B written in 6.2–9.3 s, read in 11.9–12.2 s; a telemetry frame 100 ms against 41 ms). The three failures are Bluetooth connects that timed out, WSA 10060: CCC's reconnect after the explicit disconnect and the contract check that follows from it, and AAA's first connect. That is N3 (step-6 plan): this host's radio misses the page, as it did for BBB on 11.11.; no file or program check failed on it.
+
 
 ## Review (codex, inline packet)
 
