@@ -13,6 +13,7 @@ import { describe, it } from 'node:test';
 import { BrickCommand, BrickResponse } from '../contracts';
 import { FileTransferService } from '../fs/fileTransferService';
 import { TimeoutError } from '../errors/CockpitError';
+import { buildCommand } from '../protocol/ev3Commands';
 
 const HANDLE = 3;
 
@@ -115,6 +116,28 @@ describe('FileTransferService — writes', () => {
 			brick.written.every((n) => n + 7 <= 64),
 			`every chunk must fit a 64-byte packet, got ${brick.written.join(',')}`
 		);
+	});
+
+	it('fills a packet larger than the stock 1024 when the link is given one (4.6.4)', async () => {
+		// The user may set a larger packet over TCP or Bluetooth for a firmware that takes it;
+		// every chunk must use it, not only the first.
+		const brick = fakeBrick({ maxPacketBytes: 4096 });
+		const svc = new FileTransferService(brick.send, { pin: () => ({ send: brick.send, maxPacketBytes: 4096 }) });
+		const content = body(20_000);
+
+		await svc.writeFile('/x.raw', content);
+		const back = await svc.readFile('/x.raw');
+
+		assert.equal(Buffer.compare(brick.stored(), Buffer.from(content)), 0);
+		assert.equal(Buffer.compare(Buffer.from(back), Buffer.from(content)), 0);
+		assert.equal(brick.written[1], 4096 - 7, `continuation chunks: ${brick.written.join(',')}`);
+		const wants = brick.commands.flatMap((c) => (c.kind === 'fs:beginRead' || c.kind === 'fs:continueRead' ? [c.wantBytes] : []));
+		assert.equal(wants[0], 4096 - 12, `read sizes: ${wants.join(',')}`);
+	});
+
+	it('encodes a continuation chunk over the stock 1017 and refuses one past the protocol (4.6.4)', () => {
+		assert.doesNotThrow(() => buildCommand({ kind: 'fs:continueWrite', handle: HANDLE, chunk: new Uint8Array(4089) }));
+		assert.throws(() => buildCommand({ kind: 'fs:continueWrite', handle: HANDLE, chunk: new Uint8Array(0x10000) }), /protocol/);
 	});
 
 	it('reports progress that reaches the total', async () => {

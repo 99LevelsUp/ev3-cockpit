@@ -35,10 +35,17 @@ export const FIRMWARE_BUFFER_BYTES = 1024;
 export const SYSTEM_ENVELOPE_BYTES = 2 + 2 + 1 + 1;
 
 /**
- * Largest chunk `CONTINUE_DOWNLOAD` can carry: the buffer less the envelope and the
- * one-byte handle.
+ * Largest chunk `CONTINUE_DOWNLOAD` can carry on the stock firmware: the buffer less the
+ * envelope and the one-byte handle.
  */
 export const MAX_WRITE_CHUNK_BYTES = FIRMWARE_BUFFER_BYTES - SYSTEM_ENVELOPE_BYTES - 1;
+
+/**
+ * Largest packet the protocol can express: its length field is 16 bits and does not count
+ * itself. The encoders guard this; the firmware's own 1024 is the transfer service's business,
+ * since a user may set a larger packet for a firmware that takes one (IMPLEMENTATION_PLAN 4.6.4).
+ */
+export const MAX_PROTOCOL_PACKET_BYTES = 0xffff + 2;
 
 /**
  * Largest first chunk `BEGIN_DOWNLOAD` can carry for a given path.
@@ -621,9 +628,10 @@ function buildFsBeginWriteCommand(
 	totalBytes: number,
 	chunk: Uint8Array,
 ): EncodedCommand {
-	// Sized against the firmware buffer; a tighter host transport is the service's
-	// business, and its own guard catches that before this one.
-	const room = maxFirstChunkBytes(path);
+	// Sized against what the protocol can carry; the link's packet (the firmware's buffer, a
+	// tighter host transport, or a size the user set) is the service's business, and its own
+	// guard catches that before this one.
+	const room = maxFirstChunkBytes(path, MAX_PROTOCOL_PACKET_BYTES);
 	if (chunk.length > room) {
 		throw new ProtocolError(
 			`BEGIN_DOWNLOAD first chunk of ${chunk.length} bytes exceeds the ${room} bytes `
@@ -649,10 +657,11 @@ function buildFsBeginWriteCommand(
 }
 
 function buildFsContinueWriteCommand(handle: number, chunk: Uint8Array): EncodedCommand {
-	if (chunk.length > MAX_WRITE_CHUNK_BYTES) {
+	// The protocol's ceiling; the link's packet is the service's to keep (see buildFsBeginWriteCommand).
+	const room = MAX_PROTOCOL_PACKET_BYTES - SYSTEM_ENVELOPE_BYTES - 1;
+	if (chunk.length > room) {
 		throw new ProtocolError(
-			`CONTINUE_DOWNLOAD chunk of ${chunk.length} bytes exceeds the firmware's `
-			+ `${MAX_WRITE_CHUNK_BYTES}-byte limit.`
+			`CONTINUE_DOWNLOAD chunk of ${chunk.length} bytes exceeds the protocol's ${room}-byte limit.`
 		);
 	}
 	return {
