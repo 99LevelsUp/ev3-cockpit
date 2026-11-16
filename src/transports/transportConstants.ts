@@ -63,7 +63,9 @@ export const USB = {
 	 * Sustained command rate measured over 600 back-to-back commands.
 	 *
 	 * Not a safety ceiling — an observed capability. No error and no latency drift
-	 * at this rate, so the limit is the round trip, not the firmware.
+	 * at this rate, so the limit is the round trip, not the firmware. Not the fastest
+	 * either: file chunks through libusb on HOSTA ran at about 380 exchanges per second
+	 * (100 000 B in 0.26 s, 16.11.2026).
 	 */
 	MAX_COMMANDS_PER_SEC: 176,
 } as const;
@@ -229,8 +231,14 @@ export const FIRMWARE_SAFETY = {
 	 * transport self-limiting and this value a guard against a pathological caller
 	 * (a retry storm, a runaway loop), not a meter on normal traffic. Prefer the
 	 * per-transport `MAX_COMMANDS_PER_SEC` when the transport is known.
+	 *
+	 * It was 200, on the 176 above, until a 100 000-byte file through libusb on HOSTA ran
+	 * at about 380 exchanges per second and the guard refused it halfway (U9, 16.11.2026).
+	 * The window counts every channel to the brick, so USB, TCP and Bluetooth at full
+	 * speed together come to under 500; 1000 leaves that twice over. A full window waits
+	 * rather than refuses (`TransportGuard.acquire`).
 	 */
-	MAX_COMMANDS_PER_SEC: 200,
+	MAX_COMMANDS_PER_SEC: 1000,
 	/** Minimum heartbeat interval (ms) — below this risks firmware stress. */
 	MIN_HEARTBEAT_INTERVAL_MS: 3000,
 	/** Number of consecutive failures before marking a channel as degraded. */

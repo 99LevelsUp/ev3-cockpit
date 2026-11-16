@@ -1032,7 +1032,21 @@ describe('SessionManager -- one brick over two channels', () => {
 		await manager.send(usbKey, { kind: 'battery' });
 		await manager.send(btKey, { kind: 'battery' });
 		await manager.send(usbKey, { kind: 'battery' });
-		await assert.rejects(manager.send(btKey, { kind: 'battery' }), /rate limit/i);
+		const started = Date.now();
+		await manager.send(btKey, { kind: 'battery' });
+		assert.ok(Date.now() - started >= 950, 'the fourth send in the brick\'s window must wait for it to turn');
+		manager.dispose();
+	});
+
+	it('carries a burst of 300 sends in under a second at the default ceiling, none refused', async () => {
+		// U9 on HOSTA: a 100 000-byte file through libusb ran at about 380 chunks per second
+		// and the guard, then at 200 and refusing, failed the write halfway and the listing
+		// queued behind it. A burst a working caller makes must pass whole and at its own speed.
+		const { manager } = makeTwoChannelManager(new TransportGuard());
+		await manager.connect(usbKey, Transport.USB);
+		const started = Date.now();
+		for (let i = 0; i < 300; i += 1) { await manager.send(usbKey, { kind: 'battery' }); }
+		assert.ok(Date.now() - started < 900, `300 sends took ${Date.now() - started} ms: the guard metered them`);
 		manager.dispose();
 	});
 
