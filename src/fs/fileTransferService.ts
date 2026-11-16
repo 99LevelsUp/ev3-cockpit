@@ -5,18 +5,18 @@
  * That split is deliberate: a transport should move one packet, not own a loop that
  * spans a thousand of them.
  *
- * Chunk size has two ceilings and the lower one wins. The firmware's own buffers are
- * 1024 bytes on every channel (`c_com.c` sets both RX and TX unconditionally), which
- * caps a `CONTINUE_DOWNLOAD` payload at 1017. But the host transport can be tighter:
- * a HID write on Windows delivers 64 bytes however large a report it is handed, so USB
- * is the most constrained transport here rather than the least. The caller passes the
- * cap; this service does not guess it.
+ * Chunk size follows one packet size, which the caller passes; this service does not guess it.
+ * The stock firmware's buffers are 1024 bytes on every channel (`c_com.c` sets both RX and TX
+ * unconditionally), which caps a `CONTINUE_DOWNLOAD` payload at 1017, and that is the default.
+ * The host transport can be tighter: a HID write on Windows delivers 64 bytes however large a
+ * report it is handed. And over TCP or Bluetooth the user may set a larger packet for a
+ * firmware that takes one (IMPLEMENTATION_PLAN 4.6.4), so the stock 1024 is not a ceiling here.
  */
 
 import { BrickCommand, BrickResponse } from '../contracts';
 import {
 	FIRMWARE_BUFFER_BYTES,
-	MAX_WRITE_CHUNK_BYTES,
+	MAX_PROTOCOL_PACKET_BYTES,
 	SYSTEM_ENVELOPE_BYTES,
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
@@ -96,18 +96,19 @@ interface TransferLink extends LinkSizes {
 	readonly send: SendCommand;
 }
 
-function sizesFor(maxPacketBytes: number): LinkSizes {
-	const maxChunkBytes = Math.min(
-		MAX_WRITE_CHUNK_BYTES,
-		maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1,
-	);
+/**
+ * The chunks one packet size carries. The packet is the link's (the firmware's 1024, or USB's
+ * report) or the size the user set for TCP or Bluetooth (4.6.4), so nothing here caps it at the
+ * stock firmware's buffer: that cap is the default packet, not a ceiling of its own. Only the
+ * protocol's 16-bit length bounds it.
+ */
+function sizesFor(packetBytes: number): LinkSizes {
+	const maxPacketBytes = Math.min(packetBytes, MAX_PROTOCOL_PACKET_BYTES);
+	const maxChunkBytes = maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1;
 	// Replies are bounded by the same packet size as sends. BEGIN_UPLOAD's reply header is
 	// the largest -- echo, status, a 4-byte size and the handle on top of the 6-byte
 	// envelope -- so size the request against that and every later chunk fits too.
-	const maxReadBytes = Math.min(
-		MAX_WRITE_CHUNK_BYTES - 4,
-		maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1 - 4 - 1,
-	);
+	const maxReadBytes = maxPacketBytes - SYSTEM_ENVELOPE_BYTES - 1 - 4 - 1;
 	if (maxReadBytes < 1) {
 		throw new ProtocolError(`A ${maxPacketBytes}-byte packet leaves no room for a read payload.`);
 	}
