@@ -20,7 +20,7 @@ import {
 	SYSTEM_ENVELOPE_BYTES,
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
-import { ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { LinkLostError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { TransferLedger } from './transferLedger';
 
 /** How the service reaches a brick. Narrower than a provider on purpose. */
@@ -222,6 +222,8 @@ export class FileTransferService {
 		const end = await this.ledger?.begin(link.send);
 		try {
 			await this.write(link, path, content, options);
+			// A whole file now: nothing owed may delete it.
+			this.ledger?.written(path);
 		} finally {
 			end?.();
 		}
@@ -256,12 +258,13 @@ export class FileTransferService {
 			throw new ProtocolError(`Expected a fs:beginWrite reply, got ${begin.kind}.`);
 		}
 		sent = firstSize;
-		options?.onProgress?.({ transferred: sent, total });
-
 		const handle = begin.handle;
 		let endOfFile = begin.endOfFile;
 
+		// From here the slot is open until end-of-file, so everything that can throw, the
+		// caller's progress callback included, is inside the release (review of 6188670).
 		try {
+			options?.onProgress?.({ transferred: sent, total });
 			while (sent < total && !endOfFile) {
 				this.assertNotAborted(options?.signal, handle);
 
@@ -285,8 +288,9 @@ export class FileTransferService {
 		} catch (error) {
 			// The firmware only frees the handle on end-of-file or its own error path, so an
 			// abandoned transfer would otherwise hold one, and the file's space, until the brick
-			// restarts. The partial file goes too: it is not the file anyone sent (4.6.17).
-			await this.abandon(link, handle, path);
+			// restarts. The partial file goes too: it is not the file anyone sent (4.6.17). After
+			// end-of-file the slot is the firmware's again and the file whole: nothing to undo.
+			if (!endOfFile) { await this.abandon(link, handle, path); }
 			throw error;
 		}
 
@@ -337,9 +341,9 @@ export class FileTransferService {
 		let received = begin.chunk.length;
 		let endOfFile = begin.endOfFile;
 		const handle = begin.handle;
-		options?.onProgress?.({ transferred: received, total });
 
 		try {
+			options?.onProgress?.({ transferred: received, total });
 			while (received < total && !endOfFile) {
 				this.assertNotAborted(options?.signal, handle);
 
@@ -367,7 +371,7 @@ export class FileTransferService {
 				options?.onProgress?.({ transferred: received, total });
 			}
 		} catch (error) {
-			await this.abandon(link, handle);
+			if (!endOfFile) { await this.abandon(link, handle); }
 			throw error;
 		}
 
@@ -399,7 +403,10 @@ export class FileTransferService {
 		try {
 			return await work;
 		} catch (error) {
-			if (!brickAnswered(error)) { this.ledger?.owe({ kind: 'unknown', ...(deletePath !== undefined ? { deletePath } : {}) }); }
+			// Refused before it left (2.8.14): the brick opened nothing.
+			if (!brickAnswered(error) && !(error instanceof LinkLostError)) {
+				this.ledger?.owe({ kind: 'unknown', ...(deletePath !== undefined ? { deletePath } : {}) });
+			}
 			throw error;
 		}
 	}
@@ -426,12 +433,16 @@ export class FileTransferService {
 		}
 	}
 
-	/** Best-effort handle release; a failure here must not mask the original error. */
+	/**
+	 * Closes a slot whose transfer moved every byte but saw no end-of-file. The file is whole, so
+	 * only the slot is owed when the link takes the close with it (review of 6188670); the brick
+	 * answering anything means the slot is free (`c_com.c` 2116–2150).
+	 */
 	private async releaseHandle(link: TransferLink, handle: number): Promise<void> {
 		try {
 			await link.send({ kind: 'fs:closeHandle', handle });
-		} catch {
-			// The handle is unusable either way, and the brick frees it on restart.
+		} catch (error) {
+			if (!brickAnswered(error)) { this.ledger?.owe({ kind: 'slot', handle }); }
 		}
 	}
 }

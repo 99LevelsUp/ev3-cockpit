@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { BrickCommand, BrickId, BrickResponse } from '../contracts';
-import { ProtocolError, TransportError } from '../errors/CockpitError';
+import { LinkLostError, ProtocolError, TransportError } from '../errors/CockpitError';
 import { FileTransferService } from '../fs/fileTransferService';
 import { TransferLedger, ledgerFor } from '../fs/transferLedger';
 import { buildCommand } from '../protocol/ev3Commands';
@@ -226,6 +226,89 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 		b.release();
 		await Promise.all([running, next]);
 		assert.equal(ledger.pending(), 1, 'still owed, for a transfer that starts with nothing running');
+	});
+
+	it('lets no transfer start while a settlement still waits on the user (review of 6188670)', async () => {
+		let answer: (yes: boolean) => void = () => { /* set below */ };
+		const { b, service } = setup(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+		b.cutOn('fs:beginWrite');
+		await assert.rejects(service.writeFile(PATH, content));
+		b.reconnect();
+		b.clear();
+
+		const first = service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+		await new Promise((resolve) => setImmediate(resolve));
+		const second = service.readFile(PATH);   // starts while the question is open
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(b.kinds(), [], 'a transfer went out under the settlement');
+
+		answer(true);
+		await Promise.all([first, second]);
+		const kinds = b.kinds();
+		const lastClose = kinds.lastIndexOf('close 63');
+		assert.ok(lastClose >= 0 && lastClose < kinds.indexOf('fs:beginRead') && lastClose < kinds.indexOf('fs:beginWrite'),
+			`the sweep did not end before both transfers began: ${kinds.join(', ')}`);
+	});
+
+	it('keeps the debt when the question itself fails, and asks again (review of 6188670)', async () => {
+		let asked = 0;
+		const { b, ledger, service } = setup(async () => { asked += 1; if (asked === 1) { throw new Error('no window'); } return true; });
+		b.cutOn('fs:beginWrite');
+		await assert.rejects(service.writeFile(PATH, content));
+		b.reconnect();
+
+		await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+		assert.equal(ledger.pending(), 1, 'the debt went with the failed question');
+		await service.writeFile('/home/root/lms2012/prjs/z.rbf', new Uint8Array(10));
+		assert.equal(asked, 2);
+		assert.equal(ledger.pending(), 0);
+	});
+
+	it('owes the slot when the close after the last byte goes with the link (review of 6188670)', async () => {
+		const ledger = new TransferLedger();
+		const sent: string[] = [];
+		const send = async (command: BrickCommand): Promise<BrickResponse> => {
+			sent.push(command.kind);
+			if (command.kind === 'fs:beginWrite') { return { kind: 'fs:beginWrite', handle: 7, endOfFile: false }; }
+			if (command.kind === 'fs:closeHandle') { throw new TransportError('cable out'); }
+			throw new Error(`unexpected ${command.kind}`);
+		};
+		const service = new FileTransferService(send, { ledger });
+
+		await service.writeFile(PATH, new Uint8Array(10));   // every byte in BEGIN, no end-of-file
+
+		assert.deepEqual(sent, ['fs:beginWrite', 'fs:closeHandle']);
+		assert.equal(ledger.pending(), 1);
+	});
+
+	it('releases the slot when the progress callback throws after the first chunk (review of 6188670)', async () => {
+		const { b, ledger, service } = setup();
+		await assert.rejects(service.writeFile(PATH, content, { onProgress: () => { throw new Error('callback'); } }), /callback/);
+
+		assert.deepEqual(b.kinds(), ['fs:beginWrite', `close ${HANDLE}`, 'fs:delete']);
+		assert.equal(ledger.pending(), 0);
+	});
+
+	it('deletes nothing a later complete write produced (review of 6188670)', async () => {
+		const { b, ledger, service } = setup();
+		ledger.owe({ kind: 'delete', path: PATH });
+		ledger.owe({ kind: 'slot', handle: 5, deletePath: PATH });
+		ledger.written(PATH);
+
+		await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+
+		assert.deepEqual(b.kinds().slice(0, 2), ['close 5', 'fs:beginWrite'], 'the slot is still owed, the delete is not');
+		assert.equal(b.commands.filter((c) => c.kind === 'fs:delete').length, 0);
+	});
+
+	it('owes nothing for a first command refused before it left (2.8.14)', async () => {
+		const ledger = new TransferLedger({ confirmSweep: async () => true });
+		const send = async (): Promise<BrickResponse> => { throw new LinkLostError('lost; the command was not sent'); };
+		const service = new FileTransferService(send, { ledger });
+
+		await assert.rejects(service.writeFile(PATH, content), LinkLostError);
+
+		assert.equal(ledger.pending(), 0);
 	});
 
 	it('keeps one ledger per brick for the same brick layer', () => {
