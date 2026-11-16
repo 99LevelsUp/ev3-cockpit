@@ -22,7 +22,7 @@ import { ProviderRegistry } from '../transports/providerRegistry';
 import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
 import { PresenceAggregator } from '../runtime/presenceAggregator';
 import { SessionManager } from '../runtime/sessionManager';
-import { BrickManager } from '../runtime/brickManager';
+import { BrickManager, BrickManagerOptions } from '../runtime/brickManager';
 import { waitFor } from './waitFor';
 
 // ── A fake channel ──────────────────────────────────────────────────
@@ -199,7 +199,7 @@ const usbKey = makeBrickKey(Transport.USB, '001653F00C0C');
 const btKey = makeBrickKey(Transport.BT, '00:16:53:F0:0C:0C');
 const CCC = brickIdOf(usbKey);
 
-function world(frames = false) {
+function world(frames = false, extra: Partial<BrickManagerOptions> = {}) {
 	const usb = fakeChannel(Transport.USB, 30, { supportsTelemetryFrames: frames }, true);
 	const bt = fakeChannel(Transport.BT, 20, { rejoinOnEvidenceOnly: true, supportsTelemetryFrames: frames });
 	const registry = new ProviderRegistry();
@@ -215,6 +215,7 @@ function world(frames = false) {
 	});
 	const bricks = new BrickManager({
 		sessionManager, aggregator, providerRegistry: registry, rejoinBaseMs: 20, rejoinMaxMs: 40, slowProbeRetryMs: 20,
+		...extra,
 	});
 	const show = { usb: () => usb.seen.splice(0, usb.seen.length, item(usbKey, Transport.USB)),
 		bt: () => bt.seen.splice(0, bt.seen.length, item(btKey, Transport.BT)) };
@@ -279,6 +280,41 @@ describe('BrickManager — signing in', () => {
 		await bricks.signIn(brickIdOf(mockKey));
 		assert.equal(bricks.routeOf(brickIdOf(mockKey)), mockKey);
 		bricks.dispose(); sessionManager.dispose(); aggregator.dispose(); scheduler.dispose(); registry.dispose();
+	});
+});
+
+describe('BrickManager — the transfer packet the user chose (4.6.4)', () => {
+	const chosen = (transport: Transport): number | undefined =>
+		(transport === Transport.BT ? 4096 : transport === Transport.USB ? 2048 : undefined);
+
+	it('gives a transfer over Bluetooth the chosen packet', async () => {
+		const w = world(false, { transferPacketBytes: chosen });
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		assert.equal(w.bricks.routeOf(CCC), btKey);
+		assert.equal(w.bricks.pin(CCC).maxPacketBytes, 4096);
+		w.done();
+	});
+
+	it('keeps USB at its link\'s own packet, whatever is chosen', async () => {
+		const w = world(false, { transferPacketBytes: chosen });
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		assert.equal(w.bricks.routeOf(CCC), usbKey);
+		assert.equal(w.bricks.pin(CCC).maxPacketBytes, w.sessionManager.maxPacketBytes(usbKey));
+		w.done();
+	});
+
+	it('leaves telemetry at the link\'s packet, a chosen size is for transfers only', async () => {
+		const w = world(false, { transferPacketBytes: chosen });
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		assert.equal(w.bricks.maxPacketBytes(CCC), w.sessionManager.maxPacketBytes(btKey));
+		assert.notEqual(w.bricks.maxPacketBytes(CCC), 4096);
+		w.done();
 	});
 });
 
