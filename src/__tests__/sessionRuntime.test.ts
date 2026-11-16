@@ -1038,6 +1038,43 @@ describe('SessionManager -- one brick over two channels', () => {
 		manager.dispose();
 	});
 
+	it('drops a command held by a full window when its session closes, on the old link and on the new', async () => {
+		const executed: string[] = [];
+		let linkNo = 0;
+		const provider: TransportProvider = {
+			transport: Transport.USB,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.USB, items: [] }),
+			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.USB }),
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.reject(new Error('not used: the channel below answers commands')),
+			createCommandChannel: () => {
+				const link = ++linkNo;
+				return { execute: () => { executed.push(`link ${link}`); return Promise.resolve({ kind: 'battery', level: 80 }); } };
+			},
+			dispose: () => { /* nothing to release */ },
+		};
+		const registry = new ProviderRegistry();
+		registry.register(provider);
+		const manager = new SessionManager({
+			providerRegistry: registry,
+			heartbeatIntervalMs: 60_000,
+			transportGuard: new TransportGuard({ maxCommandsPerSec: 2 }),
+		});
+		await manager.connect(usbKey, Transport.USB);
+		await manager.send(usbKey, { kind: 'battery' });
+		await manager.send(usbKey, { kind: 'battery' });
+		const held = manager.send(usbKey, { kind: 'battery' });
+		await new Promise<void>((r) => setImmediate(r));
+
+		await manager.disconnect(usbKey);
+		await manager.connect(usbKey, Transport.USB);   // a new link to the same brick while it waits
+		await assert.rejects(held, /disconnected/i);
+		assert.deepEqual(executed, ['link 1', 'link 1'], 'the held command reached a link');
+		manager.dispose();
+	});
+
 	it('carries a burst of 300 sends in under a second at the default ceiling, none refused', async () => {
 		// U9 on HOSTA: a 100 000-byte file through libusb ran at about 380 chunks per second
 		// and the guard, then at 200 and refusing, failed the write halfway and the listing
