@@ -8,6 +8,7 @@
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/99LevelsUp/ev3-cockpit" },
   "engines": { "vscode": "^1.90.0" },
+  "capabilities": { "untrustedWorkspaces": { "supported": true } },
   "extensionDependencies": ["99LevelsUp.ev3-cockpit"],
   "activationEvents": [],
   "main": "./extension.js",
