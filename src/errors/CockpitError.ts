@@ -89,6 +89,22 @@ export class BrickUnreachableError extends TransportError {
 	}
 }
 
+/**
+ * The command was refused before it reached the wire: its session's link is lost and reconnecting
+ * (IMPLEMENTATION_PLAN 2.8.14).
+ *
+ * A link fault to whoever routes traffic, so the brick layer moves to another channel as for any
+ * {@link TransportError}. But unlike one, it proves the brick never saw the command: a caller that
+ * reads a link failure as "it may have run" (a Bluetooth peer removal, an interrupted transfer's
+ * slot) must read this one as "it did not".
+ */
+export class LinkLostError extends TransportError {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause);
+		this.name = 'LinkLostError';
+	}
+}
+
 export class ConnectionError extends CockpitError {
 	constructor(message: string, cause?: unknown) {
 		super(ErrorCode.ConnectionFailed, message, cause);

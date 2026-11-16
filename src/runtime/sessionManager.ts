@@ -18,15 +18,15 @@ import { HeartbeatMonitor } from './heartbeatMonitor';
 import { ReconnectStrategy } from './reconnectStrategy';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import {
-	AlreadyConnectedError, ConnectionAbandonedError, NotConnectedError, NoProviderError, ProtocolError,
+	AlreadyConnectedError, ConnectionAbandonedError, LinkLostError, NotConnectedError, NoProviderError, ProtocolError,
 	TimeoutError, TransportError,
 } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { TransportGuard } from '../transports/transportGuard';
 
-/** A command refused because its session's link is lost: a link fault, so the brick layer routes elsewhere. */
-const linkLost = (brickKey: BrickKey): TransportError =>
-	new TransportError(`The link to ${describeChannel(brickKey)} is lost and reconnecting; the command was not sent.`);
+/** A command refused because its session's link is lost: never sent, and a link fault to the brick layer. */
+const linkLost = (brickKey: BrickKey): LinkLostError =>
+	new LinkLostError(`The link to ${describeChannel(brickKey)} is lost and reconnecting; the command was not sent.`);
 
 // ── Events ──────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@ import {
 	brickIdOf, makeBrickKey,
 } from '../contracts';
 import type { DiscoveryScanResult, SessionHandle, TransportProvider } from '../contracts';
-import { TimeoutError, TransportError } from '../errors/CockpitError';
+import { LinkLostError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { MockTransportProvider } from '../mock';
 import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../protocol/ev3Packet';
 import { ProviderRegistry } from '../transports/providerRegistry';
@@ -625,6 +625,42 @@ describe('Forget a brick — this computer\'s entry on the brick (R7–R9)', () 
 });
 
 // ── Nothing reopens the brick while it is forgotten (R3, KTD4) ─────
+
+/** Every peer removal refused before it leaves, as by a session whose link is lost (2.8.14). */
+function lostOnRemoval(sessionManager: SessionManager): void {
+	const send = sessionManager.send.bind(sessionManager);
+	sessionManager.send = ((key, command, options) => (command.kind === 'brick:removeBluetoothPeer'
+		? Promise.reject(new LinkLostError('The link is lost and reconnecting; the command was not sent.'))
+		: send(key, command, options))) as typeof sessionManager.send;
+}
+
+describe('A peer removal refused before it left is not reported as sent (2.8.14)', () => {
+	it('forget: reports this computer\'s removal as failed, not sent', async () => {
+		const w = world({ peers: [THIS_PC], paired: false });
+		await signedInOver(w, Transport.USB);
+		lostOnRemoval(w.sessionManager);
+
+		const report = await w.bricks.forget(CCC);
+
+		assert.deepEqual(w.removals(), []);
+		assert.equal(report.brickSide.status, 'failed');
+		w.done();
+	});
+
+	it('clear: reports every entry as not sent, none as sent', async () => {
+		const w = world({ peers: ['OLD-PC', 'Zed'] });
+		await signedInOver(w, Transport.USB);
+		lostOnRemoval(w.sessionManager);
+
+		const report = await w.bricks.clearBluetoothList(CCC, asked().confirm);
+
+		assert.deepEqual(w.removals(), []);
+		assert.deepEqual(report?.entries.map((entry) => entry.status), ['failed', 'failed']);
+		assert.ok(report?.entries.every((entry) => 'detail' in entry && /Not sent/.test(entry.detail ?? '')),
+			JSON.stringify(report?.entries));
+		w.done();
+	});
+});
 
 describe('Forget a brick — nothing opens or probes it meanwhile (R3)', () => {
 	it('starts no name probe for a presence event, and refuses a sign-in from outside', async () => {
