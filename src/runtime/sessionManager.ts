@@ -638,6 +638,9 @@ export class SessionManager implements vscode.Disposable {
 	}
 
 	private cleanupSession(resources: SessionResources): void {
+		// First, before anyone awaits the provider: a command held by the rate window checks this
+		// when it resumes, and the session is deleted only after the provider has let go.
+		resources.link = undefined;
 		resources.heartbeat.stop();
 		resources.commandQueue.drainWith(new Error('Session disconnected.'));
 		resources.commandQueue.dispose();
