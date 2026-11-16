@@ -100,16 +100,22 @@ export class CommandQueue {
 
 		try {
 			while (this.queue.length > 0 && !this._disposed) {
+				const entry = this.queue[0];
+				let refusal: { error: unknown } | undefined;
 				try {
 					const wait = this.admit?.();
 					if (wait) { await wait; }
 				} catch (error) {
-					this.queue.shift()?.reject(error);
+					refusal = { error };
+				}
+				// A drain during the wait has already rejected what was waiting, and a command
+				// queued since is now at the head: it gets its own admission, not this one's.
+				if (this._disposed || this.queue[0] !== entry) { continue; }
+				this.queue.shift();
+				if (refusal) {
+					entry.reject(refusal.error);
 					continue;
 				}
-				// A drain or a dispose during the wait has already rejected what was waiting.
-				if (this._disposed || this.queue.length === 0) { break; }
-				const entry = this.queue.shift()!;
 				try {
 					const response = await this.executor!(entry.command, entry.options);
 					entry.resolve(response);

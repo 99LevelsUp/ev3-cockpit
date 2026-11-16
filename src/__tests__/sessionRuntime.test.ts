@@ -132,14 +132,80 @@ describe('CommandQueue', () => {
 		assert.deepEqual(executed, []);
 	});
 
-	it('fails the head command when admission refuses it, and goes on with the next', async () => {
-		const queue = new CommandQueue();
-		let refuse = true;
-		queue.setExecutor(async () => ({ kind: 'battery', level: 50 } as const),
-			() => { if (refuse) { refuse = false; throw new Error('degraded'); } return undefined; });
+	/** Admissions the test settles by hand, one per call, in call order. */
+	function handAdmission() {
+		const calls: { resolve: () => void; reject: (error: Error) => void }[] = [];
+		const admit = () => new Promise<void>((resolve, reject) => { calls.push({ resolve, reject }); });
+		return { calls, admit };
+	}
+	const tick = () => new Promise<void>((r) => setImmediate(r));
 
-		await assert.rejects(queue.send({ kind: 'battery' }), /degraded/);
-		assert.deepEqual(await queue.send({ kind: 'battery' }), { kind: 'battery', level: 50 });
+	it('gives a command queued after a drain its own admission, not the drained one\'s', async () => {
+		const executed: string[] = [];
+		const { calls, admit } = handAdmission();
+		const queue = new CommandQueue();
+		queue.setExecutor(async (cmd) => { executed.push(cmd.kind); return { kind: 'battery', level: 50 } as const; }, admit);
+
+		const first = queue.send({ kind: 'battery' });
+		queue.drainWith(new Error('Session disconnected.'));
+		await assert.rejects(first, /disconnected/);
+		const second = queue.send({ kind: 'ports' });
+		calls[0].resolve();   // the drained command's slot opens
+		await tick();
+		assert.deepEqual(executed, [], 'the second command went out on the first one\'s admission');
+		assert.equal(calls.length, 2, 'the second command was never asked for');
+		calls[1].resolve();
+		await second;
+		assert.deepEqual(executed, ['ports']);
+	});
+
+	it('does not pass a drained command\'s refusal on to the command queued after it', async () => {
+		const { calls, admit } = handAdmission();
+		const queue = new CommandQueue();
+		queue.setExecutor(async () => ({ kind: 'battery', level: 50 } as const), admit);
+
+		const first = queue.send({ kind: 'battery' });
+		queue.drainWith(new Error('Session disconnected.'));
+		await assert.rejects(first, /disconnected/);
+		const second = queue.send({ kind: 'battery' });
+		calls[0].reject(new Error('degraded'));
+		await tick();
+		calls[1].resolve();
+		assert.deepEqual(await second, { kind: 'battery', level: 50 });
+	});
+
+	it('fails the head on a refused admission and goes on with the command queued behind it', async () => {
+		const { calls, admit } = handAdmission();
+		const queue = new CommandQueue();
+		queue.setExecutor(async () => ({ kind: 'battery', level: 50 } as const), admit);
+
+		const head = queue.send({ kind: 'battery' });
+		const behind = queue.send({ kind: 'battery' });   // queued while the head waits
+		calls[0].reject(new Error('degraded'));
+		await assert.rejects(head, /degraded/);
+		await tick();
+		calls[1].resolve();   // no further send: the same drain must carry it
+		assert.deepEqual(await behind, { kind: 'battery', level: 50 });
+	});
+
+	it('goes on with the backlog after an admission that throws at once', async () => {
+		let release: () => void = () => { /* set below */ };
+		let refuseNext = false;
+		const queue = new CommandQueue();
+		queue.setExecutor(
+			(cmd) => cmd.kind === 'info'
+				? new Promise((resolve) => { release = () => resolve({ kind: 'battery', level: 50 }); })
+				: Promise.resolve({ kind: 'battery', level: 50 }),
+			() => { if (refuseNext) { refuseNext = false; throw new Error('degraded'); } return undefined; });
+
+		const slow = queue.send({ kind: 'info' });
+		const refused = queue.send({ kind: 'battery' });
+		const after = queue.send({ kind: 'ports' });
+		refuseNext = true;
+		release();
+		await slow;
+		await assert.rejects(refused, /degraded/);
+		assert.deepEqual(await after, { kind: 'battery', level: 50 });
 	});
 
 	it('executes commands in FIFO order', async () => {
@@ -1097,6 +1163,7 @@ describe('SessionManager -- one brick over two channels', () => {
 		await manager.disconnect(usbKey);
 		await manager.connect(usbKey, Transport.USB);   // a new link to the same brick while it waits
 		await assert.rejects(held, /disconnected/i);
+		await new Promise<void>((r) => setTimeout(r, 1100));   // past the window's turn, when it would resume
 		assert.deepEqual(executed, ['link 1', 'link 1'], 'the held command reached a link');
 		manager.dispose();
 	});
@@ -1132,6 +1199,7 @@ describe('SessionManager -- one brick over two channels', () => {
 
 		const closing = manager.disconnect(usbKey);   // the provider holds on past the window's turn
 		await assert.rejects(held, /disconnected/i);
+		await new Promise<void>((r) => setTimeout(r, 1100));   // the window turns while the provider still holds
 		assert.deepEqual(executed, ['sent', 'sent'], 'the held command went out during the disconnect');
 		letGo();
 		await closing;
