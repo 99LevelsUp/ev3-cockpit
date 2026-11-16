@@ -1206,6 +1206,60 @@ describe('SessionManager -- one brick over two channels', () => {
 		manager.dispose();
 	});
 
+	/** A USB link whose first command hangs on the wire, the way one does when the cable goes. */
+	function hangingLink() {
+		const executed: string[] = [];
+		const provider: TransportProvider = {
+			transport: Transport.USB,
+			priority: 0,
+			capabilities: { supportsSignalInfo: false, supportsForget: false, supportsTelemetryFrames: false },
+			discover: () => Promise.resolve({ transport: Transport.USB, items: [] }),
+			connect: (brickKey) => Promise.resolve({ brickKey, transport: Transport.USB }),
+			disconnect: () => Promise.resolve(),
+			sendPacket: () => Promise.reject(new Error('not used: the channel below answers commands')),
+			createCommandChannel: () => ({
+				execute: (cmd) => {
+					executed.push(cmd.kind);
+					return executed.length === 1
+						? new Promise<never>(() => { /* on the wire when the link goes */ })
+						: Promise.resolve({ kind: 'battery', level: 80 });
+				},
+			}),
+			dispose: () => { /* nothing to release */ },
+		};
+		const registry = new ProviderRegistry();
+		registry.register(provider);
+		// The reconnect waits a minute: the session stays reconnecting for the whole test.
+		const manager = new SessionManager({
+			providerRegistry: registry, heartbeatIntervalMs: 60_000, reconnectBaseMs: 60_000, reconnectMaxMs: 60_000,
+		});
+		return { manager, executed };
+	}
+
+	it('refuses the commands queued behind the failure when the link drops, at once and unsent', async () => {
+		const { manager, executed } = hangingLink();
+		await manager.connect(usbKey, Transport.USB);
+		void manager.send(usbKey, { kind: 'battery' }).catch(() => { /* on the wire; fails by itself */ });
+		const queued = manager.send(usbKey, { kind: 'ports' });
+		await new Promise<void>((r) => setImmediate(r));
+
+		manager['handleHeartbeatFailure'](usbKey, new Error('cable out'));
+		await assert.rejects(queued, (error: unknown) => error instanceof TransportError && /lost/.test((error as Error).message));
+		assert.deepEqual(executed, ['battery'], 'the queued command went out on the dead link');
+		manager.dispose();
+	});
+
+	it('refuses a command sent while the session reconnects, without queueing it', async () => {
+		const { manager, executed } = hangingLink();
+		await manager.connect(usbKey, Transport.USB);
+		manager['handleHeartbeatFailure'](usbKey, new Error('cable out'));
+		assert.equal(manager.getSession(usbKey)?.connectionState, ConnectionState.Reconnecting);
+
+		await assert.rejects(manager.send(usbKey, { kind: 'battery' }), (error: unknown) => error instanceof TransportError);
+		assert.deepEqual(executed, []);
+		manager.dispose();
+	});
+
 	it('carries a burst of 300 sends in under a second at the default ceiling, none refused', async () => {
 		// U9 on HOSTA: a 100 000-byte file through libusb ran at about 380 chunks per second
 		// and the guard, then at 200 and refusing, failed the write halfway and the listing

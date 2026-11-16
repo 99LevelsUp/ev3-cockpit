@@ -24,6 +24,10 @@ import {
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { TransportGuard } from '../transports/transportGuard';
 
+/** A command refused because its session's link is lost: a link fault, so the brick layer routes elsewhere. */
+const linkLost = (brickKey: BrickKey): TransportError =>
+	new TransportError(`The link to ${describeChannel(brickKey)} is lost and reconnecting; the command was not sent.`);
+
 // ── Events ──────────────────────────────────────────────────────────
 
 export interface SessionStateChangeEvent {
@@ -253,7 +257,13 @@ export class SessionManager implements vscode.Disposable {
 
 	// ── Command dispatch ────────────────────────────────────────────
 
-	/** Send a command to a connected brick (via its command queue). */
+	/**
+	 * Send a command to a connected brick (via its command queue).
+	 *
+	 * Refused at once while the session reconnects: its link is lost and the queue still holds
+	 * the old executor, so the command would go out on the dead link and fail on its own timeout
+	 * (IMPLEMENTATION_PLAN 2.8.14). The reconnect's own checks use the queue directly.
+	 */
 	send(
 		brickKey: BrickKey,
 		command: BrickCommand,
@@ -262,6 +272,9 @@ export class SessionManager implements vscode.Disposable {
 		const resources = this.sessions.get(brickKey);
 		if (!resources) {
 			return Promise.reject(new NotConnectedError(`Brick ${describeChannel(brickKey)} is not connected.`));
+		}
+		if (resources.entry.connectionState === ConnectionState.Reconnecting) {
+			return Promise.reject(linkLost(brickKey));
 		}
 		return resources.commandQueue.send(command, options);
 	}
@@ -370,6 +383,10 @@ export class SessionManager implements vscode.Disposable {
 		if (previousState === ConnectionState.Connected) {
 			resources.entry.setError(error instanceof Error ? error.message : String(error));
 			resources.entry.transition(ConnectionState.Reconnecting);
+			// What waited behind the failure is refused now rather than sent on the dead link one by
+			// one, each on its own timeout; nor held for the new link, where a motor command would
+			// arrive late (IMPLEMENTATION_PLAN 2.8.14). A command already on the wire fails by itself.
+			resources.commandQueue.drainWith(linkLost(brickKey));
 			this.fireStateChange(brickKey, previousState, ConnectionState.Reconnecting);
 			this.scheduleReconnect(brickKey);
 		}
