@@ -1049,6 +1049,11 @@ Build the source of truth for connected bricks.
     session if the net48 helper's process-per-pairing model turns out to be a real problem in
     practice, not a default next step
 
+  - [ ] 2.8.14 **Commands queued on a session when its link drops are refused at once.** Decided
+    by the owner, 16.11.2026 (step-5 plan, review of the rate-guard fix): on the transition to
+    reconnecting the session's queue is drained with a link-lost error instead of each command
+    going out on the dead link and failing on its own timeout; the reconnect's probes go on.
+    Not held for the new link: a late motor command is worse than a refused one.
   - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears
@@ -1414,6 +1419,15 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Today `brickKey` is `transport:id` and every command hardcodes layer 0, so the cockpit
     can neither list nor address a chained brick. Needs a design decision: does a layer
     become part of the key, a property of the session, or a separate concept?
+    **Decided by the owner, 16.11.2026: full support, built before Phase 5, and the chain is a
+    separate concept.** The firmware (1.09D `c_com/source/c_daisy.c`) carries only motor
+    commands and sensor types down the chain and sensor data up; no file transfer, program
+    start, name or serial crosses it, so today a chained brick shows as the master's further
+    ports by layer (0 = master, 1–3). The API still models a chain with members, each member
+    carrying what it can do, found from the brick and not from a firmware version: the owner
+    may extend the firmware, and a member that gains files, programs or a name should light
+    them up without an API change. To verify on the hardware when built: that a name or serial
+    really cannot be read over the chain.
 
   - [x] 3.1.4h **Closed 11.11.2026 (step 6 U1): carried by `RowResult.alignment` and the assembler.** **A 32-bit global must start on a 4-byte boundary.** It *is* documented, in
     the Communication Developer Kit's opening section on direct commands — "Offset in the
@@ -1669,6 +1683,13 @@ Export a stable API for other extensions without giving them direct access to th
     transport, which no measurement has asked for
   - [ ] 4.6.4 Per-transport chunk size — USB takes the report payload; TCP and BT take the largest
     the firmware accepts, which is unmeasured (R4)
+    **Measured 16.11.2026 (step-5 plan, U9):** 1024-byte packets carry 1, 1000 and 100 000-byte
+    files byte for byte over USB, TCP and Bluetooth on HOSTD and HOSTA. **Decided by the owner,
+    16.11.2026: configurable**, because a firmware the owner may extend could take more: a
+    setting each for TCP and Bluetooth, default 1024; USB stays at its report size. The
+    setting's description says a larger value is safe only with a firmware that takes it — on
+    the stock firmware a message over one buffer puts the channel into `RXFILEDL`, and a link
+    lost then writes the next packets into the file (4.6.17).
   - [x] 4.6.5 `list` with `CONTINUE_LIST_FILES` paging, typed entries carrying the byte
     size and checksum the brick already includes per file (R5)
   - [x] 4.6.6 `read` for a file of any size (R6)
