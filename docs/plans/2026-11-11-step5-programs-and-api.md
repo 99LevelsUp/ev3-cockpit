@@ -111,6 +111,12 @@ Each unit: tests first (RED), mutation check of the key assertions, `npm run tes
 - Upload a file, list, remove; run a brick's own demo `.rbf` and stop it; run while one runs (refused, then `replace`); emergency stop with a motor turning; a shell `echo` in full mode, refused in safe mode; connect and disconnect through the API.
 - IMPLEMENTATION_PLAN 4.6.4: the largest write chunk the firmware takes over TCP and over Bluetooth (today both use the firmware's 1024-byte buffer); write files of 1, 1000 and 100 000 bytes over each and read them back.
 
+**HOSTD (Linux), 16.11.2026, cockpit 0.2.345.** Two tools, both in `scripts/`: `api-check/` is an extension that uses the public API as a sibling would, `hardware-matrix.js` writes and reads the files over each transport.
+
+- API check on AAA over USB (firmware V1.10E, a program made in EV3 Classroom turning a motor on B): 19 of 19. Folder, 1 B / 1000 B / 100 000 B written and read back byte for byte (100 000 B: write 0.66 s, read 0.49 s), the listing's sizes, a write to `sys/` refused in safe mode, the folder removed; run, a second run refused `program_running`, run with `replace`, stop, emergency stop with the motor turning (the person saw it stop and the menu back); the shell refused in safe mode, `echo` with status 0 and the file read back in full mode, the setting restored; disconnect and connect.
+- Matrix: 78 passed, 1 failed. Files of 1, 1000 and 100 000 B with 1024-byte packets, every byte compared: USB on AAA, BBB (V1.10E) and CCC (V1.09H), 100 000 B written in 0.41–0.49 s and read in 0.40–0.42 s; Bluetooth on CCC, the only brick paired there, 100 000 B written in 4.6 s and read in 4.6 s. TCP: nothing announced, no brick on Wi-Fi at HOSTD.
+- Still open: TCP, and the same on HOSTA (Windows). The 1024-byte chunk works over Bluetooth; whether the firmware takes a larger one was not tried.
+
 ## Review (codex, inline packet)
 
 ### Round 1 — U3, U4, U6 (11.11.2026), NOT-READY → fixed in ddcdf57
