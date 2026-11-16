@@ -301,6 +301,21 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 		assert.equal(b.commands.filter((c) => c.kind === 'fs:delete').length, 0);
 	});
 
+	it('keeps a complete file safe from deletion when its last progress report throws (review of 6188670)', async () => {
+		const { b, ledger, service } = setup();
+		b.hold('fs:continueWrite');
+		const writing = service.writeFile(PATH, content, {
+			onProgress: (p) => { if (p.transferred === p.total) { throw new Error('callback'); } },
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+		ledger.owe({ kind: 'delete', path: PATH });   // from an overlapping write to the same path, owed meanwhile
+		b.release();
+		await assert.rejects(writing, /callback/);
+
+		await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+		assert.equal(b.commands.filter((c) => c.kind === 'fs:delete').length, 0, 'the complete file was deleted');
+	});
+
 	it('owes nothing for a first command refused before it left (2.8.14)', async () => {
 		const ledger = new TransferLedger({ confirmSweep: async () => true });
 		const send = async (): Promise<BrickResponse> => { throw new LinkLostError('lost; the command was not sent'); };

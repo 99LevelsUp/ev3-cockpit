@@ -44,7 +44,8 @@ function brickAnswered(error: unknown): boolean {
 export class TransferLedger {
 	private debts: TransferDebt[] = [];
 	private active = 0;
-	private settling: Promise<void> | undefined;
+	/** Settles when the last begin() let in has been admitted (or refused). */
+	private gate: Promise<void> = Promise.resolve();
 
 	constructor(private options: TransferLedgerOptions = {}) {}
 
@@ -68,16 +69,20 @@ export class TransferLedger {
 	 * counts it out again.
 	 */
 	async begin(send: SendCommand): Promise<() => void> {
-		// A settlement under way owns the brick until it ends, whatever is left owed: a transfer
-		// let in now could have its fresh slot swept or its file deleted (review of 6188670). One
+		// Admission goes through one gate, and a settlement runs inside it: no transfer is let in
+		// while one runs, and each is counted active before the next is admitted, so a settlement
+		// starts only with nothing of ours running (review of 6188670, rounds 1 and 2). One
 		// settlement per begin at most, so debts that wait for the user do not spin.
-		if (this.settling) {
-			await this.settling;
-		} else if (this.active === 0 && this.debts.length > 0) {
-			this.settling = this.settle(send).finally(() => { this.settling = undefined; });
-			await this.settling;
+		const previous = this.gate;
+		let open: () => void = () => { /* set below */ };
+		this.gate = new Promise<void>((resolve) => { open = resolve; });
+		try {
+			await previous;
+			if (this.active === 0 && this.debts.length > 0) { await this.settle(send); }
+			this.active += 1;
+		} finally {
+			open();
 		}
-		this.active += 1;
 		let ended = false;
 		return () => {
 			if (!ended) { ended = true; this.active -= 1; }

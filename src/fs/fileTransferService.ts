@@ -290,7 +290,8 @@ export class FileTransferService {
 			// abandoned transfer would otherwise hold one, and the file's space, until the brick
 			// restarts. The partial file goes too: it is not the file anyone sent (4.6.17). After
 			// end-of-file the slot is the firmware's again and the file whole: nothing to undo.
-			if (!endOfFile) { await this.abandon(link, handle, path); }
+			// A complete file whose last progress report threw is still a complete file.
+			if (!endOfFile) { await this.abandon(link, handle, path); } else { this.ledger?.written(path); }
 			throw error;
 		}
 
