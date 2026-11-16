@@ -34,38 +34,50 @@ describe('TransportGuard', () => {
 		});
 	});
 
-	it('enforces rate limit', () => {
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, usb);
-		assert.throws(() => guard.checkRateLimit(brick, usb), /Rate limit/);
+	/** Whether `acquire` has settled after the microtasks queued so far; no promise is a slot taken at once. */
+	async function settledNow(slot: Promise<void> | undefined): Promise<boolean> {
+		if (!slot) { return true; }
+		let settled = false;
+		void slot.then(() => { settled = true; }, () => { settled = true; });
+		await new Promise<void>((r) => setImmediate(r));
+		return settled;
+	}
+
+	it('holds a command past a full window until a slot frees, and does not refuse it', async () => {
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		const started = Date.now();
+		const fourth = guard.acquire(brick, usb);
+		assert.equal(await settledNow(fourth), false, 'a full window must hold the fourth send');
+		await fourth;
+		assert.ok(Date.now() - started >= 950, `released after ${Date.now() - started} ms, before the window turned`);
 	});
 
-	it('shares one rate window across every channel to a brick', () => {
+	it('shares one rate window across every channel to a brick', async () => {
 		// Commands over USB and Bluetooth land on the same VM.
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, bt);
-		guard.checkRateLimit(brick, usb);
-		assert.throws(() => guard.checkRateLimit(brick, bt), /Rate limit/);
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, bt);
+		await guard.acquire(brick, usb);
+		assert.equal(await settledNow(guard.acquire(brick, bt)), false);
 	});
 
-	it('keeps separate rate windows for separate bricks', () => {
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, usb);
-		assert.doesNotThrow(() => guard.checkRateLimit('00165300000B', 'usb:00165300000B'));
+	it('keeps separate rate windows for separate bricks', async () => {
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		assert.equal(await settledNow(guard.acquire('00165300000B', 'usb:00165300000B')), true);
 	});
 
-	it('resets rate limit after 1 second window', async () => {
-		guard = new TransportGuard({
-			maxCommandsPerSec: 2,
-			degradationThreshold: 2,
-		});
-		guard.checkRateLimit(brick, usb);
-		guard.checkRateLimit(brick, usb);
-		assert.throws(() => guard.checkRateLimit(brick, usb));
-		await new Promise<void>((r) => setTimeout(r, 1050));
-		assert.doesNotThrow(() => guard.checkRateLimit(brick, usb));
+	it('refuses a held send whose channel degrades while it waits', async () => {
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		await guard.acquire(brick, usb);
+		const held = guard.acquire(brick, usb);
+		assert.ok(held, 'a full window must hold the fourth send');
+		guard.recordFailure(usb);
+		guard.recordFailure(usb);
+		await assert.rejects(held, /degraded/);
 	});
 
 	it('tracks consecutive failures and triggers degradation', () => {
@@ -89,17 +101,21 @@ describe('TransportGuard', () => {
 		assert.equal(degradedState, true);
 	});
 
-	it('blocks sends on a degraded channel', () => {
+	it('blocks sends on a degraded channel', async () => {
 		guard.recordFailure(usb);
 		guard.recordFailure(usb);
-		assert.throws(() => guard.checkRateLimit(brick, usb), /degraded/);
+		assert.throws(() => guard.acquire(brick, usb), /degraded/);
 	});
 
-	it('does not block another channel to the same brick when one degrades', () => {
+	it('takes a slot with room to spare in the same turn, without a promise', () => {
+		assert.equal(guard.acquire(brick, usb), undefined);
+	});
+
+	it('does not block another channel to the same brick when one degrades', async () => {
 		// A pulled cable fails every USB send; the Bluetooth standby must stay usable.
 		guard.recordFailure(usb);
 		guard.recordFailure(usb);
-		assert.doesNotThrow(() => guard.checkRateLimit(brick, bt));
+		await guard.acquire(brick, bt);
 	});
 
 	it('resets degradation on success', () => {
@@ -134,11 +150,11 @@ describe('TransportGuard', () => {
 		assert.equal(guard.getLastRttMs(usb), undefined);
 	});
 
-	it('disposes all state', () => {
+	it('disposes all state', async () => {
 		guard.recordFailure(usb);
 		guard.recordFailure(usb);
 		guard.dispose();
-		assert.doesNotThrow(() => guard.checkRateLimit(brick, usb));
+		await guard.acquire(brick, usb);
 	});
 });
 

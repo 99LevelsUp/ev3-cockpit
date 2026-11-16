@@ -281,8 +281,9 @@ sessions to two bricks at once (§4.1.1). What does need serialising is the *ope
 connections, pairing and the background presence jobs, which all page the one radio:
 `BtConnectionQueue` paces those, on both backends.
 
-**Transport guard**: A backstop against a pathological caller (≤ 200 commands/second per
-brick, counted across all of its channels) and degradation tracking per channel, so a pulled
+**Transport guard**: A backstop against a pathological caller (≤ 1000 commands/second per
+brick, counted across all of its channels; a full window waits, it does not refuse) and
+degradation tracking per channel, so a pulled
 cable degrades its USB channel and not the Bluetooth link standing by. The former "one active
 transport at a time" and its 2-second switch cooldown are gone: two links open to one brick
 with commands in flight on both froze nothing on three bricks (§4.1.1). It is deliberately
@@ -290,7 +291,10 @@ with commands in flight on both froze nothing on three bricks (§4.1.1). It is d
 commands are strictly serial, so each transport is already self-limiting at its own round
 trip — measured at 176, 62 and 11 commands per second for USB, TCP and BT, with no error
 and no latency drift at any of them. The guard exists for a retry storm or a runaway
-loop, not for the rates a working caller can reach.
+loop, not for the rates a working caller can reach. It was 200 until file chunks through
+libusb on Windows ran at about 380 per second and the guard refused a 100 000-byte write
+halfway (step-5 plan, U9); a refused chunk leaves a half-written file, so a full window
+now delays the next command instead.
 
 **BT connection queue**: serialises the opening of Bluetooth connections, pairing attempts and
 the presence jobs — a 15-second gap after a connect is released cleanly, 30 seconds after one

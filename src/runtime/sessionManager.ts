@@ -192,7 +192,7 @@ export class SessionManager implements vscode.Disposable {
 		const previousState = resources.entry.connectionState;
 		this.cleanupSession(resources);
 		// The channel's failures are history the next connect should not inherit --
-		// checkRateLimit() has no path back from `degraded` except recordSuccess(), which a
+		// acquire() has no path back from `degraded` except recordSuccess(), which a
 		// degraded channel can never reach on its own. Only this channel: another channel to
 		// the same brick keeps its own count.
 		this.transportGuard.resetHealth(brickKey);
@@ -611,7 +611,8 @@ export class SessionManager implements vscode.Disposable {
 				provider.transport,
 			);
 		resources.commandQueue.setExecutor(async (cmd, options) => {
-			this.transportGuard.checkRateLimit(brickId, brickKey);
+			const full = this.transportGuard.acquire(brickId, brickKey);
+			if (full) { await full; }
 			const startedAt = Date.now();
 			try {
 				const response = await channel.execute(cmd, options);
