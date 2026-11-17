@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { MOCK_CONFIG_FILE, loadMockConfigFile } from '../mock';
+import { DEFAULT_MOCK_CONFIG, MOCK_CONFIG_FILE, loadMockConfigFile, validateMockConfig } from '../mock';
 
 const notThere = (): never => { throw Object.assign(new Error('no such file'), { code: 'ENOENT' }); };
 const files = (byPath: Record<string, string>) => (file: string): string => {
@@ -44,6 +44,29 @@ describe('Mock bricks from the workspace (1.6.10)', () => {
 		}));
 		assert.equal(result.kind, 'invalid');
 		assert.match(result.kind === 'invalid' ? result.reason : '', /battery\.level/);
+	});
+
+	it('refuses what a hand-written file can get wrong beyond the required fields (review)', () => {
+		const broken: Record<string, unknown>[] = [
+			{ ...brick, filesystem: {} },
+			{ ...brick, bluetoothPeers: 42 },
+			{ ...brick, error: null },
+			{ ...brick, loss: { enabled: true, visibleMs: -1, hiddenMs: 100 } },
+			{ ...brick, loss: { enabled: true, visibleMs: 0, hiddenMs: 0 } },
+			{ ...brick, sensorPorts: [{ port: '1', dynamic: { kind: 'sine' } }] },
+			{ ...brick, sensorPorts: [{ port: '1', dynamic: { kind: 'square', low: 0, high: 1, periodMs: -5 } }] },
+			{ ...brick, parentId: 'nobody' },
+		];
+		for (const bad of broken) {
+			const result = loadMockConfigFile([ROOT], files({ [path.join(ROOT, MOCK_CONFIG_FILE)]: JSON.stringify({ transport: 'mock', bricks: [bad] }) }));
+			assert.equal(result.kind, 'invalid', `accepted ${JSON.stringify(bad)}`);
+		}
+		const twice = loadMockConfigFile([ROOT], files({ [path.join(ROOT, MOCK_CONFIG_FILE)]: JSON.stringify({ transport: 'mock', bricks: [brick, brick] }) }));
+		assert.match(twice.kind === 'invalid' ? twice.reason : '', /twice/);
+	});
+
+	it('still takes the built-in set', () => {
+		assert.doesNotThrow(() => validateMockConfig(DEFAULT_MOCK_CONFIG));
 	});
 
 	it('says why a file that cannot be read was not used, and does not look further', () => {
