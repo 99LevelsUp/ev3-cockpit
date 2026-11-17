@@ -88,6 +88,13 @@ export interface TelemetryRow {
 	 */
 	readonly port?: string;
 
+	/**
+	 * The daisy-chain layer of the brick whose port this row reads: 1-3 for a brick below the
+	 * master, absent for the master's own ports. The master answers for the whole chain when a
+	 * direct command carries the layer, so a member needs no session of its own.
+	 */
+	readonly layer?: number;
+
 	/** The UART mode this row selects, where it selects one. */
 	readonly mode?: number;
 
