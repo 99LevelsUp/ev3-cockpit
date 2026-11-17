@@ -42,6 +42,18 @@ From IMPLEMENTATION_PLAN 3.1.4f, 3.1.4i and 3.1.4j (three bricks chained over US
 | No host operation that reads a brick's name, files or programs takes a layer: `opCOM_GET` has none, and system commands have none. | `bytecodes.c`, `c_com.c` |
 | Emergency stop already sends `opINPUT_DEVICE STOP_ALL` with layer −1, which the firmware defines as every brick in the chain. | `src/protocol/ev3Commands.ts` `program:emergencyStop`; `ev3Packet.ts` `STOP_ALL` |
 
+U0 measured the rest on 17.11.2026 (AAA master, BBB layer 1, CCC layer 2, firmware 1.10E); the full record is in IMPLEMENTATION_PLAN 3.1.4f.
+
+| Fact | Source |
+|---|---|
+| The device list puts sensors at layer × 4 + port and motors at 16 + layer × 4 + port, and agrees with `GET_TYPEMODE` on every port. | U0, hardware |
+| Motor types are right on layers 1 and 2 in three rewirings, and no motor entry appeared on a port with nothing plugged in (Q1: no). | U0, hardware |
+| An empty member and no member read the same, `TYPE_NONE` everywhere (R2 holds). | U0, hardware |
+| Devices plugged into a member while the chain runs show on the next read; a member's sensor switches mode with one `NaN` read, as on the master. | U0, hardware |
+| The chain reads the same over USB, Bluetooth and Wi-Fi. Wi-Fi needs a hub on the master's host port, and the master finds a member behind the hub only after it restarts. | U0, hardware |
+| Emergency stop stops a member's motor. | U0, hardware |
+| Plugging a lower member back in while the chain runs kills the whole chain until the master restarts; unplugging alone does not. | U0, hardware |
+
 ## Where the code is (17.11.2026, checked against the repo)
 
 - `src/telemetry/ev3Rows.ts` — the row catalogue. Every port row hard-codes `LAYER_SELF = 0`. Port names `'1'–'4'` and `'A'–'D'`. `allEv3Rows()` is the truncation priority order.
@@ -132,7 +144,7 @@ Three chained bricks were measured in August, and the cockpit still sees only th
   - When the depth drops below a layer, that layer's occupancy, commanded modes and settling are forgotten, as when a port stops being known. Its value rows then wait for occupancy again.
 - KTD5. **Capabilities live in one module, `src/telemetry/chainCapabilities.ts`. Today they are fixed from measured facts, because stock firmware offers nothing to probe.** What is read from the brick today is which members exist and the types on their ports. Everything else is set from measurements:
   - `sensors` is true for every member found, because sensor types and values cross.
-  - `motorTypes` is true for a layer only when U0 reads the right motor type there in every one of at least three rewirings, with motors of different types. Any other layer is false, including layer 3, which a three-brick rig cannot reach.
+  - `motorTypes` is true for a layer only when U0 reads the right motor type there in every one of at least three rewirings, with motors of different types. U0 did so for layers 1 and 2. Layer 3, which a three-brick rig cannot reach, is false.
   - `motorReadout`, `files`, `programs` and `name` are false. No host operation addresses them to a layer (What is measured already), so nothing can be asked.
   - A firmware that answers one of them gets its probe added in this module, and that capability is then read from the brick. The API shape stays (R8). How such a firmware makes itself known is Q2.
 - KTD6. **The chain is derived, never stored.**
@@ -170,9 +182,8 @@ flowchart TB
 
 ### Assumptions
 
-- The chain reads the same with the master on Wi-Fi or Bluetooth as on USB: the layer argument is part of the direct command, whatever carries it. Measured only over USB so far; U0 measures it.
-- The master has one USB host port. The Wi-Fi dongle and the chain cable both need it, so the Wi-Fi leg needs a USB hub on that port. The firmware's own search for a dongle behind a hub is commented out (`c_wifi.c` 1354–1357), so a hub may not carry the dongle at all. If it does not, that is a hardware limit, recorded in 3.1.4f as such, not as a routing result, and R10's Wi-Fi leg goes to the owner under the stop condition.
-- Changing a member's sensor mode through `opINPUT_READSI` with its layer works as on the master. Measured only for values in the default mode; U0 measures it.
+- The chain reads the same with the master on Wi-Fi or Bluetooth as on USB. Confirmed by U0. Wi-Fi needs a USB hub on the master's one host port, carrying both the dongle and the chain cable.
+- Changing a member's sensor mode through `opINPUT_READSI` with its layer works as on the master. Confirmed by U0.
 
 ---
 
@@ -337,12 +348,13 @@ flowchart TB
 
 ## Open Questions
 
-- Q1 (blocks U1's counting rule only; U0 answers it). Can a motor entry appear on any remote port with no motor plugged in, whether or not a brick is on that layer? 3.1.4i saw one copied motor on a brick that was there. If yes, motor entries do not count towards the depth and member motor ports are not reported, so a member with only motors attached is not found. That limit goes to the owner before U1 is built, because a second brick that adds motors is a common robot.
+- Q1 (answered by U0: no). No motor entry appeared on a port with nothing plugged in, in three rewirings. Motor entries count towards the depth, and a member with only motors attached is found.
 - Q2 (deferred, does not block). How will an extended firmware make its new abilities known? Recommended: an answer the stock firmware does not give, such as a layer argument on a name read that today's firmware rejects. A version string would be a firmware table, which the owner ruled out. KTD5 adds the probe once the answer exists.
 
 ## Risks
 
 - **Bluetooth budget.** A chain of three members with every port in use adds up to 36 rows to the foreground. Gating keeps it to what is plugged in, and the throttle built in Step 6 slows the loop. U7's Bluetooth step measures it.
+- **A replugged member kills the chain.** Plugging a lower member back in while the chain runs empties every layer until the master restarts (U0). The cockpit then reports depth 0, which is true. Telling the user to restart the master belongs to the panel (Phase 5).
 - **The depth can flap.** The firmware zeroes every layer's buffers on a downstream resync and flags a port FAIL after a failed mode write (`c_daisy.c` 2046, 2133, 2397, 2530); FAIL reads as `TYPE_NONE` (`c_input.c` 3153–3163). A bottom member with one device can then drop out and return, firing `onChainChanged` twice and re-sending a claimed mode. Not debounced: U0 and U7 watch for it, and a flap seen there adds a hold of one reading before a drop takes effect.
 - **Remote values lag.** The daisy relay refreshes about every 100 ms (Hardware Developer Kit), so a member's value can be one relay period older than its `sampledAt` says. Not corrected; `sampledAt` keeps meaning the time the reply arrived.
 - **Firmware variants.** Measurements are from 1.09H and 1.10E. A brick on another build may relay differently. Members and port types are read from the brick, so a difference there shows. The fixed capabilities of KTD5 would not show it: on such a build they can be wrong until a probe exists.

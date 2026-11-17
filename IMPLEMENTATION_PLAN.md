@@ -1390,6 +1390,29 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Consistent with that, the frozen figure is not a fixed constant: it changed from 111616
     to 43192 when the motors were rewired and the chain resynchronised, then froze again.
 
+    **Measured again 17.11.2026 (step-8 plan, U0; HOSTA, AAA master on USB, BBB layer 1, CCC
+    layer 2, firmware 1.10E).** `opINPUT_DEVICE_LIST` returns the whole chain's types in one
+    instruction, sensors at layer × 4 + port and motors at 16 + layer × 4 + port, and agrees with
+    `GET_TYPEMODE` on every port read.
+    - Motor types are right on layers 1 and 2 in three rewirings: a large motor alone on layer 1,
+      a medium motor alone on layer 2, then the medium motor moved to layer 1 and a large motor on
+      layer 2. No motor entry ever appeared on a port with nothing plugged in, on an empty brick
+      or after a motor moved between bricks. The layer-2 type error above did not recur.
+    - An empty member and no member read the same: `TYPE_NONE` on every port, in both the list
+      and `GET_TYPEMODE`. An empty member above a member with a device is known only by inference.
+    - Sensors and motors can be plugged into a member while the chain runs; the master sees them
+      on the next read. A member's sensor changes mode through `opINPUT_READSI` with its layer,
+      with one `NaN` read after the switch, as on the master.
+    - The chain reads the same with the master on Bluetooth and on Wi-Fi. For Wi-Fi the dongle
+      and the chain cable share the master's one USB host port through a hub; firmware 1.10E finds
+      a member behind the hub, which the 1.09D source would not (`c_daisy.c` 2315 looks only at
+      `1-1`), but only after the master restarts.
+    - Emergency stop (`STOP_ALL` with layer −1) stopped a member's motor driven by
+      `opOUTPUT_TIME_SPEED`.
+    - **Bring-up:** the chain did not come up with a loose cable; with the cable seated, restarting
+      the master alone was enough (no power-on order needed). **Plugging a lower member back in
+      while the chain runs kills the whole chain**, the members above it included, until the master
+      restarts. Unplugging alone does not.
   - [x] 3.1.4i **Writing to a remote motor works; only reading is broken.** Driving layer 1's
     ports A and B with `opOUTPUT_TIME_SPEED` turned both motors — confirmed by eye, eight
     alternating bursts, starting and stopping together. The counter still reported the same
