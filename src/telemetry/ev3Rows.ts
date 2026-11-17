@@ -26,6 +26,7 @@ import {
 } from '../protocol/ev3Packet';
 import {
 	lc0,
+	lc1,
 	concatBytes,
 	readFloat32le,
 	readInt32le,
@@ -35,6 +36,15 @@ import { globalRef } from './frameAssembler';
 import { RowLifetime, RowSlot, RowValue, TelemetryRow } from './telemetryRow';
 
 const LAYER_SELF = 0;
+
+/**
+ * The layers of the bricks a master can have below it in a USB daisy chain: three, for four
+ * bricks in all (`DAISY_MAX_LAYER_DEPT`, `c_daisy.h`).
+ */
+export const CHAIN_LAYERS = [1, 2, 3] as const;
+
+/** `TYPE_NONE` (`bytecodes.h`): nothing on the port, and what every port of a missing brick reads. */
+const TYPE_NONE = 126;
 
 /** Sensor ports 1-4 as the firmware numbers them. */
 const SENSOR_PORTS = [0, 1, 2, 3];
@@ -72,6 +82,18 @@ function value(rowId: string, v: RowValue['value'], sampledAt: number, unit?: st
 // ── Ports ────────────────────────────────────────────────────────────
 
 /**
+ * Where a port row is named. The master's own ports keep the ids and port names they always had
+ * (`ports.sensor.1.value`, port `'1'`), so nothing a consumer subscribed to changes. A port of a
+ * brick below it in the chain lives under `chain.<layer>`, and its port name carries the layer
+ * (`'2:3'`), because the scheduler and the mode claims key on the port name alone.
+ */
+function portRow(kind: 'sensor' | 'motor', name: string, field: string, layer: number):
+{ id: string; port: string; layer?: number } {
+	if (layer === LAYER_SELF) { return { id: `ports.${kind}.${name}.${field}`, port: name }; }
+	return { id: `chain.${layer}.${kind}.${name}.${field}`, port: `${layer}:${name}`, layer };
+}
+
+/**
  * Occupancy for one sensor port: the type code and the mode, two bytes.
  *
  * A row with its own divider, not a header stapled to every frame. An earlier version of the
@@ -84,39 +106,36 @@ function value(rowId: string, v: RowValue['value'], sampledAt: number, unit?: st
  * `GET_TYPEMODE` reads `DeviceType` and `DeviceMode` straight out of memory and never blocks,
  * so this row is safe at any divider. The value rows are the ones that can stall.
  */
-export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event): TelemetryRow {
-	const port = SENSOR_PORT_NAMES[index];
-	const id = `ports.sensor.${port}.occupancy`;
-	return {
-		id,
-		tier: 'event',
-		lifetime: repeating(divider),
-		result: { bytes: 2, alignment: 1 },
-		port,
-		reportsOccupancy: true,
-		emit: (slot: RowSlot) => concatBytes(
-			new Uint8Array([EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
-			lc0(LAYER_SELF), lc0(SENSOR_PORTS[index]),
-			globalRef(slot), globalRef(slot + 1),
-		),
-		parse: (payload, slot, sampledAt) => ({ ...value(id, payload[slot], sampledAt), mode: payload[slot + 1] }),
-	};
+export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
+	return occupancyRow(portRow('sensor', SENSOR_PORT_NAMES[index], 'occupancy', layer), SENSOR_PORTS[index], divider);
 }
 
-/** Occupancy for one motor port. Same instruction, the other port numbering. */
-export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event): TelemetryRow {
-	const port = MOTOR_PORT_NAMES[index];
-	const id = `ports.motor.${port}.occupancy`;
+/**
+ * Occupancy for one motor port. Same instruction, the other port numbering.
+ *
+ * On a member of a daisy chain this is all there is of a motor: its type crosses the chain, its
+ * tacho does not (IMPLEMENTATION_PLAN 3.1.4f), so no tacho row exists for a member.
+ */
+export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
+	return occupancyRow(portRow('motor', MOTOR_PORT_NAMES[index], 'occupancy', layer), MOTOR_INPUT_PORTS[index], divider);
+}
+
+function occupancyRow(
+	{ id, port, layer }: { id: string; port: string; layer?: number },
+	firmwarePort: number,
+	divider: number,
+): TelemetryRow {
 	return {
 		id,
 		tier: 'event',
 		lifetime: repeating(divider),
 		result: { bytes: 2, alignment: 1 },
 		port,
+		...(layer !== undefined ? { layer } : {}),
 		reportsOccupancy: true,
 		emit: (slot: RowSlot) => concatBytes(
 			new Uint8Array([EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE]),
-			lc0(LAYER_SELF), lc0(MOTOR_INPUT_PORTS[index]),
+			lc0(layer ?? LAYER_SELF), lc0(firmwarePort),
 			globalRef(slot), globalRef(slot + 1),
 		),
 		parse: (payload, slot, sampledAt) => ({ ...value(id, payload[slot], sampledAt), mode: payload[slot + 1] }),
@@ -135,19 +154,20 @@ export function sensorValueRow(
 	index: number,
 	mode = 0,
 	divider = DEFAULT_DIVIDERS.sampled,
+	layer = LAYER_SELF,
 ): TelemetryRow {
-	const port = SENSOR_PORT_NAMES[index];
-	const id = `ports.sensor.${port}.value`;
+	const { id, port, layer: memberLayer } = portRow('sensor', SENSOR_PORT_NAMES[index], 'value', layer);
 	return {
 		id,
 		tier: 'sampled',
 		lifetime: repeating(divider),
 		result: { bytes: 4, alignment: 4 },
 		port,
+		...(memberLayer !== undefined ? { layer: memberLayer } : {}),
 		mode,
 		emit: (slot: RowSlot) => concatBytes(
 			new Uint8Array([EV3_OPCODE.INPUT_READ_SI]),
-			lc0(LAYER_SELF), lc0(SENSOR_PORTS[index]),
+			lc0(layer), lc0(SENSOR_PORTS[index]),
 			lc0(0),      // type hint: 0 lets the firmware use what it detected
 			lc0(mode),
 			globalRef(slot),
@@ -372,6 +392,54 @@ export function programRunningRow(divider = DEFAULT_DIVIDERS.event): TelemetryRo
 	};
 }
 
+// ── Daisy chain ──────────────────────────────────────────────────────
+
+/** The row that says how deep the chain below a brick is. */
+export const CHAIN_DEPTH_ROW = 'chain.depth';
+
+/** Entries in the master's device list: four sensor and four motor ports for each of four bricks. */
+const DEVICE_LIST_LENGTH = 32;
+
+/**
+ * How many bricks hang below this one in a USB daisy chain: 0 for none, up to 3.
+ *
+ * The master keeps the type of every port of the whole chain in one array and refreshes it on its
+ * own (`c_input.c` `cInputDcmUpdate`); `opINPUT_DEVICE_LIST` copies it in one instruction that
+ * never blocks (`c_input.c` 3750–3776). Sensors sit at layer × 4 + port, motors at 16 + layer × 4
+ * + port. Measured on three chained bricks 17.11.2026: the list agrees with `GET_TYPEMODE` on
+ * every port, and no motor shows on a port with nothing in it.
+ *
+ * The depth is the deepest layer with a device on any port. A brick with nothing plugged in reads
+ * exactly like no brick, so an empty last member is not counted; one above a member with a device
+ * is, because a chain has no gaps. The list's `CHANGED` byte is not used: reading it resets it for
+ * the asking program slot, so a second reader would steal it.
+ */
+export function chainDepthRow(divider = DEFAULT_DIVIDERS.event): TelemetryRow {
+	const id = CHAIN_DEPTH_ROW;
+	return {
+		id,
+		tier: 'event',
+		lifetime: repeating(divider),
+		result: { bytes: DEVICE_LIST_LENGTH + 1, alignment: 1 },
+		emit: (slot: RowSlot) => concatBytes(
+			new Uint8Array([EV3_OPCODE.INPUT_DEVICE_LIST]),
+			lc1(DEVICE_LIST_LENGTH),   // 32 does not fit a short constant
+			globalRef(slot),
+			globalRef(slot + DEVICE_LIST_LENGTH),
+		),
+		parse: (payload, slot, sampledAt) => value(id, chainDepthOf(payload.subarray(slot, slot + DEVICE_LIST_LENGTH)), sampledAt),
+	};
+}
+
+function chainDepthOf(types: Uint8Array): number {
+	let depth = 0;
+	for (const layer of CHAIN_LAYERS) {
+		const indexes = [0, 1, 2, 3].flatMap((port) => [layer * 4 + port, 16 + layer * 4 + port]);
+		if (indexes.some((index) => types[index] !== TYPE_NONE)) { depth = layer; }
+	}
+	return depth;
+}
+
 /**
  * Every row a brick offers, in truncation priority order.
  *
@@ -380,10 +448,17 @@ export function programRunningRow(divider = DEFAULT_DIVIDERS.event): TelemetryRo
  * Occupancy last looks wrong until you remember it has a slow divider anyway — on the ticks
  * where it does come up, losing it costs one divider period, while losing a sensor value
  * costs a visibly frozen reading.
+ *
+ * The rows of bricks below this one in a daisy chain follow the master's rows of the same kind,
+ * and the chain's depth comes last. The scheduler orders by urgency each tick, so the order here
+ * breaks ties only; what keeps a brick with no chain from paying for member rows is the
+ * scheduler's layer gate.
  */
 export function allEv3Rows(): TelemetryRow[] {
+	const members = <T>(rowsOf: (layer: number) => T[]): T[] => CHAIN_LAYERS.flatMap((layer) => rowsOf(layer));
 	return [
 		...SENSOR_PORTS.map((_, i) => sensorValueRow(i)),
+		...members((layer) => SENSOR_PORTS.map((_, i) => sensorValueRow(i, 0, DEFAULT_DIVIDERS.sampled, layer))),
 		...MOTOR_PORT_NAMES.map((_, i) => motorTachoRow(i)),
 		...BUTTON_NAMES.map((_, i) => buttonRow(i)),
 		// Before the system rows: it decides how fast the whole loop may run (D11).
@@ -399,6 +474,9 @@ export function allEv3Rows(): TelemetryRow[] {
 		firmwareVersionRow(),
 		...SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i)),
 		...MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i)),
+		...members((layer) => SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
+		...members((layer) => MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
+		chainDepthRow(),
 	];
 }
 

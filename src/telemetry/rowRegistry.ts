@@ -12,7 +12,7 @@
  */
 
 import { bytecodeBudgetFor, FrameAssemblyError, validateRow } from './frameAssembler';
-import { allEv3Rows, sensorValueRow, SENSOR_PORT_NAMES } from './ev3Rows';
+import { allEv3Rows, CHAIN_LAYERS, DEFAULT_DIVIDERS, sensorValueRow, SENSOR_PORT_NAMES } from './ev3Rows';
 import type { TelemetryRow, TelemetryTier } from './telemetryRow';
 
 /** One row as a consumer sees it: plain data. */
@@ -21,6 +21,8 @@ export interface RowDescriptor {
 	readonly tier: TelemetryTier;
 	readonly unit?: string;
 	readonly port?: string;
+	/** The daisy-chain layer of a member's port row, 1-3; absent for the brick's own ports. */
+	readonly layer?: number;
 }
 
 /** The tightest link: rows are validated against it. */
@@ -95,6 +97,7 @@ export class RowRegistry {
 			tier: row.tier,
 			...(row.unit !== undefined ? { unit: row.unit } : {}),
 			...(row.port !== undefined ? { port: row.port } : {}),
+			...(row.layer !== undefined ? { layer: row.layer } : {}),
 		}));
 	}
 }
@@ -106,6 +109,11 @@ export function createEv3RowRegistry(): RowRegistry {
 	// A sensor is read in the mode its claim asks for (D6); motors' tacho has no mode.
 	SENSOR_PORT_NAMES.forEach((port, index) => {
 		registry.registerModes(`ports.sensor.${port}.value`, (mode) => sensorValueRow(index, mode));
+		// A member's sensor changes mode through the master the same way (measured 17.11.2026).
+		for (const layer of CHAIN_LAYERS) {
+			registry.registerModes(`chain.${layer}.sensor.${port}.value`,
+				(mode) => sensorValueRow(index, mode, DEFAULT_DIVIDERS.sampled, layer));
+		}
 	});
 	return registry;
 }

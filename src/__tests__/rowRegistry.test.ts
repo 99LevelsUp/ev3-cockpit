@@ -12,7 +12,8 @@ import { describe, it } from 'node:test';
 
 import { COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB } from '../protocol/ev3Packet';
 import { RowRegistry, createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { allEv3Rows, motorOccupancyRow, sensorOccupancyRow } from '../telemetry/ev3Rows';
+import { allEv3Rows, chainDepthRow, motorOccupancyRow, sensorOccupancyRow } from '../telemetry/ev3Rows';
+import { globalRef } from '../telemetry/frameAssembler';
 import type { TelemetryRow } from '../telemetry/telemetryRow';
 
 const HID = { maxPacketBytes: 64 };
@@ -172,5 +173,102 @@ describe('EV3 row catalogue (step-6 U2)', () => {
 
 		assert.equal(parsed.value, 30);
 		assert.equal(parsed.mode, 2);
+	});
+
+	it("emits the master's own port rows exactly as before the chain rows existed", () => {
+		const rows = new Map(allEv3Rows().map((r) => [r.id, r]));
+		const bytes = (id: string): number[] => [...(rows.get(id)?.emit(4) ?? [])];
+
+		// GV0(4) = 0x64, GV0(5) = 0x65; layer 0 is LC0(0).
+		assert.deepEqual(bytes('ports.sensor.1.value'), [EV3_OPCODE.INPUT_READ_SI, 0, 0, 0, 0, 0x64]);
+		assert.deepEqual(bytes('ports.sensor.3.occupancy'), [EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE, 0, 2, 0x64, 0x65]);
+		assert.deepEqual(bytes('ports.motor.B.occupancy'), [EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE, 0, 17, 0x64, 0x65]);
+		assert.deepEqual(bytes('ports.motor.B.tacho'), [EV3_OPCODE.OUTPUT_GET_COUNT, 0, 1, 0x64]);
+	});
+});
+
+describe('Daisy-chain rows (step-8 U1)', () => {
+	const TYPE_NONE = 126;
+	const TYPE_UNKNOWN = 125;
+	const COLOR = 29;
+	const LARGE_MOTOR = 7;
+	const rows = (): Map<string, TelemetryRow> => new Map(allEv3Rows().map((r) => [r.id, r]));
+	/** The 32 types `opINPUT_DEVICE_LIST` answers, all empty but the given indexes, then CHANGED. */
+	const deviceList = (devices: Record<number, number> = {}): Uint8Array => {
+		const list = new Uint8Array(33).fill(TYPE_NONE);
+		for (const [index, type] of Object.entries(devices)) { list[Number(index)] = type; }
+		list[32] = 1;
+		return list;
+	};
+	const depthOf = (devices: Record<number, number>): unknown =>
+		chainDepthRow().parse(deviceList(devices), 0, 1).value;
+
+	it('reads the whole chain with one opINPUT_DEVICE_LIST of 32 entries', () => {
+		const row = chainDepthRow();
+
+		assert.equal(row.id, 'chain.depth');
+		assert.equal(row.tier, 'event');
+		assert.deepEqual(row.result, { bytes: 33, alignment: 1 });
+		// LENGTH 32 does not fit a short constant (6 bits, signed): LC1 is 0x81 then the byte.
+		assert.deepEqual([...row.emit(0)], [EV3_OPCODE.INPUT_DEVICE_LIST, 0x81, 32, ...globalRef(0), ...globalRef(32)]);
+	});
+
+	it('takes the depth from the deepest layer with a device, sensor or motor', () => {
+		assert.equal(depthOf({}), 0, 'nothing anywhere');
+		assert.equal(depthOf({ 0: COLOR, 16: LARGE_MOTOR }), 0, "the master's own ports are not a member");
+		assert.equal(depthOf({ 4: COLOR }), 1, 'a sensor on layer 1, port 1');
+		assert.equal(depthOf({ 10: COLOR }), 2, 'a sensor on layer 2, port 3, with layer 1 empty');
+		assert.equal(depthOf({ 25: LARGE_MOTOR }), 2, 'a motor alone on layer 2, port B');
+		assert.equal(depthOf({ 31: LARGE_MOTOR }), 3, 'a motor on layer 3, port D');
+		assert.equal(depthOf({ 4: TYPE_UNKNOWN }), 1, 'a device still identifying itself is there');
+	});
+
+	it("reads a member's sensor port by layer and port, with the port named by both", () => {
+		const occupancy = rows().get('chain.2.sensor.3.occupancy');
+		const value = rows().get('chain.2.sensor.3.value');
+
+		assert.ok(occupancy && value);
+		assert.equal(occupancy.port, '2:3');
+		assert.equal(occupancy.layer, 2);
+		assert.equal(occupancy.reportsOccupancy, true);
+		assert.deepEqual([...occupancy.emit(4)], [EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE, 2, 2, 0x64, 0x65]);
+		assert.equal(value.port, '2:3');
+		assert.equal(value.layer, 2);
+		assert.deepEqual([...value.emit(4)], [EV3_OPCODE.INPUT_READ_SI, 2, 2, 0, 0, 0x64]);
+	});
+
+	it("reads a member's motor type, and never its tacho, which does not cross the chain", () => {
+		const all = rows();
+		const occupancy = all.get('chain.1.motor.A.occupancy');
+
+		assert.ok(occupancy);
+		assert.equal(occupancy.port, '1:A');
+		assert.deepEqual([...occupancy.emit(4)], [EV3_OPCODE.INPUT_DEVICE, INPUT_DEVICE_SUB.GET_TYPEMODE, 1, 16, 0x64, 0x65]);
+		assert.deepEqual([...all.keys()].filter((id) => /^chain\.\d\.motor\..*\.(?!occupancy)/.test(id)), []);
+	});
+
+	it('offers every member layer 1-3, ports 1-4 and A-D, and puts the depth row last', () => {
+		const ids = allEv3Rows().map((r) => r.id);
+
+		for (const layer of [1, 2, 3]) {
+			for (const port of ['1', '2', '3', '4']) {
+				assert.ok(ids.includes(`chain.${layer}.sensor.${port}.occupancy`));
+				assert.ok(ids.includes(`chain.${layer}.sensor.${port}.value`));
+			}
+			for (const port of ['A', 'B', 'C', 'D']) { assert.ok(ids.includes(`chain.${layer}.motor.${port}.occupancy`)); }
+		}
+		assert.equal(ids[ids.length - 1], 'chain.depth');
+		assert.ok(ids.indexOf('chain.1.sensor.1.value') < ids.indexOf('ports.motor.A.tacho'),
+			"a member's sensor value comes right after the master's");
+	});
+
+	it("lists a member's rows with their layer, and reads a member's sensor in the mode asked for", () => {
+		const registry = createEv3RowRegistry();
+
+		assert.deepEqual(registry.list().find((r) => r.id === 'chain.1.sensor.1.value'),
+			{ id: 'chain.1.sensor.1.value', tier: 'sampled', port: '1:1', layer: 1 });
+		assert.ok(registry.modePorts().has('1:1'));
+		const inMode = registry.inMode('chain.1.sensor.1.value', 2);
+		assert.deepEqual([...(inMode?.emit(4) ?? [])], [EV3_OPCODE.INPUT_READ_SI, 1, 0, 0, 2, 0x64]);
 	});
 });
