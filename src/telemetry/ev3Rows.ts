@@ -33,6 +33,7 @@ import {
 	readFixedCString,
 } from '../protocol/ev3Bytecode';
 import { globalRef } from './frameAssembler';
+import { portStateOf } from './portState';
 import { RowLifetime, RowSlot, RowValue, TelemetryRow } from './telemetryRow';
 
 const LAYER_SELF = 0;
@@ -42,9 +43,6 @@ const LAYER_SELF = 0;
  * bricks in all (`DAISY_MAX_LAYER_DEPT`, `c_daisy.h`).
  */
 export const CHAIN_LAYERS = [1, 2, 3] as const;
-
-/** `TYPE_NONE` (`bytecodes.h`): nothing on the port, and what every port of a missing brick reads. */
-const TYPE_NONE = 126;
 
 /** Sensor ports 1-4 as the firmware numbers them. */
 const SENSOR_PORTS = [0, 1, 2, 3];
@@ -89,8 +87,14 @@ function value(rowId: string, v: RowValue['value'], sampledAt: number, unit?: st
  */
 function portRow(kind: 'sensor' | 'motor', name: string, field: string, layer: number):
 { id: string; port: string; layer?: number } {
-	if (layer === LAYER_SELF) { return { id: `ports.${kind}.${name}.${field}`, port: name }; }
-	return { id: `chain.${layer}.${kind}.${name}.${field}`, port: `${layer}:${name}`, layer };
+	const id = portRowId(kind, name, field, layer);
+	if (layer === LAYER_SELF) { return { id, port: name }; }
+	return { id, port: `${layer}:${name}`, layer };
+}
+
+/** The id of a port row: `ports.sensor.1.value` for the brick's own port, `chain.2.sensor.1.value` for layer 2's. */
+export function portRowId(kind: 'sensor' | 'motor', name: string, field: string, layer = LAYER_SELF): string {
+	return layer === LAYER_SELF ? `ports.${kind}.${name}.${field}` : `chain.${layer}.${kind}.${name}.${field}`;
 }
 
 /**
@@ -421,6 +425,7 @@ export function chainDepthRow(divider: number = DEFAULT_DIVIDERS.event): Telemet
 		tier: 'event',
 		lifetime: repeating(divider),
 		result: { bytes: DEVICE_LIST_LENGTH + 1, alignment: 1 },
+		reportsChainDepth: true,
 		emit: (slot: RowSlot) => concatBytes(
 			new Uint8Array([EV3_OPCODE.INPUT_DEVICE_LIST]),
 			lc1(DEVICE_LIST_LENGTH),   // 32 does not fit a short constant
@@ -435,7 +440,8 @@ function chainDepthOf(types: Uint8Array): number {
 	let depth = 0;
 	for (const layer of CHAIN_LAYERS) {
 		const indexes = [0, 1, 2, 3].flatMap((port) => [layer * 4 + port, 16 + layer * 4 + port]);
-		if (indexes.some((index) => types[index] !== TYPE_NONE)) { depth = layer; }
+		// Empty is `TYPE_NONE`, what every port of a missing brick reads too.
+		if (indexes.some((index) => portStateOf(types[index]) !== 'empty')) { depth = layer; }
 	}
 	return depth;
 }
@@ -455,10 +461,9 @@ function chainDepthOf(types: Uint8Array): number {
  * scheduler's layer gate.
  */
 export function allEv3Rows(): TelemetryRow[] {
-	const members = <T>(rowsOf: (layer: number) => T[]): T[] => CHAIN_LAYERS.flatMap((layer) => rowsOf(layer));
 	return [
 		...SENSOR_PORTS.map((_, i) => sensorValueRow(i)),
-		...members((layer) => SENSOR_PORTS.map((_, i) => sensorValueRow(i, 0, DEFAULT_DIVIDERS.sampled, layer))),
+		...CHAIN_LAYERS.flatMap((layer) => SENSOR_PORTS.map((_, i) => sensorValueRow(i, 0, DEFAULT_DIVIDERS.sampled, layer))),
 		...MOTOR_PORT_NAMES.map((_, i) => motorTachoRow(i)),
 		...BUTTON_NAMES.map((_, i) => buttonRow(i)),
 		// Before the system rows: it decides how fast the whole loop may run (D11).
@@ -474,8 +479,8 @@ export function allEv3Rows(): TelemetryRow[] {
 		firmwareVersionRow(),
 		...SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i)),
 		...MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i)),
-		...members((layer) => SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
-		...members((layer) => MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
+		...CHAIN_LAYERS.flatMap((layer) => SENSOR_PORTS.map((_, i) => sensorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
+		...CHAIN_LAYERS.flatMap((layer) => MOTOR_PORT_NAMES.map((_, i) => motorOccupancyRow(i, DEFAULT_DIVIDERS.event, layer))),
 		chainDepthRow(),
 	];
 }

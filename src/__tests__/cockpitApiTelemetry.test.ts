@@ -154,6 +154,15 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 		assert.deepEqual(w.released, [w.claims[0].handle], 'disposing releases exactly that claim');
 	});
 
+	it('refuses to follow a chain whose brick went inside the claim itself, and keeps no listener', () => {
+		const w = world();
+		w.onClaim(() => w.end(A, [w.claims[w.claims.length - 1].handle]));
+		const before = w.listening();
+
+		assert.throws(() => w.api.registerConsumer('ev3-c').onChainChanged(A, () => undefined), /went/);
+		assert.equal(w.listening(), before);
+	});
+
 	it('stops when its brick goes, and tells nothing after', async () => {
 		const w = world();
 		const heard: number[] = [];

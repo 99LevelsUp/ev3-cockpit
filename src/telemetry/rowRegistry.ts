@@ -12,7 +12,7 @@
  */
 
 import { bytecodeBudgetFor, FrameAssemblyError, validateRow } from './frameAssembler';
-import { allEv3Rows, CHAIN_LAYERS, DEFAULT_DIVIDERS, sensorValueRow, SENSOR_PORT_NAMES } from './ev3Rows';
+import { allEv3Rows, CHAIN_LAYERS, DEFAULT_DIVIDERS, portRowId, sensorValueRow, SENSOR_PORT_NAMES } from './ev3Rows';
 import type { TelemetryRow, TelemetryTier } from './telemetryRow';
 
 /** One row as a consumer sees it: plain data. */
@@ -108,10 +108,10 @@ export function createEv3RowRegistry(): RowRegistry {
 	for (const row of allEv3Rows()) { registry.register(row); }
 	// A sensor is read in the mode its claim asks for (D6); motors' tacho has no mode.
 	SENSOR_PORT_NAMES.forEach((port, index) => {
-		registry.registerModes(`ports.sensor.${port}.value`, (mode) => sensorValueRow(index, mode));
+		registry.registerModes(portRowId('sensor', port, 'value'), (mode) => sensorValueRow(index, mode));
 		// A member's sensor changes mode through the master the same way (measured 17.11.2026).
 		for (const layer of CHAIN_LAYERS) {
-			registry.registerModes(`chain.${layer}.sensor.${port}.value`,
+			registry.registerModes(portRowId('sensor', port, 'value', layer),
 				(mode) => sensorValueRow(index, mode, DEFAULT_DIVIDERS.sampled, layer));
 		}
 	});
