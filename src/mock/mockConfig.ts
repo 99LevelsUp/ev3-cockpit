@@ -92,7 +92,10 @@ export interface MockBrickConfig {
 	readonly battery: MockBatteryConfig;
 	readonly motorPorts: MockPortConfig[];
 	readonly sensorPorts: MockPortConfig[];
-	/** ID of the master brick; undefined = standalone / master. */
+	/**
+	 * ID of the brick directly above this one in a USB daisy chain; undefined for a brick of its
+	 * own or a master. A brick with a parent is reached through its master and is not discovered.
+	 */
 	readonly parentId?: string;
 	readonly error?: MockErrorConfig;
 	readonly loss?: MockLossConfig;
@@ -136,7 +139,37 @@ export function validateMockConfig(raw: unknown): MockConfig {
 			throw new Error(`Brick "${brick.id}" parentId must name another brick of this config`);
 		}
 	}
+	validateChains(bricks);
 	return raw as MockConfig;
+}
+
+/**
+ * `parentId` makes a USB daisy chain, and a chain is a line: each brick has at most one brick
+ * below it, and a master at most three (`DAISY_MAX_LAYER_DEPT` 4, the master included).
+ */
+function validateChains(bricks: readonly { id: string; parentId?: string }[]): void {
+	const parentOf = new Map<string, string>();
+	const below = new Set<string>();
+	for (const brick of bricks) {
+		if (brick.parentId === undefined) { continue; }
+		if (below.has(brick.parentId)) {
+			throw new Error(`Brick "${brick.parentId}" has two bricks below it; a daisy chain has one brick per layer`);
+		}
+		below.add(brick.parentId);
+		parentOf.set(brick.id, brick.parentId);
+	}
+	for (const brick of bricks) {
+		const seen = new Set([brick.id]);
+		let depth = 0;
+		for (let at = parentOf.get(brick.id); at !== undefined; at = parentOf.get(at)) {
+			if (seen.has(at)) { throw new Error(`Brick "${brick.id}" is in a parentId loop`); }
+			seen.add(at);
+			depth += 1;
+		}
+		if (depth > 3) {
+			throw new Error(`Brick "${brick.id}" is ${depth} bricks below its master; a daisy chain holds at most three below the master`);
+		}
+	}
 }
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);

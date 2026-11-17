@@ -115,6 +115,9 @@ export class MockTransportProvider implements TransportProvider {
 			if (this.isHidden(state, now)) {
 				continue; // brick is "temporarily disappeared"
 			}
+			// A brick below another in a daisy chain is reached through its master, not found:
+			// USB discovery sees only the master (IMPLEMENTATION_PLAN 3.1.4g).
+			if (state.config.parentId !== undefined) { continue; }
 			items.push(this.toDiscoveryItem(brickKey, state, now));
 		}
 
@@ -483,8 +486,25 @@ export class MockTransportProvider implements TransportProvider {
 		};
 	}
 
-	/** The brick's state as a telemetry frame reads it. */
+	/** The brick's state as a telemetry frame reads it, with the bricks chained below it. */
 	private frameView(state: MockBrickState, now: number): MockBrickView {
+		const chain: MockBrickView[] = [];
+		// At most three below the master; the bound also stops an unvalidated parentId loop.
+		for (let member = this.memberBelow(state.config.id); member && chain.length < 3; member = this.memberBelow(member.config.id)) {
+			chain.push(this.brickView(member, now));
+		}
+		return { ...this.brickView(state, now), chain };
+	}
+
+	/** The brick whose `parentId` names this one: the next layer down the chain. */
+	private memberBelow(id: string): MockBrickState | undefined {
+		for (const state of this.bricks.values()) {
+			if (state.config.parentId === id) { return state; }
+		}
+		return undefined;
+	}
+
+	private brickView(state: MockBrickState, now: number): MockBrickView {
 		const reading = (ports: ReadonlyArray<MockPortConfig>, label: string): MockPortReading => {
 			const port = ports.find((p) => p.port === label);
 			if (!port) { return { typeCode: TYPE_NONE, mode: 0, value: Number.NaN }; }

@@ -16,7 +16,8 @@ import { assembleFrame, buildTelemetryFrame, parseFrame } from '../telemetry/fra
 import { createEv3RowRegistry } from '../telemetry/rowRegistry';
 import { createBrickTelemetry } from '../telemetry/brickTelemetry';
 import { EV3_OPCODE, COM_GET_SUB, COM_HARDWARE } from '../protocol/ev3Packet';
-import { concatBytes, gv0, lc0, uint16le } from '../protocol/ev3Bytecode';
+import { concatBytes, gv0, gv1, lc0, lc1, uint16le } from '../protocol/ev3Bytecode';
+import { chainDepthRow } from '../telemetry/ev3Rows';
 import type { RowValue } from '../telemetry/telemetryRow';
 
 const KEY = makeBrickKey(Transport.Mock, 'M1');
@@ -141,12 +142,99 @@ describe('Mock telemetry (step-6 U3)', () => {
 		mock.dispose();
 	});
 
+	it('answers no brick below it: the device list is empty past the master', async () => {
+		const mock = await brick();
+		const frame = assembleFrame([chainDepthRow()], LIBUSB);
+		const reply = await mock.executeCommand(KEY, { kind: 'telemetry:frame', payload: buildTelemetryFrame(frame) });
+
+		assert.equal(parseFrame(frame, (reply as { payload: Uint8Array }).payload, 1)[0].value, 0);
+		mock.dispose();
+	});
+
 	it('fails the frame on GET_ON_OFF of USB, as the firmware does (FAILBREAK)', async () => {
 		const mock = await brick();
 		const usbOnOff = concatBytes(new Uint8Array([EV3_OPCODE.COM_GET, COM_GET_SUB.GET_ON_OFF]), lc0(COM_HARDWARE.USB), gv0(0));
 
 		await assert.rejects(mock.executeCommand(KEY, { kind: 'telemetry:frame', payload: frameOf(1, usbOnOff) }),
 			/FAILBREAK/);
+		mock.dispose();
+	});
+});
+
+describe('Mock daisy chain (step-8 U2)', () => {
+	const MASTER = makeBrickKey(Transport.Mock, 'M');
+	const port = (name: string, peripheralType: string, value: number) =>
+		({ port: name, peripheralType, dynamic: { kind: 'static', value } });
+	const brickOf = (id: string, extra: Record<string, unknown>) =>
+		({ id, displayName: id, battery: { level: 50 }, sensorPorts: [], motorPorts: [], ...extra });
+
+	/** M is the master; L1 hangs below it, L2 below L1. */
+	async function chain(): Promise<MockTransportProvider> {
+		const mock = new MockTransportProvider({
+			transport: Transport.Mock,
+			bricks: [
+				brickOf('M', { sensorPorts: [port('1', 'touch-sensor', 1)] }),
+				brickOf('L1', { parentId: 'M', sensorPorts: [port('1', 'ultrasonic-sensor', 33)], motorPorts: [port('A', 'large-motor', 45)] }),
+				brickOf('L2', { parentId: 'L1', motorPorts: [port('B', 'medium-motor', 10)] }),
+			],
+		} as never);
+		await mock.connect(MASTER);
+		return mock;
+	}
+
+	async function run(mock: MockTransportProvider, payload: Uint8Array): Promise<Uint8Array> {
+		const reply = await mock.executeCommand(MASTER, { kind: 'telemetry:frame', payload });
+		return (reply as { payload: Uint8Array }).payload;
+	}
+
+	async function read(mock: MockTransportProvider, ids: string[]): Promise<Map<string, RowValue>> {
+		const registry = createEv3RowRegistry();
+		const frame = assembleFrame(ids.map((id) => registry.get(id) ?? chainDepthRow()), LIBUSB);
+		const values = parseFrame(frame, await run(mock, buildTelemetryFrame(frame)), 1);
+		return new Map(values.map((v) => [v.rowId, v]));
+	}
+
+	it('lists only the master: a brick below it is reached through it, as USB discovery sees only the master', async () => {
+		const mock = await chain();
+
+		assert.deepEqual((await mock.discover()).items.map((item) => item.displayName), ['M']);
+		mock.dispose();
+	});
+
+	it("answers the master's device list with every member's ports at layer × 4 + port", async () => {
+		const mock = await chain();
+		const list = await run(mock, frameOf(33, new Uint8Array([EV3_OPCODE.INPUT_DEVICE_LIST]), lc1(32), gv0(0), gv1(32)));
+
+		assert.equal(list[0], 16, "the master's own touch sensor");
+		assert.equal(list[4], 30, "L1's ultrasonic sensor on port 1");
+		assert.equal(list[20], 7, "L1's large motor on port A");
+		assert.equal(list[25], 8, "L2's medium motor on port B");
+		assert.deepEqual([...list.subarray(12, 16), ...list.subarray(28, 32)], new Array(8).fill(126), 'nothing on layer 3');
+		assert.equal((await read(mock, ['chain.depth'])).get('chain.depth')?.value, 2);
+		mock.dispose();
+	});
+
+	it("reads a member's ports through the master by their layer", async () => {
+		const mock = await chain();
+		const v = await read(mock, ['chain.1.sensor.1.occupancy', 'chain.1.sensor.1.value', 'chain.2.motor.B.occupancy', 'chain.3.sensor.1.occupancy']);
+
+		assert.equal(v.get('chain.1.sensor.1.occupancy')?.value, 30);
+		assert.equal(v.get('chain.1.sensor.1.value')?.value, 33);
+		assert.equal(v.get('chain.2.motor.B.occupancy')?.value, 8);
+		assert.equal(v.get('chain.3.sensor.1.occupancy')?.value, 126, 'no brick on layer 3');
+		mock.dispose();
+	});
+
+	it("answers a member's tacho with a frozen number, as the firmware does, never its motor's position", async () => {
+		const mock = await chain();
+		const tacho = frameOf(4, new Uint8Array([EV3_OPCODE.OUTPUT_GET_COUNT]), lc0(1), lc0(0), gv0(0));
+
+		const first = new DataView((await run(mock, tacho)).buffer).getInt32(0, true);
+		const second = new DataView((await run(mock, tacho)).buffer).getInt32(0, true);
+
+		assert.notEqual(first, 45, "L1's motor A is at 45 degrees, and that does not cross the chain");
+		assert.equal(first, 111616, 'the frozen figure measured on a brick (IMPLEMENTATION_PLAN 3.1.4f)');
+		assert.equal(second, first);
 		mock.dispose();
 	});
 });
