@@ -154,6 +154,23 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 		assert.deepEqual(w.released, [w.claims[0].handle], 'disposing releases exactly that claim');
 	});
 
+	it('tells when the depth reading goes stale, and when it is dropped (review)', async () => {
+		const w = world();
+		w.change(depth(A, 2));
+		const heard: { read: boolean; stale: boolean; members: number }[] = [];
+		w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push({ read: chain.read, stale: chain.stale, members: chain.members.length }));
+
+		w.change({ brickKey: A, rows: [value('chain.depth', 2, { stale: true })], removed: [] });
+		await settle();
+		w.change({ brickKey: A, rows: [], removed: ['chain.depth'] });
+		await settle();
+
+		assert.deepEqual(heard, [
+			{ read: true, stale: true, members: 2 },
+			{ read: false, stale: false, members: 0 },
+		]);
+	});
+
 	it('refuses to follow a chain whose brick went inside the claim itself, and keeps no listener', () => {
 		const w = world();
 		w.onClaim(() => w.end(A, [w.claims[w.claims.length - 1].handle]));

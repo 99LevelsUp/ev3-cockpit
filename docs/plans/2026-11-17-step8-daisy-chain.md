@@ -150,7 +150,8 @@ Three chained bricks were measured in August, and the cockpit still sees only th
 - KTD6. **The chain is derived, never stored.**
   - `chainOf(values)` is a pure function over one brick's read-model values: depth, members, capabilities.
   - The API's `getChain(brick)` reads it from the snapshot and says whether the chain was read at all (`read: false` when `chain.depth` has no value yet).
-  - `onChainChanged(brick, listener)` holds its own claim on `chain.depth` and the member occupancy rows, as `followProgramRow` does for the program state, and calls the listener when the member list or a capability changes.
+  - `onChainChanged(brick, listener)` holds its own claim on `chain.depth`, as `followProgramRow` does for the program state, and calls the listener when the member list, a capability or the staleness changes.
+  - A claim on any member row also reads the rows that open it: `chain.depth`, and for a value its port's occupancy, at the event cadence. Without them a member row claimed alone on a brick that is not the active one would never come up (code review, 17.11.2026).
 - KTD7. **The view model gains `chain`.** `ActiveBrickViewModel.chain` lists members, each with its capabilities, `sensorPorts` and `motorPorts`. `PortState.layer` is the real layer. A member's motor `PortState` never carries `value`, `unit` or `timestamp` (R5).
 - KTD8. **The mock chain is linear and built from `parentId`.**
   - **Validation:** no cycles, at most one child per brick, at most three members below a root. A brick's layer is its depth.
@@ -349,6 +350,7 @@ flowchart TB
 ## Open Questions
 
 - Q1 (answered by U0: no). No motor entry appeared on a port with nothing plugged in, in three rewirings. Motor entries count towards the depth, and a member with only motors attached is found.
+- Q3 (open, for the owner; raised by the code review 17.11.2026). R10 holds through the built cockpit on USB only. Wi-Fi: the master with the dongle and the chain on one hub froze twice, so the recommendation is to narrow R10 to USB and Bluetooth. Bluetooth: blocked by the cockpit defect recorded under IMPLEMENTATION_PLAN 2.8.12, so U7 step 6 runs again once that is fixed (next backend item); the chain read over both radios in U0.
 - Q2 (deferred, does not block). How will an extended firmware make its new abilities known? Recommended: an answer the stock firmware does not give, such as a layer argument on a name read that today's firmware rejects. A version string would be a firmware table, which the owner ruled out. KTD5 adds the probe once the answer exists.
 
 ## Risks

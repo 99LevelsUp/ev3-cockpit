@@ -130,7 +130,8 @@ export class TelemetryScheduler {
 	 *
 	 * Empty until the first occupancy row lands. An unknown port is treated as readable, so a
 	 * cold start does not sit silent waiting for permission; the firmware answers NAN for a
-	 * port with nothing on it, which is a correct reading of an empty port.
+	 * port with nothing on it, which is a correct reading of an empty port. A daisy-chain
+	 * member's unknown port is the exception: its value waits for its occupancy (`isReadable`).
 	 */
 	private readonly occupancy = new Map<string, number>();
 

@@ -178,9 +178,28 @@ export class TelemetryClaims {
 			}
 		}
 		for (const claim of this.claims.values()) {
-			for (const id of claim.rowIds) { want(id, claim.intervalMs); }
+			for (const id of claim.rowIds) {
+				want(id, claim.intervalMs);
+				this.wantGatesOf(id, claim.intervalMs * FOREGROUND_EVENT_FACTOR, want);
+			}
 		}
 		return wanted;
+	}
+
+	/**
+	 * A daisy-chain member's row comes up only once the chain's depth reaches its layer, and a
+	 * member's value only once its port's occupancy has reported (the scheduler's layer gate). A
+	 * claim names the row it wants, so the rows that open it are read beside it, at the event
+	 * cadence the foreground reads them at; the grant still names only what was asked.
+	 */
+	private wantGatesOf(id: string, ms: number, want: (id: string, ms: number) => void): void {
+		const row = this.registry.get(id);
+		if (row?.layer === undefined || row.layer <= 0) { return; }
+		for (const gate of this.registry.all()) {
+			if (gate.reportsChainDepth || (gate.reportsOccupancy && gate.port === row.port && !row.reportsOccupancy)) {
+				want(gate.id, ms);
+			}
+		}
 	}
 
 	/** The mode a port is held in, and by whom: the earliest claim still holding it. */

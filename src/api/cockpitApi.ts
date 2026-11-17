@@ -125,7 +125,12 @@ export interface TelemetrySubscription extends Subscription {
  */
 export interface ApiChain {
 	readonly brickId: string;
-	/** False until the chain has been read; then `members` is empty only for a brick with nothing below it. */
+	/**
+	 * False until the chain has been read; then `members` is empty only for a brick with nothing
+	 * below it. A brick reached over the 64-byte HID fallback (USB without libusb) never has its
+	 * chain read, so there it stays false: the chain's device list would take the frames the
+	 * brick's own readings need.
+	 */
 	readonly read: boolean;
 	/** No newer reading of the chain came for a while. */
 	readonly stale: boolean;

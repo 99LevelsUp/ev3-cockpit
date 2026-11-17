@@ -165,6 +165,18 @@ describe('Telemetry claims (step-6 U5)', () => {
 			"the master's own port 3 is another port");
 	});
 
+	it("reads what a chain member's row needs to open, though only that row was claimed (step-8 review)", () => {
+		const c = claims(false);
+
+		const claim = c.claim({ rowIds: ['chain.1.sensor.1.value'], intervalMs: 200 }, 'ev3-c');
+
+		const ids = c.plan().rows.map((r) => r.id);
+		assert.ok(ids.includes('chain.depth'), 'the gate opens a member row only to the depth the brick reports');
+		assert.ok(ids.includes('chain.1.sensor.1.occupancy'), "a member's value waits for its own occupancy");
+		assert.deepEqual(Object.keys(c.grantOf(claim.handle) ?? {}), ['chain.1.sensor.1.value'], 'the grant names what was asked');
+		assert.ok(!ids.some((id) => id.startsWith('chain.2.')), 'nothing of another member');
+	});
+
 	it('frees a port\'s mode when the last claim holding it is released', () => {
 		const c = claims(false);
 		const a = c.claim({ rowIds: ['ports.sensor.1.value'], intervalMs: 200, modes: { '1': 2 } }, 'a');
