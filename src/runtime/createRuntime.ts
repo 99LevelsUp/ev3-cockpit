@@ -22,6 +22,7 @@ import type { BluetoothAccessFix } from '../transports/bluezAccess';
 import type { BluezBluetoothOptions } from '../transports/bluezBluetooth';
 import { BT } from '../transports/transportConstants';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
+import type { MockConfig } from '../mock';
 import { TelemetryReadModel } from '../telemetry/telemetryReadModel';
 import { TelemetryService } from '../telemetry/telemetryService';
 import type { ProgramPresetSettings, TelemetrySettings, ThrottleSettings } from '../telemetry/telemetrySettings';
@@ -55,6 +56,8 @@ export interface RuntimeOptions {
 	 * has no use for six robots that are not there, and they fill the log.
 	 */
 	readonly mockBricks?: boolean;
+	/** The simulated bricks a workspace defines (1.6.10); absent, the built-in set. */
+	readonly mockConfig?: MockConfig;
 	/**
 	 * Register these providers instead of the real ones, for tests. The Bluetooth pairing and
 	 * presence pieces are then not built.
@@ -247,8 +250,9 @@ function registerRealProviders(
 
 	// Mock transport: simulated bricks, for development only.
 	if (options.mockBricks) {
-		registry.register(services.add(new MockTransportProvider(DEFAULT_MOCK_CONFIG)));
-		log.info(`Mock transport registered (${DEFAULT_MOCK_CONFIG.bricks.length} brick(s))`);
+		const config = options.mockConfig ?? DEFAULT_MOCK_CONFIG;
+		registry.register(services.add(new MockTransportProvider(config)));
+		log.info(`Mock transport registered (${config.bricks.length} brick(s)${options.mockConfig ? ', from the workspace' : ''})`);
 	}
 
 	// USB transport: discovery over node-hid, connections over libusb where it can claim
