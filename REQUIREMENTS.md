@@ -235,6 +235,14 @@ Requirements:
   average; queue depth was measured and has no range with one frame in flight (DESIGN §4.5,
   changed 11.11.2026).
 
+Bricks chained over USB (up to four, owner decision 16.11.2026, built 17.11.2026): the cockpit
+reads the chain below the brick it reads, through that brick. Each brick below it is a member
+of the chain, with its sensor ports (type, mode, value) and its motor ports (type only: a
+member's motor position does not cross the chain) named by layer and port, and with what it can
+do. A brick with no chain pays one extra reading every fifth tick and nothing more. After the
+chain is rewired the master must be restarted: the firmware can freeze a chain's last state,
+and nothing the host can read tells a frozen chain from a still one.
+
 ## 9. Public API
 
 Third-party extensions communicate with bricks exclusively through the Cockpit public API — they never connect to bricks directly.
@@ -368,7 +376,6 @@ No concrete plan or timeline. Must not be architecturally blocked.
 
 - **Mock settings editor** — GUI editor in the main editor area for creating and configuring mock brick definitions without editing JSON manually.
 - **Firmware update** — ability to flash EV3 firmware from within Cockpit.
-- **Daisy chain** — support for EV3 bricks chained together and presented as a single composite device.
 - **Mailbox** — sending and receiving mailbox messages between the host and a brick.
 - **Display mirror** — live view of the EV3 screen inside the Cockpit panel.
 - **macOS support** — running Cockpit on macOS with at least USB and TCP transports working.

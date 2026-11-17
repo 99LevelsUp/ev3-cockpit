@@ -1062,6 +1062,12 @@ Build the source of truth for connected bricks.
     underneath an open handle. Then: a brick reachable over two transports losing one; Wi-Fi
     switched off mid-session on TCP. Use **CCC** for USB scenarios — its cable is the
     accessible one
+    **Found 17.11.2026 (step-8 U7), to fix here: a Bluetooth channel that went unheard is never
+    checked again.** AAA froze while it was on TCP only with Bluetooth off; its TCP channel was
+    removed, and its Bluetooth channel too. From then on the presence checks asked only the other
+    bricks, "Connect a Brick" refused at once with "not available on any channel", and even a
+    sign-in over USB joined USB alone, so pulling the cable left nothing to fail over to. A
+    paired brick has to stay a Bluetooth candidate whatever happened to its other channels.
   - [x] 2.8.13 **A brick has no name over Bluetooth.** Done 30.10.2026 (step-2 plan): one
     list entry per brick keyed by `BrickId`, named from the brick itself (`info`, also read over
     USB without connecting, and the TCP beacon). Original entry: Discovery reports `EV3
@@ -1438,7 +1444,27 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     Whatever the master answers for a remote layer's outputs, it is not a reading of that
     brick.
 
-  - [ ] 3.1.4g **Daisy chain changes what discovery sees, and `brickKey` cannot express it.**
+  - [x] 3.1.4g **Built 17.11.2026 (step-8 plan, `docs/plans/2026-11-17-step8-daisy-chain.md`).**
+    A member is reached through its master's session by the layer argument and has no key of
+    its own. `chain.depth` reads the master's device list; a member's ports are rows under
+    `chain.<layer>`, port names `'<layer>:<port>'`, gated on the depth (and not read at all on the
+    HID fallback); the API offers `getChain` and `onChainChanged`, each member with what it can
+    do (`telemetry/chainCapabilities.ts`). No host operation that reads a name, serial, files or
+    programs takes a layer, so none of those is offered for a member.
+    **Verified through the API 17.11.2026** (HOSTA, AAA master on USB): members [1, 2] and their
+    ports in one event 130 ms after the watch started; a device pulled from the last member gave
+    one event with that member gone; pulling that member's cable gave none; no member motor ever
+    showed a position. Plugging the member back in **froze the chain**: the master went on
+    answering the old types and the last sensor value (a hand in front of the colour sensor did
+    not move it, a newly plugged touch sensor never showed), checked by reading the master
+    directly; only a master restart brought it back, touch sensor included. U0 had seen the same
+    replug empty the chain instead. The cockpit cannot tell a frozen chain from a still one:
+    after rewiring a chain, restart the master (for the panel to say, Phase 5). Wi-Fi: the
+    master with the dongle and the chain on one hub froze twice within minutes, once with no
+    host traffic at all, so a chain is for a master on USB or Bluetooth; the chain read over TCP
+    in U0. Bluetooth through the API was blocked by a cockpit defect recorded under 2.8.12; the
+    chain read over Bluetooth in U0.
+  - 3.1.4g (original entry) **Daisy chain changes what discovery sees, and `brickKey` cannot express it.**
     With three bricks chained, USB discovery reports **one** — only the master keeps its
     client port free. The other two are reachable only as layers 1 and 2 of that connection.
     Today `brickKey` is `transport:id` and every command hardcodes layer 0, so the cockpit
@@ -1538,7 +1564,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [x] 3.2.2 **Done 13.11.2026 as rows (step 6 U6/U8):** the rows that changed (`TelemetryUpdate` of kind `change`), `TelemetryRowInfo`, and the subscription with what each row was granted. As planned: `TelemetryEvent` — **rewrite against rows before implementing** (3.1.14 (3)):
     the rows that changed. Add `TelemetryRow` (id, value type, unit, raw type code) and
     `TelemetrySubscription` (handle plus the interval each row was granted)
-  - [ ] 3.2.3 Per-port value model (peripheral type, value, unit, timestamp). Port identity must
+  - [x] 3.2.3 **Done 17.11.2026 (step-8 plan):** `PortState.layer` is the real layer, a member's port rows are named `'<layer>:<port>'`, and `typeCode` stays beside the name. Per-port value model (peripheral type, value, unit, timestamp). Port identity must
     carry the **daisy-chain layer** (0–3), not just the port number: 3.1.4j–3.1.4l measured that
     sensor types and values relay across a chain while motor tacho does not, so a port is only
     identified by layer *and* number. Keep the raw type code alongside the resolved name — a
@@ -1614,7 +1640,7 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
   - [x] 3.4.5 Diagnostic output — current telemetry speed observable for the UI (`throttleOf()`, `onThrottleChange`: period, factor, p95, limit, stalls; the display itself is Phase 5)
 - [x] **3.5 Read model for the active brick** — done 13.11.2026 in step 6 U6; the panel that draws it is Phase 5
   - [x] 3.5.1 `ActiveBrickViewModel` aggregation from telemetry snapshots (step 6 U6, ccb1ce1, `activeBrickView.ts`)
-  - [x] 3.5.2 Port state (A–D motors, 1–4 sensors), layer 0 (D3) (step 6 U6, ccb1ce1, `activeBrickView.ts`)
+  - [x] 3.5.2 Port state (A–D motors, 1–4 sensors), layer 0 (D3) (step 6 U6, ccb1ce1, `activeBrickView.ts`); the bricks below in a daisy chain as `chain`, each member with its ports by layer (step 8 U5)
   - [x] 3.5.3 Peripheral detection and type identification, raw code kept (step 6 U6, ccb1ce1, `activeBrickView.ts`)
   - [x] 3.5.4 Button state (step 6 U6, ccb1ce1, `activeBrickView.ts`)
   - [x] 3.5.5 Battery state (step 6 U6, ccb1ce1, `activeBrickView.ts`)

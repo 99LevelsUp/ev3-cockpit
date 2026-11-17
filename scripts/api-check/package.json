@@ -14,8 +14,8 @@
   "main": "./extension.js",
   "contributes": {
     "commands": [
-      { "command": "ev3-cockpit-api-check.run", "title": "EVƎ Cockpit: API check on real bricks (U9)" },
-      { "command": "ev3-cockpit-api-check.watchChain", "title": "EVƎ Cockpit: watch the daisy chain (start/stop)" }
+      { "command": "ev3-cockpit-api-check.run", "title": "EV3 Cockpit: API check on real bricks (U9)" },
+      { "command": "ev3-cockpit-api-check.watchChain", "title": "EV3 Cockpit: watch the daisy chain (start/stop)" }
     ]
   }
 }
