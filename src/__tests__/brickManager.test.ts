@@ -456,6 +456,35 @@ describe('BrickManager — channels that come later', () => {
 		w.done();
 	});
 
+	it('logs a join that keeps failing the same way once, and says when it finally joins', async () => {
+		const lines: string[] = [];
+		const log = { warn: (m: string) => lines.push(`warn ${m}`), info: (m: string) => lines.push(`info ${m}`) };
+		const w = world(false, { log });
+		w.show.bt();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+
+		w.usb.connectFailures = 3;
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await waitFor(() => w.bricks.routeOf(CCC) === usbKey, 2000);
+
+		assert.equal(w.usb.connects, 4);
+		assert.equal(lines.filter((l) => l.startsWith('warn Joining')).length, 1, lines.join('\n'));
+		assert.equal(lines.filter((l) => l.startsWith('info Joined') && l.includes('after it had failed')).length, 1, lines.join('\n'));
+		w.done();
+	});
+
+	it('warns once that BlueZ\'s default radio name is shared by every Linux computer', () => {
+		const lines: string[] = [];
+		const w = world(false, { log: { warn: (m: string) => lines.push(m) }, radioName: () => 'BlueZ 5.82' });
+		const read = (): string | undefined => (w.bricks as unknown as { readRadioName(): string | undefined }).readRadioName();
+		assert.equal(read(), 'BlueZ 5.82');
+		read();
+		assert.equal(lines.filter((l) => l.includes('BlueZ\'s default')).length, 1);
+		w.done();
+	});
+
 	it('leaves a failed Bluetooth join alone until the brick is seen again', async () => {
 		const w = world();
 		w.show.usb(); w.show.bt();

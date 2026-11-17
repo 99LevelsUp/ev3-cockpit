@@ -29,7 +29,7 @@ import type { ProgramPresetSettings, TelemetrySettings, ThrottleSettings } from 
 import { BrickManager, BrickManagerOptions } from './brickManager';
 import { brickLabel, channelLabel, transportLabel } from './brickLabels';
 import { DiscoveryScheduler } from './discoveryScheduler';
-import { logOnChange } from './logOnChange';
+import { logOnChange, onChangePerKey } from './logOnChange';
 import { PresenceAggregator } from './presenceAggregator';
 import { SessionManager } from './sessionManager';
 
@@ -135,9 +135,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 			e.items.map(i => `${i.name.value} [${i.channels.map(c => `${c.transport}:${c.state}`).join(' ')}]`));
 	}));
 	// The change the picker shows as "BT not heard", so a wait seen there can be found here (KTD9).
-	services.add(aggregator.onHeardChange(e => {
-		log.info(`Presence check: ${channelLabel(aggregator, e.brickKey)} ${e.heard ? 'heard again' : 'not heard'}`);
-	}));
+	// Said once until the brick is heard again: a Bluetooth stack that restarts lists the paired
+	// brick afresh, which is not hearing it, and the next missed check is no news (HOSTD, 16.11.2026).
+	const sayHeard = onChangePerKey<BrickKey, boolean>((key, heard) => {
+		log.info(`Presence check: ${channelLabel(aggregator, key)} ${heard ? 'heard again' : 'not heard'}`);
+	});
+	services.add(aggregator.onHeardChange(e => sayHeard(e.brickKey, e.heard)));
 	services.add(aggregator.onPresenceChanged(e => {
 		// The brick's name, not this channel's: a channel that has none yet would otherwise
 		// print a different name for the same brick.
