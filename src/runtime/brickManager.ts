@@ -213,6 +213,8 @@ export class BrickManager implements vscode.Disposable {
 	private disposed = false;
 	private readonly log?: { warn(message: string): void; info?(message: string): void };
 	private readonly transferPacketBytes?: (transport: Transport) => number | undefined;
+	/** The reason each channel's join last failed with, logged once until it joins or the reason changes. */
+	private readonly joinFailures = new Map<BrickKey, string>();
 	/** Channels being asked their name without a session, so one sighting asks once. */
 	private readonly probing = new Set<BrickKey>();
 	/** Channels whose name probe has failed and been reported, so it is reported once. */
@@ -390,6 +392,8 @@ export class BrickManager implements vscode.Disposable {
 			this.setActiveBrick(brickId);
 			return;
 		}
+		// A new sign-in says its own failures again, even ones the last one already said.
+		for (const key of this.joinFailures.keys()) { if (brickIdOf(key) === brickId) { this.joinFailures.delete(key); } }
 		const candidates = this.joinCandidates(brickId);
 		if (candidates.length === 0) {
 			throw new NotConnectedError(`Brick ${brickId} is not available on any channel.`);
@@ -894,6 +898,7 @@ export class BrickManager implements vscode.Disposable {
 			const name = this.aggregator.getBrick(brickId)?.name.value;
 			await this.sessionManager.connect(key, transport, name);
 			signIn.backoff.delete(key);
+			if (this.joinFailures.delete(key)) { this.log?.info?.(`Joined ${channelLabel(this.aggregator, key)} after it had failed`); }
 			void this.readNameOverSession(key);
 			// Signed out once the connect was through: the user asked for nothing to stay open.
 			// A newer sign-in keeps the channel; it is the one it would have opened.
@@ -904,9 +909,13 @@ export class BrickManager implements vscode.Disposable {
 			// Nothing to say or retry for a join its sign-in no longer wants.
 			if (error instanceof ConnectionAbandonedError || this.signedIn.get(brickId) !== signIn) { throw error; }
 			// Said, because a channel that will not join is otherwise invisible: the brick works
-			// over its other channels and nothing explains why this one stays unused.
-			this.log?.warn(`Joining ${channelLabel(this.aggregator, key)} failed: `
-				+ `${error instanceof Error ? error.message : String(error)}`);
+			// over its other channels and nothing explains why this one stays unused. Once per
+			// reason: a rejoin that fails the same way every half minute is no news.
+			const reason = error instanceof Error ? error.message : String(error);
+			if (this.joinFailures.get(key) !== reason) {
+				this.joinFailures.set(key, reason);
+				this.log?.warn(`Joining ${channelLabel(this.aggregator, key)} failed: ${reason}`);
+			}
 			this.scheduleRejoin(brickId, signIn, key, transport);
 			throw error;
 		} finally {
@@ -1091,7 +1100,8 @@ export class BrickManager implements vscode.Disposable {
 	 * list or no match: nothing is sent, and the outcome says which.
 	 */
 	private async removeOwnEntry(brickId: BrickId): Promise<{ outcome: BrickSideOutcome; peers?: string[] }> {
-		const name = this.radioName?.();
+		// Read directly, not through readRadioName: a name that throws is reported, not taken as none.
+		const name = this.noteRadioName(this.radioName?.());
 		if (!name) { return { outcome: { status: 'skipped', reason: 'radio-name-unknown' } }; }
 
 		const channel = await this.peerListChannel(brickId);
@@ -1154,14 +1164,33 @@ export class BrickManager implements vscode.Disposable {
 			.map((s) => s.brickKey));
 	}
 
-	/** This computer's Bluetooth name; undefined when it cannot be read, whatever the reason. */
+	/**
+	 * This computer's Bluetooth name; undefined when it cannot be read, whatever the reason.
+	 *
+	 * A brick knows this computer only by that name (KTD3). BlueZ names an adapter nobody named
+	 * "BlueZ 5.82", the same on every Linux computer with that BlueZ, so a brick cannot tell them
+	 * apart and this computer's entry may be another's: said once in the log, with the fix.
+	 */
 	private readRadioName(): string | undefined {
 		try {
-			return this.radioName?.() || undefined;
+			return this.noteRadioName(this.radioName?.() || undefined);
 		} catch {
 			return undefined;
 		}
 	}
+
+	/** Passes the radio name through, warning once when it is BlueZ's default (see readRadioName). */
+	private noteRadioName(name: string | undefined): string | undefined {
+		if (name && !this.saidDefaultRadioName && /^BlueZ \d+(\.\d+)*$/.test(name)) {
+			this.saidDefaultRadioName = true;
+			this.log?.warn(`This computer's Bluetooth name is BlueZ's default, "${name}", which every Linux computer `
+				+ 'with this BlueZ shares: a brick cannot tell them apart, so the entry taken for this computer may be '
+				+ 'another\'s. Give the adapter a name of its own: bluetoothctl system-alias <name>.');
+		}
+		return name;
+	}
+
+	private saidDefaultRadioName = false;
 
 	private bestForPeerList(keys: BrickKey[]): BrickKey | undefined {
 		return keys.sort((a, b) => this.peerListRank(b) - this.peerListRank(a))[0];

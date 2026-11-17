@@ -15,10 +15,22 @@ export interface BrickNames {
 	getBrick(brickId: BrickId): BrickEntry | undefined;
 }
 
-/** `CCC [001653F00C0C]`, or the id alone while the brick has no name yet. */
+/** The last name each brick was labelled with, per list: a brick keeps it after the list forgets it. */
+const lastNames = new WeakMap<BrickNames, Map<BrickId, string>>();
+
+/**
+ * `CCC [001653F00C0C]`, or the id alone while the brick has no name yet.
+ *
+ * A name once seen stays in the labels: the Bluetooth channel of a brick whose USB record went
+ * first has no name of its own, and its "removed" line came out as the bare id (HOSTD, 16.11.2026).
+ */
 export function brickLabel(names: BrickNames, brickId: BrickId): string {
-	const name = names.getBrick(brickId)?.name.value;
-	return name && name !== brickId ? `${name} [${brickId}]` : brickId;
+	let last = lastNames.get(names);
+	if (!last) { last = new Map(); lastNames.set(names, last); }
+	const current = names.getBrick(brickId)?.name.value;
+	if (current && current !== brickId) { last.set(brickId, current); }
+	const name = last.get(brickId);
+	return name ? `${name} [${brickId}]` : brickId;
 }
 
 /** `USB`, `BT`, `TCP` — the transport of a channel key. */
