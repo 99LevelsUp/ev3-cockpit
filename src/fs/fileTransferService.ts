@@ -20,8 +20,8 @@ import {
 	SYSTEM_ENVELOPE_BYTES,
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
-import { ChannelChangedError, LinkLostError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
-import { TransferLedger } from './transferLedger';
+import { ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { TransferLedger, mayHaveRun } from './transferLedger';
 
 /** How the service reaches a brick. Narrower than a provider on purpose. */
 export type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
@@ -78,15 +78,6 @@ export interface TransferServiceOptions {
 }
 
 /** A failure the brick answered: the command reached it. Anything else, it may not have. */
-/**
- * A failure that does not prove the command stayed on this side: it may have reached the brick and
- * run, with only its reply lost. Three settle it: an answer from the brick, a session's refusal
- * before it left (2.8.14), and a pinned channel's refusal before it left (`BrickManager.pin`).
- */
-function mayHaveRun(error: unknown): boolean {
-	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError) && !(error instanceof ProtocolError);
-}
-
 function brickAnswered(error: unknown): boolean {
 	return error instanceof ProtocolError;
 }
