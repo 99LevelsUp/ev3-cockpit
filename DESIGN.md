@@ -1468,8 +1468,23 @@ heartbeat — would pay for it silently.
 
 The grant stays what was negotiated. When throttling moves the tick (§4.5), the snapshot and
 every event carry `effectiveIntervalMs`, the interval the rows really run at; nothing is
-re-negotiated (owner, 11.11.2026). Every port carries `layer`, 0 until a daisy chain is
-supported, so adding layers does not change the shape (owner, 11.11.2026).
+re-negotiated (owner, 11.11.2026). Every port carries `layer`: 0 for the brick's own ports,
+1–3 for the bricks below it in a USB daisy chain (owner, 11.11.2026; built 17.11.2026).
+
+**The daisy chain** (step-8 plan, `docs/plans/2026-11-17-step8-daisy-chain.md`). A brick below
+another is reached only through it, by the `LAYER` argument of an ordinary direct command; it
+has no `BrickKey`, session or queue of its own. One event-tier row, `chain.depth`, copies the
+master's device list (`opINPUT_DEVICE_LIST`, all 32 port types of the chain in one instruction)
+and reports the deepest layer with a device; an empty last member reads exactly like no brick
+and is not counted. A member's ports are rows of their own under `chain.<layer>`, with port
+names `'<layer>:<port>'` so the occupancy gate and the mode claims work per port; there is no
+tacho row for a member, because the position does not cross the chain. The scheduler reads a
+member's rows only within the reported depth, a member's value only after its occupancy says a
+device is there, and nothing of the chain on the HID fallback, where the 33-byte list would take
+the brick's own readings' frames. The chain itself is derived from the depth row, never stored,
+and each member carries what it can do from one module (`telemetry/chainCapabilities.ts`): today
+sensors, motor types on the layers measured, and nothing a host cannot address to a layer
+(name, files, programs). The API offers it as `getChain` and `onChainChanged`.
 
 Subscribers are identified by an opaque handle returned from subscribe, so unsubscribing
 releases exactly one claim on a row and the effective interval is recomputed from those that
