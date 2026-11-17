@@ -16,7 +16,7 @@ execution: code
 - **Means:** everything goes through the master's existing session with the firmware's `LAYER` argument (KTD1). Members are found from one device-list row (KTD2). Each member's ports are rows of their own, gated on the member being there (KTD3, KTD4). The chain reaches the API as its own concept, derived from what the telemetry reads (KTD6).
 - **Authority:** owner decisions (Key Decisions below) > IMPLEMENTATION_PLAN 3.1.4f–3.1.4j and the measurements of U0 > this plan's KTDs > existing code.
 - **Not in this step:** the panel (Phase 5); driving motors through the API, which the API does not offer even for the master today; bricks linked brick-to-brick over Bluetooth (3.1.4j: not a chain, no ports cross); joining a member that is also reachable on its own radio with its chain entry.
-- **Stop conditions:** stop and ask the owner when U0 finds that motor entries can appear on a layer with no brick behind it (Open Questions, Q1), or that the chain cannot be read when the master is on Wi-Fi or Bluetooth.
+- **Stop conditions:** stop and ask the owner when U0 finds a motor entry on any remote port with no motor plugged in (Open Questions, Q1), or that the chain cannot be read when the master is on Bluetooth, or on Wi-Fi through a hub (Assumptions).
 - **Execution profile:** one PR's worth of work on `master`, committed unit by unit and pushed when each unit's review is READY (the owner allows pushing at any time). U0 and U7 need the owner at three chained bricks, one instruction at a time; the session reads the logs itself.
 - **Finishes and ships:** this Windows session builds, reviews (codex, verdict rounds until READY) and pushes. The owner runs the hardware steps.
 
@@ -97,7 +97,8 @@ Three chained bricks were measured in August, and the cockpit still sees only th
 ### Scope Boundaries
 
 - A member also connected to this computer on its own (Bluetooth, Wi-Fi) appears twice: as a member of the chain and as a brick of its own. Joining them needs a name or serial, and neither crosses the chain. Not built. What would change it: a firmware that answers a member's name (R8 then reports `name`).
-- No guard against reading a chain over Bluetooth's 10.7 commands per second budget beyond the gating in KTD4. The member rows come up only while members exist, and the throttle of step 6 already slows the loop under load. Not built; a measured stall in U7 would change it.
+- No guard against reading a chain over Bluetooth's 10.7 commands per second budget beyond the gating in KTD4. The member rows come up only while members exist, and the throttle built in Step 6 (IMPLEMENTATION_PLAN 3.3) already slows the loop under load. Not built; a measured stall in U7 would change it.
+- The chain is not shown on the HID fallback (KTD9). Not built: HID is the fallback when libusb is missing, and the chain would cost layer 0 its cadence there. A user who needs the chain over USB without libusb would change it.
 - No caching of the chain across sessions. The chain is read again at each connection; a cached chain would describe wiring that may have changed.
 
 #### Deferred to Follow-Up Work
@@ -115,7 +116,7 @@ Three chained bricks were measured in August, and the cockpit still sees only th
 - KTD2. **Members are found from `opINPUT_DEVICE_LIST` in one row, `chain.depth`.** It is event tier, registered for every brick.
   - **Why it can be trusted:** it copies the same `DeviceType[]` that `opINPUT_DEVICE GET_TYPEMODE` reads, and `GET_TYPEMODE` was verified on remote sensors (3.1.4f).
   - **What it reports:** the depth, meaning the deepest layer with a real entry; layers above it are members because a chain has no gaps (R2).
-  - **Which entries count:** sensor and motor entries alike, unless U0 shows motor phantoms on a layer with no brick (Q1).
+  - **Which entries count:** sensor and motor entries alike, unless U0 finds a motor entry on a remote port with no motor plugged in (Q1).
   - **What it ignores:** the `CHANGED` byte. Reading it resets it for the asking slot, so a second reader would steal it. Changes are found by comparing the depth.
   - **Encoding detail:** `LENGTH` 32 needs a one-byte constant (LC1), since a short constant only reaches 31.
   - **Cost:** 33 bytes of globals every fifth tick.
@@ -126,13 +127,14 @@ Three chained bricks were measured in August, and the cockpit still sees only th
   - **Chosen over** parsing the device list into per-port occupancy. Per-port `GET_TYPEMODE` rows reuse the existing occupancy gate unchanged and bring the mode. Their cost applies only while a member exists (KTD4). The parsing alternative would make one row report occupancy for 24 ports, a new concept in the scheduler.
 - KTD4. **A layer gate in the scheduler.**
   - A row with `layer > 0` comes up only while the last `chain.depth` is at least its layer.
-  - Before `chain.depth` first reports, every member row is closed. This differs from layer 0, where an unreported port reads as known so a cold start does not wait. A brick with no chain then never pays for member rows (R3).
-  - When the depth drops below a layer, that layer's occupancy, commanded modes and settling are forgotten, as when a port stops being known.
-- KTD5. **Capabilities come from probes in one module, `src/telemetry/chainCapabilities.ts`.**
+  - Before `chain.depth` first reports, every member row is closed. A brick with no chain then never pays for member rows (R3).
+  - A member value row comes up only after its own port's occupancy has reported a known device. An unreported member port is closed, unlike layer 0, where an unreported port reads as known so a cold start does not wait (`TelemetryScheduler.isReadable`). Otherwise up to twelve member value rows would go out on the ticks before the event-tier occupancy rows report.
+  - When the depth drops below a layer, that layer's occupancy, commanded modes and settling are forgotten, as when a port stops being known. Its value rows then wait for occupancy again.
+- KTD5. **Capabilities live in one module, `src/telemetry/chainCapabilities.ts`. Today they are fixed from measured facts, because stock firmware offers nothing to probe.** What is read from the brick today is which members exist and the types on their ports. Everything else is set from measurements:
   - `sensors` is true for every member found, because sensor types and values cross.
-  - `motorTypes` is true or false per layer as U0 measures it.
+  - `motorTypes` is true for a layer only when U0 reads the right motor type there in every one of at least three rewirings, with motors of different types. Any other layer is false, including layer 3, which a three-brick rig cannot reach.
   - `motorReadout`, `files`, `programs` and `name` are false. No host operation addresses them to a layer (What is measured already), so nothing can be asked.
-  - A firmware that answers one of them gets its probe added here. The API shape stays (R8). How such a firmware makes itself known is Q2.
+  - A firmware that answers one of them gets its probe added in this module, and that capability is then read from the brick. The API shape stays (R8). How such a firmware makes itself known is Q2.
 - KTD6. **The chain is derived, never stored.**
   - `chainOf(values)` is a pure function over one brick's read-model values: depth, members, capabilities.
   - The API's `getChain(brick)` reads it from the snapshot and says whether the chain was read at all (`read: false` when `chain.depth` has no value yet).
@@ -143,7 +145,7 @@ Three chained bricks were measured in August, and the cockpit still sees only th
   - **Discovery:** members are left out of discovery (R9).
   - **Frame interpreter:** answers `INPUT_DEVICE_LIST` and remote ports from the member bricks. A remote `OUTPUT_GET_COUNT` answers a frozen constant, not the live value, so a test that trusts a member's tacho fails here as on a brick.
   - **Default config:** T1000 moves under T800.
-- KTD9. **The HID fallback may never show the chain.** `chain.depth` takes 33 of the 59 bytes a HID frame carries. The assembler's truncation order puts it last, with the occupancy rows. On HID the chain may appear late or not at all. Accepted: HID is the fallback when libusb is missing, and layer 0 must stay whole there (U3 tests it).
+- KTD9. **The chain is not read on the HID fallback.** While the scheduler's frame limits are the 64-byte HID packet, `chain.depth` and every row with `layer > 0` are not readable; the check sits beside the layer gate in `isReadable`. Reason: `chain.depth` takes 33 of the 59 bytes a HID frame carries, and the scheduler orders rows by urgency, not by their place in `allEv3Rows()` (`candidatesFor`). A divider-5 row that keeps waiting reaches the front by its fifth tick and pushes layer 0's sampled rows out of that frame. HID is the fallback when libusb is missing; the chain is not shown there (Scope Boundaries).
 
 ### High-Level Technical Design
 
@@ -169,6 +171,7 @@ flowchart TB
 ### Assumptions
 
 - The chain reads the same with the master on Wi-Fi or Bluetooth as on USB: the layer argument is part of the direct command, whatever carries it. Measured only over USB so far; U0 measures it.
+- The master has one USB host port. The Wi-Fi dongle and the chain cable both need it, so the Wi-Fi leg needs a USB hub on that port. The firmware's own search for a dongle behind a hub is commented out (`c_wifi.c` 1354–1357), so a hub may not carry the dongle at all. If it does not, that is a hardware limit, recorded in 3.1.4f as such, not as a routing result, and R10's Wi-Fi leg goes to the owner under the stop condition.
 - Changing a member's sensor mode through `opINPUT_READSI` with its layer works as on the master. Measured only for values in the default mode; U0 measures it.
 
 ---
@@ -181,12 +184,12 @@ flowchart TB
 - **Requirements:** R1, R2, R4, R10; Q1.
 - **Dependencies:** none.
 - **Files:** a probe in the scratchpad, not in `src/`. Results go to IMPLEMENTATION_PLAN 3.1.4f and to this plan's "What is measured already".
-- **Approach:** AAA is the master on USB to HOSTA, BBB is layer 1, CCC is layer 2. Needed: one sensor (a colour sensor, for its modes) and two motors of different types (large and medium). One instruction at a time; each step says what to plug where.
+- **Approach:** AAA is the master on USB to HOSTA, BBB is layer 1, CCC is layer 2. Needed: one sensor (a colour sensor, for its modes), two motors of different types (large and medium), and a USB hub for step 5's Wi-Fi leg (Assumptions). One instruction at a time; each step says what to plug where.
   1. Sensors on layers 1 and 2: the device list carries them at index layer × 4 + port.
   2. Empty member against no member: remove the devices from CCC, then unplug CCC. Both read `TYPE_NONE` throughout (R2).
-  3. Motors alone: a large motor alone on layer 1, then a medium motor alone on layer 2. Check both types, and check whether either appears on the other layer (Q1; also closes 3.1.4f's open layer-2 motor type).
+  3. Motors alone, with CCC attached and empty: a large motor alone on layer 1, then swapped to a medium motor alone on layer 2, then motors of different types on both. Three rewirings in all. In each, check every motor type and whether a motor entry appears on any port with no motor plugged in (Q1; KTD5's `motorTypes`; closes 3.1.4f's open layer-2 motor type).
   4. A member's sensor mode: read the colour sensor on layer 1 in two modes, one after the other, with a settle pause between. The value changes with the mode.
-  5. The master over Wi-Fi, then over Bluetooth: steps 1 and 4 again.
+  5. The master over Wi-Fi (dongle and chain cable through the hub), then over Bluetooth: steps 1 and 4 again.
   6. Emergency stop: drive a member's motor with a long `opOUTPUT_TIME_SPEED`, send the `program:emergencyStop` bytes, and see whether it stops.
 - **Execution note:** follow the hardware protocol: one instruction, wait for "hotovo", read the probe's output. Beep before a step where the owner watches the brick.
 - **Test expectation:** none — measurement only, no product code.
@@ -197,12 +200,12 @@ flowchart TB
 - **Goal:** the rows of KTD2 and KTD3 exist, validate against the HID bound, and parse.
 - **Requirements:** R1, R3, R4, R5, R6.
 - **Dependencies:** U0 (which entries count, Q1).
-- **Files:** `src/telemetry/ev3Rows.ts`, `src/telemetry/telemetryRow.ts` (a `layer` field), `src/telemetry/rowRegistry.ts`, `src/__tests__/rowRegistry.test.ts`, `src/__tests__/portsTelemetry.test.ts`.
+- **Files:** `src/telemetry/ev3Rows.ts`, `src/telemetry/telemetryRow.ts` (a `layer` field), `src/telemetry/rowRegistry.ts` (`RowDescriptor.layer`), `src/__tests__/rowRegistry.test.ts`, `src/__tests__/portsTelemetry.test.ts`.
 - **Approach:**
   1. `chainDepthRow()`: `INPUT_DEVICE_LIST` with LC1 32, 33 globals, parsing to the depth (KTD2).
   2. Member rows per KTD3, built from the same encoders as layer 0 with the layer as a parameter, so one encoder serves both.
-  3. In `allEv3Rows()`, member rows go after layer 0's rows of the same kind and `chain.depth` last (KTD9).
-  4. The registry registers modes for member sensor value rows under their port ids.
+  3. In `allEv3Rows()`, member rows go after layer 0's rows of the same kind and `chain.depth` last. The order breaks ties only; the scheduler orders by urgency (KTD9).
+  4. The registry registers modes for member sensor value rows under their port ids, and `list()` carries each row's `layer`.
 - **Patterns to follow:** `sensorOccupancyRow`, `sensorValueRow` and `radioRow` in `ev3Rows.ts`; the alignment comment at the head of the file (32-bit globals on a 4-byte boundary, 3.1.4h).
 - **Test scenarios:**
   - `chain.depth` emits `0x98`, an LC1 32, then a global reference, and declares 33 globals.
@@ -251,9 +254,10 @@ flowchart TB
   - Before `chain.depth` has replied, no member row is in any frame.
   - Depth 1: layer-1 occupancy rows come up, layer-2 rows do not.
   - Depth drops from 2 to 1: layer-2 rows leave the next frame, and a commanded mode on `'2:1'` is forgotten.
-  - A layer-1 sensor value row comes up only once its occupancy reports a known device.
+  - Depth 1 reported, layer-1 occupancy not yet reported: no layer-1 value row is in the frame.
+  - A layer-1 sensor value row comes up only once its occupancy reports a known device, and again only after occupancy reports anew when the depth drops and returns.
   - A claim with modes `{ '1:3': 2 }` is granted; a second claim asking `{ '1:3': 4 }` is refused with `mode_conflict`; `{ '3': 4 }` on the master's port 3 is independent.
-  - Over the HID limits with a chain of depth 3, every layer-0 sampled row still fits each frame (KTD9).
+  - On HID limits with a mock chain of depth 3, no frame carries `chain.depth` or a member row, and the frames match those of a brick without a chain (KTD9).
 - **Execution note:** check that the gate test discriminates: in a temporary worktree, remove the layer check and see the "before `chain.depth`" scenario fail.
 - **Verification:** a brick with no chain sends the same frames as before plus `chain.depth` every fifth tick.
 
@@ -268,7 +272,7 @@ flowchart TB
   - No `chain.depth` value: the chain is unknown, not empty.
   - Depth 0: known and empty.
   - Depth 2: two members, layers 1 and 2, each with `sensors: true` and `motorReadout`, `files`, `programs` and `name` false.
-  - `motorTypes` per layer matches U0's result.
+  - `motorTypes` per layer matches U0's result, and is false for layer 3.
   - A stale `chain.depth` value marks the chain stale.
 - **Verification:** the capabilities come from one module; no firmware version string is read anywhere in it.
 
@@ -284,14 +288,14 @@ flowchart TB
   - A large motor on layer 1, port A with a tacho value present in the values (a stray value): the motor port has its type and no `value`, `unit` or `timestamp`.
   - The master's ports carry layer 0 and are otherwise unchanged.
   - No `chain.depth` value: `chain` is absent.
-- **Verification:** the view of a brick with no chain differs from today's only by `chain: []`.
+- **Verification:** the view of a brick whose depth reads 0 differs from today's only by `chain: []`; a brick whose depth has not been read has no `chain` field.
 
 ### U6. The chain in the API — `src/api/cockpitApi.ts`
 
 - **Goal:** consumers ask for a brick's chain and hear when it changes (R7).
 - **Requirements:** R7, R8.
 - **Dependencies:** U3, U4.
-- **Files:** `src/api/cockpitApi.ts`, `src/telemetry/rowRegistry.ts` (`RowDescriptor.layer`), `src/programs/programService.ts` (if `followProgramRow`'s claim helper is shared), `src/__tests__/cockpitApiChain.test.ts`.
+- **Files:** `src/api/cockpitApi.ts`, `src/programs/programService.ts` (if `followProgramRow`'s claim helper is shared), `src/__tests__/cockpitApiChain.test.ts`.
 - **Approach:** `getChain(brick)` and `onChainChanged(brick, listener)` per KTD6. The listener hears the chain, not raw rows. A brick that goes ends the notification as a telemetry subscription ends.
 - **Patterns to follow:** `followProgramRow` (`src/programs/programService.ts`), `TelemetryDelivery` for ordering, `resolve()` for `'active'`.
 - **Test scenarios:**
@@ -309,12 +313,12 @@ flowchart TB
 - **Requirements:** R1, R2, R4, R5, R10.
 - **Dependencies:** U1–U6.
 - **Files:** `scripts/api-check/extension.js` (a chain section), `scripts/hardware-matrix.js` (a depth row if the matrix lists rows).
-- **Approach:** the api-check VSIX on HOSTA prints `getChain` and the `onChainChanged` events. Steps, one at a time:
+- **Approach:** the api-check VSIX on HOSTA prints `getChain`, the `onChainChanged` events, and a telemetry subscription to every member row: type, raw type code, mode and value of sensor ports, and type of motor ports, with no position for any member motor. Steps, one at a time:
   1. AAA on USB: members and ports.
   2. Unplug the device on CCC: one event, one member.
   3. Unplug CCC: no event.
-  4. Plug it back: one event.
-  5. AAA on Wi-Fi: steps 1 and 2 again.
+  4. Plug CCC back with its device attached: one event, two members.
+  5. AAA on Wi-Fi through the hub: steps 1 and 2 again.
   6. AAA on Bluetooth: steps 1 and 2 again.
 - **Test expectation:** none — hardware verification; the unit tests of U1–U6 hold the behaviour.
 - **Verification:** each step's output recorded in IMPLEMENTATION_PLAN 3.1.4g; the log shows no frame failure while the chain is read.
@@ -333,14 +337,15 @@ flowchart TB
 
 ## Open Questions
 
-- Q1 (blocks U1's counting rule only; U0 answers it). Can a motor entry appear on a layer with no brick behind it? If yes, only sensor entries count towards the depth, and a member with only motors attached is not found. That limit goes to the owner before U1 is built, because a second brick that adds motors is a common robot.
+- Q1 (blocks U1's counting rule only; U0 answers it). Can a motor entry appear on any remote port with no motor plugged in, whether or not a brick is on that layer? 3.1.4i saw one copied motor on a brick that was there. If yes, motor entries do not count towards the depth and member motor ports are not reported, so a member with only motors attached is not found. That limit goes to the owner before U1 is built, because a second brick that adds motors is a common robot.
 - Q2 (deferred, does not block). How will an extended firmware make its new abilities known? Recommended: an answer the stock firmware does not give, such as a layer argument on a name read that today's firmware rejects. A version string would be a firmware table, which the owner ruled out. KTD5 adds the probe once the answer exists.
 
 ## Risks
 
-- **Bluetooth budget.** A chain of three members with every port in use adds up to 36 rows to the foreground. Gating keeps it to what is plugged in, and the step-6 throttle slows the loop. U7 step 6 measures it.
+- **Bluetooth budget.** A chain of three members with every port in use adds up to 36 rows to the foreground. Gating keeps it to what is plugged in, and the throttle built in Step 6 slows the loop. U7's Bluetooth step measures it.
+- **The depth can flap.** The firmware zeroes every layer's buffers on a downstream resync and flags a port FAIL after a failed mode write (`c_daisy.c` 2046, 2133, 2397, 2530); FAIL reads as `TYPE_NONE` (`c_input.c` 3153–3163). A bottom member with one device can then drop out and return, firing `onChainChanged` twice and re-sending a claimed mode. Not debounced: U0 and U7 watch for it, and a flap seen there adds a hold of one reading before a drop takes effect.
 - **Remote values lag.** The daisy relay refreshes about every 100 ms (Hardware Developer Kit), so a member's value can be one relay period older than its `sampledAt` says. Not corrected; `sampledAt` keeps meaning the time the reply arrived.
-- **Firmware variants.** Measurements are from 1.09H and 1.10E. A brick on another build may relay differently; the capabilities come from what the brick answers (KTD5), so a difference shows rather than breaks.
+- **Firmware variants.** Measurements are from 1.09H and 1.10E. A brick on another build may relay differently. Members and port types are read from the brick, so a difference there shows. The fixed capabilities of KTD5 would not show it: on such a build they can be wrong until a probe exists.
 
 ---
 
