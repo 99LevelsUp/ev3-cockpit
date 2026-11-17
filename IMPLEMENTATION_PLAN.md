@@ -1083,6 +1083,47 @@ Build the source of truth for connected bricks.
     is refused at once (2.8.14); an upload cut mid-way is released after the reconnect (4.6.17);
     the daisy chain through the API with the master on Bluetooth (step-8 U7 step 6, R10); and this
     fix: a lost paired Bluetooth channel is tried by "Connect a Brick" and joined beside USB.
+    **Hardware round 17.11.2026 (HOSTA, 0.2.387, AAA as master of AAA→BBB→CCC unless said): all
+    pass except Wi-Fi, which is left for the next session (on a brick other than AAA, no chain).**
+    - The fix: "Connect a Brick" at 21:55:52 with no presence check having heard AAA again joined
+      Bluetooth at 21:56:10.
+    - R10 over Bluetooth through the API: members [1, 2], the touch sensor on CCC read 0/1.
+    - Bluetooth off on the brick: the route went about 2 s after the heartbeat; with commands in
+      flight the brick closes the link itself, so nothing waits out a timeout (below).
+    - Bluetooth off on the computer: every Bluetooth brick unavailable at once, the reconnect
+      failed fast (WSA 10050), the brick stayed on USB, Bluetooth back 14 s after the radio.
+    - Two channels losing one: three cable pulls, the route USB → BT in the same millisecond and
+      back to USB within 30 ms of the cable.
+    - 2.8.14: over USB+BT, 6 failures in 11–53 ms and 1720 answers over Bluetooth meanwhile; over
+      Bluetooth alone, 1 closed by the brick (719 ms), 5 refused by the transport guard
+      (93–483 ms), then 276 refused at once. No command waited out a timeout. Both times the guard
+      emptied the queue before the session did, so the `LinkLostError` drain has not run on hardware;
+      only a silent loss (battery out, out of range) would reach it.
+    - 4.6.17: cut at 30 % over USB; the next transfer (a 1-byte upload) settled the debt over
+      Bluetooth while the cable was out: free 2492 KB → 3412 KB (3416 before), the partial file gone.
+      The first run read FAIL because the check measured without a next transfer; the check was
+      wrong (dbe973c), not the cockpit.
+    **Freezes.** AAA froze fully twice (21:58 a cable into its PC port while on Bluetooth; 22:02 its
+    Bluetooth switched on while on USB), each time as chain master with the cockpit reading it, and
+    its Bluetooth stack hung on enable twice (hourglass, then an empty error dialog on every try;
+    the menu works). The owner suspected the cockpit; a controlled test, three USB and three
+    Bluetooth cycles each: (A) chain, cockpit off — the Bluetooth hang once, no freeze; (B)
+    cockpit, no chain — nothing; (C) cockpit and chain — nothing. The Bluetooth hang is firmware;
+    the full freeze was not reproduced, so the cockpit is neither cleared nor convicted. Precedent:
+    the March 2026 lab incidents (`ev3-testlab.bak/notes/firmware-freeze-guidelines.md`). If AAA
+    freezes again: record uptime and the cockpit's last 30 s before the reset.
+    **Found on the way, open:**
+    - Reading a chain loads the master: USB ticks back off to 150–400 ms with stalls (p95 up to
+      229 ms against 30), Bluetooth p95 up to 1.8 s against 390 ms. Measure before damping.
+    - Bluetooth comes back up to ~3 min after the brick's radio returns: each failed connect
+      takes 20–40 s on Windows, and the backoff grows. Worth a shorter path once presence hears it.
+    - The presence checks log a change only, so a channel already lost leaves no line while
+      they keep missing it.
+    - Transfer debts live in memory: an extension host restart drops them, and the slot stays
+      taken until the brick restarts.
+    - Commands refused from the queue on a lost channel could go on a channel already live
+      (owner, 17.11.2026: weigh in Phase 5; today they are refused, as decided 16.11.).
+    - Bluetooth-only bricks show without names after an extension host restart.
   - [x] 2.8.13 **A brick has no name over Bluetooth.** Done 30.10.2026 (step-2 plan): one
     list entry per brick keyed by `BrickId`, named from the brick itself (`info`, also read over
     USB without connecting, and the TCP beacon). Original entry: Discovery reports `EV3
@@ -1813,8 +1854,9 @@ Export a stable API for other extensions without giving them direct access to th
     are collected in §2, "What Linux needs". 11.11.2026: still not run — HOSTC had no USB to
     the bricks; the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`) come
     prebuilt for linux-arm64 and load (`docs/plans/linux-session-results/2026-11-11-hostc.md`)
-  - [ ] 4.6.17 **Built 13.11.2026 (6188670), reviewed 17.11.2026, the owner's decision taken
-    17.11.2026 (row 3); open: the hardware check, under 2.8.12.** Codex, three rounds, READY after
+  - [x] 4.6.17 **Built 13.11.2026 (6188670), reviewed 17.11.2026, the owner's decision taken
+    17.11.2026 (row 3); hardware check passed 17.11.2026 (2.8.12): a cut upload's slot closed and
+    its file deleted by the next transfer, over the other channel.** Codex, three rounds, READY after
     f1be86e:
 
     | # | Sev | Finding | Verdict | Outcome |
