@@ -20,6 +20,8 @@
  *   each row was granted, then a snapshot, then only the rows that changed, each value with when it
  *   was sampled, the interval it runs at now and whether it is stale (D2, D10). Disposing the handle
  *   releases exactly that claim; a brick that goes ends its subscriptions with an `ended` update.
+ * - The daisy chain (step-8 U6): the bricks below a brick, each with what it can do, derived from
+ *   the telemetry's depth row and never stored. A member has no id of its own; its ports are rows.
  */
 
 import {
@@ -30,6 +32,9 @@ import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
 import { ProgramService, ProgramServiceOptions, followProgramRow } from '../programs/programService';
+import type { ChainMemberCapabilities } from '../contracts/models';
+import { chainOf } from '../telemetry/chainModel';
+import { CHAIN_DEPTH_ROW } from '../telemetry/ev3Rows';
 import type { RowDescriptor } from '../telemetry/rowRegistry';
 import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
@@ -111,6 +116,23 @@ export interface TelemetrySubscription extends Subscription {
 	snapshot(): TelemetryValue[];
 }
 
+/**
+ * The bricks below a brick in a USB daisy chain, as last read: plain data.
+ *
+ * A member is reached only through the brick above it and has no id of its own; its ports are
+ * telemetry rows under `chain.<layer>`. What it can do is in `capabilities`, and a firmware that
+ * carries more across the chain turns more on there without a change of shape.
+ */
+export interface ApiChain {
+	readonly brickId: string;
+	/** False until the chain has been read; then `members` is empty only for a brick with nothing below it. */
+	readonly read: boolean;
+	/** No newer reading of the chain came for a while. */
+	readonly stale: boolean;
+	/** Layer 1 first. An empty last member cannot be told from no brick and is not listed. */
+	readonly members: readonly { readonly layer: number; readonly capabilities: ChainMemberCapabilities }[];
+}
+
 export interface ShellResult {
 	readonly brickId: string;
 	/** The return value of `system()` on the brick. */
@@ -156,7 +178,15 @@ export interface CockpitConsumer extends Subscription {
 	// Telemetry (step-6 U8)
 	listTelemetryRows(): TelemetryRowInfo[];
 	subscribeTelemetry(brick: BrickTarget, request: TelemetryRequest, listener: (update: TelemetryUpdate) => void): TelemetrySubscription;
+	// The daisy chain (step-8 U6)
+	/** The chain below a brick as last read; not read yet unless something reads that brick's telemetry. */
+	getChain(brick: BrickTarget): ApiChain;
+	/** Reads the chain below a brick and calls `listener` when its members or their abilities change. */
+	onChainChanged(brick: BrickTarget, listener: (chain: ApiChain) => void): Subscription;
 }
+
+/** How often a followed chain is read: a chain changes when a cable or a device does. */
+const CHAIN_FOLLOW_INTERVAL_MS = 1000;
 
 export interface CockpitApi {
 	readonly apiVersion: typeof API_VERSION;
@@ -253,6 +283,16 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 			.filter((channel) => channel.state !== ChannelState.Absent)
 			.map((channel) => ({ transport: String(channel.transport), state: String(channel.state) })),
 	});
+	/** A brick's chain from what its telemetry last read; not read without a telemetry service. */
+	const chainNow = (brickId: BrickId): ApiChain => {
+		const chain = chainOf(deps.telemetry?.snapshot(brickId, [CHAIN_DEPTH_ROW]) ?? []);
+		return {
+			brickId,
+			read: chain !== undefined,
+			stale: chain?.stale ?? false,
+			members: (chain?.members ?? []).map((member) => ({ layer: member.layer, capabilities: { ...member.capabilities } })),
+		};
+	};
 	/** Access mode first, so a refused call sends nothing. */
 	const allowed = (operation: Parameters<typeof assertAllowed>[1], path?: string): void => {
 		assertAllowed(deps.accessMode(), operation, path);
@@ -385,6 +425,49 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				};
 				subscriptions.add(record);
 				return { brickId, grant: { ...claim.grant }, snapshot, dispose: () => record.dispose() };
+			},
+
+			getChain: (brick) => chainNow(resolve(brick)),
+			onChainChanged: (brick, listener) => {
+				open();
+				const { telemetry } = telemetryOf();
+				const brickId = resolve(brick);
+				let live = true;
+				let handle: string | undefined;
+				let last = JSON.stringify(chainNow(brickId));
+				const ending = telemetry.onClaimsEnded((event) => {
+					// Its brick went: the claim is gone with it, and nothing more is told.
+					if (event.brickKey === brickId && handle !== undefined && event.handles.includes(handle)) { close(false); }
+				});
+				const listening = telemetry.onChange((change) => {
+					if (change.brickKey !== brickId) { return; }
+					if (!change.rows.some((row) => row.rowId === CHAIN_DEPTH_ROW) && !change.removed.includes(CHAIN_DEPTH_ROW)) { return; }
+					const chain = chainNow(brickId);
+					const now = JSON.stringify(chain);
+					if (now === last) { return; }
+					last = now;
+					// Told after the read model's dispatch, as a followed program is (review of step-6 U8, round 4).
+					queueMicrotask(() => {
+						if (!live) { return; }
+						try { listener(chain); } catch { /* the consumer's own error */ }
+					});
+				});
+				const close = (release: boolean): void => {
+					if (!live) { return; }
+					live = false;
+					listening.dispose();
+					ending.dispose();
+					if (release && handle !== undefined) { telemetry.release(handle); }
+				};
+				try {
+					handle = telemetry.claim(brickId, { rowIds: [CHAIN_DEPTH_ROW], intervalMs: CHAIN_FOLLOW_INTERVAL_MS }, name).handle;
+				} catch (error) {
+					close(false);
+					if (error instanceof CockpitError) { throw error; }
+					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
+				}
+				if (closed) { close(true); open(); }
+				return keep({ dispose: () => close(true) });
 			},
 
 			dispose: () => {

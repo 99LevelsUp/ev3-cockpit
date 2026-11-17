@@ -115,6 +115,60 @@ function world() {
 	};
 }
 
+describe('The daisy chain on the API (step-8 U6)', () => {
+	const depth = (brickKey: BrickId, v: number): ReadModelChange => ({ brickKey, rows: [value('chain.depth', v)], removed: [] });
+
+	it('says a chain that has not been read is not known, rather than empty', () => {
+		const w = world();
+
+		assert.deepEqual(w.api.registerConsumer('ev3-c').getChain(A), { brickId: A, read: false, stale: false, members: [] });
+	});
+
+	it('lists the members below a brick, each with what it can do', () => {
+		const w = world();
+		w.change(depth(A, 2));
+
+		const chain = w.api.registerConsumer('ev3-c').getChain('active');
+
+		assert.equal(chain.read, true);
+		assert.deepEqual(chain.members.map((m) => m.layer), [1, 2]);
+		assert.deepEqual(chain.members[0].capabilities,
+			{ sensors: true, motorTypes: true, motorReadout: false, files: false, programs: false, name: false });
+		assert.doesNotThrow(() => JSON.parse(JSON.stringify(chain)));
+	});
+
+	it('follows the chain with a claim on its depth, and tells only a change', async () => {
+		const w = world();
+		w.change(depth(A, 2));
+		const heard: number[][] = [];
+
+		const sub = w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.map((m) => m.layer)));
+		w.change(depth(A, 2));   // read again, the same
+		w.change(depth(A, 1));
+		w.change({ brickKey: B, rows: [value('chain.depth', 3)], removed: [] });   // another brick
+		await settle();
+
+		assert.deepEqual(w.claims.map((c) => [c.brickId, c.rowIds]), [[A, ['chain.depth']]]);
+		assert.deepEqual(heard, [[1]]);
+		sub.dispose();
+		assert.deepEqual(w.released, [w.claims[0].handle], 'disposing releases exactly that claim');
+	});
+
+	it('stops when its brick goes, and tells nothing after', async () => {
+		const w = world();
+		const heard: number[] = [];
+		w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.length));
+		const listeningWhileFollowed = w.listening();
+
+		w.end(A, [w.claims[0].handle]);
+		w.change(depth(A, 1));
+		await settle();
+
+		assert.deepEqual(heard, []);
+		assert.ok(w.listening() < listeningWhileFollowed, 'its listeners are gone');
+	});
+});
+
 describe('Telemetry on the API (step-6 U8)', () => {
 	it('lists the rows a consumer can subscribe to, as plain data (4.5.1)', () => {
 		const w = world();

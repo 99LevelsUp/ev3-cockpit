@@ -254,10 +254,56 @@ async function run() {
 	}
 }
 
+/**
+ * Watches the daisy chain of the brick picked, through the API a consumer uses (step-8 plan, U7):
+ * every chain event, and the member ports each time they change. Runs until the command is given
+ * again, so the bricks can be rewired in between.
+ */
+let chainWatch;
+
+async function watchChain() {
+	if (chainWatch) { chainWatch.dispose(); chainWatch = undefined; line('===== chain watch stopped'); return; }
+	out.show(true);
+	const cockpit = vscode.extensions.getExtension('99LevelsUp.ev3-cockpit');
+	if (!cockpit) { line('FAIL  the cockpit is not installed'); return; }
+	const api = await cockpit.activate();
+	const consumer = api.registerConsumer('ev3-cockpit-chain-watch');
+	const brick = await pickBrick(consumer);
+	if (!brick) { consumer.dispose(); line('skip  no brick picked'); return; }
+	if (!brick.signedIn) { await consumer.connect(brick.brickId); }
+	consumer.setActiveBrick(brick.brickId);
+	line(`===== chain watch on ${brick.name}, ${route(consumer.listBricks().find((b) => b.brickId === brick.brickId))}`);
+
+	const show = (chain) => {
+		const members = chain.members.map((m) => `${m.layer}${m.capabilities.motorTypes ? '' : ' (motor types not vouched for)'}`);
+		line(`chain read=${chain.read} stale=${chain.stale} members=[${members.join(', ')}]`);
+	};
+	show(consumer.getChain(brick.brickId));
+	const following = consumer.onChainChanged(brick.brickId, show);
+
+	// Every member port row: type, raw code and mode from occupancy, value for sensors. A member's
+	// motor has no position row, so none can show.
+	const rows = consumer.listTelemetryRows().filter((r) => r.id.startsWith('chain.')).map((r) => r.id);
+	line(`      ${rows.length} chain rows; motor position rows among them: ${rows.filter((id) => /\.motor\..*\.(?!occupancy$)/.test(id)).length}`);
+	let lastTable = '';
+	const telemetry = consumer.subscribeTelemetry(brick.brickId, { rows, intervalMs: 500 }, () => {
+		const table = telemetry.snapshot()
+			.filter((v) => v.rowId !== 'chain.depth' && v.value !== undefined && !(v.rowId.endsWith('.occupancy') && v.value === 126))
+			.map((v) => `${v.rowId}=${typeof v.value === 'number' ? Math.round(v.value * 10) / 10 : v.value}${v.mode !== undefined ? `/m${v.mode}` : ''}${v.stale ? ' (stale)' : ''}`)
+			.sort()
+			.join('  ');
+		if (table !== lastTable) { lastTable = table; line(`ports ${table || '(none)'}`); }
+	});
+	chainWatch = { dispose: () => { following.dispose(); telemetry.dispose(); consumer.dispose(); } };
+}
+
 function activate(context) {
 	out = vscode.window.createOutputChannel('EVƎ Cockpit API check');
 	context.subscriptions.push(out, vscode.commands.registerCommand('ev3-cockpit-api-check.run', () =>
 		run().catch((error) => line(`FAIL  the check itself — ${describe(error)}`))));
+	context.subscriptions.push(vscode.commands.registerCommand('ev3-cockpit-api-check.watchChain', () =>
+		watchChain().catch((error) => line(`FAIL  the chain watch — ${describe(error)}`))));
+	context.subscriptions.push({ dispose: () => chainWatch?.dispose() });
 }
 
 module.exports = { activate };
