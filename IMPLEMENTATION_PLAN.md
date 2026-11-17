@@ -1463,7 +1463,9 @@ Introduce a controlled telemetry architecture for Cockpit and other extensions.
     master with the dongle and the chain on one hub froze twice within minutes, once with no
     host traffic at all, so a chain is for a master on USB or Bluetooth; the chain read over TCP
     in U0. Bluetooth through the API was blocked by a cockpit defect recorded under 2.8.12; the
-    chain read over Bluetooth in U0.
+    chain read over Bluetooth in U0. Owner 17.11.2026 (plan Q3): R10 narrowed to USB and
+    Bluetooth; Wi-Fi with a chain stays untested through the cockpit, expected to behave the
+    same, and does not hold up further work.
   - 3.1.4g (original entry) **Daisy chain changes what discovery sees, and `brickKey` cannot express it.**
     With three bricks chained, USB discovery reports **one** — only the master keeps its
     client port free. The other two are reachable only as layers 1 and 2 of that connection.

@@ -104,7 +104,7 @@ Three chained bricks were measured in August, and the cockpit still sees only th
 **Simulation and verification**
 
 - R9. The mock simulates a chain from `parentId`: linear, at most three members deep, members not discoverable as bricks of their own, remote tacho frozen as the firmware does.
-- R10. The chain is verified on three bricks chained over USB, with the master read over USB, Wi-Fi and Bluetooth.
+- R10. The chain is verified on three bricks chained over USB, with the master read over USB and Bluetooth (narrowed from USB, Wi-Fi and Bluetooth by the owner 17.11.2026, see Q3).
 
 ### Scope Boundaries
 
@@ -350,7 +350,7 @@ flowchart TB
 ## Open Questions
 
 - Q1 (answered by U0: no). No motor entry appeared on a port with nothing plugged in, in three rewirings. Motor entries count towards the depth, and a member with only motors attached is found.
-- Q3 (open, for the owner; raised by the code review 17.11.2026). R10 holds through the built cockpit on USB only. Wi-Fi: the master with the dongle and the chain on one hub froze twice, so the recommendation is to narrow R10 to USB and Bluetooth. Bluetooth: blocked by the cockpit defect recorded under IMPLEMENTATION_PLAN 2.8.12, so U7 step 6 runs again once that is fixed (next backend item); the chain read over both radios in U0.
+- Q3 (answered by the owner 17.11.2026: narrowed to USB and Bluetooth). Wi-Fi is not tested with a chain; it is expected to behave as USB and Bluetooth do, since the chain is read the same way on every transport, but practice has not confirmed it. That does not hold up further work. Raised by the code review 17.11.2026: R10 holds through the built cockpit on USB only. Wi-Fi: the master with the dongle and the chain on one hub froze twice, so the recommendation is to narrow R10 to USB and Bluetooth. Bluetooth: blocked by the cockpit defect recorded under IMPLEMENTATION_PLAN 2.8.12, so U7 step 6 runs again once that is fixed (next backend item); the chain read over both radios in U0.
 - Q2 (deferred, does not block). How will an extended firmware make its new abilities known? Recommended: an answer the stock firmware does not give, such as a layer argument on a name read that today's firmware rejects. A version string would be a firmware table, which the owner ruled out. KTD5 adds the probe once the answer exists.
 
 ## Risks
