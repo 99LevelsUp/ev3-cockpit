@@ -21,6 +21,8 @@
 
 import { TelemetryRow, RowValue, comesUpOnTick, assertValidLifetime } from './telemetryRow';
 import { portStateOf, PortState } from './portState';
+import { CHAIN_DEPTH_ROW } from './ev3Rows';
+import { USB } from '../transports/transportConstants';
 import {
 	AssembledFrame,
 	FrameLimits,
@@ -132,6 +134,12 @@ export class TelemetryScheduler {
 	 * port with nothing on it, which is a correct reading of an empty port.
 	 */
 	private readonly occupancy = new Map<string, number>();
+
+	/**
+	 * How many bricks hang below this one in a daisy chain, as `chain.depth` last reported;
+	 * undefined until it has. A row of a member's port is read only while its layer is within it.
+	 */
+	private chainDepth: number | undefined;
 
 	private readonly now: () => number;
 	/** The rows read now; `setRows` replaces them while running (KTD2). */
@@ -373,18 +381,29 @@ export class TelemetryScheduler {
 	/**
 	 * Is this row safe to include?
 	 *
-	 * Only value rows are gated, and only on their port's last reported occupancy. A row with
+	 * The brick's own value rows are gated on their port's last reported occupancy. A row with
 	 * no port, or a port nothing has reported yet, is readable: the gate saves the bytes of a
 	 * read with nothing to learn, it does not withhold readings until permission arrives.
+	 *
+	 * The rows of a daisy chain are gated harder, because most bricks have no chain and must not
+	 * pay for one. A member's rows wait for `chain.depth` to report their layer, and a member's
+	 * value waits for its own port's occupancy. On the HID fallback the chain is not read at all:
+	 * the device list takes 33 of a frame's 59 bytes, and since rows go out by urgency, a slow row
+	 * that keeps waiting reaches the front and pushes the brick's own readings out of that frame.
 	 */
 	private isReadable(row: TelemetryRow): boolean {
+		const member = row.layer !== undefined && row.layer > 0;
+		if (member || row.id === CHAIN_DEPTH_ROW) {
+			if (this.resolveLimits().maxPacketBytes <= USB.MAX_WRITE_PACKET_BYTES) { return false; }
+		}
+		if (member && (this.chainDepth === undefined || row.layer > this.chainDepth)) { return false; }
 		if (row.port === undefined) { return true; }
 		// An occupancy row reads the type itself, so gating it on the type would be circular
 		// and would make a port that ever went empty unrecoverable.
 		if (row.reportsOccupancy) { return true; }
 
 		const code = this.occupancy.get(row.port);
-		if (code === undefined) { return true; }
+		if (code === undefined) { return !member; }
 		return isReadableType(code);
 	}
 
@@ -426,9 +445,27 @@ export class TelemetryScheduler {
 			}
 		}
 
+		const depth = values.find((value) => value.rowId === CHAIN_DEPTH_ROW)?.value;
+		if (typeof depth === 'number') { this.setChainDepth(depth); }
+
 		if (values.length === 0) { return; }
 		// A consumer's failing listener is reported, not mistaken for a failed frame (review of U4, round 3).
 		try { this.options.onValues?.(values); } catch (error) { this.options.onError?.(error); }
+	}
+
+	/**
+	 * Takes the chain's new depth. A layer below it is gone: what its ports reported, the modes
+	 * sent to them and their settling are forgotten, as for a port that stops being known, so a
+	 * brick plugged in there later starts afresh and its values wait for its occupancy again.
+	 */
+	private setChainDepth(depth: number): void {
+		this.chainDepth = depth;
+		for (const row of [...this.rows, ...(this.pendingRows ?? [])]) {
+			if (row.layer === undefined || row.layer <= depth || row.port === undefined) { continue; }
+			this.occupancy.delete(row.port);
+			this.commandedMode.delete(row.port);
+			this.settling.delete(row.port);
+		}
 	}
 
 	/**
