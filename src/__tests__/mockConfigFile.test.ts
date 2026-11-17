@@ -69,6 +69,16 @@ describe('Mock bricks from the workspace (1.6.10)', () => {
 		assert.doesNotThrow(() => validateMockConfig(DEFAULT_MOCK_CONFIG));
 	});
 
+	it('takes a daisy chain only as a USB chain is built: one brick per layer, no loop, at most three below the master', () => {
+		const chained = (id: string, parentId?: string) => ({ ...brick, id, ...(parentId ? { parentId } : {}) });
+		const check = (bricks: unknown[]) => { try { validateMockConfig({ transport: 'mock', bricks }); return ''; } catch (e) { return (e as Error).message; } };
+
+		assert.equal(check([chained('M'), chained('A', 'M'), chained('B', 'A'), chained('C', 'B')]), '', 'three below the master');
+		assert.match(check([chained('M'), chained('A', 'M'), chained('B', 'M')]), /"M".*one brick/);
+		assert.match(check([chained('A', 'B'), chained('B', 'A')]), /loop/);
+		assert.match(check([chained('M'), chained('A', 'M'), chained('B', 'A'), chained('C', 'B'), chained('D', 'C')]), /"D".*three/);
+	});
+
 	it('says why a file that cannot be read was not used, and does not look further', () => {
 		const result = loadMockConfigFile([ROOT, OTHER], (file) => {
 			if (file.startsWith(ROOT)) { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); }

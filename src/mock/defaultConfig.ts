@@ -116,13 +116,13 @@ export const DEFAULT_MOCK_CONFIG: MockConfig = {
 		},
 
 		// ── T1000 ───────────────────────────────────────────────────────
-		// Terminator T-1000. Liquid metal. Slave unit of SkyNet.
+		// Terminator T-1000. Liquid metal. Below T800 in SkyNet's daisy chain.
 		{
 			id: 't1000',
 			displayName: 'T1000',
 			firmwareVersion: 'V1.10E',
 			battery: { level: 88, voltage: 7.7 },
-			parentId: 'skynet',
+			parentId: 't800',
 			motorPorts: [
 				{ port: 'A', peripheralType: 'large-motor', unit: 'deg', dynamic: { kind: 'sine', min: 0, max: 360, periodMs: 800 } },
 				{ port: 'B', peripheralType: 'large-motor', unit: 'deg', dynamic: { kind: 'sine', min: 0, max: 360, periodMs: 850 } },

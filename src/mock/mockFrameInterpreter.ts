@@ -25,6 +25,16 @@ const TYPE_NONE = 126;
 /** What an unwritten global byte holds in the mock: not zero, as on a brick. */
 const UNWRITTEN = 0xa5;
 
+/**
+ * What a brick answers for the tacho of a motor on a brick below it in a daisy chain: a frozen
+ * number, never the motor's position. Measured on three chained bricks (IMPLEMENTATION_PLAN 3.1.4f).
+ */
+const FROZEN_MEMBER_TACHO = 111616;
+
+/** Bricks in a chain, the master included (`DAISY_MAX_LAYER_DEPT`). */
+const CHAIN_DEPTH = 4;
+const EMPTY_PORT: MockPortReading = { typeCode: TYPE_NONE, mode: 0, value: Number.NaN };
+
 /** One port as the mock brick reports it. */
 export interface MockPortReading {
 	readonly typeCode: number;
@@ -50,6 +60,8 @@ export interface MockBrickView {
 	readonly wifiPresent: boolean;
 	/** Whether a program runs in the user slot. */
 	readonly programRunning: boolean;
+	/** The bricks below this one in a USB daisy chain: layer 1 first. */
+	readonly chain?: readonly MockBrickView[];
 }
 
 type Parameter = { readonly global: number } | { readonly constant: number };
@@ -104,12 +116,16 @@ export function executeTelemetryFrame(frame: Uint8Array, brick: MockBrickView): 
 		}
 		return p.global;
 	};
+	// The brick a layer names: this one, one below it in the chain, or none — whose ports all read
+	// empty, as a missing brick's do on a real master.
+	const brickAt = (layer: number): MockBrickView | undefined => (layer === 0 ? brick : brick.chain?.[layer - 1]);
 	const port = (layer: number, number: number): MockPortReading => {
-		// One brick: a layer down the daisy chain has nothing on it.
-		if (layer !== 0) { return { typeCode: TYPE_NONE, mode: 0, value: Number.NaN }; }
-		if (number >= 0 && number <= 3) { return brick.sensor(number); }
-		if (number >= 16 && number <= 19) { return brick.motor(number - 16); }
-		throw new TransportError(`Port ${number} does not exist.`);
+		if (!(number >= 0 && number <= 3) && !(number >= 16 && number <= 19)) {
+			throw new TransportError(`Port ${number} does not exist.`);
+		}
+		const at = brickAt(layer);
+		if (!at) { return EMPTY_PORT; }
+		return number <= 3 ? at.sensor(number) : at.motor(number - 16);
 	};
 	const text = (offset: number, length: number, value: string): void => {
 		const bytes = Buffer.from(value, 'utf8').subarray(0, Math.max(0, length - 1));
@@ -139,8 +155,25 @@ export function executeTelemetryFrame(frame: Uint8Array, brick: MockBrickView): 
 		case EV3_OPCODE.OUTPUT_GET_COUNT: {
 			const layer = constant();
 			const motor = constant();
-			const reading = layer === 0 ? brick.motor(motor) : { typeCode: TYPE_NONE, mode: 0, value: Number.NaN };
+			if (layer !== 0) {
+				view.setInt32(global(4), FROZEN_MEMBER_TACHO, true);
+				break;
+			}
+			const reading = brick.motor(motor);
 			view.setInt32(global(4), Number.isFinite(reading.value) ? Math.round(reading.value) : 0, true);
+			break;
+		}
+		case EV3_OPCODE.INPUT_DEVICE_LIST: {
+			// The type of every port of the whole chain: sensors at layer × 4 + port, motors at
+			// 16 + layer × 4 + port (`c_input.c` 410–447), then the CHANGED byte.
+			const length = constant();
+			const list = global(length);
+			const changed = global(1);
+			for (let index = 0; index < length && index < CHAIN_DEPTH * 8; index += 1) {
+				const layer = Math.floor((index % 16) / 4);
+				globals[list + index] = port(layer, index < 16 ? index % 4 : 16 + (index % 4)).typeCode;
+			}
+			globals[changed] = 0;
 			break;
 		}
 		case EV3_OPCODE.UI_READ: {
