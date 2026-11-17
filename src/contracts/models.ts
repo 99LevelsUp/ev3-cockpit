@@ -135,7 +135,7 @@ export type PortOccupancy = 'unreported' | 'empty' | 'identifying' | 'known' | '
 
 export interface PortState {
     port: string;
-    /** The daisy-chain layer; 0 until chains are supported (owner decision D3). */
+    /** The daisy-chain layer of the brick the port is on: 0 for the brick itself, 1-3 below it. */
     layer?: number;
     /** What is on the port, from its type code (telemetry view). */
     occupancy?: PortOccupancy;
@@ -152,6 +152,53 @@ export interface PortState {
     timestamp?: number;
 }
 
+/**
+ * What a brick below another in a USB daisy chain can do, reached through the brick above it.
+ *
+ * Today's firmware carries only port types, sensor values and motor commands across the chain,
+ * so most of this is false. A firmware that carries more turns a capability on here, and the
+ * shape stays.
+ */
+export interface ChainMemberCapabilities {
+    /** Types, modes and values of its sensor ports. */
+    readonly sensors: boolean;
+    /** The type of the motor on each of its motor ports. */
+    readonly motorTypes: boolean;
+    /** The position of its motors. */
+    readonly motorReadout: boolean;
+    /** Its files. */
+    readonly files: boolean;
+    /** Running and stopping its programs. */
+    readonly programs: boolean;
+    /** Its own name. */
+    readonly name: boolean;
+}
+
+/** One brick below another in a USB daisy chain. */
+export interface ChainMember {
+    /** Its place in the chain: 1 directly below the master, up to 3. */
+    readonly layer: number;
+    readonly capabilities: ChainMemberCapabilities;
+}
+
+/**
+ * The bricks below a brick in a USB daisy chain, as last read. An empty last member cannot be
+ * told from no brick, so a chain lists the members down to the last one with a device.
+ */
+export interface BrickChain {
+    /** Layer 1 first. */
+    readonly members: readonly ChainMember[];
+    /** No newer reading of the chain came for a while. */
+    readonly stale: boolean;
+}
+
+/** A member of the active brick's chain as the panel draws it: its ports beside what it can do. */
+export interface ChainMemberView extends ChainMember {
+    /** Type only: a member's motor position does not cross the chain. */
+    readonly motorPorts: PortState[];
+    readonly sensorPorts: PortState[];
+}
+
 export interface ActiveBrickViewModel {
     brickKey: BrickRef;
     displayName: string;
@@ -162,6 +209,8 @@ export interface ActiveBrickViewModel {
     btVisible?: boolean;
     motorPorts: PortState[];
     sensorPorts: PortState[];
+    /** The bricks below it in a USB daisy chain, layer 1 first; absent until the chain has been read. */
+    chain?: ChainMemberView[];
     buttons: Record<string, boolean>;
     firmwareVersion?: string;
     favorite: boolean;
