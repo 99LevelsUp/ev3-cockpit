@@ -124,7 +124,83 @@ export function validateMockConfig(raw: unknown): MockConfig {
 	for (const brick of obj.bricks as unknown[]) {
 		validateBrickConfig(brick);
 	}
+	// A workspace writes this file by hand (1.6.10): what the provider relies on across bricks too.
+	const bricks = obj.bricks as { id: string; parentId?: string }[];
+	const ids = new Set<string>();
+	for (const brick of bricks) {
+		if (ids.has(brick.id)) { throw new Error(`Brick id "${brick.id}" appears twice`); }
+		ids.add(brick.id);
+	}
+	for (const brick of bricks) {
+		if (brick.parentId !== undefined && (brick.parentId === brick.id || !ids.has(brick.parentId))) {
+			throw new Error(`Brick "${brick.id}" parentId must name another brick of this config`);
+		}
+	}
 	return raw as MockConfig;
+}
+
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isRate = (value: unknown): boolean => isNumber(value) && value >= 0 && value <= 1;
+
+function validateOptionalSections(b: Record<string, unknown>): void {
+	const at = `Brick "${String(b.id)}"`;
+	if (b.firmwareVersion !== undefined && typeof b.firmwareVersion !== 'string') {
+		throw new Error(`${at} firmwareVersion must be a string`);
+	}
+	const battery = b.battery as Record<string, unknown>;
+	if (battery.voltage !== undefined && !isNumber(battery.voltage)) {
+		throw new Error(`${at} battery.voltage must be a number`);
+	}
+	if (b.parentId !== undefined && (typeof b.parentId !== 'string' || b.parentId.length === 0)) {
+		throw new Error(`${at} parentId must be a non-empty string`);
+	}
+	if (b.error !== undefined) {
+		const e = b.error as Record<string, unknown> | null;
+		if (!e || typeof e !== 'object' || !isRate(e.connectFailRate) || !isRate(e.sendFailRate)) {
+			throw new Error(`${at} error must hold connectFailRate and sendFailRate between 0 and 1`);
+		}
+	}
+	if (b.loss !== undefined) {
+		const l = b.loss as Record<string, unknown> | null;
+		// visibleMs 0 pins a brick hidden; the cycle they make must not be empty (the provider takes a modulo of it).
+		if (!l || typeof l !== 'object' || typeof l.enabled !== 'boolean'
+			|| !isNumber(l.visibleMs) || l.visibleMs < 0 || !isNumber(l.hiddenMs) || l.hiddenMs < 0
+			|| l.visibleMs + l.hiddenMs <= 0) {
+			throw new Error(`${at} loss must hold enabled, and visibleMs and hiddenMs of 0 or more, not both 0`);
+		}
+	}
+	if (b.filesystem !== undefined) {
+		if (!Array.isArray(b.filesystem) || !b.filesystem.every((f) => f && typeof f === 'object'
+			&& typeof (f as Record<string, unknown>).path === 'string' && typeof (f as Record<string, unknown>).content === 'string')) {
+			throw new Error(`${at} filesystem must be a list of { path, content } strings`);
+		}
+	}
+	if (b.bluetoothPeers !== undefined) {
+		if (!Array.isArray(b.bluetoothPeers) || !b.bluetoothPeers.every((p) => typeof p === 'string')) {
+			throw new Error(`${at} bluetoothPeers must be a list of names`);
+		}
+	}
+}
+
+function validateDynamic(d: Record<string, unknown>, at: string): void {
+	switch (d.kind) {
+	case 'static':
+		if (!isNumber(d.value) && typeof d.value !== 'string') { throw new Error(`${at} static dynamic needs a number or string value`); }
+		return;
+	case 'sine':
+	case 'triangle':
+		if (!isNumber(d.min) || !isNumber(d.max) || !isNumber(d.periodMs) || d.periodMs <= 0) {
+			throw new Error(`${at} ${String(d.kind)} dynamic needs min, max and a positive periodMs`);
+		}
+		return;
+	case 'square':
+		if (!isNumber(d.low) || !isNumber(d.high) || !isNumber(d.periodMs) || d.periodMs <= 0) {
+			throw new Error(`${at} square dynamic needs low, high and a positive periodMs`);
+		}
+		return;
+	default:
+		return;
+	}
 }
 
 function validateBrickConfig(raw: unknown): void {
@@ -154,6 +230,7 @@ function validateBrickConfig(raw: unknown): void {
 	for (const port of [...b.motorPorts as unknown[], ...b.sensorPorts as unknown[]]) {
 		validatePortConfig(port);
 	}
+	validateOptionalSections(b);
 }
 
 function validatePortConfig(raw: unknown): void {
@@ -171,4 +248,8 @@ function validatePortConfig(raw: unknown): void {
 	if (!(VALID_DYNAMIC_KINDS as readonly string[]).includes(d.kind as string)) {
 		throw new Error(`Unknown dynamic kind: ${String(d.kind)}`);
 	}
+	const at = `Port ${p.port}:`;
+	if (p.peripheralType !== undefined && typeof p.peripheralType !== 'string') { throw new Error(`${at} peripheralType must be a string`); }
+	if (p.unit !== undefined && typeof p.unit !== 'string') { throw new Error(`${at} unit must be a string`); }
+	validateDynamic(d, at);
 }
