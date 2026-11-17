@@ -372,8 +372,9 @@ export class BrickManager implements vscode.Disposable {
 	// ── Sign-in ─────────────────────────────────────────────────────
 
 	/**
-	 * Sign a brick in: join every channel it is available on now, and every one that becomes
-	 * available later while it stays signed in.
+	 * Sign a brick in: join every channel it is available on now, its paired Bluetooth channel even
+	 * when the presence checks did not hear it, and every one that becomes available later while it
+	 * stays signed in.
 	 *
 	 * Resolves once the first channel connects; the rest keep joining in the background, so a
 	 * cable that opens in 30 ms does not wait out a 5 s Bluetooth attempt. Makes the brick the
@@ -394,7 +395,13 @@ export class BrickManager implements vscode.Disposable {
 		}
 		// A new sign-in says its own failures again, even ones the last one already said.
 		for (const key of this.joinFailures.keys()) { if (brickIdOf(key) === brickId) { this.joinFailures.delete(key); } }
-		const candidates = this.joinCandidates(brickId);
+		// The paired Bluetooth channel the presence checks lost is tried too, as "Connect a Brick" on a
+		// signed-in brick tries it: the checks miss bricks that are there. On hardware (2.8.12, step-8
+		// U7) a sign-in that left it out refused three times with no channel tried, and one over USB
+		// joined USB alone, so the pulled cable had nothing to fail over to. A brick that is really
+		// off costs one failed Bluetooth connect, and the user is told it did not answer.
+		const lost = this.unheardBluetooth(brickId);
+		const candidates = [...this.joinCandidates(brickId), ...(lost ? [lost] : [])];
 		if (candidates.length === 0) {
 			throw new NotConnectedError(`Brick ${brickId} is not available on any channel.`);
 		}

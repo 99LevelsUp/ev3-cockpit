@@ -1062,12 +1062,27 @@ Build the source of truth for connected bricks.
     underneath an open handle. Then: a brick reachable over two transports losing one; Wi-Fi
     switched off mid-session on TCP. Use **CCC** for USB scenarios — its cable is the
     accessible one
-    **Found 17.11.2026 (step-8 U7), to fix here: a Bluetooth channel that went unheard is never
-    checked again.** AAA froze while it was on TCP only with Bluetooth off; its TCP channel was
-    removed, and its Bluetooth channel too. From then on the presence checks asked only the other
-    bricks, "Connect a Brick" refused at once with "not available on any channel", and even a
-    sign-in over USB joined USB alone, so pulling the cable left nothing to fail over to. A
-    paired brick has to stay a Bluetooth candidate whatever happened to its other channels.
+    **Found 17.11.2026 (step-8 U7), fixed 17.11.2026: a sign-in left out the paired Bluetooth
+    channel the presence checks had not heard.** AAA froze while it was on TCP only; after its
+    hard reset a Bluetooth join failed (WSA 10060) and the next check did not hear it, so the
+    channel was lost. Three "Connect a Brick" in six minutes then refused at once with "not
+    available on any channel" and tried nothing, and a sign-in over USB joined USB alone, so the
+    pulled cable had nothing to fail over to; Bluetooth joined 2.5 minutes later, when a check
+    heard the brick again. The first record said the channel was "never checked again" and that
+    the checks "asked only the other bricks": the log does not bear that out (a check logs only a
+    change, so its misses leave no line, and it did hear AAA again at 15:53). Cause:
+    `BrickManager.signIn` took only available channels, while "Connect a Brick" on a signed-in
+    brick and the forget's channel already tried the lost paired Bluetooth one. Fix: the sign-in
+    tries it too, beside whatever else is available, and resolves on the first channel to
+    connect. Cost: a sign-in to a brick whose Bluetooth is really off pages it once (on Windows
+    up to ~20 s, holding the Bluetooth queue) and says it did not answer, the trade the forget
+    already made.
+    **The hardware round, one scenario at a time:** Bluetooth off on the brick; Bluetooth off on
+    the computer (the owner switches it in Settings; the cockpit never touches `bthserv`); a brick
+    on two channels losing one; Wi-Fi off mid-session on TCP; a command queued when the link drops
+    is refused at once (2.8.14); an upload cut mid-way is released after the reconnect (4.6.17);
+    the daisy chain through the API with the master on Bluetooth (step-8 U7 step 6, R10); and this
+    fix: a lost paired Bluetooth channel is tried by "Connect a Brick" and joined beside USB.
   - [x] 2.8.13 **A brick has no name over Bluetooth.** Done 30.10.2026 (step-2 plan): one
     list entry per brick keyed by `BrickId`, named from the brick itself (`info`, also read over
     USB without connecting, and the TCP beacon). Original entry: Discovery reports `EV3
@@ -1798,8 +1813,9 @@ Export a stable API for other extensions without giving them direct access to th
     are collected in §2, "What Linux needs". 11.11.2026: still not run — HOSTC had no USB to
     the bricks; the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`) come
     prebuilt for linux-arm64 and load (`docs/plans/linux-session-results/2026-11-11-hostc.md`)
-  - [ ] 4.6.17 **Built 13.11.2026 (6188670), reviewed 17.11.2026; open: one owner decision and the
-    hardware check.** Codex, three rounds, READY after f1be86e:
+  - [ ] 4.6.17 **Built 13.11.2026 (6188670), reviewed 17.11.2026, the owner's decision taken
+    17.11.2026 (row 3); open: the hardware check, under 2.8.12.** Codex, three rounds, READY after
+    f1be86e:
 
     | # | Sev | Finding | Verdict | Outcome |
     |---|---|---|---|---|
