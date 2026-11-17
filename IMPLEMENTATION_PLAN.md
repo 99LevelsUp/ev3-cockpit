@@ -1112,6 +1112,13 @@ Build the source of truth for connected bricks.
     the full freeze was not reproduced, so the cockpit is neither cleared nor convicted. Precedent:
     the March 2026 lab incidents (`ev3-testlab.bak/notes/firmware-freeze-guidelines.md`). If AAA
     freezes again: record uptime and the cockpit's last 30 s before the reset.
+    **A third full freeze, 23:46:37, with nobody touching anything:** USB and Bluetooth dropped
+    within 0.5 s, about 8 minutes after the last scenario (Bluetooth back at 23:38:13), with the
+    cockpit reading AAA over USB, Bluetooth joined and the chain attached; the scheduler logged no
+    back-off in those 8 minutes. The owner found AAA frozen at the end of the session. This is the
+    first freeze with no change of link at all, so a load the cockpit puts on a chain master over
+    time is now the leading suspect: next, a soak with the cockpit reading a chain master and
+    nothing else, against the same soak with no chain.
     **Found on the way, open:**
     - Reading a chain loads the master: USB ticks back off to 150–400 ms with stalls (p95 up to
       229 ms against 30), Bluetooth p95 up to 1.8 s against 390 ms. Measure before damping.
