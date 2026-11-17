@@ -20,7 +20,7 @@ import {
 	SYSTEM_ENVELOPE_BYTES,
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
-import { LinkLostError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { ChannelChangedError, LinkLostError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { TransferLedger } from './transferLedger';
 
 /** How the service reaches a brick. Narrower than a provider on purpose. */
@@ -78,6 +78,15 @@ export interface TransferServiceOptions {
 }
 
 /** A failure the brick answered: the command reached it. Anything else, it may not have. */
+/**
+ * A failure that does not prove the command stayed on this side: it may have reached the brick and
+ * run, with only its reply lost. Three settle it: an answer from the brick, a session's refusal
+ * before it left (2.8.14), and a pinned channel's refusal before it left (`BrickManager.pin`).
+ */
+function mayHaveRun(error: unknown): boolean {
+	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError) && !(error instanceof ProtocolError);
+}
+
 function brickAnswered(error: unknown): boolean {
 	return error instanceof ProtocolError;
 }
@@ -263,12 +272,15 @@ export class FileTransferService {
 
 		// From here the slot is open until end-of-file, so everything that can throw, the
 		// caller's progress callback included, is inside the release (review of 6188670).
+		/** The chunk on its way completes the file: losing its reply leaves the slot uncertain. */
+		let lastInFlight = false;
 		try {
 			options?.onProgress?.({ transferred: sent, total });
 			while (sent < total && !endOfFile) {
 				this.assertNotAborted(options?.signal, handle);
 
 				const size = Math.min(link.maxChunkBytes, total - sent);
+				lastInFlight = sent + size >= total;
 				const step = await withStallTimeout(
 					link.send({
 						kind: 'fs:continueWrite',
@@ -278,6 +290,7 @@ export class FileTransferService {
 					stallMs,
 					sent,
 				);
+				lastInFlight = false;
 				if (step.kind !== 'fs:continueWrite') {
 					throw new ProtocolError(`Expected a fs:continueWrite reply, got ${step.kind}.`);
 				}
@@ -291,7 +304,11 @@ export class FileTransferService {
 			// restarts. The partial file goes too: it is not the file anyone sent (4.6.17). After
 			// end-of-file the slot is the firmware's again and the file whole: nothing to undo.
 			// A complete file whose last progress report threw is still a complete file.
-			if (!endOfFile) { await this.abandon(link, handle, path); } else { this.ledger?.written(path); }
+			if (!endOfFile) {
+				await this.abandon(link, handle, path, lastInFlight && mayHaveRun(error));
+			} else {
+				this.ledger?.written(path);
+			}
 			throw error;
 		}
 
@@ -343,20 +360,25 @@ export class FileTransferService {
 		let endOfFile = begin.endOfFile;
 		const handle = begin.handle;
 
+		/** The read on its way reaches the end: the brick frees the slot with it (see write). */
+		let lastInFlight = false;
 		try {
 			options?.onProgress?.({ transferred: received, total });
 			while (received < total && !endOfFile) {
 				this.assertNotAborted(options?.signal, handle);
 
+				const wantBytes = Math.min(want, total - received);
+				lastInFlight = received + wantBytes >= total;
 				const step = await withStallTimeout(
 					link.send({
 						kind: 'fs:continueRead',
 						handle,
-						wantBytes: Math.min(want, total - received),
+						wantBytes,
 					}),
 					stallMs,
 					received,
 				);
+				lastInFlight = false;
 				if (step.kind !== 'fs:continueRead') {
 					throw new ProtocolError(`Expected a fs:continueRead reply, got ${step.kind}.`);
 				}
@@ -372,7 +394,7 @@ export class FileTransferService {
 				options?.onProgress?.({ transferred: received, total });
 			}
 		} catch (error) {
-			if (!endOfFile) { await this.abandon(link, handle); }
+			if (!endOfFile) { await this.abandon(link, handle, undefined, lastInFlight && mayHaveRun(error)); }
 			throw error;
 		}
 
@@ -404,8 +426,8 @@ export class FileTransferService {
 		try {
 			return await work;
 		} catch (error) {
-			// Refused before it left (2.8.14): the brick opened nothing.
-			if (!brickAnswered(error) && !(error instanceof LinkLostError)) {
+			// Refused before it left (2.8.14, a pinned channel lost): the brick opened nothing.
+			if (mayHaveRun(error)) {
 				this.ledger?.owe({ kind: 'unknown', ...(deletePath !== undefined ? { deletePath } : {}) });
 			}
 			throw error;
@@ -416,13 +438,22 @@ export class FileTransferService {
 	 * Releases a failed transfer's slot and, for an upload, deletes its partial file. What the link
 	 * took with it is owed, to be settled before the next transfer; a failure here must not mask the
 	 * original error.
+	 *
+	 * `uncertain`: the command that frees the slot (the last chunk) may have run with its reply lost.
+	 * Then the brick may have handed the number on, so nothing is closed or deleted now: it is owed
+	 * for the user to release (owner decision 17.11.2026, 4.6.17).
 	 */
-	private async abandon(link: TransferLink, handle: number, deletePath?: string): Promise<void> {
+	private async abandon(link: TransferLink, handle: number, deletePath?: string, uncertain = false): Promise<void> {
+		const owe = (doubt: boolean): void => this.ledger?.owe({
+			kind: 'slot', handle, ...(deletePath !== undefined ? { deletePath } : {}), ...(doubt ? { uncertain: true as const } : {}),
+		});
+		if (uncertain) { owe(true); return; }
 		try {
 			await link.send({ kind: 'fs:closeHandle', handle });
 		} catch (error) {
 			if (!brickAnswered(error)) {
-				this.ledger?.owe({ kind: 'slot', handle, ...(deletePath !== undefined ? { deletePath } : {}) });
+				// A close that may have run frees the slot for someone else: uncertain from then on.
+				owe(mayHaveRun(error));
 				return;
 			}
 		}
@@ -443,7 +474,9 @@ export class FileTransferService {
 		try {
 			await link.send({ kind: 'fs:closeHandle', handle });
 		} catch (error) {
-			if (!brickAnswered(error)) { this.ledger?.owe({ kind: 'slot', handle }); }
+			if (!brickAnswered(error)) {
+				this.ledger?.owe(mayHaveRun(error) ? { kind: 'slot', handle, uncertain: true } : { kind: 'slot', handle });
+			}
 		}
 	}
 }
