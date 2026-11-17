@@ -6,8 +6,9 @@
  * (identity, route, channels, the panel's preferences), to `ActiveBrickViewModel`. The panel
  * (Phase 5) draws it; nothing here talks to a loop or keeps state.
  *
- * - Every port is listed, read or not, and carries its daisy-chain layer, 0 until chains are
- *   supported (D3).
+ * - Every port is listed, read or not, and carries its daisy-chain layer: 0 for the brick's own,
+ *   1-3 for the bricks below it, which the view lists once the chain's depth has been read. A
+ *   member's motor shows its type and never a position, which does not cross the chain.
  * - What is on a port comes from its occupancy row's type code. A value is shown only for a known
  *   device: an empty, identifying or faulty port answers NaN or a stale number, and showing that
  *   would claim a reading there is not.
@@ -19,8 +20,9 @@
 
 import { ConnectionState, Transport } from '../contracts/enums';
 import type { BrickRef } from '../contracts/brickKey';
-import type { ActiveBrickViewModel, BatteryState, PortState, ValueDisplayStyle } from '../contracts/models';
+import type { ActiveBrickViewModel, BatteryState, ChainMemberView, PortState, ValueDisplayStyle } from '../contracts/models';
 import { peripheralTypeOf } from '../protocol/peripheralTypes';
+import { chainOf } from './chainModel';
 import { MOTOR_PORT_NAMES, SENSOR_PORT_NAMES } from './ev3Rows';
 import { portStateOf } from './portState';
 import type { ReadValue } from './telemetryReadModel';
@@ -40,14 +42,21 @@ export interface ActiveBrickInput {
 	readonly values: readonly ReadValue[];
 }
 
-/** Daisy-chain layer of every port until chains are supported (D3). */
-const LAYER = 0;
 const BUTTON_PREFIX = 'ui.button.';
 
 export function activeBrickView(input: ActiveBrickInput): ActiveBrickViewModel {
 	const byId = new Map(input.values.map((value) => [value.rowId, value] as const));
 	const port = (kind: 'sensor' | 'motor', name: string, valueRow: string): PortState =>
-		portView(name, byId.get(`ports.${kind}.${name}.occupancy`), byId.get(`ports.${kind}.${name}.${valueRow}`));
+		portView(name, 0, byId.get(`ports.${kind}.${name}.occupancy`), byId.get(`ports.${kind}.${name}.${valueRow}`));
+	// A member's motor shows its type only: its position does not cross the chain, so no value row is read.
+	const memberPort = (layer: number, kind: 'sensor' | 'motor', name: string): PortState =>
+		portView(name, layer, byId.get(`chain.${layer}.${kind}.${name}.occupancy`),
+			kind === 'sensor' ? byId.get(`chain.${layer}.sensor.${name}.value`) : undefined);
+	const chain = chainOf(input.values)?.members.map((member): ChainMemberView => ({
+		...member,
+		motorPorts: MOTOR_PORT_NAMES.map((name) => memberPort(member.layer, 'motor', name)),
+		sensorPorts: SENSOR_PORT_NAMES.map((name) => memberPort(member.layer, 'sensor', name)),
+	}));
 
 	const buttons: Record<string, boolean> = {};
 	for (const value of input.values) {
@@ -70,6 +79,7 @@ export function activeBrickView(input: ActiveBrickInput): ActiveBrickViewModel {
 		...(typeof visible === 'boolean' ? { btVisible: visible } : {}),
 		motorPorts: MOTOR_PORT_NAMES.map((name) => port('motor', name, 'tacho')),
 		sensorPorts: SENSOR_PORT_NAMES.map((name) => port('sensor', name, 'value')),
+		...(chain ? { chain } : {}),
 		buttons,
 		...(typeof firmware === 'string' ? { firmwareVersion: firmware } : {}),
 		favorite: input.favorite,
@@ -77,14 +87,14 @@ export function activeBrickView(input: ActiveBrickInput): ActiveBrickViewModel {
 	};
 }
 
-function portView(name: string, occupancy: ReadValue | undefined, reading: ReadValue | undefined): PortState {
+function portView(name: string, layer: number, occupancy: ReadValue | undefined, reading: ReadValue | undefined): PortState {
 	const code = typeof occupancy?.value === 'number' ? occupancy.value : undefined;
 	const state = portStateOf(code);
 	const known = state === 'known';
 	const showsValue = known && reading !== undefined;
 	return {
 		port: name,
-		layer: LAYER,
+		layer,
 		occupancy: state,
 		...(known && code !== undefined ? { peripheralType: peripheralTypeOf(code) } : {}),
 		...(code !== undefined ? { typeCode: code } : {}),

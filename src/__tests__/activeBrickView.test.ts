@@ -4,7 +4,8 @@
  *
  * A pure function: what the panel will show (Phase 5) from the rows the loops read. A port shows a
  * value only when a known device is on it; the raw type code stays beside the name, so a device we
- * have never heard of stays recognisable; every port carries its daisy-chain layer, 0 for now.
+ * have never heard of stays recognisable; every port carries its daisy-chain layer, 0 for the
+ * brick's own (step-8 U5 adds the bricks below it).
  */
 
 import assert from 'node:assert/strict';
@@ -33,6 +34,52 @@ function input(values: readonly ReadValue[]): ActiveBrickInput {
 
 const sensor = (view: ReturnType<typeof activeBrickView>, port: string) =>
 	view.sensorPorts.find((p) => p.port === port);
+
+describe('Active brick view — the daisy chain (step-8 U5)', () => {
+	it('shows no chain until the depth has been read, and an empty one for a brick with nothing below', () => {
+		assert.equal(activeBrickView(input([])).chain, undefined);
+		assert.deepEqual(activeBrickView(input([fresh('chain.depth', 0)])).chain, []);
+	});
+
+	it("shows a member's ports by layer, a known sensor with its value", () => {
+		const view = activeBrickView(input([
+			fresh('chain.depth', 1),
+			fresh('chain.1.sensor.2.occupancy', 16, { mode: 0 }),   // EV3 touch sensor
+			fresh('chain.1.sensor.2.value', 1, { sampledAt: 1200 }),
+		]));
+
+		assert.equal(view.chain?.length, 1);
+		const member = view.chain?.[0];
+		assert.equal(member?.layer, 1);
+		assert.equal(member?.capabilities.sensors, true);
+		assert.deepEqual(member?.sensorPorts.find((p) => p.port === '2'), {
+			port: '2', layer: 1, occupancy: 'known', peripheralType: 'touch-sensor', typeCode: 16, mode: 0,
+			value: 1, timestamp: 1200, stale: false,
+		});
+		assert.deepEqual(member?.motorPorts.map((p) => [p.port, p.layer]), [['A', 1], ['B', 1], ['C', 1], ['D', 1]]);
+	});
+
+	it("never shows a position for a member's motor, whatever value came along", () => {
+		const view = activeBrickView(input([
+			fresh('chain.depth', 1),
+			fresh('chain.1.motor.A.occupancy', 7),            // large motor
+			fresh('chain.1.motor.A.tacho', 111616),           // what a brick answers, and no row reads it
+		]));
+
+		const motor = view.chain?.[0].motorPorts.find((p) => p.port === 'A');
+		assert.equal(motor?.peripheralType, 'large-motor');
+		assert.equal(motor?.value, undefined);
+		assert.equal(motor?.unit, undefined);
+		assert.equal(motor?.timestamp, undefined);
+	});
+
+	it("keeps the master's own ports on layer 0 beside a chain", () => {
+		const view = activeBrickView(input([fresh('chain.depth', 2), fresh('ports.sensor.1.occupancy', 29)]));
+
+		assert.ok(view.sensorPorts.every((p) => p.layer === 0));
+		assert.deepEqual(view.chain?.map((member) => member.layer), [1, 2]);
+	});
+});
 
 describe('Active brick view (step-6 U6)', () => {
 	it('shows every port, layer 0, even before anything was read', () => {
