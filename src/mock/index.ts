@@ -9,3 +9,5 @@ export type {
 	ValueDynamic, StaticDynamic, SineDynamic, TriangleDynamic, SquareDynamic,
 } from './mockConfig';
 export { validateMockConfig } from './mockConfig';
+export { MOCK_CONFIG_FILE, loadMockConfigFile } from './mockConfigFile';
+export type { MockConfigFileResult } from './mockConfigFile';

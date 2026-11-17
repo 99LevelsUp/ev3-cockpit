@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.370",
+  "version": "0.2.371",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -68,7 +68,7 @@
         "ev3-cockpit.mockBricks": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Show simulated bricks, for development. Left unset, they appear only while the extension runs from source (F5) and never in an installed build. Takes effect after reloading the window."
+          "markdownDescription": "Show simulated bricks, for development. Left unset, they appear only while the extension runs from source (F5) and never in an installed build. The bricks come from `.vscode/ev3-cockpit-mock.json` in the workspace when it exists, otherwise from a built-in set. Takes effect after reloading the window."
         },
         "ev3-cockpit.accessMode": {
           "type": "string",

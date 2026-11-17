@@ -1,5 +1,7 @@
+import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { DisposableStore } from './events';
+import { loadMockConfigFile } from './mock';
 import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
 import { setSweepConfirmation } from './fs/transferLedger';
 import { createRuntime } from './runtime/createRuntime';
@@ -53,13 +55,21 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		},
 	}, logger);
 
+	const mockBricks = mockBricksWanted(context);
+	// The workspace's own simulated bricks, read at activation like the setting (1.6.10).
+	const mockFile = mockBricks
+		? loadMockConfigFile(
+			(vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath),
+			(file) => fs.readFileSync(file, 'utf8'))
+		: undefined;
 	const runtime = services.add(createRuntime({
 		extensionPath: context.extensionPath,
 		log: logger,
 		onBluetoothAccessDenied: offerBluetoothAccess,
 		// Not in the extension test host: its suite must not page real bricks around the desk.
 		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
-		mockBricks: mockBricksWanted(context),
+		mockBricks,
+		...(mockFile?.kind === 'loaded' ? { mockConfig: mockFile.config } : {}),
 		// The user's settings; VS Code hands back package.json's default for what nobody set (D9).
 		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
 		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
@@ -90,6 +100,11 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	// Every notification is written to the log too (owner, 09.11.2026), so the log alone says
 	// what the person was told while they watched the brick.
 	const notify = createNotifier(logger, vscode.window);
+	if (mockFile?.kind === 'loaded') { logger.info(`Simulated bricks from ${mockFile.file}`); }
+	if (mockFile?.kind === 'invalid') {
+		void notify.warn(`The simulated bricks in ${mockFile.file} were not used: the file ${mockFile.reason}. `
+			+ 'The built-in set is shown instead; fix the file and reload the window.');
+	}
 	// A transfer whose first reply was lost may have left a slot, and its file's space, taken on the
 	// brick until a reboot. Releasing it means closing every open file there, another computer's
 	// live transfer included, so it is the user's call (4.6.17; owner decision 13.11.2026).

@@ -298,10 +298,10 @@ Design the unified `TransportProvider` contract and apply it to all channels, st
     bricks in the order it first saw them and leaves ordering to the picker (DESIGN §4.2)
   - [x] 1.5.5 Event emission on presence state changes
   - [x] 1.5.6 Read model for the discovery list (single observable collection)
-- [ ] **1.6 Mock Transport** — config loading outstanding (1.6.10)
+- [x] **1.6 Mock Transport**
   - [x] 1.6.1 JSON configuration file schema (brick identity, sensors, motors, dynamics)
   - [x] 1.6.2 Configuration schema validation (`validateMockConfig`)
-  - [ ] 1.6.10 Load the mock configuration from a workspace JSON file (REQUIREMENTS §13) — today `extension.ts` always uses `DEFAULT_MOCK_CONFIG`
+  - [x] 1.6.10 Load the mock configuration from a workspace JSON file (REQUIREMENTS §13) — **done 17.11.2026:** `.vscode/ev3-cockpit-mock.json` in the first workspace folder that has it (`src/mock/mockConfigFile.ts`), read at activation while the simulated bricks are on; no file keeps `DEFAULT_MOCK_CONFIG`, and so does a file that cannot be read, parsed or validated, with a warning that says why
   - [x] 1.6.3 Mock discovery (enumerate bricks from config)
   - [x] 1.6.4 Mock connect / disconnect
   - [x] 1.6.5 Mock value dynamics (static values, sine/triangle/square oscillators)
