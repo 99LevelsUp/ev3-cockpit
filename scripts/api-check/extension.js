@@ -372,6 +372,15 @@ async function interruptedUpload(consumer, brickId) {
 	line('      waiting for the brick to be connected again (restore the link, or it stays on its other channel)');
 	await until('the brick connected again', () => connectedOn(consumer, brickId), 300_000)
 		.then(() => line(`      connected: ${route(consumer.listBricks().find((b) => b.brickId === brickId))}`));
+	const leftBefore = await consumer.exists(brickId, file).catch(() => undefined);
+	line(`      the partial file ${leftBefore === undefined ? 'could not be checked' : leftBefore ? 'is there' : 'is not there'} before the next transfer`);
+	const freeBetween = await consumer.storage(brickId).catch(() => undefined);
+	line(`      free before the next transfer: ${freeBetween?.freeKb ?? '?'} KB`);
+	// The cockpit pays what an interrupted transfer owes when the next transfer begins (4.6.17,
+	// TransferLedger), not on the reconnect itself: a one-byte upload is that next transfer.
+	await consumer.writeFile(brickId, `${CHECK_DIR}/next.bin`, new Uint8Array([1]))
+		.then(() => line('      next transfer: a one-byte upload went through'))
+		.catch((error) => line(`      next transfer: ${describe(error)}`));
 	const deadline = Date.now() + 90_000;
 	let after;
 	while (Date.now() < deadline) {
