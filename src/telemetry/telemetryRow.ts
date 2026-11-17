@@ -112,6 +112,12 @@ export interface TelemetryRow {
 	 */
 	readonly reportsOccupancy?: true;
 
+	/**
+	 * Marks the row whose number value is how many bricks hang below this one in a daisy chain.
+	 * The scheduler opens a member's rows to that depth, as it opens a port's value to its occupancy.
+	 */
+	readonly reportsChainDepth?: true;
+
 	/** Bytecode reading this value into `slot`. */
 	emit(slot: RowSlot): Uint8Array;
 

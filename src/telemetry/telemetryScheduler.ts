@@ -21,7 +21,6 @@
 
 import { TelemetryRow, RowValue, comesUpOnTick, assertValidLifetime } from './telemetryRow';
 import { portStateOf, PortState } from './portState';
-import { CHAIN_DEPTH_ROW } from './ev3Rows';
 import { USB } from '../transports/transportConstants';
 import {
 	AssembledFrame,
@@ -393,10 +392,11 @@ export class TelemetryScheduler {
 	 */
 	private isReadable(row: TelemetryRow): boolean {
 		const member = row.layer !== undefined && row.layer > 0;
-		if (member || row.id === CHAIN_DEPTH_ROW) {
+		// The depth first: on a brick with no chain it closes every member row without asking the limits.
+		if (member && (this.chainDepth === undefined || row.layer > this.chainDepth)) { return false; }
+		if (member || row.reportsChainDepth) {
 			if (this.resolveLimits().maxPacketBytes <= USB.MAX_WRITE_PACKET_BYTES) { return false; }
 		}
-		if (member && (this.chainDepth === undefined || row.layer > this.chainDepth)) { return false; }
 		if (row.port === undefined) { return true; }
 		// An occupancy row reads the type itself, so gating it on the type would be circular
 		// and would make a port that ever went empty unrecoverable.
@@ -445,7 +445,8 @@ export class TelemetryScheduler {
 			}
 		}
 
-		const depth = values.find((value) => value.rowId === CHAIN_DEPTH_ROW)?.value;
+		const depthRow = frame.placed.find(({ row }) => row.reportsChainDepth)?.row;
+		const depth = depthRow && values.find((value) => value.rowId === depthRow.id)?.value;
 		if (typeof depth === 'number') { this.setChainDepth(depth); }
 
 		if (values.length === 0) { return; }
@@ -459,6 +460,8 @@ export class TelemetryScheduler {
 	 * brick plugged in there later starts afresh and its values wait for its occupancy again.
 	 */
 	private setChainDepth(depth: number): void {
+		// Nothing below an unchanged depth was read since it was forgotten.
+		if (depth === this.chainDepth) { return; }
 		this.chainDepth = depth;
 		for (const row of [...this.rows, ...(this.pendingRows ?? [])]) {
 			if (row.layer === undefined || row.layer <= depth || row.port === undefined) { continue; }

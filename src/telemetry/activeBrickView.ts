@@ -23,7 +23,7 @@ import type { BrickRef } from '../contracts/brickKey';
 import type { ActiveBrickViewModel, BatteryState, ChainMemberView, PortState, ValueDisplayStyle } from '../contracts/models';
 import { peripheralTypeOf } from '../protocol/peripheralTypes';
 import { chainOf } from './chainModel';
-import { MOTOR_PORT_NAMES, SENSOR_PORT_NAMES } from './ev3Rows';
+import { MOTOR_PORT_NAMES, SENSOR_PORT_NAMES, portRowId } from './ev3Rows';
 import { portStateOf } from './portState';
 import type { ReadValue } from './telemetryReadModel';
 
@@ -47,11 +47,10 @@ const BUTTON_PREFIX = 'ui.button.';
 export function activeBrickView(input: ActiveBrickInput): ActiveBrickViewModel {
 	const byId = new Map(input.values.map((value) => [value.rowId, value] as const));
 	const port = (kind: 'sensor' | 'motor', name: string, valueRow: string): PortState =>
-		portView(name, 0, byId.get(`ports.${kind}.${name}.occupancy`), byId.get(`ports.${kind}.${name}.${valueRow}`));
-	// A member's motor shows its type only: its position does not cross the chain, so no value row is read.
+		portView(name, 0, byId.get(portRowId(kind, name, 'occupancy')), byId.get(portRowId(kind, name, valueRow)));
 	const memberPort = (layer: number, kind: 'sensor' | 'motor', name: string): PortState =>
-		portView(name, layer, byId.get(`chain.${layer}.${kind}.${name}.occupancy`),
-			kind === 'sensor' ? byId.get(`chain.${layer}.sensor.${name}.value`) : undefined);
+		portView(name, layer, byId.get(portRowId(kind, name, 'occupancy', layer)),
+			kind === 'sensor' ? byId.get(portRowId('sensor', name, 'value', layer)) : undefined);
 	const chain = chainOf(input.values)?.members.map((member): ChainMemberView => ({
 		...member,
 		motorPorts: MOTOR_PORT_NAMES.map((name) => memberPort(member.layer, 'motor', name)),

@@ -32,7 +32,7 @@ import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
 import { ProgramService, ProgramServiceOptions, followProgramRow } from '../programs/programService';
-import type { ChainMemberCapabilities } from '../contracts/models';
+import type { ChainMember } from '../contracts/models';
 import { chainOf } from '../telemetry/chainModel';
 import { CHAIN_DEPTH_ROW } from '../telemetry/ev3Rows';
 import type { RowDescriptor } from '../telemetry/rowRegistry';
@@ -130,7 +130,7 @@ export interface ApiChain {
 	/** No newer reading of the chain came for a while. */
 	readonly stale: boolean;
 	/** Layer 1 first. An empty last member cannot be told from no brick and is not listed. */
-	readonly members: readonly { readonly layer: number; readonly capabilities: ChainMemberCapabilities }[];
+	readonly members: readonly ChainMember[];
 }
 
 export interface ShellResult {
@@ -435,9 +435,13 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				let live = true;
 				let handle: string | undefined;
 				let last = JSON.stringify(chainNow(brickId));
+				// Claims that ended before `claim()` returned the handle: a brick that went inside the claim itself.
+				const endedEarly = new Set<string>();
 				const ending = telemetry.onClaimsEnded((event) => {
+					if (event.brickKey !== brickId) { return; }
+					if (handle === undefined) { for (const ended of event.handles) { endedEarly.add(ended); } return; }
 					// Its brick went: the claim is gone with it, and nothing more is told.
-					if (event.brickKey === brickId && handle !== undefined && event.handles.includes(handle)) { close(false); }
+					if (event.handles.includes(handle)) { close(false); }
 				});
 				const listening = telemetry.onChange((change) => {
 					if (change.brickKey !== brickId) { return; }
@@ -465,6 +469,10 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 					close(false);
 					if (error instanceof CockpitError) { throw error; }
 					throw new SubscriptionError(error instanceof Error ? error.message : String(error), error);
+				}
+				if (endedEarly.has(handle)) {
+					close(false);
+					throw new SubscriptionError(`Brick ${brickId} went while its chain was being followed.`);
 				}
 				if (closed) { close(true); open(); }
 				return keep({ dispose: () => close(true) });
