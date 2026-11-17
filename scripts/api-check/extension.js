@@ -297,12 +297,140 @@ async function watchChain() {
 	chainWatch = { dispose: () => { following.dispose(); telemetry.dispose(); consumer.dispose(); } };
 }
 
+/**
+ * Failure scenarios for a hardware session (IMPLEMENTATION_PLAN 2.8.12): the person cuts a link
+ * while the API is busy, and the check records what the consumer saw. Two of them:
+ *
+ *  - an upload cut mid-way (4.6.17): the brick's free space before, the failure the write ended
+ *    with, and the free space after the brick is back, which the cockpit should have released
+ *    without a reboot;
+ *  - commands in flight when the link drops (2.8.14): several callers keep asking the brick, and
+ *    each failure is listed with how long it took, so a command refused at once (never sent) shows
+ *    apart from one that waited out a timeout.
+ */
+async function failures() {
+	out.show(true);
+	const cockpit = vscode.extensions.getExtension('99LevelsUp.ev3-cockpit');
+	if (!cockpit) { line('FAIL  the cockpit is not installed'); return; }
+	const api = await cockpit.activate();
+	const consumer = api.registerConsumer('ev3-cockpit-failures');
+	try {
+		const brick = await pickBrick(consumer);
+		if (!brick) { line('skip  no brick picked'); return; }
+		const scenario = await vscode.window.showQuickPick([
+			{ label: 'An upload cut mid-way (4.6.17)', run: interruptedUpload },
+			{ label: 'Commands in flight when the link drops (2.8.14)', run: commandsInFlight },
+		], { title: 'API check: which failure scenario?' });
+		if (!scenario) { line('skip  no scenario picked'); return; }
+		if (!brick.signedIn) { await consumer.connect(brick.brickId); }
+		line(`===== ${scenario.label} on ${brick.name}, ${route(consumer.listBricks().find((b) => b.brickId === brick.brickId))}, cockpit ${cockpit.packageJSON.version}`);
+		await scenario.run(consumer, brick.brickId);
+	} finally {
+		consumer.dispose();
+	}
+}
+
+const connectedOn = (consumer, brickId) => consumer.listBricks().find((b) => b.brickId === brickId)
+	?.channels.some((c) => c.state === 'connected') === true;
+
+async function interruptedUpload(consumer, brickId) {
+	const size = await vscode.window.showQuickPick([
+		{ label: '3 MB', bytes: 3_000_000, description: 'USB: several seconds' },
+		{ label: '1 MB', bytes: 1_000_000, description: 'Bluetooth or Wi-Fi: a minute or more' },
+		{ label: '300 kB', bytes: 300_000, description: 'Bluetooth: half a minute' },
+	], { title: 'API check: how big an upload?' });
+	if (!size) { line('skip  no size picked'); return; }
+	const file = `${CHECK_DIR}/cut.bin`;
+	await consumer.makeDirectory(brickId, CHECK_DIR).catch(() => { /* there already */ });
+	const before = await consumer.storage(brickId);
+	line(`      free before: ${before.freeKb} KB of ${before.totalKb} KB`);
+	await ask(`An upload of ${size.label} starts when you press Start. Cut the link while it runs, `
+		+ 'when the output says it is a quarter through.', 'Start');
+
+	const content = new Uint8Array(size.bytes).map((_, i) => (i * 13) & 0xff);
+	const started = Date.now();
+	let told = false;
+	let lastTenth = -1;
+	try {
+		await consumer.writeFile(brickId, file, content, {
+			onProgress: (p) => {
+				const done = p.transferred;
+				const tenth = Math.floor((done / size.bytes) * 10);
+				if (tenth !== lastTenth) { lastTenth = tenth; line(`      ${tenth * 10} % (${done} B, ${Date.now() - started} ms)`); }
+				if (!told && done >= size.bytes / 4) {
+					told = true;
+					line('>>>>  CUT THE LINK NOW');
+					void vscode.window.showWarningMessage('API check: cut the link now.');
+				}
+			},
+		});
+		line(`note  the upload finished before the link went (${Date.now() - started} ms); nothing to release`);
+	} catch (error) {
+		line(`ok    the upload failed — ${describe(error)} (${Date.now() - started} ms)`);
+	}
+
+	line('      waiting for the brick to be connected again (restore the link, or it stays on its other channel)');
+	await until('the brick connected again', () => connectedOn(consumer, brickId), 300_000)
+		.then(() => line(`      connected: ${route(consumer.listBricks().find((b) => b.brickId === brickId))}`));
+	const deadline = Date.now() + 90_000;
+	let after;
+	while (Date.now() < deadline) {
+		after = await consumer.storage(brickId).catch((error) => { line(`      storage: ${describe(error)}`); return undefined; });
+		if (after) { line(`      free now: ${after.freeKb} KB`); }
+		if (after && after.freeKb >= before.freeKb - 4) { break; }
+		await wait(5000);
+	}
+	const released = after !== undefined && after.freeKb >= before.freeKb - 4;
+	results.push({ name: 'upload cut: space released without a reboot', ok: released });
+	line(`${released ? 'ok   ' : 'FAIL '} upload cut: free ${before.freeKb} KB before, ${after?.freeKb ?? '?'} KB after`);
+	const left = await consumer.exists(brickId, file).catch(() => undefined);
+	line(`      the partial file ${left === undefined ? 'could not be checked' : left ? 'is still there' : 'is gone'}`);
+	await consumer.remove(brickId, CHECK_DIR, { recursive: true }).catch((error) => line(`      cleanup: ${describe(error)}`));
+}
+
+async function commandsInFlight(consumer, brickId) {
+	const CALLERS = 6;
+	const SECONDS = 60;
+	const go = await ask(`${CALLERS} callers keep asking the brick for ${SECONDS} s. Cut the link a few seconds after Start, `
+		+ 'and restore it if you want to see it come back.', 'Start');
+	if (go !== 'Start') { line('skip  commands in flight'); return; }
+	const end = Date.now() + SECONDS * 1000;
+	const answered = [];
+	const failed = [];
+	const caller = async (n) => {
+		while (Date.now() < end) {
+			const t = Date.now();
+			try {
+				await consumer.storage(brickId);
+				answered.push(Date.now() - t);
+			} catch (error) {
+				const ms = Date.now() - t;
+				failed.push({ ms, what: describe(error) });
+				line(`      caller ${n}: ${ms} ms — ${describe(error)}`);
+				await wait(1000);   // a link that stays down would otherwise be asked as fast as it refuses
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: CALLERS }, (_, n) => caller(n + 1)));
+	const kinds = new Map();
+	for (const f of failed) {
+		const k = kinds.get(f.what) ?? { count: 0, min: Infinity, max: 0 };
+		k.count += 1; k.min = Math.min(k.min, f.ms); k.max = Math.max(k.max, f.ms);
+		kinds.set(f.what, k);
+	}
+	line(`      answered ${answered.length}, median ${answered.sort((a, b) => a - b)[Math.floor(answered.length / 2)] ?? '?'} ms`);
+	for (const [what, k] of kinds) { line(`      failed ${k.count}× in ${k.min}–${k.max} ms — ${what}`); }
+	line(`===== commands in flight: ${answered.length} answered, ${failed.length} failed`);
+}
+
 function activate(context) {
 	out = vscode.window.createOutputChannel('EVƎ Cockpit API check');
 	context.subscriptions.push(out, vscode.commands.registerCommand('ev3-cockpit-api-check.run', () =>
 		run().catch((error) => line(`FAIL  the check itself — ${describe(error)}`))));
 	context.subscriptions.push(vscode.commands.registerCommand('ev3-cockpit-api-check.watchChain', () =>
 		watchChain().catch((error) => line(`FAIL  the chain watch — ${describe(error)}`))));
+	context.subscriptions.push(vscode.commands.registerCommand('ev3-cockpit-api-check.failures', () =>
+		failures().catch((error) => line(`FAIL  the failure scenario — ${describe(error)}`))));
 	context.subscriptions.push({ dispose: () => chainWatch?.dispose() });
 }
 
