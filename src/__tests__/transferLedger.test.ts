@@ -380,6 +380,33 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 			assert.deepEqual(b.kinds().slice(0, 3), [`close ${HANDLE}`, 'fs:delete', 'fs:beginWrite']);
 		});
 
+		it('turns a known slot uncertain when the settlement\'s own close loses its reply (review of ad59373)', async () => {
+			const scopes: string[] = [];
+			const { b, ledger, service } = setup(async (scope) => { scopes.push(scope); return true; });
+			ledger.owe({ kind: 'slot', handle: 5 });
+			b.cutOn('fs:closeHandle');               // the close goes out, its reply does not come back
+			await assert.rejects(service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10)));
+			b.reconnect();
+			b.clear();
+
+			await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+
+			assert.deepEqual(scopes, ['one'], 'the slot was closed again unasked');
+			assert.deepEqual(b.kinds().slice(0, 2), ['close 5', 'fs:beginWrite']);
+		});
+
+		it('asks about each uncertain slot on its own, and a no keeps that one alone (review of ad59373)', async () => {
+			let calls = 0;
+			const { b, ledger, service } = setup(async () => { calls += 1; return calls === 1; });
+			ledger.owe({ kind: 'slot', handle: 5, uncertain: true });
+			ledger.owe({ kind: 'slot', handle: 6, uncertain: true });
+
+			await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+
+			assert.equal(calls, 2);
+			assert.deepEqual(b.kinds().filter((k) => k.startsWith('close')), ['close 5']);
+		});
+
 		it('owes an uncertain slot when a close may have run, a certain one when it never left', async () => {
 			const owed = async (closeFails: Error) => {
 				const ledger = new TransferLedger();

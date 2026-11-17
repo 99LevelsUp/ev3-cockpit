@@ -20,7 +20,7 @@
  */
 
 import { BrickCommand, BrickRef, BrickResponse } from '../contracts';
-import { ProtocolError } from '../errors/CockpitError';
+import { ChannelChangedError, LinkLostError, ProtocolError } from '../errors/CockpitError';
 import { FILE_HANDLE_SLOTS } from '../protocol/ev3Commands';
 
 type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
@@ -52,6 +52,15 @@ export interface TransferLedgerOptions {
 /** A failure the brick itself answered: the command reached it. Anything else may not have. */
 function brickAnswered(error: unknown): boolean {
 	return error instanceof ProtocolError;
+}
+
+/**
+ * A failure that does not prove the command stayed on this side: it may have reached the brick and
+ * run, with only its reply lost. Three settle it: an answer from the brick, a session's refusal
+ * before it left (2.8.14), and a pinned channel's refusal before it left (`BrickManager.pin`).
+ */
+export function mayHaveRun(error: unknown): boolean {
+	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError) && !brickAnswered(error);
 }
 
 export class TransferLedger {
@@ -138,40 +147,47 @@ export class TransferLedger {
 				if (path !== undefined) { await remove(path); }
 			} catch (error) {
 				linkError = error;
-				if (!closed) { keep(debt); } else {
+				// A close that may have run freed the slot for someone else: asked about from now on.
+				if (!closed) { keep(debt.kind === 'slot' && mayHaveRun(error) ? { ...debt, uncertain: true } : debt); } else {
 					const path = debt.kind === 'slot' ? debt.deletePath : debt.kind === 'delete' ? debt.path : undefined;
 					if (path !== undefined) { keep({ kind: 'delete', path }); }
 				}
 			}
 		}
 
-		if (asking.length > 0) {
-			// A slot never learned needs every slot closed; uncertain ones need only their own.
-			const sweep = asking.some((debt) => debt.kind === 'unknown');
+		// A slot never learned needs every slot closed, one question for them all; otherwise each
+		// uncertain slot is its own question, so a yes releases that slot alone (owner, 17.11.2026).
+		const groups: { scope: ReleaseScope; debts: TransferDebt[]; handles: number[] }[] = [];
+		if (asking.some((debt) => debt.kind === 'unknown')) {
+			groups.push({ scope: 'all', debts: asking, handles: Array.from({ length: FILE_HANDLE_SLOTS }, (_, i) => i) });
+		} else {
+			for (const debt of asking) {
+				if (debt.kind !== 'slot') { continue; }
+				const group = groups.find((g) => g.handles[0] === debt.handle);
+				if (group) { group.debts.push(debt); } else { groups.push({ scope: 'one', debts: [debt], handles: [debt.handle] }); }
+			}
+		}
+		for (const group of groups) {
 			let agreed: boolean | undefined;
 			if (linkError === undefined && this.options.confirmSweep) {
 				try {
-					agreed = await this.options.confirmSweep(sweep ? 'all' : 'one');
+					agreed = await this.options.confirmSweep(group.scope);
 				} catch {
 					// Not an answer: the question failed. Kept, to be asked again (review of 6188670).
 					agreed = undefined;
 				}
 			}
 			if (agreed === undefined) {
-				kept.push(...asking);
+				kept.push(...group.debts);
 			} else if (agreed) {
 				try {
-					if (sweep) {
-						for (let handle = 0; handle < FILE_HANDLE_SLOTS; handle += 1) { await close(handle); }
-					} else {
-						for (const debt of asking) { if (debt.kind === 'slot') { await close(debt.handle); } }
-					}
-					for (const debt of asking) {
+					for (const handle of group.handles) { await close(handle); }
+					for (const debt of group.debts) {
 						if (debt.kind !== 'delete' && debt.deletePath !== undefined) { await remove(debt.deletePath); }
 					}
 				} catch (error) {
 					linkError = error;
-					kept.push(...asking);
+					kept.push(...group.debts);
 				}
 			}
 			// Declined: dropped, and not offered again; a reboot frees the slot too.
