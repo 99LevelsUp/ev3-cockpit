@@ -93,12 +93,17 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 	// A transfer whose first reply was lost may have left a slot, and its file's space, taken on the
 	// brick until a reboot. Releasing it means closing every open file there, another computer's
 	// live transfer included, so it is the user's call (4.6.17; owner decision 13.11.2026).
-	setSweepConfirmation(bricks, async () => {
+	// A slot whose number is known but which the brick may already have handed on is asked about
+	// too, for that slot alone (owner decision 17.11.2026).
+	setSweepConfirmation(bricks, async (scope) => {
 		const release = 'Release';
-		const pick = await notify.info(
-			'A file transfer to the brick was cut off before the brick said which file it opened, '
-			+ 'so its space may stay taken until the brick restarts. Release it now? This closes every '
-			+ 'file the brick has open, including a transfer another computer may be running.', release);
+		const pick = await notify.info(scope === 'all'
+			? 'A file transfer to the brick was cut off before the brick said which file it opened, '
+				+ 'so its space may stay taken until the brick restarts. Release it now? This closes every '
+				+ 'file the brick has open, including a transfer another computer may be running.'
+			: 'A file transfer to the brick was cut off just as it finished, so the cockpit cannot tell '
+				+ 'whether the brick already let go of its file. Release it now? If another computer is '
+				+ 'sending a file to this brick at this moment, this may cut its transfer off.', release);
 		return pick === release;
 	});
 	const notificationProgress: ShowProgress = (title, task) => {

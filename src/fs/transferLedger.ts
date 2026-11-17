@@ -25,15 +25,28 @@ import { FILE_HANDLE_SLOTS } from '../protocol/ev3Commands';
 
 type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
 
-/** One thing owed: a slot to close (and a file to delete), a file only, or a slot never learned. */
+/**
+ * One thing owed: a slot to close (and a file to delete), a file only, or a slot never learned.
+ *
+ * A slot is `uncertain` when the brick may already have freed it: the link went with the reply to
+ * a command that frees it, the last chunk or a close. The firmware hands a freed number to the next
+ * transfer, another computer's too, so such a slot is closed only when the user agrees (owner
+ * decision 17.11.2026, IMPLEMENTATION_PLAN 4.6.17); every other known slot is closed at once.
+ */
 export type TransferDebt =
-	| { readonly kind: 'slot'; readonly handle: number; readonly deletePath?: string }
+	| { readonly kind: 'slot'; readonly handle: number; readonly deletePath?: string; readonly uncertain?: true }
 	| { readonly kind: 'delete'; readonly path: string }
 	| { readonly kind: 'unknown'; readonly deletePath?: string };
 
+/**
+ * What the user is asked to release: `all`, a sweep of every slot, for a slot never learned; `one`,
+ * a slot whose number is known but which the brick may already have handed to someone else.
+ */
+export type ReleaseScope = 'all' | 'one';
+
 export interface TransferLedgerOptions {
-	/** Asks the user whether to sweep the slots; absent, a slot never learned waits. */
-	readonly confirmSweep?: () => Promise<boolean>;
+	/** Asks the user whether to release; absent, a slot never learned or uncertain waits. */
+	readonly confirmSweep?: (scope: ReleaseScope) => Promise<boolean>;
 }
 
 /** A failure the brick itself answered: the command reached it. Anything else may not have. */
@@ -50,7 +63,7 @@ export class TransferLedger {
 	constructor(private options: TransferLedgerOptions = {}) {}
 
 	/** Who to ask before a sweep. */
-	setConfirmSweep(confirmSweep: (() => Promise<boolean>) | undefined): void {
+	setConfirmSweep(confirmSweep: ((scope: ReleaseScope) => Promise<boolean>) | undefined): void {
 		this.options = { ...this.options, confirmSweep };
 	}
 
@@ -113,10 +126,11 @@ export class TransferLedger {
 			}
 		};
 
-		const unknown: TransferDebt[] = [];
+		/** What only the user may release: slots never learned, and slots the brick may have handed on. */
+		const asking: TransferDebt[] = [];
 		for (const debt of debts) {
 			if (linkError !== undefined) { keep(debt); continue; }
-			if (debt.kind === 'unknown') { unknown.push(debt); continue; }
+			if (debt.kind === 'unknown' || (debt.kind === 'slot' && debt.uncertain)) { asking.push(debt); continue; }
 			let closed = debt.kind !== 'slot';
 			try {
 				if (debt.kind === 'slot') { await close(debt.handle); closed = true; }
@@ -131,27 +145,33 @@ export class TransferLedger {
 			}
 		}
 
-		if (unknown.length > 0) {
+		if (asking.length > 0) {
+			// A slot never learned needs every slot closed; uncertain ones need only their own.
+			const sweep = asking.some((debt) => debt.kind === 'unknown');
 			let agreed: boolean | undefined;
 			if (linkError === undefined && this.options.confirmSweep) {
 				try {
-					agreed = await this.options.confirmSweep();
+					agreed = await this.options.confirmSweep(sweep ? 'all' : 'one');
 				} catch {
 					// Not an answer: the question failed. Kept, to be asked again (review of 6188670).
 					agreed = undefined;
 				}
 			}
 			if (agreed === undefined) {
-				kept.push(...unknown);
+				kept.push(...asking);
 			} else if (agreed) {
 				try {
-					for (let handle = 0; handle < FILE_HANDLE_SLOTS; handle += 1) { await close(handle); }
-					for (const debt of unknown) {
-						if (debt.kind === 'unknown' && debt.deletePath !== undefined) { await remove(debt.deletePath); }
+					if (sweep) {
+						for (let handle = 0; handle < FILE_HANDLE_SLOTS; handle += 1) { await close(handle); }
+					} else {
+						for (const debt of asking) { if (debt.kind === 'slot') { await close(debt.handle); } }
+					}
+					for (const debt of asking) {
+						if (debt.kind !== 'delete' && debt.deletePath !== undefined) { await remove(debt.deletePath); }
 					}
 				} catch (error) {
 					linkError = error;
-					kept.push(...unknown);
+					kept.push(...asking);
 				}
 			}
 			// Declined: dropped, and not offered again; a reboot frees the slot too.
@@ -169,14 +189,15 @@ export class TransferLedger {
 		this.debts = this.debts.flatMap((debt): TransferDebt[] => {
 			if (debt.kind === 'delete') { return debt.path === path ? [] : [debt]; }
 			if (debt.deletePath !== path) { return [debt]; }
-			return [debt.kind === 'slot' ? { kind: 'slot', handle: debt.handle } : { kind: 'unknown' }];
+			if (debt.kind === 'unknown') { return [{ kind: 'unknown' }]; }
+			return [debt.uncertain ? { kind: 'slot', handle: debt.handle, uncertain: true } : { kind: 'slot', handle: debt.handle }];
 		});
 	}
 }
 
 /** The ledgers, per brick layer and brick: they outlive the transfer services built per call. */
 const ledgers = new WeakMap<object, Map<BrickRef, TransferLedger>>();
-const confirmations = new WeakMap<object, () => Promise<boolean>>();
+const confirmations = new WeakMap<object, (scope: ReleaseScope) => Promise<boolean>>();
 
 /** The ledger of one brick, for a brick layer (the extension and the API share one). */
 export function ledgerFor(owner: object, brickKey: BrickRef): TransferLedger {
@@ -191,7 +212,7 @@ export function ledgerFor(owner: object, brickKey: BrickRef): TransferLedger {
 }
 
 /** Who to ask before a sweep, for every brick of a brick layer: the extension sets a notification. */
-export function setSweepConfirmation(owner: object, confirm: () => Promise<boolean>): void {
+export function setSweepConfirmation(owner: object, confirm: (scope: ReleaseScope) => Promise<boolean>): void {
 	confirmations.set(owner, confirm);
 	for (const ledger of ledgers.get(owner)?.values() ?? []) { ledger.setConfirmSweep(confirm); }
 }

@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { BrickCommand, BrickId, BrickResponse } from '../contracts';
 import { LinkLostError, ProtocolError, TransportError } from '../errors/CockpitError';
 import { FileTransferService } from '../fs/fileTransferService';
-import { TransferLedger, ledgerFor } from '../fs/transferLedger';
+import { ReleaseScope, TransferLedger, ledgerFor } from '../fs/transferLedger';
 import { buildCommand } from '../protocol/ev3Commands';
 
 const HANDLE = 3;
@@ -54,7 +54,8 @@ function brick() {
 	};
 	const send = async (command: BrickCommand): Promise<BrickResponse> => {
 		commands.push(command);
-		if (linkDown) { throw new TransportError('USB receive failed: LIBUSB_TRANSFER_ERROR'); }
+		// Once the link is gone, the session refuses before sending, as it does while reconnecting (2.8.14).
+		if (linkDown) { throw new LinkLostError('The link is lost and reconnecting; the command was not sent.'); }
 		if (failNext === command.kind) { failNext = undefined; linkDown = true; throw new TransportError('cable out'); }
 		if (holdKind === command.kind) {
 			holdKind = undefined;
@@ -75,7 +76,7 @@ function brick() {
 	};
 }
 
-function setup(confirm?: () => Promise<boolean>) {
+function setup(confirm?: (scope: ReleaseScope) => Promise<boolean>) {
 	const b = brick();
 	const ledger = new TransferLedger(confirm ? { confirmSweep: confirm } : {});
 	const service = new FileTransferService(b.send, { ledger });
@@ -138,7 +139,9 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 	});
 
 	it('leaves a read\'s file alone: it closes the slot only', async () => {
-		const { b, service } = setup();
+		// The fake's read has one continuation, the last, so its slot is uncertain and asked about.
+		const scopes: string[] = [];
+		const { b, service } = setup(async (scope) => { scopes.push(scope); return true; });
 		b.cutOn('fs:continueRead');
 		await assert.rejects(service.readFile(PATH));
 		b.reconnect();
@@ -146,7 +149,9 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 
 		await service.readFile(PATH);
 
+		assert.deepEqual(scopes, ['one']);
 		assert.deepEqual(b.kinds().slice(0, 2), [`close ${HANDLE}`, 'fs:beginRead']);
+		assert.equal(b.commands.filter((c) => c.kind === 'fs:delete').length, 0);
 	});
 
 	it('sweeps a slot it never learned, 0..63 and no higher, only when the user agrees', async () => {
@@ -324,6 +329,71 @@ describe('Transfer ledger — space an interrupted transfer took (4.6.17)', () =
 		await assert.rejects(service.writeFile(PATH, content), LinkLostError);
 
 		assert.equal(ledger.pending(), 0);
+	});
+
+	describe('a slot the brick may already have handed on (owner decision 17.11.2026)', () => {
+		const lastChunkOnly = new Uint8Array(1500);   // BEGIN carries 982 bytes, one CONTINUE the rest
+
+		it('closes nothing when the last chunk\'s reply is lost, and asks before closing that one slot', async () => {
+			const scopes: string[] = [];
+			const { b, ledger, service } = setup(async (scope) => { scopes.push(scope); return true; });
+			b.cutOn('fs:continueWrite');
+			await assert.rejects(service.writeFile(PATH, lastChunkOnly), TransportError);
+			assert.deepEqual(b.kinds(), ['fs:beginWrite', 'fs:continueWrite'], 'something went out after the uncertain chunk');
+			b.reconnect();
+			b.clear();
+
+			await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+
+			assert.deepEqual(scopes, ['one']);
+			assert.deepEqual(b.kinds().slice(0, 3), [`close ${HANDLE}`, 'fs:delete', 'fs:beginWrite'], 'not that slot alone, before the transfer');
+			assert.equal(ledger.pending(), 0);
+		});
+
+		it('leaves the slot alone when the user declines, and does not ask again', async () => {
+			let asked = 0;
+			const { b, ledger, service } = setup(async () => { asked += 1; return false; });
+			b.cutOn('fs:continueWrite');
+			await assert.rejects(service.writeFile(PATH, lastChunkOnly));
+			b.reconnect();
+			b.clear();
+
+			await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+			await service.writeFile('/home/root/lms2012/prjs/z.rbf', new Uint8Array(10));
+
+			assert.equal(b.kinds().filter((k) => k.startsWith('close')).length, 0);
+			assert.equal(asked, 1);
+			assert.equal(ledger.pending(), 0);
+		});
+
+		it('still closes at once, unasked, when the chunk lost was not the last', async () => {
+			let asked = 0;
+			const { b, service } = setup(async () => { asked += 1; return true; });
+			b.cutOn('fs:continueWrite');                // the first of two continuation chunks
+			await assert.rejects(service.writeFile(PATH, content));
+			b.reconnect();
+			b.clear();
+
+			await service.writeFile('/home/root/lms2012/prjs/y.rbf', new Uint8Array(10));
+
+			assert.equal(asked, 0);
+			assert.deepEqual(b.kinds().slice(0, 3), [`close ${HANDLE}`, 'fs:delete', 'fs:beginWrite']);
+		});
+
+		it('owes an uncertain slot when a close may have run, a certain one when it never left', async () => {
+			const owed = async (closeFails: Error) => {
+				const ledger = new TransferLedger();
+				const send = async (command: BrickCommand): Promise<BrickResponse> => {
+					if (command.kind === 'fs:beginWrite') { return { kind: 'fs:beginWrite', handle: 7, endOfFile: false }; }
+					if (command.kind === 'fs:closeHandle') { throw closeFails; }
+					throw new Error(`unexpected ${command.kind}`);
+				};
+				await new FileTransferService(send, { ledger }).writeFile(PATH, new Uint8Array(10));
+				return (ledger as unknown as { debts: unknown[] }).debts;
+			};
+			assert.deepEqual(await owed(new TransportError('reply lost')), [{ kind: 'slot', handle: 7, uncertain: true }]);
+			assert.deepEqual(await owed(new LinkLostError('never sent')), [{ kind: 'slot', handle: 7 }]);
+		});
 	});
 
 	it('keeps one ledger per brick for the same brick layer', () => {
