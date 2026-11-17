@@ -12,7 +12,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { TelemetryScheduler, isReadableType } from '../telemetry/telemetryScheduler';
-import { RowLifetime, TelemetryRow } from '../telemetry/telemetryRow';
+import { RowLifetime, TelemetryRow, withLifetime } from '../telemetry/telemetryRow';
+import { chainDepthRow, sensorOccupancyRow, sensorValueRow } from '../telemetry/ev3Rows';
+import { MockTransportProvider } from '../mock/mockTransportProvider';
+import { makeBrickKey, Transport } from '../contracts';
 
 const LIBUSB = { maxPacketBytes: 1024 };
 const HID = { maxPacketBytes: 64 };
@@ -302,6 +305,107 @@ describe('scheduler — the occupancy gate', () => {
 		assert.equal(isReadableType(125), false, 'TYPE_UNKNOWN: still identifying, read blocks');
 		assert.equal(isReadableType(126), false, 'TYPE_NONE: empty');
 		assert.equal(isReadableType(127), false, 'TYPE_ERROR: faulty');
+	});
+});
+
+describe('scheduler — the daisy-chain layer gate (step-8 U3)', () => {
+	const MASTER = makeBrickKey(Transport.Mock, 'M');
+	const sensor = (name: string, peripheralType: string, value: number) =>
+		({ port: name, peripheralType, dynamic: { kind: 'static', value } });
+	const brickOf = (id: string, extra: Record<string, unknown>) =>
+		({ id, displayName: id, battery: { level: 50 }, sensorPorts: [], motorPorts: [], ...extra });
+	const every = { kind: 'repeating', divider: 1 } as RowLifetime;
+
+	/** A master M with `depth` bricks below it, each with an ultrasonic sensor on port 1. */
+	async function chainOf(depth: number): Promise<MockTransportProvider> {
+		const bricks = [brickOf('M', { sensorPorts: [sensor('1', 'touch-sensor', 1)] })];
+		for (let layer = 1; layer <= depth; layer += 1) {
+			bricks.push(brickOf(`L${layer}`, { parentId: layer === 1 ? 'M' : `L${layer - 1}`, sensorPorts: [sensor('1', 'ultrasonic-sensor', 10 * layer)] }));
+		}
+		const mock = new MockTransportProvider({ transport: Transport.Mock, bricks } as never);
+		await mock.connect(MASTER);
+		return mock;
+	}
+
+	/** The chain's rows, every one on every tick so the gate alone decides what goes out. */
+	const chainRows = (): TelemetryRow[] => [
+		withLifetime(sensorValueRow(0), every),
+		withLifetime(sensorOccupancyRow(0), every),
+		...[1, 2].flatMap((layer) => [
+			withLifetime(sensorOccupancyRow(0, 1, layer), every),
+			withLifetime(sensorValueRow(0, 0, 1, layer), every),
+		]),
+		withLifetime(chainDepthRow(), every),
+	];
+
+	function schedulerOver(mocks: { current: MockTransportProvider }, limits = LIBUSB) {
+		const seen: string[][] = [];
+		const scheduler = new TelemetryScheduler({
+			rows: chainRows(), limits, tickPeriodMs: 10,
+			send: async (payload) => {
+				const reply = await mocks.current.executeCommand(MASTER, { kind: 'telemetry:frame', payload });
+				return (reply as { payload: Uint8Array }).payload;
+			},
+			onValues: (values) => seen.push(values.map((v) => v.rowId)),
+		});
+		return { scheduler, seen };
+	}
+
+	it('reads no member row before the chain has reported its depth', async () => {
+		const mocks = { current: await chainOf(2) };
+		const { scheduler, seen } = schedulerOver(mocks);
+
+		await scheduler.runTick();
+
+		assert.ok(seen[0].includes('chain.depth'));
+		assert.ok(seen[0].includes('ports.sensor.1.value'), "the master's own rows do not wait");
+		assert.deepEqual(seen[0].filter((id) => id.startsWith('chain.') && id !== 'chain.depth'), []);
+		mocks.current.dispose();
+	});
+
+	it("opens a member's occupancy to the depth reported, and its value only once its occupancy is known", async () => {
+		const mocks = { current: await chainOf(1) };
+		const { scheduler, seen } = schedulerOver(mocks);
+
+		await scheduler.runTick();   // depth 1 arrives
+		await scheduler.runTick();   // layer 1's occupancy arrives; its value still waits
+		await scheduler.runTick();   // now the value
+
+		assert.ok(seen[1].includes('chain.1.sensor.1.occupancy'));
+		assert.ok(!seen[1].includes('chain.1.sensor.1.value'), 'an unreported member port is closed');
+		assert.ok(seen[2].includes('chain.1.sensor.1.value'));
+		assert.ok(seen.every((ids) => !ids.some((id) => id.startsWith('chain.2.'))), 'nothing below the depth');
+		mocks.current.dispose();
+	});
+
+	it('closes and forgets a layer when the depth drops below it', async () => {
+		const deep = await chainOf(2);
+		const shallow = await chainOf(1);
+		const mocks = { current: deep };
+		const { scheduler, seen } = schedulerOver(mocks);
+
+		for (let tick = 0; tick < 3; tick += 1) { await scheduler.runTick(); }
+		assert.ok(seen[2].includes('chain.2.sensor.1.value'));
+		assert.equal(scheduler.occupancyOf('2:1'), 30);
+
+		mocks.current = shallow;
+		await scheduler.runTick();   // depth 1 arrives
+		await scheduler.runTick();
+
+		assert.ok(!seen[4].some((id) => id.startsWith('chain.2.')));
+		assert.equal(scheduler.occupancyOf('2:1'), undefined, 'a layer that went away is forgotten');
+		deep.dispose(); shallow.dispose();
+	});
+
+	it("reads no chain on the HID fallback, so the master's rows keep their frames", async () => {
+		const mocks = { current: await chainOf(2) };
+		const { scheduler, seen } = schedulerOver(mocks, HID);
+
+		for (let tick = 0; tick < 6; tick += 1) { await scheduler.runTick(); }
+
+		assert.ok(seen.every((ids) => !ids.some((id) => id.startsWith('chain.'))));
+		assert.ok(seen.every((ids) => ids.includes('ports.sensor.1.value')));
+		mocks.current.dispose();
 	});
 });
 

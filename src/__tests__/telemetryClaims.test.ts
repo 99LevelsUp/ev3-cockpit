@@ -153,6 +153,18 @@ describe('Telemetry claims (step-6 U5)', () => {
 			(e) => codeOf(e) === ErrorCode.ModeConflict, 'released while another claim still holds the mode');
 	});
 
+	it("holds the mode of a chain member's port apart from the master's port of the same number (step-8 U3)", () => {
+		const c = claims(false);
+
+		c.claim({ rowIds: ['chain.1.sensor.3.value'], intervalMs: 200, modes: { '1:3': 2 } }, 'ev3-c');
+
+		assert.equal(rowOf(c.plan().rows, 'chain.1.sensor.3.value')?.mode, 2);
+		assert.throws(() => c.claim({ rowIds: ['chain.1.sensor.3.value'], intervalMs: 200, modes: { '1:3': 4 } }, 'blockly'),
+			(e) => codeOf(e) === ErrorCode.ModeConflict);
+		assert.doesNotThrow(() => c.claim({ rowIds: ['ports.sensor.3.value'], intervalMs: 200, modes: { '3': 4 } }, 'blockly'),
+			"the master's own port 3 is another port");
+	});
+
 	it('frees a port\'s mode when the last claim holding it is released', () => {
 		const c = claims(false);
 		const a = c.claim({ rowIds: ['ports.sensor.1.value'], intervalMs: 200, modes: { '1': 2 } }, 'a');

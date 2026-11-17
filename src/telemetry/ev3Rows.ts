@@ -106,7 +106,7 @@ function portRow(kind: 'sensor' | 'motor', name: string, field: string, layer: n
  * `GET_TYPEMODE` reads `DeviceType` and `DeviceMode` straight out of memory and never blocks,
  * so this row is safe at any divider. The value rows are the ones that can stall.
  */
-export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
+export function sensorOccupancyRow(index: number, divider: number = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
 	return occupancyRow(portRow('sensor', SENSOR_PORT_NAMES[index], 'occupancy', layer), SENSOR_PORTS[index], divider);
 }
 
@@ -116,7 +116,7 @@ export function sensorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.eve
  * On a member of a daisy chain this is all there is of a motor: its type crosses the chain, its
  * tacho does not (IMPLEMENTATION_PLAN 3.1.4f), so no tacho row exists for a member.
  */
-export function motorOccupancyRow(index: number, divider = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
+export function motorOccupancyRow(index: number, divider: number = DEFAULT_DIVIDERS.event, layer = LAYER_SELF): TelemetryRow {
 	return occupancyRow(portRow('motor', MOTOR_PORT_NAMES[index], 'occupancy', layer), MOTOR_INPUT_PORTS[index], divider);
 }
 
@@ -153,7 +153,7 @@ function occupancyRow(
 export function sensorValueRow(
 	index: number,
 	mode = 0,
-	divider = DEFAULT_DIVIDERS.sampled,
+	divider: number = DEFAULT_DIVIDERS.sampled,
 	layer = LAYER_SELF,
 ): TelemetryRow {
 	const { id, port, layer: memberLayer } = portRow('sensor', SENSOR_PORT_NAMES[index], 'value', layer);
@@ -414,7 +414,7 @@ const DEVICE_LIST_LENGTH = 32;
  * is, because a chain has no gaps. The list's `CHANGED` byte is not used: reading it resets it for
  * the asking program slot, so a second reader would steal it.
  */
-export function chainDepthRow(divider = DEFAULT_DIVIDERS.event): TelemetryRow {
+export function chainDepthRow(divider: number = DEFAULT_DIVIDERS.event): TelemetryRow {
 	const id = CHAIN_DEPTH_ROW;
 	return {
 		id,
