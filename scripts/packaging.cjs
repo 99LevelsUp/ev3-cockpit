@@ -17,8 +17,15 @@ const TARGETS = {
 	'win32-x64': { os: 'win32', cpu: 'x64', helper: true, udevRule: false },
 	'linux-x64': { os: 'linux', cpu: 'x64', helper: false, udevRule: true },
 	'linux-arm64': { os: 'linux', cpu: 'arm64', helper: false, udevRule: true },
-	'darwin-arm64': { os: 'darwin', cpu: 'arm64', helper: false, udevRule: false },
+	'darwin-arm64': { os: 'darwin', cpu: 'arm64', helper: false, udevRule: false, macHelper: true },
 };
+
+/**
+ * The macOS Bluetooth helper (`native/macos/ev3-bt-helper.swift`), built on a Mac with
+ * `npm run build:helper:macos`: only Apple's toolchain compiles it, so a VSIX built elsewhere takes
+ * the binary a Mac built into native/bin/.
+ */
+const MAC_HELPER = 'native/bin/ev3-bt-helper';
 
 /** The modules that ship prebuilt binaries in a `prebuilds/` folder, one of which a target needs. */
 const PREBUILT_MODULES = ['usb', 'node-hid', '@serialport/bindings-cpp'];
@@ -88,6 +95,7 @@ function allowed(target, entry) {
 	if (!entry.startsWith('extension/')) { return true; }   // the VSIX's own manifest and content types
 	const file = entry.slice('extension/'.length);
 	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
+	if (file === MAC_HELPER) { return TARGETS[target].macHelper === true; }
 	if (file.startsWith('native/bin/')) { return TARGETS[target].helper && !file.endsWith('.pdb'); }
 	if (UDEV_RULES.includes(file)) { return TARGETS[target].udevRule; }
 	if (!file.startsWith('node_modules/')) { return false; }
@@ -115,6 +123,7 @@ function required(target) {
 		'extension/node_modules/serialport/',
 	];
 	if (TARGETS[target].helper) { needs.push('extension/native/bin/bt-pairing-helper.exe'); }
+	if (TARGETS[target].macHelper) { needs.push(`extension/${MAC_HELPER}`); }
 	if (TARGETS[target].udevRule) { needs.push(...UDEV_RULES.map((rule) => `extension/${rule}`)); }
 	return needs;
 }
@@ -135,4 +144,4 @@ function checkVsix(target, entries) {
 	return { missing, unexpected };
 }
 
-module.exports = { TARGETS, NATIVE_MODULES, SHIPPED_FILES, SHIPPED_FILES_FOR, keepPrebuild, listZipEntries, checkVsix };
+module.exports = { TARGETS, NATIVE_MODULES, SHIPPED_FILES, SHIPPED_FILES_FOR, MAC_HELPER, keepPrebuild, listZipEntries, checkVsix };
