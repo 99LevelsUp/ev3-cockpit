@@ -146,13 +146,44 @@ func connect(_ address: String) -> Never {
 	exit(0)
 }
 
+// ── forget ───────────────────────────────────────────────────────────
+
+/**
+ * Removes the Mac's pairing with a device. A brick reset without a clean shutdown loses its side of
+ * the pairing while macOS keeps its key; the brick then offers to pair on every connect and macOS
+ * never takes it up (the Mac visit, 18.11.2026), and the system settings offer no way out there.
+ * IOBluetooth's `remove` is not public API; it is what blueutil and similar tools call.
+ */
+func forget(_ address: String) -> Never {
+	guard bluetoothAllowed() else { fail("Bluetooth access is refused for this app", code: 3) }
+	let bare = bareMac(address)
+	guard bare.count == 12 else { fail("not an address: \(address)", code: 2) }
+	let dashed = stride(from: 0, to: 12, by: 2).map { i -> String in
+		let start = bare.index(bare.startIndex, offsetBy: i)
+		return String(bare[start..<bare.index(start, offsetBy: 2)])
+	}.joined(separator: "-")
+	guard let device = IOBluetoothDevice(addressString: dashed) else { fail("no device \(dashed)", code: 4) }
+	if !device.isPaired() { status("not paired"); exit(0) }
+	let remove = Selector(("remove"))
+	guard device.responds(to: remove) else { fail("this macOS offers no way to remove a pairing", code: 6) }
+	device.perform(remove)
+	let deadline = Date().addingTimeInterval(5)
+	while device.isPaired() && Date() < deadline {
+		RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.2))
+	}
+	if device.isPaired() { fail("the pairing is still there", code: 6) }
+	status("forgotten")
+	exit(0)
+}
+
 // ── main ─────────────────────────────────────────────────────────────
 
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "" {
 case "list": list()
 case "connect" where args.count > 2: connect(args[2])
+case "forget" where args.count > 2: forget(args[2])
 default:
-	status("usage: ev3-bt-helper list | connect <mac>")
+	status("usage: ev3-bt-helper list | connect <mac> | forget <mac>")
 	exit(2)
 }
