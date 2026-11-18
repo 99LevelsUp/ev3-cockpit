@@ -30,10 +30,23 @@ const MAX_RECEIVE_BUFFER_SIZE = 1_048_576; // 1 MB
  * error is Node's (ECONNREFUSED, ECONNRESET, EPIPE and the like) and carries none, so it is kept
  * as the cause. Replies get the same from `createPendingReply`.
  */
-function coded(error: unknown): unknown {
+function coded(error: unknown, platform: NodeJS.Platform = process.platform): unknown {
 	if (error instanceof CockpitError) { return error; }
-	return new TransportError(`TCP connection failed: ${error instanceof Error ? error.message : String(error)}`, error);
+	const hint = platform === 'darwin' && (error as NodeJS.ErrnoException | undefined)?.code === 'EHOSTUNREACH'
+		? ` ${MAC_LOCAL_NETWORK_HINT}` : '';
+	return new TransportError(`TCP connection failed: ${error instanceof Error ? error.message : String(error)}${hint}`, error);
 }
+
+/**
+ * macOS keeps an app off the local network until the user allows it, and until then a connect to
+ * a brick fails with EHOSTUNREACH while the brick's beacons still arrive (the Mac visit, 18.11.2026:
+ * the first connect from VS Code failed so, the second, after the prompt, took 120 ms).
+ */
+export const MAC_LOCAL_NETWORK_HINT = 'macOS may be keeping VS Code off the local network: allow it in '
+	+ 'System Settings → Privacy & Security → Local Network, then connect again.';
+
+/** For tests: the message a connect failure gets on a given platform. */
+export const codedForTests = coded;
 
 interface PendingHandshake {
 	resolve: (response: string) => void;
