@@ -1056,7 +1056,8 @@ Build the source of truth for connected bricks.
     reconnecting the session's queue is drained with a link-lost error instead of each command
     going out on the dead link and failing on its own timeout; the reconnect's probes go on.
     Not held for the new link: a late motor command is worse than a refused one.
-  - [ ] 2.8.12 **Remaining hardware scenarios.** For Bluetooth there are two, not one — the
+  - [x] 2.8.12 **Remaining hardware scenarios. Done 18.11.2026: every scenario passed on hardware
+    (two rounds below); the findings on the way stay open as listed.** For Bluetooth there are two, not one — the
     radio can be switched off **on the brick** or **on the computer**, and they are different
     failures: one is a peer that stops answering, the other is a local stack that disappears
     underneath an open handle. Then: a brick reachable over two transports losing one; Wi-Fi
@@ -1131,6 +1132,27 @@ Build the source of truth for connected bricks.
     - Commands refused from the queue on a lost channel could go on a channel already live
       (owner, 17.11.2026: weigh in Phase 5; today they are refused, as decided 16.11.).
     - Bluetooth-only bricks show without names after an extension host restart.
+    **Round two, 18.11.2026 (HOSTA): the soak and Wi-Fi.**
+    - Soak: the cockpit read AAA as master of a three-brick chain over USB and Bluetooth for 90
+      minutes with nothing else going on (the chain checked after, members [1, 2]): no drop, the
+      ticks backing off to 150 ms five times for under 10 s. Steady reading does not freeze a
+      master; the freezes stay an open observation (see above).
+    - Wi-Fi switched off mid-session on TCP, each brick alone on TCP (Bluetooth off, no USB), with
+      six callers in flight: CCC (V1.09H, three cycles), BBB (V1.10E), AAA. The brick closes the
+      socket itself, so nothing waits out a timeout: the command on the wire failed in 0.2–1.1 s
+      (BBB the slowest), the queue was refused by the guard, the rest at once. The cockpit came back
+      by itself within 0.2–1 s of the brick's next beacon every time.
+    - **Found and fixed (6946108, 421bc37, codex READY on the second round):** that close reached
+      the API consumer as a bare `Error('TCP socket closed.')` with no code, against the promise of
+      a code on every failure. `createPendingReply` now wraps any error a link raises as a
+      `TransportError` for every adapter (TCP, USB HID, BT SPP, Winsock, BlueZ), and a refused TCP
+      connect or a failed unlock carries a code and keeps the platform error as its cause. Seen on
+      hardware after the fix: `[transport_failed] TCP connection closed by the brick.`
+    - A sign-in to a brick whose Bluetooth is off now pages it (the 5b4ccc4 trade): 35–54 s before
+      that try gives up, behind other Bluetooth work in the queue; the brick works over its other
+      channel meanwhile. More than the ~20 s estimated above.
+    - Updating the installed VSIX needs **Reload Window**; restarting the extension host kept
+      running the old version.
   - [x] 2.8.13 **A brick has no name over Bluetooth.** Done 30.10.2026 (step-2 plan): one
     list entry per brick keyed by `BrickId`, named from the brick itself (`info`, also read over
     USB without connecting, and the TCP beacon). Original entry: Discovery reports `EV3
