@@ -5,27 +5,36 @@
 
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { BtMacAdapter, HelperProcess, MAC_BT_DENIED, createMacPairedScan, parsePairedList } from '../core/transports/macBluetooth';
 import { TransportError } from '../core/errors/CockpitError';
 import { MAC_LOCAL_NETWORK_HINT, codedForTests } from '../core/transports/tcpSocketAdapter';
 
-/** A helper process whose streams and exit the test drives. */
+/** A helper process whose streams and exit the test drives; its stdin can hold a write's callback. */
 class FakeHelper extends EventEmitter {
-	readonly stdin = new PassThrough();
 	readonly stdout = new PassThrough();
 	readonly stderr = new PassThrough();
 	readonly written: Buffer[] = [];
+	/** Callbacks of writes held back, for a test that delivers a write's outcome late. */
+	readonly heldWrites: Array<(error?: Error | null) => void> = [];
+	holdWrites = false;
 	stdinEnded = false;
 	killed?: string;
+	readonly stdin: Writable;
 	constructor(readonly args: readonly string[]) {
 		super();
-		this.stdin.on('data', (chunk: Buffer) => this.written.push(chunk));
-		this.stdin.on('finish', () => { this.stdinEnded = true; });
+		this.stdin = new Writable({
+			write: (chunk: Buffer, _encoding, callback) => {
+				this.written.push(chunk);
+				if (this.holdWrites) { this.heldWrites.push(callback); } else { callback(); }
+			},
+			final: (callback) => { this.stdinEnded = true; callback(); },
+		});
 	}
-	kill(signal?: NodeJS.Signals): boolean { this.killed = signal ?? 'SIGTERM'; this.emit('exit', null, signal ?? 'SIGTERM'); return true; }
-	exit(code: number): void { this.emit('exit', code, null); }
+	kill(signal?: NodeJS.Signals): boolean { this.killed = signal ?? 'SIGTERM'; this.emit('close', null, signal ?? 'SIGTERM'); return true; }
+	/** The process ended and its pipes are drained (`close`, which is what the adapter listens to). */
+	exit(code: number): void { this.emit('close', code, null); }
 }
 
 function adapterWith(helpers: FakeHelper[], connectTimeoutMs = 2000): BtMacAdapter {
@@ -152,6 +161,138 @@ describe('macOS Bluetooth through the IOBluetooth helper', () => {
 		await closing;
 		await replyFailed;
 		assert.equal(adapter.isOpen, false);
+	});
+
+	it('survives an EPIPE on the helper\'s stdin: the link fails, the process does not (review of the Mac visit)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const opening = adapter.open();
+		await tick();
+		helpers[0].stderr.write('open 667\n');
+		await opening;
+		const replyFailed = assert.rejects(adapter.send(Uint8Array.from([0x03, 0x00, 0x01, 0x00, 0x00])), TransportError);
+		helpers[0].stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+		await replyFailed;
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('stops a helper whose stdin broke, rather than leaving it running unreferenced (second review round)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const opening = adapter.open();
+		await tick();
+		helpers[0].stderr.write('open 667\n');
+		await opening;
+		helpers[0].stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+		await tick();
+		assert.equal(adapter.isOpen, false);
+		assert.ok(helpers[0].stdinEnded || helpers[0].killed, 'the helper is told to leave');
+	});
+
+	it('does not let a late write error of a closed link fail a request on the link that replaced it (second review round)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const opening = adapter.open();
+		await tick();
+		helpers[0].stderr.write('open 667\n');
+		await opening;
+		helpers[0].holdWrites = true;
+		const oldReply = assert.rejects(adapter.send(Uint8Array.from([0x03, 0x00, 0x01, 0x00, 0x00])), TransportError);
+		await tick();
+		const closing = adapter.close();
+		await tick();
+		helpers[0].exit(0);
+		await closing;
+		await oldReply;
+
+		const reopening = adapter.open();
+		await tick();
+		helpers[1].stderr.write('open 667\n');
+		await reopening;
+		const reply = adapter.send(Uint8Array.from([0x03, 0x00, 0x02, 0x00, 0x00]));
+		await tick();
+		helpers[0].heldWrites[0](new Error('write EPIPE'));   // the old helper's write fails only now
+		helpers[1].stdout.write(Buffer.from([0x03, 0x00, 0x02, 0x00, 0x02]));
+		assert.deepEqual(Buffer.from(await reply), Buffer.from([0x03, 0x00, 0x02, 0x00, 0x02]));
+	});
+
+	it('does not publish a link whose helper ended right after saying "open" (second review round)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const openFailed = assert.rejects(adapter.open(), TransportError);
+		await tick();
+		// Ends in the same turn as the status line, before the open's continuation runs. Registered
+		// first: a PassThrough delivers the write synchronously, after the adapter's own listener.
+		helpers[0].stderr.once('data', () => helpers[0].exit(0));
+		helpers[0].stderr.write('open 667\n');
+		await openFailed;
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('does not publish a link whose pipe broke while it was opening, even when "open" comes after (third review round)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const openFailed = assert.rejects(adapter.open(), /EPIPE/);
+		await tick();
+		helpers[0].stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+		helpers[0].stderr.write('open 667\n');   // buffered status arrives after the pipe failed
+		await openFailed;
+		assert.equal(adapter.isOpen, false);
+		await tick();
+		assert.ok(helpers[0].stdinEnded || helpers[0].killed, 'the helper is told to leave');
+	});
+
+	it('does not let an earlier helper, still ending, close the link that replaced it (review of the Mac visit)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers, 30);
+		await assert.rejects(adapter.open(), /timed out/);
+		const reopening = adapter.open();
+		await tick();
+		helpers[1].stderr.write('open 667\n');
+		await reopening;
+		helpers[0].exit(0);   // the helper the first open gave up on ends only now
+		await tick();
+		assert.equal(adapter.isOpen, true, 'the new link stays open');
+		const reply = adapter.send(Uint8Array.from([0x03, 0x00, 0x01, 0x00, 0x00]));
+		await tick();
+		helpers[1].stdout.write(Buffer.from([0x03, 0x00, 0x01, 0x00, 0x02]));
+		assert.deepEqual(Buffer.from(await reply), Buffer.from([0x03, 0x00, 0x01, 0x00, 0x02]));
+	});
+
+	it('lets a close win over an open still in progress, even when the channel opens during the close (review of the Mac visit)', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const openFailed = assert.rejects(adapter.open(), TransportError);
+		await tick();
+		const closing = adapter.close();
+		helpers[0].stderr.write('open 667\n');   // the channel comes up after the close began
+		await tick();
+		helpers[0].exit(0);
+		await closing;
+		await openFailed;
+		assert.equal(adapter.isOpen, false);
+	});
+
+	it('shares one open between two callers rather than starting two helpers', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const first = adapter.open();
+		const second = adapter.open();
+		await tick();
+		assert.equal(helpers.length, 1);
+		helpers[0].stderr.write('open 667\n');
+		await Promise.all([first, second]);
+		assert.equal(adapter.isOpen, true);
+	});
+
+	it('takes the helper\'s last status line even when it comes with the end of the process', async () => {
+		const helpers: FakeHelper[] = [];
+		const adapter = adapterWith(helpers);
+		const opening = adapter.open();
+		await tick();
+		helpers[0].stderr.write('error no device 00-16-53-aa-bb-cc\n');
+		helpers[0].exit(4);
+		await assert.rejects(opening, /no device/);
 	});
 
 	it('fails a waiting reply when the brick or the radio ends the link', async () => {
