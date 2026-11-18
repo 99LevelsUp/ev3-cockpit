@@ -165,7 +165,7 @@ graph LR
     end
 ```
 
-**Protocol layer** (`src/protocol/`): Pure functions with no I/O.
+**Protocol layer** (`src/core/protocol/`): Pure functions with no I/O.
 
 - `ev3Bytecode` — encoding primitives (local constants, global variables, integer encoding).
 - `ev3Packet` — packet framing: `[length:2LE][counter:2LE][type:1B][payload]`. Encode and decode.
@@ -357,7 +357,7 @@ which the provider's 5 s per-brick gap already covers. A kernel without Bluetoot
 the backend unavailable, not the brick unreachable.
 
 **BlueZ is reached through a D-Bus client of our own (owner decision D1).** About 900
-lines in `src/transports/dbus/`: the `EXTERNAL` handshake on the system bus socket, method calls,
+lines in `src/core/transports/dbus/`: the `EXTERNAL` handshake on the system bus socket, method calls,
 signals and exported objects — only what BlueZ needs. A library would have added a runtime
 dependency and its transitive ones to a public extension; `libdbus` through FFI more native
 surface; `bluetoothctl` a human interface that changes between versions. On Debian 13 / Raspberry
@@ -463,7 +463,7 @@ The Public API is strictly read-only for session management; it cannot trigger `
 ### 4.3a Command Layer
 
 Owns the typed command vocabulary and everything needed to execute one command against
-one connected brick: the EV3 codec (`src/protocol/`), message counters, reply matching,
+one connected brick: the EV3 codec (`src/core/protocol/`), message counters, reply matching,
 and command-to-response typing.
 
 It sits above the session manager, which owns connections, and below telemetry and the
@@ -473,7 +473,7 @@ filesystem, which both orchestrate commands rather than issue them one at a time
 and returns a packet; it does not know what a command means. Until this was separated, a
 provider accepted a typed `BrickCommand`, which inverted the dependency — the lowest
 layer owned the vocabulary every layer above it was defined in terms of, and the codec
-lived inside `src/transports/`.
+lived inside `src/core/transports/`.
 
 A channel is **session-scoped**, because the message counter is. Two channels over one
 connection would hand out colliding counters and match each other's replies. The session
@@ -1561,7 +1561,7 @@ sequenceDiagram
 
 ## 10. Public API Design
 
-Built in step 5 (`docs/plans/2026-11-11-step5-programs-and-api.md`), `src/api/cockpitApi.ts`.
+Built in step 5 (`docs/plans/2026-11-11-step5-programs-and-api.md`), `src/core/api/cockpitApi.ts`.
 Consumers: VS Code extensions today (ev3-c, formerly ev3-native; ev3-explorer; later ev3-python,
 ev3-blockly), and possibly an MCP server that wraps the same object (IMPLEMENTATION_PLAN §13).
 

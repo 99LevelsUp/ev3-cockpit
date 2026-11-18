@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 6 sources]
 
-The `src/contracts/` module defines all shared types, enums, interfaces, and data models used across the entire EVƎ Cockpit codebase. It is the foundation layer with zero dependencies on runtime, transport, or UI modules. Every other module imports from contracts; contracts import from nothing else in the project.
+The `src/core/contracts/` module defines all shared types, enums, interfaces, and data models used across the entire EVƎ Cockpit codebase. It is the foundation layer with zero dependencies on runtime, transport, or UI modules. Every other module imports from contracts; contracts import from nothing else in the project.
 
 ## Architecture [coverage: high — 6 sources]
 
@@ -70,9 +70,9 @@ The `BrickCommand` union covers: `battery`, `ports`, `buttons`, `info`, `fs:list
 
 ## Sources
 
-- [src/contracts/index.ts](../../src/contracts/index.ts)
-- [src/contracts/enums.ts](../../src/contracts/enums.ts)
-- [src/contracts/brickKey.ts](../../src/contracts/brickKey.ts)
-- [src/contracts/models.ts](../../src/contracts/models.ts)
-- [src/contracts/transport.ts](../../src/contracts/transport.ts)
-- [src/contracts/api.ts](../../src/contracts/api.ts)
+- [src/core/contracts/index.ts](../../src/core/contracts/index.ts)
+- [src/core/contracts/enums.ts](../../src/core/contracts/enums.ts)
+- [src/core/contracts/brickKey.ts](../../src/core/contracts/brickKey.ts)
+- [src/core/contracts/models.ts](../../src/core/contracts/models.ts)
+- [src/core/contracts/transport.ts](../../src/core/contracts/transport.ts)
+- [src/core/contracts/api.ts](../../src/core/contracts/api.ts)
