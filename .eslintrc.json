@@ -25,5 +25,21 @@
     "indent": ["error", "tab"],
     "@typescript-eslint/no-explicit-any": "error",
     "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/core/**/*.ts"],
+      "rules": {
+        "no-restricted-syntax": ["error",
+          { "selector": "ImportDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "ExportNamedDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "ExportAllDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "ImportExpression[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "CallExpression[callee.name='require'][arguments.0.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "TSImportType[argument.literal.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "TSExternalModuleReference[expression.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." }
+        ]
+      }
+    }
+  ]
 }
