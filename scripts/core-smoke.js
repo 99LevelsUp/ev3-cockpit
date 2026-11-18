@@ -8,8 +8,9 @@
  * Settings are the defaults package.json declares; the log goes to the console.
  *
  * Then, as a consumer of the API would: waits for the brick to be heard on the named channel, signs
- * in, checks that the route is that channel, reads the brick's name and firmware, its battery and
- * its storage, and disconnects. One line per step. Any failed step, or a route over another
+ * in, checks that the route is that channel, reads the brick's name, firmware and storage through
+ * the public API, and disconnects. The battery is read through the runtime directly, since API v1
+ * offers it only as a telemetry row. One line per step. Any failed step, or a route over another
  * channel, ends with a non-zero exit code.
  *
  * Make the named channel the only one the brick can use before running: for USB, Bluetooth off on
