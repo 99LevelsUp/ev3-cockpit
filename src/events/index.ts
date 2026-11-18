@@ -24,10 +24,17 @@ export function setListenerErrorHandler(handler: (error: unknown) => void): (err
 	return previous;
 }
 
+/** One subscription; its listener and `this` are dropped when it is removed, so nothing holds them. */
 interface Subscription<T> {
-	readonly listener: (e: T) => unknown;
-	readonly thisArgs: unknown;
-	removed: boolean;
+	listener: ((e: T) => unknown) | undefined;
+	thisArgs: unknown;
+}
+
+/** One fire being delivered: the listeners subscribed when it started, and how far it has got. */
+interface Delivery<T> {
+	readonly value: T;
+	readonly to: readonly Subscription<T>[];
+	next: number;
 }
 
 const NONE: Disposable = Object.freeze({ dispose: () => { /* nothing to release */ } });
@@ -37,25 +44,25 @@ const NONE: Disposable = Object.freeze({ dispose: () => { /* nothing to release 
  * Observed on the real one (the emitter scenarios in the extension host): a listener that throws
  * does not stop the others; a listener added during a fire first hears the next one; a listener
  * removed during a fire, or every listener once the emitter is disposed, is not called again even
- * in that fire; and a fire from inside a listener is delivered after the current fire has reached
- * every listener, not in the middle of it.
+ * in that fire; and a fire from inside a listener first finishes the fire in progress, then
+ * delivers its own event to every listener, all before it returns.
  */
 export class EventEmitter<T> implements Disposable {
 	private subscriptions: Subscription<T>[] = [];
 	private disposed = false;
-	/** Fires waiting while a delivery runs, in order. */
-	private readonly pending: T[] = [];
-	private delivering = false;
+	/** The fire in progress, which a fire from inside a listener finishes first. */
+	private delivery: Delivery<T> | undefined;
 
 	readonly event: Event<T> = (listener, thisArgs, disposables) => {
 		if (this.disposed) { return NONE; }
-		const subscription: Subscription<T> = { listener, thisArgs, removed: false };
+		const subscription: Subscription<T> = { listener, thisArgs };
 		this.subscriptions.push(subscription);
+		// Cleared on the first dispose, so a handle kept after it holds neither the emitter nor the listener.
+		let remove: (() => void) | undefined = () => this.remove(subscription);
 		const handle: Disposable = {
 			dispose: () => {
-				if (subscription.removed) { return; }
-				subscription.removed = true;
-				this.subscriptions = this.subscriptions.filter((s) => s !== subscription);
+				remove?.();
+				remove = undefined;
 			},
 		};
 		disposables?.push(handle);
@@ -64,33 +71,55 @@ export class EventEmitter<T> implements Disposable {
 
 	fire(data: T): void {
 		if (this.disposed) { return; }
-		this.pending.push(data);
-		if (this.delivering) { return; }
-		this.delivering = true;
+		if (this.delivery) { this.deliver(this.delivery); }
+		const delivery: Delivery<T> = { value: data, to: this.subscriptions.slice(), next: 0 };
+		this.delivery = delivery;
 		try {
-			while (this.pending.length > 0 && !this.disposed) {
-				const next = this.pending.shift() as T;
-				for (const subscription of this.subscriptions.slice()) {
-					if (subscription.removed || this.disposed) { continue; }
-					try {
-						subscription.listener.call(subscription.thisArgs, next);
-					} catch (error) {
-						listenerErrorHandler(error);
-					}
-				}
-			}
+			this.deliver(delivery);
 		} finally {
-			this.delivering = false;
-			this.pending.length = 0;
+			if (this.delivery === delivery) { this.delivery = undefined; }
 		}
 	}
 
 	dispose(): void {
 		if (this.disposed) { return; }
 		this.disposed = true;
-		for (const subscription of this.subscriptions) { subscription.removed = true; }
+		for (const subscription of this.subscriptions) { release(subscription); }
 		this.subscriptions = [];
-		this.pending.length = 0;
+		this.delivery = undefined;
+	}
+
+	private remove(subscription: Subscription<T>): void {
+		release(subscription);
+		this.subscriptions = this.subscriptions.filter((s) => s !== subscription);
+	}
+
+	/** Calls the listeners this delivery has not reached yet, skipping any removed meanwhile. */
+	private deliver(delivery: Delivery<T>): void {
+		while (delivery.next < delivery.to.length) {
+			const subscription = delivery.to[delivery.next++];
+			const listener = subscription.listener;
+			if (!listener || this.disposed) { continue; }
+			try {
+				listener.call(subscription.thisArgs, delivery.value);
+			} catch (error) {
+				reportListenerError(error);
+			}
+		}
+	}
+}
+
+function release<T>(subscription: Subscription<T>): void {
+	subscription.listener = undefined;
+	subscription.thisArgs = undefined;
+}
+
+/** Hands a listener's error to the handler; a handler that throws in turn must not stop delivery. */
+function reportListenerError(error: unknown): void {
+	try {
+		listenerErrorHandler(error);
+	} catch (handlerError) {
+		console.error('Event listener error handler failed:', handlerError);
 	}
 }
 
