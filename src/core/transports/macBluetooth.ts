@@ -39,7 +39,11 @@ export interface HelperProcess {
 	readonly stdout: NodeJS.ReadableStream | null;
 	readonly stderr: NodeJS.ReadableStream | null;
 	kill(signal?: NodeJS.Signals): boolean;
-	on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+	/**
+	 * After the process has exited *and* its pipes are drained: `exit` can come while stdout still
+	 * holds the last reply and stderr the reason it failed (review of the Mac visit).
+	 */
+	on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
 	on(event: 'error', listener: (error: Error) => void): this;
 }
 
@@ -136,9 +140,15 @@ export class BtMacAdapter implements TransportAdapter {
 	private readonly connectTimeoutMs: number;
 	private readonly spawnHelper: SpawnHelper;
 
-	private helper?: HelperProcess;
+	/**
+	 * The helper of the current link or of the open in progress. Every callback a helper registers
+	 * checks that it is still this one: a helper being stopped, or one an earlier open gave up on,
+	 * may end long after a newer link took its place, and must not close that link (review of the
+	 * Mac visit).
+	 */
+	private helper?: Helper;
+	private opening?: Promise<void>;
 	private _isOpen = false;
-	private closing = false;
 	private receiveBuffer: Buffer = Buffer.alloc(0);
 	private pendingReply?: PendingReply;
 
@@ -153,82 +163,118 @@ export class BtMacAdapter implements TransportAdapter {
 	/** One attempt, as on the other backends: pacing belongs to the connection queue. */
 	async open(options?: OpenOptions): Promise<void> {
 		if (this._isOpen) { return; }
-		const signal = options?.signal;
+		this.opening ??= this.openOnce(options?.signal).finally(() => { this.opening = undefined; });
+		return this.opening;
+	}
+
+	private async openOnce(signal: AbortSignal | undefined): Promise<void> {
 		if (signal?.aborted) { throw signal.reason ?? new TransportError('BT open aborted.'); }
 
-		const helper = this.spawnHelper(['connect', this.mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase()]);
+		const helper = this.start();
 		this.helper = helper;
-		let statusText = '';
-		await new Promise<void>((resolve, reject) => {
-			let settled = false;
-			const settle = (error?: unknown) => {
-				if (settled) { return; }
-				settled = true;
-				clearTimeout(timer);
-				signal?.removeEventListener('abort', onAbort);
-				if (error === undefined) { resolve(); } else { reject(error); }
-			};
-			const timer = setTimeout(() => settle(new TimeoutError(
-				`BT connect to ${this.mac} timed out after ${this.connectTimeoutMs} ms.`)), this.connectTimeoutMs);
-			timer.unref?.();
-			const onAbort = () => settle(signal?.reason ?? new TransportError('BT open aborted.'));
-			signal?.addEventListener('abort', onAbort, { once: true });
-			helper.on('error', (error) => settle(new TransportError(`The Bluetooth helper did not start: ${error.message}`, error)));
-			helper.on('exit', (code) => {
-				const reason = /error (.*)/.exec(statusText)?.[1]
-					?? (code === 3 ? MAC_BT_DENIED : `the helper ended (${code})`);
-				if (!settled) { settle(new TransportError(`BT connect to ${this.mac} failed: ${reason}`)); return; }
-				this.handleFailure(new TransportError(`BT link to ${this.mac} closed: ${/closed/.test(statusText) ? 'by the brick or the radio' : reason}`));
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const settle = (error?: unknown) => {
+					clearTimeout(timer);
+					signal?.removeEventListener('abort', onAbort);
+					helper.onOpen = undefined;
+					helper.onOpenFailed = undefined;
+					if (error === undefined) { resolve(); } else { reject(error); }
+				};
+				const timer = setTimeout(() => settle(new TimeoutError(
+					`BT connect to ${this.mac} timed out after ${this.connectTimeoutMs} ms.`)), this.connectTimeoutMs);
+				timer.unref?.();
+				const onAbort = () => settle(signal?.reason ?? new TransportError('BT open aborted.'));
+				signal?.addEventListener('abort', onAbort, { once: true });
+				helper.onOpen = () => settle();
+				helper.onOpenFailed = (error) => settle(error);
 			});
-			helper.stderr?.on('data', (chunk: Buffer) => {
-				statusText += chunk.toString('utf8');
-				if (/^open \d+/m.test(statusText)) { settle(); }
-			});
-		}).catch((error: unknown) => {
-			this.stopHelper(helper);
-			this.helper = undefined;
+		} catch (error) {
+			if (this.helper === helper) { this.helper = undefined; }
+			// Not awaited: the open reports its failure now; the helper leaves in the background.
+			void this.stop(helper);
 			throw error;
-		});
-
+		}
+		// A close while the channel was opening took the helper away: the open loses.
+		if (this.helper !== helper) {
+			void this.stop(helper);
+			throw new TransportError(`BT connect to ${this.mac} was cancelled by a close.`);
+		}
+		// The helper said "open" and then failed or ended before this continuation ran: there is no
+		// link to publish.
+		if (helper.failure !== undefined || helper.ended) {
+			this.helper = undefined;
+			void this.stop(helper);
+			throw helper.failure ?? new TransportError(`BT connect to ${this.mac} failed: the helper ended right after opening.`);
+		}
 		this.receiveBuffer = Buffer.alloc(0);
 		this._isOpen = true;
-		helper.stdout?.on('data', (data: Buffer) => {
+	}
+
+	/** Starts a helper and wires its pipes; what reaches this adapter is gated on it being current. */
+	private start(): Helper {
+		const process = this.spawnHelper(['connect', this.mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase()]);
+		let markClosed!: () => void;
+		const helper: Helper = {
+			process, status: '', ended: false,
+			closed: new Promise<void>((resolve) => { markClosed = () => { helper.ended = true; resolve(); }; }),
+		};
+
+		// A write to a helper that has just gone fails with EPIPE, reported to the write's callback
+		// *and* as an `error` event: unlistened, that event would take the extension host down.
+		process.stdin?.on('error', (error: Error) => this.helperFailed(helper, new TransportError(`BT link to ${this.mac} failed: ${error.message}`, error)));
+		process.on('error', (error) => {
+			markClosed();
+			this.helperFailed(helper, new TransportError(`The Bluetooth helper did not start: ${error.message}`, error));
+		});
+		process.stderr?.on('data', (chunk: Buffer) => {
+			helper.status += chunk.toString('utf8');
+			if (/^open \d+/m.test(helper.status)) { helper.onOpen?.(); }
+		});
+		process.stdout?.on('data', (data: Buffer) => {
+			if (this.helper !== helper || !this._isOpen) { return; }
 			this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
 			this.pendingReply = drainPendingReply(this.pendingReply, () => this.extractNextPacket());
 		});
+		// `close`, not `exit`: by now both pipes are drained, so the last reply has been delivered
+		// and the helper's last status line, with the reason it failed, has been read.
+		process.on('close', (code) => {
+			markClosed();
+			const reason = /error (.*)/.exec(helper.status)?.[1]
+				?? (code === 3 ? MAC_BT_DENIED : `the helper ended (${code})`);
+			this.helperFailed(helper, helper.onOpenFailed
+				? new TransportError(`BT connect to ${this.mac} failed: ${reason}`)
+				: new TransportError(`BT link to ${this.mac} closed: `
+					+ (/^closed$/m.test(helper.status) ? 'by the brick or the radio' : reason)));
+		});
+		return helper;
 	}
 
 	async close(): Promise<void> {
 		this._isOpen = false;
-		this.closing = true;
 		this.pendingReply = rejectPendingReply(this.pendingReply, new TransportError('BT adapter closed while waiting for reply.'));
 		this.receiveBuffer = Buffer.alloc(0);
 		const helper = this.helper;
 		this.helper = undefined;
-		if (helper) {
-			await new Promise<void>((resolve) => {
-				const timer = setTimeout(() => { helper.kill('SIGKILL'); resolve(); }, HELPER_EXIT_GRACE_MS);
-				timer.unref?.();
-				helper.on('exit', () => { clearTimeout(timer); resolve(); });
-				// EOF on its stdin: the helper closes the channel itself, which frees the brick at once.
-				helper.stdin?.end();
-			});
-		}
-		this.closing = false;
+		if (helper) { await this.stop(helper); }
 	}
 
 	async send(packet: Uint8Array, options?: SendOptions): Promise<Uint8Array> {
-		const stdin = this.helper?.stdin;
-		if (!this._isOpen || !stdin) { throw new TransportError('BT adapter is not open.'); }
+		const helper = this.helper;
+		const stdin = helper?.process.stdin;
+		if (!this._isOpen || !helper || !stdin) { throw new TransportError('BT adapter is not open.'); }
 		if (this.pendingReply) { throw new TransportError('BT adapter already has in-flight send request.'); }
 		if (options?.signal?.aborted) { throw new TransportError('BT send aborted before dispatch.'); }
 		// Strictly request-reply: whatever is buffered now is a late fragment of an abandoned exchange.
 		this.receiveBuffer = Buffer.alloc(0);
 		return new Promise<Uint8Array>((resolve, reject) => {
-			this.pendingReply = createPendingReply({
+			// What a late callback may touch: this exchange, on this helper, and nothing that replaced
+			// either — a write error from a helper already closed must not fail a newer request.
+			const exchange = createPendingReply({
 				resolve,
 				reject,
 				fail: (error) => {
+					if (this.pendingReply !== exchange) { return; }
 					this.receiveBuffer = Buffer.alloc(0);
 					this.pendingReply = rejectPendingReply(this.pendingReply, error);
 				},
@@ -237,8 +283,10 @@ export class BtMacAdapter implements TransportAdapter {
 				expectedMessageCounter: options?.expectedMessageCounter,
 				transport: 'BT',
 			});
+			this.pendingReply = exchange;
 			stdin.write(Buffer.from(packet), (error?: Error | null) => {
-				if (error) { this.pendingReply = rejectPendingReply(this.pendingReply, error); }
+				if (!error || this.helper !== helper || this.pendingReply !== exchange) { return; }
+				this.pendingReply = rejectPendingReply(this.pendingReply, error);
 			});
 		});
 	}
@@ -250,17 +298,46 @@ export class BtMacAdapter implements TransportAdapter {
 		return result.packet;
 	}
 
-	private handleFailure(error: unknown): void {
-		if (this.closing) { return; }
+	/**
+	 * Every way a helper fails comes here — it ended, it never started, a pipe broke — and leaves
+	 * the same marks whatever stage it is in (review of the Mac visit, after three rounds found a
+	 * race between the separate paths each time): the helper is marked failed, so an open that is
+	 * about to publish it does not; it is stopped, since a broken pipe does not end the process and
+	 * nothing would once it is unreferenced; an open waiting on it is rejected; and if it carries the
+	 * current link, that link ends. A helper that is no longer current changes nothing else.
+	 */
+	private helperFailed(helper: Helper, error: unknown): void {
+		helper.failure ??= error;
+		if (!helper.ended) { void this.stop(helper); }
+		if (helper.onOpenFailed) { helper.onOpenFailed(error); return; }
+		if (this.helper !== helper || !this._isOpen) { return; }
 		this._isOpen = false;
 		this.helper = undefined;
 		this.pendingReply = rejectPendingReply(this.pendingReply, error);
 	}
 
-	private stopHelper(helper: HelperProcess): void {
-		try { helper.stdin?.end(); } catch { /* already gone */ }
-		const timer = setTimeout(() => helper.kill('SIGKILL'), HELPER_EXIT_GRACE_MS);
+	/**
+	 * Ends a helper: EOF on its stdin, so it closes the channel itself and frees the brick at once;
+	 * killed if it has not gone after the grace. Resolves when it has.
+	 */
+	private stop(helper: Helper): Promise<void> {
+		try { helper.process.stdin?.end(); } catch { /* already gone */ }
+		const timer = setTimeout(() => helper.process.kill('SIGKILL'), HELPER_EXIT_GRACE_MS);
 		timer.unref?.();
-		helper.on('exit', () => clearTimeout(timer));
+		return helper.closed.then(() => clearTimeout(timer));
 	}
+}
+
+/** One started helper: its process, what it has said on stderr, and the open waiting on it. */
+interface Helper {
+	readonly process: HelperProcess;
+	status: string;
+	/** Set the moment the process is known to be gone, before anything awaits. */
+	ended: boolean;
+	/** The first way it failed, once it has; an open that sees it does not publish the link. */
+	failure?: unknown;
+	/** Resolves once the process has ended and its pipes are drained (or it never started). */
+	readonly closed: Promise<void>;
+	onOpen?: () => void;
+	onOpenFailed?: (error: unknown) => void;
 }
