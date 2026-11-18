@@ -26,9 +26,9 @@ const SOCKET_CLOSE_GRACE_MS = 250;
 const MAX_RECEIVE_BUFFER_SIZE = 1_048_576; // 1 MB
 
 /**
- * A failure of the unlock handshake as the API promises it, with a cockpit code; a socket's own
- * error is Node's (ECONNRESET, EPIPE and the like) and carries none. Replies get the same from
- * `createPendingReply`.
+ * A failure to connect or to unlock as the API promises it, with a cockpit code; a socket's own
+ * error is Node's (ECONNREFUSED, ECONNRESET, EPIPE and the like) and carries none, so it is kept
+ * as the cause. Replies get the same from `createPendingReply`.
  */
 function coded(error: unknown): unknown {
 	if (error instanceof CockpitError) { return error; }
@@ -292,7 +292,7 @@ export class TcpSocketAdapter implements TransportAdapter {
 			const onError = (error: Error) => {
 				cleanup();
 				socket.destroy();
-				reject(error);
+				reject(coded(error));
 			};
 
 			const onConnect = () => {
@@ -338,7 +338,7 @@ export class TcpSocketAdapter implements TransportAdapter {
 		}
 
 		const detail = lastError instanceof Error ? lastError.message : String(lastError);
-		throw new TransportError(`TCP unlock handshake failed: ${detail}`);
+		throw new TransportError(`TCP unlock handshake failed: ${detail}`, lastError);
 	}
 
 	private sendUnlockRequest(socket: net.Socket, request: string): Promise<string> {

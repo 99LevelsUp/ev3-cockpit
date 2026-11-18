@@ -213,6 +213,52 @@ describe('TcpSocketAdapter — a link the brick drops', () => {
 		});
 	}
 
+	/** Walks an error's cause chain for a platform code such as ECONNREFUSED. */
+	function causeCode(error: unknown): string | undefined {
+		for (let e: unknown = error; e instanceof Error; e = (e as Error & { cause?: unknown }).cause) {
+			const code = (e as Error & { code?: unknown }).code;
+			if (typeof code === 'string' && code.startsWith('E') && code === code.toUpperCase()) { return code; }
+		}
+		return undefined;
+	}
+
+	it('fails a connect nobody answers with a coded TransportError, the platform error as its cause', async () => {
+		// A port that was listening a moment ago and is closed now: the connect is refused.
+		const brick = await startDroppingBrick(() => { /* never reached */ });
+		const port = brick.port;
+		await brick.close();
+		const adapter = new TcpSocketAdapter({ host: '127.0.0.1', port, useDiscovery: false, handshakeTimeoutMs: 3000 });
+		await assert.rejects(() => adapter.open(), (error: unknown) => {
+			assert.ok(error instanceof TransportError, `expected a TransportError, got ${String(error)}`);
+			assert.equal((error as TransportError).code, 'transport_failed');
+			assert.equal(causeCode(error), 'ECONNREFUSED');
+			return true;
+		});
+	});
+
+	it('keeps the socket error reachable when the brick drops the link during the unlock', async () => {
+		const server = net.createServer((socket) => {
+			socket.on('data', () => socket.resetAndDestroy());
+			socket.on('error', () => { /* the drop is the point */ });
+		});
+		await new Promise<void>((done) => server.listen(0, '127.0.0.1', () => done()));
+		const port = (server.address() as net.AddressInfo).port;
+		const adapter = new TcpSocketAdapter({ host: '127.0.0.1', port, useDiscovery: false, handshakeTimeoutMs: 3000 });
+		try {
+			await assert.rejects(() => adapter.open(), (error: unknown) => {
+				assert.ok(error instanceof TransportError, `expected a TransportError, got ${String(error)}`);
+				assert.match((error as Error).message, /unlock handshake failed/);
+				// The unlock tries two request forms, so the last cause is the second one's failure
+				// (a write to the reset socket); what matters is that a platform cause is there.
+				assert.ok(causeCode(error), 'the socket error is reachable through the cause chain');
+				return true;
+			});
+		} finally {
+			await adapter.close().catch(() => { /* best effort */ });
+			await new Promise<void>((done) => server.close(() => done()));
+		}
+	});
+
 	// Hardware, 18.11.2026 (2.8.12): Wi-Fi switched off on the brick closed the socket, and the
 	// command in flight reached the API consumer as a bare Error with no code.
 	for (const [how, drop] of [
