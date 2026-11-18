@@ -116,6 +116,13 @@ const TRANSFER_TYPE_INTERRUPT = 0x03;
 const MAX_STALE_REPLIES = 4;
 
 /**
+ * Why an exchange stops when the adapter was closed under it. A close mid-exchange (a disconnect
+ * while a command is still out, as a sign-off right after a connect does) used to surface as
+ * Node's own TypeError on the vanished endpoint (seen in plain Node, 18.11.2026).
+ */
+const CLOSED_DURING_EXCHANGE = 'USB transport was closed during the exchange.';
+
+/**
  * Longest `close` waits for libusb to hand back transfers still in flight (ms). libusb calls each
  * back by its endpoint timeout, the send budget; this only bounds a transfer sent without one.
  */
@@ -597,7 +604,10 @@ export class UsbLibusbAdapter implements TransportAdapter {
 
 		return this.withCancellation(
 			(resolve, reject) => {
-				this.submit(reject, (done) => this.outEndpoint!.transfer(frame, (error) => {
+				// A close during the exchange takes the endpoints away; say so rather than fail on them.
+				const endpoint = this.outEndpoint;
+				if (!endpoint) { reject(new TransportError(CLOSED_DURING_EXCHANGE)); return; }
+				this.submit(reject, (done) => endpoint.transfer(frame, (error) => {
 					done();
 					if (error) {
 						reject(new TransportError(`USB send failed: ${error.message}`, error));
@@ -619,7 +629,9 @@ export class UsbLibusbAdapter implements TransportAdapter {
 	): Promise<Uint8Array | undefined> {
 		return this.withCancellation<Uint8Array | undefined>(
 			(resolve, reject) => {
-				this.submit(reject, (done) => this.inEndpoint!.transfer(this.frameBytes + this.readSlack, (error, data) => {
+				const endpoint = this.inEndpoint;
+				if (!endpoint) { reject(new TransportError(CLOSED_DURING_EXCHANGE)); return; }
+				this.submit(reject, (done) => endpoint.transfer(this.frameBytes + this.readSlack, (error, data) => {
 					done();
 					if (error) {
 						reject(new TransportError(`USB receive failed: ${error.message}`, error));
