@@ -270,7 +270,7 @@ function registerRealProviders(
 		const found = hid.devices(0x0694, 0x0005).length;
 		log.info(`USB transport registered — node-hid OK, ${found} EV3 device(s) visible`);
 	} catch (e) {
-		log.warn(`USB transport registered — node-hid unavailable in extension host: ${e instanceof Error ? e.message : String(e)}`);
+		log.warn(`USB transport registered — node-hid unavailable: ${e instanceof Error ? e.message : String(e)}`);
 	}
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
