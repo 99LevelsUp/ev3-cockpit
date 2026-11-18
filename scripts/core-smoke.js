@@ -29,9 +29,9 @@ const core = (dir) => path.join(REPO, 'out', 'core', dir);
 const [, , target, channel] = process.argv;
 const waitIndex = process.argv.indexOf('--wait');
 const WAIT_MS = 1000 * (waitIndex > 0 ? Number(process.argv[waitIndex + 1]) : 90);
-const CHANNELS = { usb: 'usb', bt: 'bt', tcp: 'tcp' };
+const CHANNELS = ['usb', 'bt', 'tcp'];
 
-if (!target || !CHANNELS[channel]) {
+if (!target || !CHANNELS.includes(channel)) {
 	console.error('usage: node scripts/core-smoke.js <brick name or id> <usb|bt|tcp> [--wait <seconds>]');
 	process.exit(2);
 }
