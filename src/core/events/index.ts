@@ -122,8 +122,8 @@ function reportListenerError(error: unknown): void {
 
 /** A typed event source over the core's EventEmitter. */
 export interface TypedEvent<T> extends Disposable {
-    readonly event: Event<T>;
-    fire(data: T): void;
+	readonly event: Event<T>;
+	fire(data: T): void;
 }
 
 export function createTypedEvent<T>(): TypedEvent<T> {
