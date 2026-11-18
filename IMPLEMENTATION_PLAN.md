@@ -1844,6 +1844,14 @@ Export a stable API for other extensions without giving them direct access to th
   - [x] 4.6.10 `makeDirectory`, `remove` and `removeTree` — a populated directory is refused
     with an error naming the reason, because the firmware reports ENOTEMPTY as
     NO_PERMISSION; recursive removal is `opFILE/REMOVE` and never the default (R11, R12)
+    **Open, found 18.11.2026 by the ev3-c session in the firmware source:** `opFILE/REMOVE` runs
+    `cMemoryDeleteSubFolders` (`c_memory.c` 931–961), which removes one level only: it calls
+    `remove()` on each entry, a populated subfolder fails silently, and then the folder's own
+    `remove()` fails silently too. The cockpit sends the command without a reply, so
+    `remove(…, { recursive: true })` on a nested tree reports success and leaves part of it, while
+    the mock deletes the whole tree. To do: walk the tree (list, then remove bottom-up) or check
+    with `exists` afterwards and say what is left; make the mock match the brick. Not yet seen on
+    hardware. ev3-c keeps its run folders flat meanwhile.
   - [x] 4.6.11 Path length guard — the firmware truncates a path silently at 60 bytes, so an
     over-length path must be rejected before a packet is sent or the brick acts on a different
     path than the caller named (R13)
