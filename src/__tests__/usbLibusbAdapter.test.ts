@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { UsbLibusbAdapter } from '../core/transports/usbLibusbAdapter';
-import { DevicePermissionError } from '../core/errors/CockpitError';
+import { DevicePermissionError, TransportError } from '../core/errors/CockpitError';
 
 const FRAME = 1024;
 const INTERRUPT = 0x03;
@@ -226,6 +226,24 @@ describe('UsbLibusbAdapter — closing with a transfer still in libusb', () => {
 		log.heldReads.shift()!(new Error('LIBUSB_TRANSFER_CANCELLED'));
 		await closing;
 		assert.deepEqual(log.events, ['read-callback', 'release', 'close']);
+	});
+});
+
+describe('UsbLibusbAdapter — closed during an exchange', () => {
+	it('ends the exchange with a coded TransportError when the device is closed after the send', async () => {
+		// Seen in plain Node, 18.11.2026: a sign-off right after a connect closed the adapter while the
+		// read of the brick's Bluetooth list was still out, and the read failed with Node's own
+		// "Cannot read properties of undefined (reading 'transfer')".
+		const { adapter } = adapterFor([{ serial: '001653AABBCC', replies: [paddedReply(1)] }], '001653AABBCC');
+		await adapter.open();
+		const exchange = adapter.send(replyPacket(1), { timeoutMs: 1000, expectedMessageCounter: 1 });
+		const closing = adapter.close();
+		await assert.rejects(exchange, (error: unknown) => {
+			assert.ok(error instanceof TransportError, `expected a TransportError, got ${String(error)}`);
+			assert.equal(error.code, 'transport_failed');
+			return true;
+		});
+		await closing;
 	});
 });
 
