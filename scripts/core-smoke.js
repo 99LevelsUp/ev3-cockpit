@@ -86,10 +86,12 @@ async function main() {
 		const wanted = target.toLowerCase();
 		const deadline = Date.now() + WAIT_MS;
 		let brick;
+		let lastSeen = '';
 		while (Date.now() < deadline) {
-			brick = consumer.listBricks().find((b) => b.brickId.toLowerCase() === wanted || b.name.toLowerCase() === wanted);
-			if (brick && brick.channels.some((c) => c.transport === channel && c.state === 'available')) { break; }
-			brick = undefined;
+			const found = consumer.listBricks().find((b) => b.brickId.toLowerCase() === wanted || b.name.toLowerCase() === wanted);
+			const seen = found ? found.channels.map((c) => `${c.transport}:${c.state}`).join(' ') : 'not listed';
+			if (seen !== lastSeen) { step('waiting', `${target}: ${seen}`); lastSeen = seen; }
+			if (found && found.channels.some((c) => c.transport === channel && c.state === 'available')) { brick = found; break; }
 			await wait(1000);
 		}
 		if (!brick) { throw new Error(`${target} was not heard on ${channel} within ${WAIT_MS / 1000} s`); }
