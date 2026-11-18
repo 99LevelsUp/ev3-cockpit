@@ -9,7 +9,7 @@
 import * as dgram from 'node:dgram';
 import * as net from 'node:net';
 import { TransportAdapter, SendOptions } from './transportAdapter';
-import { TransportError, TimeoutError } from '../errors/CockpitError';
+import { CockpitError, TransportError, TimeoutError } from '../errors/CockpitError';
 import {
 	PendingReply,
 	drainPendingReply,
@@ -24,6 +24,16 @@ const SOCKET_CLOSE_GRACE_MS = 250;
 
 /** Maximum receive buffer size (bytes) before forcibly closing the connection. */
 const MAX_RECEIVE_BUFFER_SIZE = 1_048_576; // 1 MB
+
+/**
+ * A failure of the unlock handshake as the API promises it, with a cockpit code; a socket's own
+ * error is Node's (ECONNRESET, EPIPE and the like) and carries none. Replies get the same from
+ * `createPendingReply`.
+ */
+function coded(error: unknown): unknown {
+	if (error instanceof CockpitError) { return error; }
+	return new TransportError(`TCP connection failed: ${error instanceof Error ? error.message : String(error)}`, error);
+}
 
 interface PendingHandshake {
 	resolve: (response: string) => void;
@@ -146,8 +156,8 @@ export class TcpSocketAdapter implements TransportAdapter {
 	async close(): Promise<void> {
 		this._isOpen = false;
 		this.closing = true;
-		this.doRejectPendingReply(new Error('TCP adapter closed while waiting for reply.'));
-		this.doRejectPendingHandshake(new Error('TCP adapter closed during handshake.'));
+		this.doRejectPendingReply(new TransportError('TCP adapter closed while waiting for reply.'));
+		this.doRejectPendingHandshake(new TransportError('TCP adapter closed during handshake.'));
 
 		const socket = this.socket;
 		this.socket = undefined;
@@ -255,7 +265,7 @@ export class TcpSocketAdapter implements TransportAdapter {
 
 		socket.on('data', (chunk: Buffer) => this.onSocketData(chunk));
 		socket.on('error', (error) => this.handleSocketFailure(error));
-		socket.on('close', () => this.handleSocketFailure(new Error('TCP socket closed.')));
+		socket.on('close', () => this.handleSocketFailure(new TransportError('TCP connection closed by the brick.')));
 
 		try {
 			await this.performUnlockHandshake(socket, serial, protocol);
@@ -444,7 +454,7 @@ export class TcpSocketAdapter implements TransportAdapter {
 		const pending = this.pendingHandshake;
 		this.pendingHandshake = undefined;
 		clearTimeout(pending.timeout);
-		pending.reject(error);
+		pending.reject(coded(error));
 	}
 
 	private handleSocketFailure(error: unknown): void {
