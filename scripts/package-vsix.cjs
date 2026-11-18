@@ -23,7 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { TARGETS, NATIVE_MODULES, SHIPPED_FILES_FOR, keepPrebuild, listZipEntries, checkVsix } = require('./packaging.cjs');
+const { TARGETS, NATIVE_MODULES, SHIPPED_FILES_FOR, MAC_HELPER, keepPrebuild, listZipEntries, checkVsix } = require('./packaging.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const STAGING = path.join(REPO, '.vsix-staging');
@@ -79,6 +79,12 @@ function stage(target, manifest) {
 			if (file.endsWith('.pdb')) { continue; }   // debug symbols do not ship
 			fs.copyFileSync(path.join(bin, file), path.join(dir, 'native', 'bin', file));
 		}
+	}
+	if (TARGETS[target].macHelper) {
+		const from = path.join(REPO, MAC_HELPER);
+		if (!fs.existsSync(from)) { throw new Error(`${MAC_HELPER} is missing; build it on a Mac with npm run build:helper:macos.`); }
+		fs.mkdirSync(path.join(dir, 'native', 'bin'), { recursive: true });
+		fs.copyFileSync(from, path.join(dir, MAC_HELPER));
 	}
 
 	// The native modules as dependencies of their own, so npm installs them for the target.

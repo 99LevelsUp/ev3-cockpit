@@ -52,6 +52,7 @@ const DARWIN_ARM64 = [
 	'extension/node_modules/@koromix/koffi-darwin-arm64/koffi.node',
 	'extension/node_modules/koffi/index.js',
 	'extension/node_modules/serialport/dist/index.js',
+	'extension/native/bin/ev3-bt-helper',
 ];
 
 describe('Platform VSIX packaging (0.2.5)', () => {
@@ -88,6 +89,15 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		const { missing, unexpected } = packaging.checkVsix('darwin-arm64', intelOnly);
 		assert.deepEqual(missing, ['extension/node_modules/node-hid/prebuilds/<darwin-arm64>/']);
 		assert.deepEqual(unexpected, ['extension/node_modules/node-hid/prebuilds/HID-darwin-x64/node-napi-v3.node']);
+	});
+
+	it('ships the macOS Bluetooth helper on macOS only, and asks for it there (Mac visit, 18.11.2026)', () => {
+		const withoutHelper = DARWIN_ARM64.filter((entry) => !entry.endsWith('ev3-bt-helper'));
+		assert.deepEqual(packaging.checkVsix('darwin-arm64', withoutHelper).missing, ['extension/native/bin/ev3-bt-helper']);
+		assert.deepEqual(packaging.checkVsix('linux-arm64', [...LINUX_ARM64, 'extension/native/bin/ev3-bt-helper']).unexpected,
+			['extension/native/bin/ev3-bt-helper']);
+		assert.deepEqual(packaging.checkVsix('darwin-arm64', [...DARWIN_ARM64, 'extension/native/bin/bt-pairing-helper.exe']).unexpected,
+			['extension/native/bin/bt-pairing-helper.exe']);
 	});
 
 	it('reads the names in a zip', () => {

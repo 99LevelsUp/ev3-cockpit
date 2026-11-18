@@ -28,7 +28,7 @@ import { LifetimeScope, abortableDelay } from './lifetimeScope';
 
 // ── BT backend types ────────────────────────────────────────────────
 
-export type BtBackend = 'winsock' | 'spp' | 'bluez';
+export type BtBackend = 'winsock' | 'spp' | 'bluez' | 'iobluetooth';
 
 /** Factory that creates a transport adapter for a specific BT backend. */
 export type BtAdapterFactory = (mac: string) => TransportAdapter;

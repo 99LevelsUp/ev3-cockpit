@@ -224,8 +224,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 			btPresence.start();
 			log.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
 		} else {
-			// Windows runs both jobs through its helper, Linux through BlueZ; elsewhere they would only report that.
-			log.info(`Bluetooth presence not started: no Bluetooth backend for ${options.platform ?? process.platform}`);
+			// Windows runs both jobs through its helper, Linux through BlueZ; macOS has neither job yet, and
+			// elsewhere they would only report that.
+			const platform = options.platform ?? process.platform;
+			log.info(platform === 'darwin'
+				? 'Bluetooth presence not started on macOS: the list shows the bricks macOS has paired'
+				: `Bluetooth presence not started: no Bluetooth backend for ${platform}`);
 		}
 	}
 	void scheduler.scanOnce().then(() => {
@@ -324,6 +328,9 @@ function registerRealProviders(
 	if (platform === 'linux') {
 		return { ...registerBluezBluetooth(services, registry, options, btQueue, refreshDiscovery, platform), presenceRuns: true };
 	}
+	if (platform === 'darwin') {
+		return { ...registerMacBluetooth(services, registry, options, btQueue, refreshDiscovery), presenceRuns: false };
+	}
 	const btBackend = new BtSppBackend();
 	const btHelperPath = path.join(options.extensionPath, 'native', 'bin', 'bt-pairing-helper.exe');
 	const btDiscovery = new BtClassicDiscovery({
@@ -375,6 +382,59 @@ function registerRealProviders(
 		: `BT transport registered (Windows backends unavailable on ${platform}; serial-port fallback only)`);
 
 	return { btDiscovery, btPresence, presenceRuns: platform === 'win32' };
+}
+
+/**
+ * Bluetooth on macOS, through the cockpit's IOBluetooth helper (the Mac visit, 18.11.2026): the
+ * paired bricks with their names from `list`, RFCOMM through `connect`. The serial port macOS
+ * creates for a paired brick opens but never brings up the link, so it is not used. Pairing stays
+ * in the system settings and presence does not run: the list shows what macOS has paired.
+ *
+ * Required here rather than imported, like BlueZ: no other host loads it.
+ */
+function registerMacBluetooth(
+	services: DisposableStore,
+	registry: ProviderRegistry,
+	options: RuntimeOptions,
+	btQueue: BtConnectionQueue,
+	refreshDiscovery: () => void,
+): { btDiscovery: BtClassicDiscovery; btPresence: BtPresenceMonitor } {
+	const { log } = options;
+	// eslint-disable-next-line @typescript-eslint/no-var-requires
+	const mac = require('../transports/macBluetooth') as typeof import('../transports/macBluetooth');
+	const helperPath = path.join(options.extensionPath, mac.MAC_BT_HELPER_PATH);
+	const pairedScan = mac.createMacPairedScan({ helperPath });
+	const unavailable = logOnChange((message) => log.warn(message));
+	const btDiscovery = new BtClassicDiscovery({
+		portScan: () => pairedScan().catch((error: unknown) => {
+			unavailable(`BT devices unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			return [];
+		}),
+		// The helper's list is the whole answer; there is no separate device cache to read.
+		listDevices: () => [],
+		connectionQueue: btQueue,
+	});
+	// Never started on macOS (presenceRuns is false): the provider takes a monitor, and this one
+	// has nothing to check with yet.
+	const btPresence: BtPresenceMonitor = new BtPresenceMonitor({
+		queue: btQueue,
+		check: () => Promise.resolve(true),
+		inquire: () => Promise.resolve([]),
+		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		onChange: refreshDiscovery,
+	});
+	services.add({ dispose: () => btPresence.dispose() });
+	const btProvider: BtTransportProvider = services.add(new BtTransportProvider({
+		presence: btPresence,
+		discoverDevices: btDiscovery.discover,
+		backends: new Map<BtBackend, BtAdapterFactory>([
+			['iobluetooth', (address) => new mac.BtMacAdapter({ mac: address, helperPath })],
+		]),
+		connectionQueue: btQueue,
+	}));
+	registry.register(btProvider);
+	log.info('BT transport registered (IOBluetooth RFCOMM through the helper; paired bricks from macOS)');
+	return { btDiscovery, btPresence };
 }
 
 /**
