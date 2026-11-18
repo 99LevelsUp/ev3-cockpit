@@ -104,6 +104,49 @@ const SCENARIOS = [
 		emitter.fire(1);
 		return calls;
 	}),
+	scenario('a fire from inside a listener has delivered both events when it returns', (make) => {
+		const emitter = make<number>();
+		const calls: string[] = [];
+		emitter.event((n) => {
+			calls.push(`a${n}`);
+			if (n === 1) { calls.push('nested-fire'); emitter.fire(2); calls.push('nested-returned'); }
+		});
+		emitter.event((n) => calls.push(`b${n}`));
+		emitter.fire(1);
+		return calls;
+	}),
+	scenario('the emitter disposed by a listener right after a fire from inside it', (make) => {
+		const emitter = make<number>();
+		const calls: string[] = [];
+		emitter.event((n) => { calls.push(`a${n}`); if (n === 1) { emitter.fire(2); emitter.dispose(); } });
+		emitter.event((n) => calls.push(`b${n}`));
+		emitter.event((n) => calls.push(`c${n}`));
+		emitter.fire(1);
+		return calls;
+	}),
+	scenario('a listener added right after a fire from inside a listener', (make) => {
+		const emitter = make<number>();
+		const calls: string[] = [];
+		emitter.event((n) => {
+			calls.push(`a${n}`);
+			if (n === 1) { emitter.fire(2); emitter.event((m) => calls.push(`late${m}`)); }
+		});
+		emitter.event((n) => calls.push(`b${n}`));
+		emitter.fire(1);
+		emitter.fire(3);
+		return calls;
+	}),
+	scenario('the same listener subscribed twice', (make) => {
+		const emitter = make<number>();
+		const calls: string[] = [];
+		const listener = (n: number): void => { calls.push(`x${n}`); };
+		const first = emitter.event(listener);
+		emitter.event(listener);
+		emitter.fire(1);
+		first.dispose();
+		emitter.fire(2);
+		return calls;
+	}),
 	scenario('the emitter disposed during a fire', (make) => {
 		const emitter = make<number>();
 		const calls: string[] = [];

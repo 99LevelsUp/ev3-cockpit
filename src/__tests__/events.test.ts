@@ -20,6 +20,10 @@ const RECORDED_FROM_VSCODE = [
 	{ scenario: 'a listener removed during a fire before its turn', seen: ['a1', 'b1', 'a2', 'b2'] },
 	{ scenario: 'a listener that removes itself during a fire', seen: ['a1', 'b1', 'b2'] },
 	{ scenario: 'a fire from inside a listener of the same emitter', seen: ['a1', 'b1', 'c1', 'a2', 'b2', 'c2'] },
+	{ scenario: 'a fire from inside a listener has delivered both events when it returns', seen: ['a1', 'nested-fire', 'b1', 'a2', 'b2', 'nested-returned'] },
+	{ scenario: 'the emitter disposed by a listener right after a fire from inside it', seen: ['a1', 'b1', 'c1', 'a2', 'b2', 'c2'] },
+	{ scenario: 'a listener added right after a fire from inside a listener', seen: ['a1', 'b1', 'a2', 'b2', 'a3', 'b3', 'late3'] },
+	{ scenario: 'the same listener subscribed twice', seen: ['x1', 'x1', 'x2'] },
 	{ scenario: 'the emitter disposed during a fire', seen: ['a1'] },
 	{ scenario: 'after the emitter is disposed, fire does nothing and subscribing returns a disposable', seen: { calls: [], disposeThrew: false, fireThrew: false } },
 	{ scenario: 'the disposables collection receives the subscription', seen: { calls: ['a'], collected: 1 } },
@@ -64,6 +68,24 @@ describe('EventEmitter listener errors', () => {
 			assert.deepEqual(errors, [failure]);
 			assert.deepEqual(heard, [7]);
 		});
+	});
+
+	it('keeps delivering when the error handler itself throws, and the next fire still works', () => {
+		const previous = setListenerErrorHandler(() => { throw new Error('handler failed'); });
+		const quiet = console.error;
+		console.error = () => { /* the handler's failure is reported here; not under test */ };
+		try {
+			const emitter = new EventEmitter<number>();
+			const heard: string[] = [];
+			emitter.event((n) => { heard.push(`a${n}`); if (n === 1) { emitter.fire(2); } throw new Error('listener failed'); });
+			emitter.event((n) => heard.push(`b${n}`));
+			assert.doesNotThrow(() => emitter.fire(1));
+			emitter.fire(3);
+			assert.deepEqual(heard, ['a1', 'b1', 'a2', 'b2', 'a3', 'b3']);
+		} finally {
+			console.error = quiet;
+			setListenerErrorHandler(previous);
+		}
 	});
 
 	it('restores the handler it replaced', () => {
