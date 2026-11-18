@@ -309,6 +309,36 @@ describe('USB connect — a device this user may not open', () => {
 		assert.equal(log.warn.length, 1);
 		provider.dispose();
 	});
+
+	it('gives HID full 1024-byte packets on macOS, where the OS reads them from the descriptor, and does not warn (Mac visit, 18.11.2026)', async () => {
+		const asked: Array<number | undefined> = [];
+		const log = { info: [] as string[], warn: [] as string[] };
+		const providerOn = (platform: NodeJS.Platform) => new UsbTransportProvider({
+			platform,
+			log: { info: (m: string) => log.info.push(m), warn: (m: string) => log.warn.push(m) },
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			createLibusbAdapter: () => adapter({ failWith: 'Could not claim USB interface 0 on the brick. (LIBUSB_ERROR_ACCESS)' }) as any,
+			createHidAdapter: (options) => {
+				asked.push(options.maxPacketBytes);
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				return adapter({ maxPacketBytes: options.maxPacketBytes ?? USB.MAX_WRITE_PACKET_BYTES }) as any;
+			},
+		});
+		const mac = providerOn('darwin');
+		await mac.connect(KEY);
+		assert.deepEqual(asked, [USB.MAC_HID_PACKET_BYTES]);
+		assert.equal(mac.maxPacketBytes(KEY), 1024);
+		assert.deepEqual(log.warn, []);
+		assert.ok(log.info.some((m) => m.includes('1024-byte packets')));
+		mac.dispose();
+
+		const windows = providerOn('win32');
+		await windows.connect(KEY);
+		assert.deepEqual(asked, [USB.MAC_HID_PACKET_BYTES, undefined], 'elsewhere HID keeps its 64');
+		assert.equal(windows.maxPacketBytes(KEY), USB.MAX_WRITE_PACKET_BYTES);
+		assert.equal(log.warn.length, 1);
+		windows.dispose();
+	});
 });
 
 describe('USB provider — dispose gives every device back (review of 2dacf24)', () => {
