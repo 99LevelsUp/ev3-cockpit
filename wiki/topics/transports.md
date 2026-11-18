@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 8 sources]
 
-The `src/core/transports/` module provides the physical I/O layer for communicating with EV3 bricks over USB, TCP, and Bluetooth. It contains transport adapters (raw I/O), transport providers (implementing the `TransportProvider` contract), a provider registry, and infrastructure components (TransportGuard, BtConnectionQueue, PendingReply, ProtocolBridge). Mock transport is handled separately in `src/core/mock/`.
+The `src/core/transports/` module provides the physical I/O layer for communicating with EV3 bricks over USB, TCP, and Bluetooth. It contains transport adapters (raw I/O), transport providers (implementing the `TransportProvider` contract), a provider registry, and infrastructure components (TransportGuard, BtConnectionQueue, PendingReply). Mock transport is handled separately in `src/core/mock/`.
 
 ## Architecture [coverage: high — 8 sources]
 
@@ -29,7 +29,6 @@ The module follows a two-layer architecture per transport:
 - `TransportGuard` — rate limiting (≤10 commands/second per brick), firmware freeze protection (one active transport at a time, 2-second switch cooldown), degradation tracking
 - `BtConnectionQueue` — serialized RFCOMM connections (1 slot, 15-second inter-connection cooldown, exponential backoff on errors)
 - `PendingReply` — correlates outgoing commands with their reply promises
-- `ProtocolBridge` — wires adapter + protocol layer into a unified `send(BrickCommand) → BrickResponse` pipeline
 - `transportConstants.ts` — empirical timing values (`USB`, `TCP`, `BT`, `FIRMWARE_SAFETY`)
 
 ## Talks To [coverage: high — 6 sources]
@@ -91,5 +90,4 @@ Transport timing constants (from `transportConstants.ts`):
 - [src/core/transports/transportGuard.ts](../../src/core/transports/transportGuard.ts)
 - [src/core/transports/btConnectionQueue.ts](../../src/core/transports/btConnectionQueue.ts)
 - [src/core/transports/pendingReply.ts](../../src/core/transports/pendingReply.ts)
-- [src/core/transports/protocolBridge.ts](../../src/core/transports/protocolBridge.ts)
 - [src/core/transports/transportConstants.ts](../../src/core/transports/transportConstants.ts)
