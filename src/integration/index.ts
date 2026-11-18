@@ -10,6 +10,8 @@
 
 import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
+import { EventEmitter, setListenerErrorHandler } from '../events';
+import { observeEmitter } from '../test/emitterScenarios';
 
 const EXTENSION_ID = '99LevelsUp.ev3-cockpit';
 
@@ -20,6 +22,23 @@ interface IntegrationTest {
 }
 
 const tests: IntegrationTest[] = [
+	{
+		name: 'the core\'s EventEmitter delivers as VS Code\'s does',
+		fn: () => {
+			// Both emitters run the same scenarios here, where the real one exists. Listener errors
+			// are collected on the core side; VS Code's go to its own error path.
+			const errors: unknown[] = [];
+			const previous = setListenerErrorHandler((error) => errors.push(error));
+			try {
+				const vscodeSeen = observeEmitter(() => new vscode.EventEmitter());
+				const coreSeen = observeEmitter(() => new EventEmitter());
+				assert.deepEqual(coreSeen, vscodeSeen);
+			} finally {
+				setListenerErrorHandler(previous);
+			}
+			assert.equal(errors.length, 1, 'the throwing-listener scenario reports its error once');
+		},
+	},
 	{
 		name: 'extension is installed in the test host',
 		fn: () => {
