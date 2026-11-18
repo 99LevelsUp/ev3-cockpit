@@ -126,12 +126,12 @@ Record, without the MAC addresses:
 - Build the packet with the repo's own encoder (after `npm run compile`), never by hand:
 
   ```
-  node -e "const c=require('./out/protocol/ev3Commands.js'),p=require('./out/protocol/ev3Packet.js');const e=c.buildCommand({kind:'info'});console.log(Buffer.from(p.encodeEv3Packet(1,e.type,e.payload)).toString('hex'))"
+  node -e "const c=require('./out/core/protocol/ev3Commands.js'),p=require('./out/core/protocol/ev3Packet.js');const e=c.buildCommand({kind:'info'});console.log(Buffer.from(p.encodeEv3Packet(1,e.type,e.payload)).toString('hex'))"
   ```
 
 - From Python (no extra packages): `s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM,
   socket.BTPROTO_RFCOMM)`, `s.connect((mac, 1))`, `s.send(bytes.fromhex(<the hex above>))`,
-  `s.recv(1024)`. Decode the reply with `out/protocol/ev3Packet.js` `decodeEv3Packet` (its type
+  `s.recv(1024)`. Decode the reply with `out/core/protocol/ev3Packet.js` `decodeEv3Packet` (its type
   should be the direct reply) — the brick's name is in its payload as ASCII.
 - **Rule:** the socket opens on channel 1 and the brick answers with its name. Record the time to
   connect, and what happens on a second connect right after closing (the Windows sessions found a

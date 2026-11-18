@@ -12,11 +12,11 @@ EVƎ Cockpit is a Visual Studio Code extension for discovering, connecting, and 
 
 ## Architecture [coverage: high — 5 sources]
 
-The codebase is a single TypeScript project (`package.json` name: `ev3-cockpit`, publisher: `99LevelsUp`) structured into clearly separated modules under `src/`:
+The codebase is a single TypeScript project (`package.json` name: `ev3-cockpit`, publisher: `99LevelsUp`) split into `src/core/`, which runs in plain Node without VS Code, and `src/vscode/`, the extension host side (`extension.ts`, `ui/`, `integration/`). The core's modules (besides `api/`, `commands/`, `fs/`, `programs/` and `telemetry/`):
 
 - **contracts/** — shared types, enums, models, and the `TransportProvider` interface
 - **errors/** — `CockpitError` hierarchy with typed error codes
-- **events/** — `TypedEvent` wrapper and `DisposableStore` lifecycle utility
+- **events/** — the core's own `EventEmitter`, `Event` and `Disposable`, delivering as VS Code's emitter does, plus `TypedEvent` and `DisposableStore`
 - **protocol/** — pure-function EV3 bytecode encoding, packet framing, command building, response parsing
 - **transports/** — `ProviderRegistry`, transport adapters (USB HID, TCP socket, BT SPP), providers (USB, TCP, BT), infrastructure (TransportGuard, BtConnectionQueue)
 - **runtime/** — `SessionManager`, `PresenceAggregator`, `DiscoveryScheduler`, `CommandQueue`, `HeartbeatMonitor`, `ReconnectStrategy`
@@ -28,7 +28,7 @@ Architecture layers (bottom to top): Transport Providers → Presence Aggregator
 
 ## Talks To [coverage: medium — 3 sources]
 
-- **VS Code Extension API** — OutputChannel logging, EventEmitter pattern, Disposable lifecycle, globalState persistence (planned)
+- **VS Code Extension API** — only from `src/vscode/`: OutputChannel logging, commands, settings, globalState persistence (planned); the core never imports `vscode`
 - **Physical EV3 bricks** — via USB HID (`node-hid`), TCP sockets (Node.js `net` + UDP `dgram`), Bluetooth RFCOMM (WinSock2 via koffi FFI, with serialport SPP as fallback)
 - **Dependent extensions** — consume the public API via `vscode.extensions.getExtension('ev3-cockpit')?.exports` after declaring `extensionDependencies`
 

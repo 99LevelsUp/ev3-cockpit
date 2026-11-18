@@ -26,6 +26,9 @@ The `src/__tests__/` directory and `src/test/` utilities provide comprehensive u
 
 **Test utilities** in `src/test/`:
 - `vscodeStub.cjs` — VS Code API stub for running tests outside the extension host
+- `emitterScenarios.ts` — event-delivery scenarios run against both the core `EventEmitter` and VS Code's: the unit suite compares the core with a table recorded from VS Code, the host suite compares the two emitters live
+
+The unit-test preload (`scripts/test-setup.cjs`) installs a listener-error handler on the core events; a test during which a listener threw fails.
 
 **Test runners:**
 - `npm run test:unit` — Node built-in test runner (`node --test`), uses `assert/strict`
@@ -42,7 +45,7 @@ The `src/__tests__/` directory and `src/test/` utilities provide comprehensive u
 
 ## API Surface [coverage: low — 1 source]
 
-Test utilities export only `vscodeStub.cjs` for shimming `vscode` imports outside the extension host.
+Test utilities export `vscodeStub.cjs` for shimming `vscode` imports outside the extension host, and `emitterScenarios.ts` (`observeEmitter`) for the emitter characterization.
 
 ## Data [coverage: low — 0 sources]
 

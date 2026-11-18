@@ -5,7 +5,7 @@
  * the filesystem, which both orchestrate commands. Two things live here that used to be
  * spread across the transports:
  *
- *  - the EV3 codec (`src/protocol/`) is a pure utility, used only from here;
+ *  - the EV3 codec (`src/core/protocol/`) is a pure utility, used only from here;
  *  - message counters, reply matching, and command-to-response typing.
  *
  * The transports beneath are now byte movers: they carry a packet and return a packet,
