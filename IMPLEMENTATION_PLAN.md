@@ -1948,6 +1948,29 @@ Export a stable API for other extensions without giving them direct access to th
 - all API methods are covered by integration tests,
 - **antipattern cleanup**: scan the code this phase touched for code smells and anti-patterns (DRY violations, hardcoded config, silent catches, magic numbers, dead code, YAGNI, etc.); every detected issue is recorded as either fixed or explicitly accepted with a stated reason.
 
+### 4.10 The cockpit outside VS Code (owner decision 18.11.2026)
+
+Asked for by an experienced programmer who wants the cockpit from Claude Code with no VS Code.
+The model is adb's: a command-line tool that starts a background server on first use, which holds
+the devices.
+
+- [ ] 4.10.1 **The core without VS Code — right after item 7 (2.8.12).** The transports, sessions,
+  filesystem, telemetry, programs and API take from `vscode` only `EventEmitter`, `Event` and
+  `Disposable` (11 files of 194 on 18.11.2026) and one log channel; the unit tests already run in
+  plain Node over `test/vscodeStub.cjs`. Replace those with our own, take the settings (access mode,
+  packet sizes, intervals) from a configuration the host passes in, and leave the extension a thin
+  host. Check that the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`, all
+  N-API) and the Windows Bluetooth helper load in plain Node, not only in Electron.
+- [ ] 4.10.2 **A daemon and a thin CLI.** The daemon holds the bricks: connections (a Bluetooth
+  connect takes 2–20 s, so a command must not open one each time), presence, telemetry and the
+  transfer ledger; the first CLI command starts it and it ends after a quiet spell. Only it holds a
+  brick, so two processes never pull at one. The CLI (`ev3 list`, `upload`, `run`, `stop`, …) talks
+  to it, usable from a shell, scripts, Claude Code and any other tool. One TypeScript code base for
+  Windows, Linux and macOS, first as an npm package (prebuilt natives); single-file binaries per
+  platform (Node SEA) only when someone asks. When it comes relative to Phase 5 is decided once
+  4.10.1 is done. The CLI–daemon protocol goes to the ev3-c session for review before it is built.
+- [ ] 4.10.3 An MCP server, only if wanted: a thin layer over the same daemon.
+
 ## 9. Phase 5 — Cockpit Panel and UX
 
 ### Goal
