@@ -24,10 +24,14 @@ export function setListenerErrorHandler(handler: (error: unknown) => void): (err
 	return previous;
 }
 
-/** One subscription; its listener and `this` are dropped when it is removed, so nothing holds them. */
+/**
+ * One subscription. Its listener, its `this` and its way back to the emitter are dropped when it is
+ * removed or the emitter is disposed, so a handle kept after that holds none of them.
+ */
 interface Subscription<T> {
 	listener: ((e: T) => unknown) | undefined;
 	thisArgs: unknown;
+	detach: (() => void) | undefined;
 }
 
 /** One fire being delivered: the listeners subscribed when it started, and how far it has got. */
@@ -55,16 +59,10 @@ export class EventEmitter<T> implements Disposable {
 
 	readonly event: Event<T> = (listener, thisArgs, disposables) => {
 		if (this.disposed) { return NONE; }
-		const subscription: Subscription<T> = { listener, thisArgs };
+		const subscription: Subscription<T> = { listener, thisArgs, detach: undefined };
+		subscription.detach = () => this.remove(subscription);
 		this.subscriptions.push(subscription);
-		// Cleared on the first dispose, so a handle kept after it holds neither the emitter nor the listener.
-		let remove: (() => void) | undefined = () => this.remove(subscription);
-		const handle: Disposable = {
-			dispose: () => {
-				remove?.();
-				remove = undefined;
-			},
-		};
+		const handle: Disposable = { dispose: () => subscription.detach?.() };
 		disposables?.push(handle);
 		return handle;
 	};
@@ -112,6 +110,7 @@ export class EventEmitter<T> implements Disposable {
 function release<T>(subscription: Subscription<T>): void {
 	subscription.listener = undefined;
 	subscription.thisArgs = undefined;
+	subscription.detach = undefined;
 }
 
 /** Hands a listener's error to the handler; a handler that throws in turn must not stop delivery. */
