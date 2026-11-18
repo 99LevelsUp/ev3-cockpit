@@ -86,6 +86,28 @@ describe('createPendingReply', () => {
 		assert.equal(failed, false);
 		pending.cleanup();
 	});
+
+	it('rejects a link\'s own error as a coded TransportError and keeps a cockpit error as it is', () => {
+		const rejected: unknown[] = [];
+		const pending = createPendingReply({
+			resolve: () => { /* not reached */ },
+			reject: (error) => { rejected.push(error); },
+			fail: () => { /* not reached */ },
+			timeoutMs: 0,
+			transport: 'TEST',
+		});
+		const platform = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+		pending.reject(platform);
+		const timeout = new TimeoutError('TEST send timed out.');
+		pending.reject(timeout);
+
+		assert.ok(rejected[0] instanceof TransportError, 'a platform error is wrapped');
+		assert.equal((rejected[0] as TransportError).code, 'transport_failed');
+		assert.match((rejected[0] as Error).message, /^TEST link failed: read ECONNRESET$/);
+		assert.equal((rejected[0] as TransportError).cause, platform, 'the original stays as the cause');
+		assert.equal(rejected[1], timeout, 'a cockpit error passes through unchanged');
+		pending.cleanup();
+	});
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -170,6 +192,53 @@ describe('TcpSocketAdapter — timeout and recovery', () => {
 			await brick.close();
 		}
 	});
+});
+
+describe('TcpSocketAdapter — a link the brick drops', () => {
+	/** A fake brick that completes the unlock, then drops the link on the first command. */
+	function startDroppingBrick(drop: (socket: net.Socket) => void): Promise<{ port: number; close: () => Promise<void> }> {
+		return new Promise((resolve) => {
+			const server = net.createServer((socket) => {
+				let unlocked = false;
+				socket.on('data', () => {
+					if (!unlocked) { unlocked = true; socket.write('Accept:EV340\r\n\r\n'); return; }
+					drop(socket);
+				});
+				socket.on('error', () => { /* the drop is the point */ });
+			});
+			server.listen(0, '127.0.0.1', () => {
+				const address = server.address() as net.AddressInfo;
+				resolve({ port: address.port, close: () => new Promise<void>((done) => server.close(() => done())) });
+			});
+		});
+	}
+
+	// Hardware, 18.11.2026 (2.8.12): Wi-Fi switched off on the brick closed the socket, and the
+	// command in flight reached the API consumer as a bare Error with no code.
+	for (const [how, drop] of [
+		['closes it', (socket: net.Socket) => socket.end()],
+		['resets it', (socket: net.Socket) => socket.resetAndDestroy()],
+	] as const) {
+		it(`fails the command in flight with a coded TransportError when the brick ${how}`, async () => {
+			const brick = await startDroppingBrick(drop);
+			const adapter = new TcpSocketAdapter({ host: '127.0.0.1', port: brick.port, useDiscovery: false, handshakeTimeoutMs: 3000 });
+			try {
+				await adapter.open();
+				const packet = new Uint8Array([0x04, 0x00, 0x01, 0x00, 0x00, 0x00]);
+				await assert.rejects(
+					() => adapter.send(packet, { timeoutMs: 3000, expectedMessageCounter: 1 }),
+					(error: unknown) => {
+						assert.ok(error instanceof TransportError, `expected a TransportError, got ${String(error)}`);
+						assert.equal((error as TransportError).code, 'transport_failed');
+						return true;
+					},
+				);
+			} finally {
+				await adapter.close().catch(() => { /* best effort */ });
+				await brick.close();
+			}
+		});
+	}
 });
 
 // ═══════════════════════════════════════════════════════════════════════

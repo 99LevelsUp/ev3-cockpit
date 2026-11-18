@@ -5,7 +5,7 @@
  * drain loops for receive buffers, and the round-trip timeout every adapter needs.
  */
 
-import { TimeoutError, TransportError } from '../errors/CockpitError';
+import { CockpitError, TimeoutError, TransportError } from '../errors/CockpitError';
 
 /** State for a single outstanding send-and-wait-for-reply operation. */
 export interface PendingReply {
@@ -59,7 +59,13 @@ export interface PendingReplySetup {
  * request". Keeping the timer here means one implementation rather than three.
  */
 export function createPendingReply(setup: PendingReplySetup): PendingReply {
-	const { resolve, reject, fail, timeoutMs, signal, expectedMessageCounter, transport } = setup;
+	const { resolve, fail, timeoutMs, signal, expectedMessageCounter, transport } = setup;
+	// Every failure leaves with a cockpit code, as the API promises. A link's own error is the
+	// platform's (a socket's ECONNRESET, a closed port) and carries none: on hardware (2.8.12,
+	// Wi-Fi switched off on the brick, 18.11.2026) one reached a consumer as a bare "TCP socket closed.".
+	const reject = (error: unknown): void => setup.reject(error instanceof CockpitError
+		? error
+		: new TransportError(`${transport} link failed: ${error instanceof Error ? error.message : String(error)}`, error));
 
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const onAbort = () => fail(new TransportError(`${transport} send aborted.`));
