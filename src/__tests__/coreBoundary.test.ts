@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
+import * as ts from 'typescript';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const CORE_SRC = path.join(REPO, 'src', 'core');
@@ -28,21 +29,34 @@ function filesUnder(dir: string, extension: string): string[] {
 }
 
 /**
- * Every module a source file names: imports and re-exports (type-only too), `import()`, `require()`
- * and `typeof import()`. Comments are removed first, so a path mentioned in prose is not a dependency.
+ * Every module a file names, read from its syntax tree rather than its text, so a path in a string
+ * or a comment is not a dependency: imports and re-exports (type-only too), `import()`, `require()`,
+ * `typeof import()`, `import x = require()`, and `/// <reference types>` or `path` directives.
  */
-function specifiersOf(source: string): string[] {
-	const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
-	const found: string[] = [];
-	const patterns = [
-		/\b(?:import|export)\b[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
-		/\bimport\s*['"]([^'"]+)['"]/g,
-		/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-		/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+function specifiersOf(fileName: string, source: string): string[] {
+	const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
+	const found: string[] = [
+		...file.typeReferenceDirectives.map((d) => d.fileName),
+		...file.referencedFiles.map((d) => d.fileName),
 	];
-	for (const pattern of patterns) {
-		for (const match of code.matchAll(pattern)) { found.push(match[1]); }
-	}
+	const literal = (node: ts.Node | undefined): string | undefined =>
+		node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
+	const visit = (node: ts.Node): void => {
+		let named: string | undefined;
+		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+			named = literal(node.moduleSpecifier);
+		} else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+			named = literal(node.moduleReference.expression);
+		} else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+			named = literal(node.argument.literal);
+		} else if (ts.isCallExpression(node)
+			&& (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+			named = literal(node.arguments[0]);
+		}
+		if (named !== undefined) { found.push(named); }
+		ts.forEachChild(node, visit);
+	};
+	visit(file);
 	return found;
 }
 
@@ -61,7 +75,7 @@ describe('the core runs without VS Code', () => {
 		const offences: string[] = [];
 		let scanned = 0;
 		for (const file of filesUnder(CORE_SRC, '.ts')) {
-			for (const specifier of specifiersOf(fs.readFileSync(file, 'utf8'))) {
+			for (const specifier of specifiersOf(file, fs.readFileSync(file, 'utf8'))) {
 				scanned += 1;
 				const why = crossing(file, specifier);
 				if (why) { offences.push(`${path.relative(REPO, file)}: '${specifier}' (${why})`); }
@@ -74,7 +88,7 @@ describe('the core runs without VS Code', () => {
 
 	it('no compiled core module requires vscode', () => {
 		const offences = filesUnder(CORE_OUT, '.js')
-			.filter((file) => /\brequire\s*\(\s*['"]vscode['"]\s*\)/.test(fs.readFileSync(file, 'utf8')))
+			.filter((file) => specifiersOf(file, fs.readFileSync(file, 'utf8')).some((s) => crossing(file, s) === 'the vscode module'))
 			.map((file) => path.relative(REPO, file));
 		assert.deepEqual(offences, []);
 	});

@@ -37,7 +37,9 @@
           { "selector": "ImportExpression[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
           { "selector": "CallExpression[callee.name='require'][arguments.0.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
           { "selector": "TSImportType[argument.literal.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "TSExternalModuleReference[expression.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." }
+          { "selector": "TSExternalModuleReference[expression.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
+          { "selector": "CallExpression[callee.name='require'][arguments.0.type!='Literal']", "message": "In the core, require() takes a string literal, so where it reaches stays checkable." },
+          { "selector": "ImportExpression[source.type!='Literal']", "message": "In the core, import() takes a string literal, so where it reaches stays checkable." }
         ]
       }
     }
