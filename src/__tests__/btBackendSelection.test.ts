@@ -9,11 +9,11 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BtTransportProvider, BtBackend, BtAdapterFactory } from '../transports/btTransportProvider';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
-import { TransportAdapter } from '../transports/transportAdapter';
-import { BackendUnavailableError, TransportError, ConnectionError } from '../errors/CockpitError';
-import { Transport, makeBrickKey } from '../contracts';
+import { BtTransportProvider, BtBackend, BtAdapterFactory } from '../core/transports/btTransportProvider';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
+import { TransportAdapter } from '../core/transports/transportAdapter';
+import { BackendUnavailableError, TransportError, ConnectionError } from '../core/errors/CockpitError';
+import { Transport, makeBrickKey } from '../core/contracts';
 
 const MAC = '00:16:53:aa:bb:cc';
 const KEY = makeBrickKey(Transport.BT, MAC);

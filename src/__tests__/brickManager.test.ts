@@ -11,18 +11,18 @@ import { describe, it } from 'node:test';
 import {
 	Transport, PresenceState, ConnectionState, makeBrickKey, brickIdOf,
 	BrickKey, DiscoveryItem, BrickCommand, SendCommandOptions,
-} from '../contracts';
-import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../contracts';
-import { ChannelChangedError, ConnectionAbandonedError, TimeoutError, TransportError } from '../errors/CockpitError';
-import { createBrickFilesystem } from '../fs/brickFilesystem';
-import { ClaimsEndedEvent, TelemetryService } from '../telemetry/telemetryService';
-import { cadenceFor } from '../telemetry/telemetryConstants';
-import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../protocol/ev3Packet';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
-import { PresenceAggregator } from '../runtime/presenceAggregator';
-import { SessionManager } from '../runtime/sessionManager';
-import { BrickManager, BrickManagerOptions } from '../runtime/brickManager';
+} from '../core/contracts';
+import type { TransportProvider, SessionHandle, DiscoveryScanResult, BrickResponse } from '../core/contracts';
+import { ChannelChangedError, ConnectionAbandonedError, TimeoutError, TransportError } from '../core/errors/CockpitError';
+import { createBrickFilesystem } from '../core/fs/brickFilesystem';
+import { ClaimsEndedEvent, TelemetryService } from '../core/telemetry/telemetryService';
+import { cadenceFor } from '../core/telemetry/telemetryConstants';
+import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../core/protocol/ev3Packet';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { DiscoveryScheduler } from '../core/runtime/discoveryScheduler';
+import { PresenceAggregator } from '../core/runtime/presenceAggregator';
+import { SessionManager } from '../core/runtime/sessionManager';
+import { BrickManager, BrickManagerOptions } from '../core/runtime/brickManager';
 import { waitFor } from './waitFor';
 
 // ── A fake channel ──────────────────────────────────────────────────

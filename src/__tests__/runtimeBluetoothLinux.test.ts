@@ -9,10 +9,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { createRuntime } from '../runtime/createRuntime';
-import type { BluetoothAccessFix } from '../transports/bluezAccess';
-import type { BluezBus } from '../transports/bluezBluetooth';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
+import { createRuntime } from '../core/runtime/createRuntime';
+import type { BluetoothAccessFix } from '../core/transports/bluezAccess';
+import type { BluezBus } from '../core/transports/bluezBluetooth';
+import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -27,7 +27,7 @@ const settings = {
 function refusingBus(): BluezBus {
 	// Required here, not imported: the D-Bus client is what this test is about to see loaded.
 	// eslint-disable-next-line @typescript-eslint/no-var-requires
-	const { DBusError } = require('../transports/dbus/connection') as typeof import('../transports/dbus/connection');
+	const { DBusError } = require('../core/transports/dbus/connection') as typeof import('../core/transports/dbus/connection');
 	const denied = (): Promise<never> => Promise.reject(new DBusError('org.freedesktop.DBus.Error.AccessDenied', 'Rejected send message'));
 	return {
 		call: denied,

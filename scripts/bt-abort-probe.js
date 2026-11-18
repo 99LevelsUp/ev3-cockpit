@@ -16,7 +16,7 @@
 
 const path = require('path');
 const REPO = path.resolve(__dirname, '..');
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const W = require(out('transports/windowsWinsock'));
 const koffi = require('koffi');
 

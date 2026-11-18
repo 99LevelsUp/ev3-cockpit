@@ -6,8 +6,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import type { BluetoothAccessFix, GroupFixResult } from '../transports/bluezAccess';
-import { createBluetoothAccessOffer, type BluetoothAccessUi } from '../ui/bluetoothAccess';
+import type { BluetoothAccessFix, GroupFixResult } from '../core/transports/bluezAccess';
+import { createBluetoothAccessOffer, type BluetoothAccessUi } from '../vscode/ui/bluetoothAccess';
 
 const quiet = { info: () => {}, warn: () => {} };
 

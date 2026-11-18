@@ -6,8 +6,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, ChannelState, Transport, makeBrickKey } from '../contracts';
-import { brickPickRows } from '../ui/brickPickRows';
+import { BrickEntry, BrickId, ChannelState, Transport, makeBrickKey } from '../core/contracts';
+import { brickPickRows } from '../vscode/ui/brickPickRows';
 
 function brick(
 	id: string,

@@ -8,7 +8,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { EV3_SYSTEM, FILE_SUB, FILENAME_SUB } from '../protocol/ev3Packet';
+import { EV3_SYSTEM, FILE_SUB, FILENAME_SUB } from '../core/protocol/ev3Packet';
 
 describe('Firmware codes are declared (4.6.13)', () => {
 	it('declares every system command', () => {

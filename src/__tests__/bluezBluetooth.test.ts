@@ -8,15 +8,15 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { createBluezBluetooth, type BluezBus } from '../transports/bluezBluetooth';
-import { BtBluezAdapter } from '../transports/btBluezAdapter';
-import { DBusError, type ExportedMethod } from '../transports/dbus/connection';
-import { MessageType, type DBusMessage } from '../transports/dbus/message';
-import { Variant, type DBusValue } from '../transports/dbus/wire';
-import { BackendUnavailableError } from '../errors/CockpitError';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
-import { BtClassicDiscovery } from '../transports/btClassicDiscovery';
-import { BtPresenceMonitor } from '../transports/btPresence';
+import { createBluezBluetooth, type BluezBus } from '../core/transports/bluezBluetooth';
+import { BtBluezAdapter } from '../core/transports/btBluezAdapter';
+import { DBusError, type ExportedMethod } from '../core/transports/dbus/connection';
+import { MessageType, type DBusMessage } from '../core/transports/dbus/message';
+import { Variant, type DBusValue } from '../core/transports/dbus/wire';
+import { BackendUnavailableError } from '../core/errors/CockpitError';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
+import { BtClassicDiscovery } from '../core/transports/btClassicDiscovery';
+import { BtPresenceMonitor } from '../core/transports/btPresence';
 
 const AAA = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';
 const BBB = '/org/bluez/hci0/dev_00_16_53_F0_0B_0B';
@@ -428,7 +428,7 @@ describe('createBluezBluetooth — the factory (U8)', () => {
 	});
 
 	it('loads no native module when it is imported, so the runtime can import it anywhere (U8 review #7, the part here)', () => {
-		const out = execFileSync(process.execPath, ['-e', "require('./out/transports/bluezBluetooth.js'); process.stdout.write(String(Object.keys(require.cache).filter((k) => /node_modules/.test(k)).length));"], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' });
+		const out = execFileSync(process.execPath, ['-e', "require('./out/core/transports/bluezBluetooth.js'); process.stdout.write(String(Object.keys(require.cache).filter((k) => /node_modules/.test(k)).length));"], { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' });
 		assert.equal(out, '0');
 	});
 	it('joins an open still pending instead of opening a second bus (U8 confirmation #1)', async () => {

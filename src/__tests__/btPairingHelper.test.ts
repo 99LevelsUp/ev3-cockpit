@@ -19,8 +19,8 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import {
 	createHelperPairing, createHelperPresenceCheck, scanForBricks, BtPairingEvent, ScannedBrick,
-} from '../transports/btPairingHelper';
-import { BackendUnavailableError } from '../errors/CockpitError';
+} from '../core/transports/btPairingHelper';
+import { BackendUnavailableError } from '../core/errors/CockpitError';
 
 const HELPER = 'C:\\fake\\bt-pairing-helper.exe';
 const MAC = '00:16:53:00:00:0B';

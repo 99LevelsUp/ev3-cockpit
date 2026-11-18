@@ -16,18 +16,18 @@ import { describe, it } from 'node:test';
 import {
 	BrickCommand, BrickKey, BrickResponse, ChannelState, ConnectionState, DiscoveryItem, ForgetResidue, PresenceState, Transport,
 	brickIdOf, makeBrickKey,
-} from '../contracts';
-import type { DiscoveryScanResult, SessionHandle, TransportProvider } from '../contracts';
-import { LinkLostError, TimeoutError, TransportError } from '../errors/CockpitError';
-import { MockTransportProvider } from '../mock';
-import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../protocol/ev3Packet';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
-import { PresenceAggregator } from '../runtime/presenceAggregator';
-import { SessionManager } from '../runtime/sessionManager';
-import { BrickManager } from '../runtime/brickManager';
-import type { OneSidedRepair } from '../runtime/forgetReport';
-import { connectPickedBrick, describeRepair, followPairing } from '../ui/connectBrick';
+} from '../core/contracts';
+import type { DiscoveryScanResult, SessionHandle, TransportProvider } from '../core/contracts';
+import { LinkLostError, TimeoutError, TransportError } from '../core/errors/CockpitError';
+import { MockTransportProvider } from '../core/mock';
+import { EV3_REPLY, decodeEv3Packet, encodeEv3Packet } from '../core/protocol/ev3Packet';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { DiscoveryScheduler } from '../core/runtime/discoveryScheduler';
+import { PresenceAggregator } from '../core/runtime/presenceAggregator';
+import { SessionManager } from '../core/runtime/sessionManager';
+import { BrickManager } from '../core/runtime/brickManager';
+import type { OneSidedRepair } from '../core/runtime/forgetReport';
+import { connectPickedBrick, describeRepair, followPairing } from '../vscode/ui/connectBrick';
 import { waitFor } from './waitFor';
 
 const THIS_PC = 'Učebna PC';

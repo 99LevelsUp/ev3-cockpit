@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { TcpTransportProvider } from '../transports/tcpTransportProvider';
+import { TcpTransportProvider } from '../core/transports/tcpTransportProvider';
 
 /** A high port of its own, apart from beaconDiscovery.test.ts's. */
 const PORT = 34115;

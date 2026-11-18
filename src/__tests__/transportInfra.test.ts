@@ -7,15 +7,15 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { TransportGuard } from '../transports/transportGuard';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
+import { TransportGuard } from '../core/transports/transportGuard';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
 import {
 	getMessageCounter,
 	drainPendingReply,
 	rejectPendingReply,
 	extractLengthPrefixedPacket,
 	PendingReply,
-} from '../transports/pendingReply';
+} from '../core/transports/pendingReply';
 
 // ═══════════════════════════════════════════════════════════════════════
 // TransportGuard

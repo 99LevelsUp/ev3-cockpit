@@ -9,7 +9,7 @@
  * for the case where the user joined the group and BlueZ still refuses until they log in anew.
  */
 
-import type { BluetoothAccessFix } from '../transports/bluezAccess';
+import type { BluetoothAccessFix } from '../../core/transports/bluezAccess';
 
 /** What the extension shows. */
 export interface BluetoothAccessUi {

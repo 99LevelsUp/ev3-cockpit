@@ -8,12 +8,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createBluezUnpair, bluezForgetResidue, type UnpairBus, type UnpairCache } from '../transports/bluezForget';
-import { DBusError } from '../transports/dbus/connection';
-import type { DBusValue } from '../transports/dbus/wire';
-import type { BluezDevice } from '../transports/bluezObjects';
-import { BtTransportProvider } from '../transports/btTransportProvider';
-import { Transport, makeBrickKey } from '../contracts';
+import { createBluezUnpair, bluezForgetResidue, type UnpairBus, type UnpairCache } from '../core/transports/bluezForget';
+import { DBusError } from '../core/transports/dbus/connection';
+import type { DBusValue } from '../core/transports/dbus/wire';
+import type { BluezDevice } from '../core/transports/bluezObjects';
+import { BtTransportProvider } from '../core/transports/btTransportProvider';
+import { Transport, makeBrickKey } from '../core/contracts';
 
 const MAC = '00:16:53:F0:0A:0A';
 const DEV = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';

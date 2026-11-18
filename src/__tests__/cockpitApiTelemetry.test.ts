@@ -13,14 +13,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, Transport, brickIdOf, makeBrickKey } from '../contracts';
-import { ChannelState } from '../contracts/enums';
-import { CockpitApiDeps, TelemetryUpdate, createCockpitApi } from '../api/cockpitApi';
-import { ErrorCode, ModeConflictError } from '../errors/CockpitError';
-import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
-import { createRuntime } from '../runtime/createRuntime';
-import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
+import { BrickEntry, BrickId, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
+import { ChannelState } from '../core/contracts/enums';
+import { CockpitApiDeps, TelemetryUpdate, createCockpitApi } from '../core/api/cockpitApi';
+import { ErrorCode, ModeConflictError } from '../core/errors/CockpitError';
+import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../core/mock';
+import { createRuntime } from '../core/runtime/createRuntime';
+import type { ReadModelChange, ReadValue } from '../core/telemetry/telemetryReadModel';
+import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const A = 'AAA' as BrickId;

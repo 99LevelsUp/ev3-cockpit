@@ -11,17 +11,17 @@ import { describe, it, mock } from 'node:test';
 
 import {
 	createBluezPresenceCheck, createBluezInquiry, sockaddrL2, SDP_PSM, DEFAULT_INQUIRY_WINDOW_MS, type InquiryBus, type InquiryCache,
-} from '../transports/bluezPresence';
+} from '../core/transports/bluezPresence';
 import {
 	AF_BLUETOOTH, BTPROTO_L2CAP, SOCK_SEQPACKET, SOCK_NONBLOCK, SOCK_CLOEXEC,
 	EINPROGRESS, EHOSTDOWN, type LinuxBtSocketApi, type ConnectState,
-} from '../transports/linuxBluetoothSocket';
-import { BackendUnavailableError } from '../errors/CockpitError';
-import { BtPresenceMonitor } from '../transports/btPresence';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
-import type { BluezDevice } from '../transports/bluezObjects';
-import { DBusError } from '../transports/dbus/connection';
-import type { DBusValue, Variant } from '../transports/dbus/wire';
+} from '../core/transports/linuxBluetoothSocket';
+import { BackendUnavailableError } from '../core/errors/CockpitError';
+import { BtPresenceMonitor } from '../core/transports/btPresence';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
+import type { BluezDevice } from '../core/transports/bluezObjects';
+import { DBusError } from '../core/transports/dbus/connection';
+import type { DBusValue, Variant } from '../core/transports/dbus/wire';
 
 const MAC = '00:16:53:F0:0A:0A';
 const DEV_PATH = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';

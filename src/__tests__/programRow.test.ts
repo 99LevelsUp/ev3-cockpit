@@ -10,13 +10,13 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { makeBrickKey, Transport } from '../contracts';
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { buildCommand } from '../protocol/ev3Commands';
-import { EV3_OPCODE, PROGRAM_INFO_SUB, PROGRAM_SLOT, PROGRAM_STATUS } from '../protocol/ev3Packet';
-import { concatBytes, gv0, lc0, uint16le } from '../protocol/ev3Bytecode';
-import { assembleFrame, buildTelemetryFrame, parseFrame } from '../telemetry/frameAssembler';
-import { createEv3RowRegistry } from '../telemetry/rowRegistry';
+import { makeBrickKey, Transport } from '../core/contracts';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { buildCommand } from '../core/protocol/ev3Commands';
+import { EV3_OPCODE, PROGRAM_INFO_SUB, PROGRAM_SLOT, PROGRAM_STATUS } from '../core/protocol/ev3Packet';
+import { concatBytes, gv0, lc0, uint16le } from '../core/protocol/ev3Bytecode';
+import { assembleFrame, buildTelemetryFrame, parseFrame } from '../core/telemetry/frameAssembler';
+import { createEv3RowRegistry } from '../core/telemetry/rowRegistry';
 
 const ROW = 'program.user.running';
 const KEY = makeBrickKey(Transport.Mock, 'M1');

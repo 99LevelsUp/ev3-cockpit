@@ -32,7 +32,7 @@ if (process.env.NODE_TEST_CONTEXT) {
 	// production it goes to the console. Here it fails the running test instead, so an assertion
 	// inside a listener still guards its test. A test that expects a listener to throw installs its
 	// own handler for the duration.
-	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'events'));
+	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'core', 'events'));
 	const listenerErrors = [];
 	setListenerErrorHandler((error) => listenerErrors.push(error));
 	afterEach(() => {

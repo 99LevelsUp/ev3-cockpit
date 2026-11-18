@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { logOnChange, onChangePerKey } from '../runtime/logOnChange';
+import { logOnChange, onChangePerKey } from '../core/runtime/logOnChange';
 
 describe('logOnChange', () => {
 	it('logs a repeated message once, a different one again, and the first again after it', () => {

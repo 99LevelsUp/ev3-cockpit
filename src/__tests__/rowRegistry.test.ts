@@ -10,11 +10,11 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB } from '../protocol/ev3Packet';
-import { RowRegistry, createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { allEv3Rows, chainDepthRow, motorOccupancyRow, sensorOccupancyRow } from '../telemetry/ev3Rows';
-import { globalRef } from '../telemetry/frameAssembler';
-import type { TelemetryRow } from '../telemetry/telemetryRow';
+import { COM_GET_SUB, COM_HARDWARE, EV3_OPCODE, INPUT_DEVICE_SUB } from '../core/protocol/ev3Packet';
+import { RowRegistry, createEv3RowRegistry } from '../core/telemetry/rowRegistry';
+import { allEv3Rows, chainDepthRow, motorOccupancyRow, sensorOccupancyRow } from '../core/telemetry/ev3Rows';
+import { globalRef } from '../core/telemetry/frameAssembler';
+import type { TelemetryRow } from '../core/telemetry/telemetryRow';
 
 const HID = { maxPacketBytes: 64 };
 

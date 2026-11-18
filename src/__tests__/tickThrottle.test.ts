@@ -11,9 +11,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport } from '../contracts/enums';
-import { TickThrottle, typicalRoundTripMs } from '../telemetry/tickThrottle';
-import type { ThrottleSettings } from '../telemetry/telemetrySettings';
+import { Transport } from '../core/contracts/enums';
+import { TickThrottle, typicalRoundTripMs } from '../core/telemetry/tickThrottle';
+import type { ThrottleSettings } from '../core/telemetry/telemetrySettings';
 
 const SETTINGS: ThrottleSettings = { enabled: true, windowSize: 5, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 2 };
 /** A link whose usual round trip is 10 ms: the limit is 30 ms. */

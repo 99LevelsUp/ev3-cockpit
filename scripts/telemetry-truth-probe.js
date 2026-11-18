@@ -28,7 +28,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const {
 	UsbTransportProvider, BtTransportProvider, BtSppBackend, BtWinsockAdapter, BtConnectionQueue,
 } = require(out('transports'));
@@ -36,7 +36,7 @@ const { PacketCommandChannel } = require(out('commands/commandChannel'));
 const { MockTransportProvider } = require(out('mock/mockTransportProvider'));
 const { assembleFrame, buildTelemetryFrame, parseFrame } = require(out('telemetry/frameAssembler'));
 const { allEv3Rows } = require(out('telemetry/ev3Rows'));
-const { peripheralTypeOf } = require(out('telemetry/peripheralTypes'));
+const { peripheralTypeOf } = require(out('protocol/peripheralTypes'));
 const { brickKeyId, makeBrickKey } = require(out('contracts/brickKey'));
 const { Transport } = require(out('contracts/enums'));
 

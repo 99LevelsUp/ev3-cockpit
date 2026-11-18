@@ -4,11 +4,11 @@ import { describe, it } from 'node:test';
 import {
 	Transport, PresenceState, ChannelState, ConnectionState, makeBrickKey, brickIdOf,
 	BrickKey, DiscoveryItem, NameSource,
-} from '../contracts';
-import type { TransportProvider, SessionHandle, DiscoveryScanResult } from '../contracts';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
-import { PresenceAggregator } from '../runtime/presenceAggregator';
+} from '../core/contracts';
+import type { TransportProvider, SessionHandle, DiscoveryScanResult } from '../core/contracts';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { DiscoveryScheduler } from '../core/runtime/discoveryScheduler';
+import { PresenceAggregator } from '../core/runtime/presenceAggregator';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

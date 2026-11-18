@@ -14,20 +14,20 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { SessionEntry } from '../runtime/sessionEntry';
-import { SessionManager } from '../runtime/sessionManager';
-import { CommandQueue } from '../runtime/commandQueue';
-import { HeartbeatMonitor } from '../runtime/heartbeatMonitor';
-import { ConnectionAbandonedError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
-import { ReconnectStrategy } from '../runtime/reconnectStrategy';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { TransportGuard } from '../transports/transportGuard';
-import { SessionHandle, TransportProvider } from '../contracts/transport';
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { ConnectionState, Transport } from '../contracts/enums';
-import { BrickKey, makeBrickKey } from '../contracts/brickKey';
+import { SessionEntry } from '../core/runtime/sessionEntry';
+import { SessionManager } from '../core/runtime/sessionManager';
+import { CommandQueue } from '../core/runtime/commandQueue';
+import { HeartbeatMonitor } from '../core/runtime/heartbeatMonitor';
+import { ConnectionAbandonedError, ProtocolError, TimeoutError, TransportError } from '../core/errors/CockpitError';
+import { ReconnectStrategy } from '../core/runtime/reconnectStrategy';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { TransportGuard } from '../core/transports/transportGuard';
+import { SessionHandle, TransportProvider } from '../core/contracts/transport';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { ConnectionState, Transport } from '../core/contracts/enums';
+import { BrickKey, makeBrickKey } from '../core/contracts/brickKey';
 
-import { setListenerErrorHandler } from '../events';
+import { setListenerErrorHandler } from '../core/events';
 import { waitFor } from './waitFor';
 
 // ═══════════════════════════════════════════════════════════════════════

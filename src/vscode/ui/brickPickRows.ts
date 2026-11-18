@@ -7,7 +7,7 @@
  * picker is open.
  */
 
-import { BrickEntry, BrickId, ChannelState, Transport } from '../contracts';
+import { BrickEntry, BrickId, ChannelState, Transport } from '../../core/contracts';
 import { compareBricks } from './brickOrder';
 
 /** A picker row; it has the shape of a QuickPick item. */

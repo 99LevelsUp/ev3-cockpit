@@ -1,8 +1,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, ChannelState, Transport, makeBrickKey } from '../contracts';
-import { compareBricks, orderGroup } from '../ui/brickOrder';
+import { BrickEntry, BrickId, ChannelState, Transport, makeBrickKey } from '../core/contracts';
+import { compareBricks, orderGroup } from '../vscode/ui/brickOrder';
 
 function brick(
 	id: string,

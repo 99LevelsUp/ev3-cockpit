@@ -10,10 +10,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickResponse } from '../contracts';
-import { FileTransferService } from '../fs/fileTransferService';
-import { TimeoutError } from '../errors/CockpitError';
-import { buildCommand } from '../protocol/ev3Commands';
+import { BrickCommand, BrickResponse } from '../core/contracts';
+import { FileTransferService } from '../core/fs/fileTransferService';
+import { TimeoutError } from '../core/errors/CockpitError';
+import { buildCommand } from '../core/protocol/ev3Commands';
 
 const HANDLE = 3;
 

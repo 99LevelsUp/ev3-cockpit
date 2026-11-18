@@ -8,9 +8,9 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { portStateOf } from '../telemetry/portState';
-import { peripheralTypeOf } from '../protocol/peripheralTypes';
-import { isReadableType } from '../telemetry/telemetryScheduler';
+import { portStateOf } from '../core/telemetry/portState';
+import { peripheralTypeOf } from '../core/protocol/peripheralTypes';
+import { isReadableType } from '../core/telemetry/telemetryScheduler';
 
 describe('Port state (step-6 U4)', () => {
 	it('names the five states by the firmware\'s codes', () => {

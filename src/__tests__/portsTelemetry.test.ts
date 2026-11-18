@@ -10,10 +10,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildCommand } from '../protocol/ev3Commands';
-import { parseResponse } from '../protocol/ev3Responses';
-import { EV3_OPCODE, EV3_REPLY } from '../protocol';
-import { PortState, PortsResponse } from '../contracts';
+import { buildCommand } from '../core/protocol/ev3Commands';
+import { parseResponse } from '../core/protocol/ev3Responses';
+import { EV3_OPCODE, EV3_REPLY } from '../core/protocol';
+import { PortState, PortsResponse } from '../core/contracts';
 
 /** A ports reply: 8 bytes sensor type/mode, 8 motor, 16 sensor SI, 16 tacho. */
 function portsPayload(options: {

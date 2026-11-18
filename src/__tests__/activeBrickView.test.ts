@@ -11,10 +11,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { BrickId } from '../contracts';
-import { ConnectionState, Transport } from '../contracts/enums';
-import { ActiveBrickInput, activeBrickView } from '../telemetry/activeBrickView';
-import type { ReadValue } from '../telemetry/telemetryReadModel';
+import type { BrickId } from '../core/contracts';
+import { ConnectionState, Transport } from '../core/contracts/enums';
+import { ActiveBrickInput, activeBrickView } from '../core/telemetry/activeBrickView';
+import type { ReadValue } from '../core/telemetry/telemetryReadModel';
 
 const fresh = (rowId: string, value: ReadValue['value'], extra: Partial<ReadValue> = {}): ReadValue =>
 	({ rowId, value, sampledAt: 1000, effectiveIntervalMs: 100, stale: false, ...extra });

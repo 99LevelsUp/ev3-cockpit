@@ -1,14 +1,14 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { Transport } from '../contracts/enums';
-import { makeBrickKey, BrickKey } from '../contracts/brickKey';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { Transport } from '../core/contracts/enums';
+import { makeBrickKey, BrickKey } from '../core/contracts/brickKey';
 import {
 	TransportProvider, TransportCapabilities, SessionHandle, DiscoveryScanResult,
 	BrickCommand, BrickResponse,
-} from '../contracts/transport';
-import { DiscoveryItem, PresenceState } from '../contracts';
+} from '../core/contracts/transport';
+import { DiscoveryItem, PresenceState } from '../core/contracts';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

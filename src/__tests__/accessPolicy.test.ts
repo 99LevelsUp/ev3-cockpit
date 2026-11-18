@@ -8,8 +8,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { AccessDeniedError, ErrorCode } from '../errors/CockpitError';
-import { assertAllowed, isAllowed, normaliseBrickPath } from '../api/accessPolicy';
+import { AccessDeniedError, ErrorCode } from '../core/errors/CockpitError';
+import { assertAllowed, isAllowed, normaliseBrickPath } from '../core/api/accessPolicy';
 
 const PRJ = '/home/root/lms2012/prjs/Robot/Robot.rbf';
 const CARD = '/media/card/Robot/Robot.rbf';

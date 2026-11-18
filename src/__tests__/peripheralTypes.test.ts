@@ -8,7 +8,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { peripheralTypeOf, typeCodeOf } from '../protocol/peripheralTypes';
+import { peripheralTypeOf, typeCodeOf } from '../core/protocol/peripheralTypes';
 
 describe('Peripheral vocabulary (step-6 U2)', () => {
 	it('names the EV3 devices by the firmware\'s codes', () => {

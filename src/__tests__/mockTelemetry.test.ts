@@ -10,15 +10,15 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { makeBrickKey, Transport } from '../contracts';
-import { assembleFrame, buildTelemetryFrame, parseFrame } from '../telemetry/frameAssembler';
-import { createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { createBrickTelemetry } from '../telemetry/brickTelemetry';
-import { EV3_OPCODE, COM_GET_SUB, COM_HARDWARE } from '../protocol/ev3Packet';
-import { concatBytes, gv0, gv1, lc0, lc1, uint16le } from '../protocol/ev3Bytecode';
-import { chainDepthRow } from '../telemetry/ev3Rows';
-import type { RowValue } from '../telemetry/telemetryRow';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { makeBrickKey, Transport } from '../core/contracts';
+import { assembleFrame, buildTelemetryFrame, parseFrame } from '../core/telemetry/frameAssembler';
+import { createEv3RowRegistry } from '../core/telemetry/rowRegistry';
+import { createBrickTelemetry } from '../core/telemetry/brickTelemetry';
+import { EV3_OPCODE, COM_GET_SUB, COM_HARDWARE } from '../core/protocol/ev3Packet';
+import { concatBytes, gv0, gv1, lc0, lc1, uint16le } from '../core/protocol/ev3Bytecode';
+import { chainDepthRow } from '../core/telemetry/ev3Rows';
+import type { RowValue } from '../core/telemetry/telemetryRow';
 
 const KEY = makeBrickKey(Transport.Mock, 'M1');
 const LIBUSB = { maxPacketBytes: 1024 };

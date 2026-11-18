@@ -9,20 +9,20 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickId, BrickKey, ChannelState, ConnectionState, PresenceState, Transport, brickIdOf, makeBrickKey } from '../contracts';
-import type { DiscoveryItem, DiscoveryScanResult, SessionHandle, TransportProvider } from '../contracts';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
-import { BtPresenceMonitor } from '../transports/btPresence';
-import { BtTransportProvider } from '../transports/btTransportProvider';
-import type { PairingResult } from '../transports/btClassicDiscovery';
-import type { BtPairingEvent, ScannedBrick } from '../transports/btPairingHelper';
-import { DiscoveryScheduler } from '../runtime/discoveryScheduler';
-import { PresenceAggregator } from '../runtime/presenceAggregator';
-import { SessionManager } from '../runtime/sessionManager';
-import { BrickManager, BrickManagerOptions } from '../runtime/brickManager';
-import { BrickPickRow, brickPickRows } from '../ui/brickPickRows';
-import { BrickPickerView, connectPickedBrick, followPairing, pickBrick } from '../ui/connectBrick';
+import { BrickId, BrickKey, ChannelState, ConnectionState, PresenceState, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
+import type { DiscoveryItem, DiscoveryScanResult, SessionHandle, TransportProvider } from '../core/contracts';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
+import { BtPresenceMonitor } from '../core/transports/btPresence';
+import { BtTransportProvider } from '../core/transports/btTransportProvider';
+import type { PairingResult } from '../core/transports/btClassicDiscovery';
+import type { BtPairingEvent, ScannedBrick } from '../core/transports/btPairingHelper';
+import { DiscoveryScheduler } from '../core/runtime/discoveryScheduler';
+import { PresenceAggregator } from '../core/runtime/presenceAggregator';
+import { SessionManager } from '../core/runtime/sessionManager';
+import { BrickManager, BrickManagerOptions } from '../core/runtime/brickManager';
+import { BrickPickRow, brickPickRows } from '../vscode/ui/brickPickRows';
+import { BrickPickerView, connectPickedBrick, followPairing, pickBrick } from '../vscode/ui/connectBrick';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };

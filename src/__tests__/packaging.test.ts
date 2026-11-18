@@ -91,7 +91,7 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 	it('ships the udev rule the Linux permission message points at, on Linux only (merge review, 13.11.2026)', () => {
 		// The message told a Linux user to copy a file that no VSIX carried.
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_UDEV_RULE_PATH } = require('../transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
+		const { LINUX_UDEV_RULE_PATH } = require('../core/transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
 		const entry = `extension/${LINUX_UDEV_RULE_PATH}`;
 		const repoRoot = path.join(__dirname, '..', '..');
 		assert.ok(require('node:fs').existsSync(path.join(repoRoot, LINUX_UDEV_RULE_PATH)), 'the rule is in the repository');
@@ -108,7 +108,7 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		// `uaccess` is granted by systemd-logind or elogind. On a runit system with neither the nodes
 		// stayed root:root 0660 and the user got LIBUSB_ERROR_ACCESS with the rule installed.
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_UDEV_RULE_PATH } = require('../transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
+		const { LINUX_UDEV_RULE_PATH } = require('../core/transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
 		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_UDEV_RULE_PATH), 'utf8') as string;
 		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');
 		const rules = text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
@@ -123,7 +123,7 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 
 	it('ships, on Linux only, the rule that lets the cockpit restart a Bluetooth adapter that stopped answering (HOSTD, 15.11.2026)', () => {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_BT_RESTART_RULE_PATH } = require('../transports/bluezRadioWatch') as { LINUX_BT_RESTART_RULE_PATH: string };
+		const { LINUX_BT_RESTART_RULE_PATH } = require('../core/transports/bluezRadioWatch') as { LINUX_BT_RESTART_RULE_PATH: string };
 		const entry = `extension/${LINUX_BT_RESTART_RULE_PATH}`;
 		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_BT_RESTART_RULE_PATH), 'utf8') as string;
 		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');

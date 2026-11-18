@@ -8,10 +8,10 @@
  * (R6, KD3).
  */
 
-import { BrickEntry, BrickId, ChannelState, Transport } from '../contracts';
-import type { BrickManager } from '../runtime/brickManager';
-import { brickLabel } from '../runtime/brickLabels';
-import type { ClearListReport, ClearedEntry } from '../runtime/forgetReport';
+import { BrickEntry, BrickId, ChannelState, Transport } from '../../core/contracts';
+import type { BrickManager } from '../../core/runtime/brickManager';
+import { brickLabel } from '../../core/runtime/brickLabels';
+import type { ClearListReport, ClearedEntry } from '../../core/runtime/forgetReport';
 import { compareBricks } from './brickOrder';
 import type { BrickPickRow } from './brickPickRows';
 import {

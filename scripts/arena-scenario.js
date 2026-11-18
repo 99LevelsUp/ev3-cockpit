@@ -31,7 +31,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const { createRuntime } = require(out('runtime/createRuntime'));
 const { createBrickFilesystem } = require(out('fs/brickFilesystem'));
 const { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } = require(out('telemetry/telemetrySettings'));

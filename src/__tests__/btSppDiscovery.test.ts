@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BtSppBackend, macFromPnpId, formatMac } from '../transports/btSppDiscovery';
+import { BtSppBackend, macFromPnpId, formatMac } from '../core/transports/btSppDiscovery';
 
 /** A Windows Bluetooth SPP port, spelled the way the OS spells one. */
 const brickPort = {

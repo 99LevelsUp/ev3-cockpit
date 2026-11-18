@@ -38,7 +38,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const { BtTransportProvider, BtWinsockAdapter, BtConnectionQueue } = require(out('transports'));
 const { encodeEv3Packet, decodeEv3Packet } = require(out('protocol/ev3Packet'));
 const { buildCommand } = require(out('protocol/ev3Commands'));

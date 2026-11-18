@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { EventEmitter } from 'node:events';
 
-import { offerBluetoothGroup, isBluezAccessDenied, manualGroupCommand } from '../transports/bluezAccess';
-import { DBusError } from '../transports/dbus/connection';
+import { offerBluetoothGroup, isBluezAccessDenied, manualGroupCommand } from '../core/transports/bluezAccess';
+import { DBusError } from '../core/transports/dbus/connection';
 
 interface Spawned { file: string; args: readonly string[]; options: Record<string, unknown> }
 

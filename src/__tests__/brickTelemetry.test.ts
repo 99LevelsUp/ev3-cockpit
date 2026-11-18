@@ -11,14 +11,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickKey, BrickResponse, TransportProvider } from '../contracts';
-import { makeBrickKey } from '../contracts/brickKey';
-import { ActivityMode, ConnectionState, Transport } from '../contracts/enums';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { createBrickTelemetry, frameLimitsFor } from '../telemetry/brickTelemetry';
-import { TelemetryService } from '../telemetry/telemetryService';
-import { TELEMETRY_CADENCE, cadenceFor } from '../telemetry/telemetryConstants';
-import { RowLifetime, TelemetryRow } from '../telemetry/telemetryRow';
+import { BrickCommand, BrickKey, BrickResponse, TransportProvider } from '../core/contracts';
+import { makeBrickKey } from '../core/contracts/brickKey';
+import { ActivityMode, ConnectionState, Transport } from '../core/contracts/enums';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { createBrickTelemetry, frameLimitsFor } from '../core/telemetry/brickTelemetry';
+import { TelemetryService } from '../core/telemetry/telemetryService';
+import { TELEMETRY_CADENCE, cadenceFor } from '../core/telemetry/telemetryConstants';
+import { RowLifetime, TelemetryRow } from '../core/telemetry/telemetryRow';
 
 const USB_KEY = makeBrickKey(Transport.USB, '00165300000A');
 const MOCK_KEY = makeBrickKey(Transport.Mock, 'brick-a');

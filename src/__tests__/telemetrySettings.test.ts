@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import {
 	programPresetSettingsFromPackage, readProgramPresetSettings,
 	readThrottleSettings, readTelemetrySettings, telemetrySettingsFromPackage, throttleSettingsFromPackage,
-} from '../telemetry/telemetrySettings';
+} from '../core/telemetry/telemetrySettings';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 

@@ -11,9 +11,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { BrickId } from '../contracts';
-import { followProgramRow } from '../programs/programService';
-import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
+import type { BrickId } from '../core/contracts';
+import { followProgramRow } from '../core/programs/programService';
+import type { ReadModelChange, ReadValue } from '../core/telemetry/telemetryReadModel';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;

@@ -5,8 +5,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, Transport, makeBrickKey } from '../contracts';
-import { brickLabel, channelLabel } from '../runtime/brickLabels';
+import { BrickEntry, BrickId, Transport, makeBrickKey } from '../core/contracts';
+import { brickLabel, channelLabel } from '../core/runtime/brickLabels';
 
 const CCC = '001653F00C0C' as BrickId;
 

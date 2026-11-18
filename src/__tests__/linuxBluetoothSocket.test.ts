@@ -15,8 +15,8 @@ import {
 	POLLIN, POLLOUT, POLLERR, POLLHUP, POLLNVAL, SOCKADDR_RC_SIZE, MSG_NOSIGNAL,
 	macToBdaddr, sockaddrRc, encodePollFd, decodeRevents, loadLinuxBtSocket, resetLinuxBtSocketCache,
 	bindLinuxBtSocket, type RawLibc,
-} from '../transports/linuxBluetoothSocket';
-import { BackendUnavailableError } from '../errors/CockpitError';
+} from '../core/transports/linuxBluetoothSocket';
+import { BackendUnavailableError } from '../core/errors/CockpitError';
 
 describe('linuxBluetoothSocket — constants (Linux, every architecture the cockpit ships)', () => {
 	it('uses the kernel values', () => {

@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Duplex } from 'node:stream';
 
-import { DBusConnection, DBusError } from '../transports/dbus/connection';
-import { MessageType, decodeMessage, encodeMessage, type DBusMessage } from '../transports/dbus/message';
-import { Variant } from '../transports/dbus/wire';
+import { DBusConnection, DBusError } from '../core/transports/dbus/connection';
+import { MessageType, decodeMessage, encodeMessage, type DBusMessage } from '../core/transports/dbus/message';
+import { Variant } from '../core/transports/dbus/wire';
 
 /** Two ends of a pipe: what one writes, the other reads. */
 function duplexPair(): [Duplex, Duplex] {

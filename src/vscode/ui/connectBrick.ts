@@ -6,14 +6,14 @@
  * command in `extension.ts` hands it a QuickPick, progress notifications and messages.
  */
 
-import { BrickId, ChannelState, Transport } from '../contracts';
-import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '../errors/CockpitError';
-import type { BrickManager, PairingStartedEvent } from '../runtime/brickManager';
-import type { OneSidedRepair } from '../runtime/forgetReport';
-import { brickLabel, transportLabel } from '../runtime/brickLabels';
-import type { RuntimeLog } from '../runtime/createRuntime';
-import type { PresenceAggregator } from '../runtime/presenceAggregator';
-import { PAIRING_CANCELLED } from '../transports/btPairingHelper';
+import { BrickId, ChannelState, Transport } from '../../core/contracts';
+import { BrickUnreachableError, ConnectionAbandonedError, TimeoutError } from '../../core/errors/CockpitError';
+import type { BrickManager, PairingStartedEvent } from '../../core/runtime/brickManager';
+import type { OneSidedRepair } from '../../core/runtime/forgetReport';
+import { brickLabel, transportLabel } from '../../core/runtime/brickLabels';
+import type { RuntimeLog } from '../../core/runtime/createRuntime';
+import type { PresenceAggregator } from '../../core/runtime/presenceAggregator';
+import { PAIRING_CANCELLED } from '../../core/transports/btPairingHelper';
 import { BrickPickRow, brickPickRows } from './brickPickRows';
 
 /** The picker as the flow uses it; a `vscode.QuickPick<BrickPickRow>` is one. */

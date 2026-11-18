@@ -11,11 +11,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { TelemetryScheduler, isReadableType } from '../telemetry/telemetryScheduler';
-import { RowLifetime, TelemetryRow, withLifetime } from '../telemetry/telemetryRow';
-import { chainDepthRow, sensorOccupancyRow, sensorValueRow } from '../telemetry/ev3Rows';
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { makeBrickKey, Transport } from '../contracts';
+import { TelemetryScheduler, isReadableType } from '../core/telemetry/telemetryScheduler';
+import { RowLifetime, TelemetryRow, withLifetime } from '../core/telemetry/telemetryRow';
+import { chainDepthRow, sensorOccupancyRow, sensorValueRow } from '../core/telemetry/ev3Rows';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { makeBrickKey, Transport } from '../core/contracts';
 
 const LIBUSB = { maxPacketBytes: 1024 };
 const HID = { maxPacketBytes: 64 };

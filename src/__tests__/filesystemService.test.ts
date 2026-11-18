@@ -10,9 +10,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickResponse } from '../contracts';
-import { FilesystemService } from '../fs/filesystemService';
-import { TransportError } from '../errors/CockpitError';
+import { BrickCommand, BrickResponse } from '../core/contracts';
+import { FilesystemService } from '../core/fs/filesystemService';
+import { TransportError } from '../core/errors/CockpitError';
 
 /** Records commands and answers them from a table. */
 function fakeBrick(answers: Partial<Record<string, (c: BrickCommand) => BrickResponse>>) {
