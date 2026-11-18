@@ -91,7 +91,7 @@ Two things the Mac visit needs sit outside this plan. The VSIX build has no macO
 - KTD2. **The core's event type keeps VS Code's call shape** (a listener, optional `this`, optional disposables collection, returning a disposable), so the extension can hand a core event to a VS Code API that expects `vscode.Event` without an adapter. This also keeps U2 a type substitution.
 - KTD3. **Decouple in place, then move, then fence.** U1–U2 change code where it lives, so their diffs show only real changes; U3 is a pure move with import-path edits and nothing else; U4 adds the boundary once the folder exists. (session-settled: user-approved — chosen over moving and changing in one step: a move mixed with edits cannot be reviewed.)
 - KTD4. **Layout:** `src/core/` holds `api`, `commands`, `contracts`, `errors`, `events`, `fs`, `mock`, `programs`, `protocol`, `runtime`, `telemetry`, `transports`; `src/vscode/` holds `extension.ts`, `ui` and `integration`. Tests stay in one suite in `src/__tests__/`, and `src/test/vscodeStub.cjs` stays where the probe scripts and the test preload find it. The bundle keeps its output `out/extension.js`, so `package.json` `main`, `.vscodeignore` and the VSIX allow-list do not change. Today `tsc` also writes `out/extension.js` (rootDir `src`), and `test:ci` runs the extension-host tests on that compile output without bundling; after the move `tsc` writes `out/vscode/extension.js`, so `test:host` builds the bundle before launching VS Code and the host tests run the shipped file.
-- KTD5. **The boundary is enforced statically and at run time.** Statically: under `src/core/`, lint forbids imports, re-exports and type-only references of `vscode` and of anything under `src/vscode/`, and forbids `require('vscode')` calls, the form the core already uses for lazily loaded optional modules. At run time: a unit test scans the text of every compiled `out/core/**/*.js` for a `vscode` require (an `import` compiles to one too), and starts a fresh Node process without the stub preload that loads the core entry modules `runtime/index`, `transports/index` and `api/cockpitApi` (R1, R5).
+- KTD5. **The boundary is enforced by lint and by a test, each covering every form of dependency.** The forbidden targets are the `vscode` module and any path under `src/vscode/`; the forms are imports, re-exports, type-only references, dynamic `import()` and `require()` calls (the core already loads optional modules with a lazy `require` inside functions). Lint: an override for `src/core/**` restricts all of these. Test: it scans the source of every `src/core/**/*.ts` file for a module specifier naming either target (source, because type-only references vanish on compile), scans every compiled `out/core/**/*.js` for a `vscode` require, and starts a fresh Node process without the stub preload that loads the core entry modules `runtime/index`, `transports/index` and `api/cockpitApi` (R1, R5).
 - KTD6. **The proof is a probe-style script, not the CLI:** `scripts/core-smoke.js` loads the compiled core directly, as the other probes do, but without the `vscode` stub; it builds the runtime with the defaults `package.json` declares and logs to the console. It is not shipped in the VSIX.
 
 ### High-Level Technical Design
@@ -274,11 +274,11 @@ scripts/
 
 **Approach:**
 1. Add the lint override KTD5 describes.
-2. Add the test KTD5 describes: the text scan of compiled core output, then the fresh-process load of the entry modules.
+2. Add the test KTD5 describes: the source scan, the scan of compiled core output, then the fresh-process load of the entry modules.
 
 **Test scenarios:**
-- The core entry modules load in a fresh Node process with no `vscode` module available, and no compiled core file contains a `vscode` require.
-- Seen failing before it counts, each by reverse patch, not checkout: a top-level `vscode` import in a core file, a lazy `require('vscode')` inside a function body, and a core import from `src/vscode/` each make lint fail, and the first two also make the test fail.
+- On the real tree: no core source names `vscode` or a path under `src/vscode/`, no compiled core file contains a `vscode` require, and the core entry modules load in a fresh Node process with no `vscode` module available.
+- Seen failing before it counts, each by reverse patch, not checkout, and each failing both lint and the test: a top-level `vscode` import, a type-only `vscode` import, a lazy `require('vscode')` inside a function body, a dynamic `import('vscode')`, and a lazy `require` of a module under `src/vscode/`.
 
 **Verification:** lint and the new test pass on the real tree and fail on the deliberately broken one.
 
