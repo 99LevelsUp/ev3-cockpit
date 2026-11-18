@@ -2005,6 +2005,31 @@ the devices.
   packet sizes, intervals) from a configuration the host passes in, and leave the extension a thin
   host. Check that the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`, all
   N-API) and the Windows Bluetooth helper load in plain Node, not only in Electron.
+- [x] 4.10.1m **macOS on Apple Silicon (item 8, the Mac visit, 18.11.2026).** A borrowed M4 on
+  macOS 27, driven over SSH; brick CCC (V1.09H). The core runs in plain Node there (natives load,
+  unit suite green), and a `darwin-arm64` VSIX installs and connects over all three channels:
+  - **USB through HID, at full speed.** macOS's HID driver holds the interface, so libusb may not
+    claim it without root (`LIBUSB_ERROR_ACCESS`, for an admin too). But macOS reads the brick's
+    descriptor as it is — a 1024-byte report (`96 00 04`), `MaxOutputReportSize` 1024 — where
+    Windows derives none, so on macOS HID carries full frames (`USB.MAC_HID_PACKET_BYTES`): 300 KB
+    written and read back identical at 309 and 447 KB/s, against 15 and 22 KB/s with 64-byte
+    packets. No warning about a slow fallback there.
+  - **Bluetooth through an IOBluetooth helper.** The serial port macOS gives a paired brick
+    (`/dev/cu.<name>`) opens and takes writes but never brings up RFCOMM. IOBluetooth does (1.1 s to
+    open, 60 ms for a reply), so `native/macos/ev3-bt-helper.swift` lists the paired bricks *with
+    their names* and carries an RFCOMM channel over its pipes (`src/core/transports/macBluetooth.ts`).
+    It is built on a Mac (`npm run build:helper:macos`) into `native/bin/`, from where the VSIX build
+    takes it; VS Code drops its executable bit when unpacking, and the cockpit sets it back.
+    Bluetooth needs the user's consent: macOS asks once, in VS Code's name (over SSH it is refused,
+    and the helper says `denied` rather than listing nothing). Pairing stays in the system settings.
+  - **TCP** works once the user allows VS Code onto the local network; before that a connect fails
+    with `EHOSTUNREACH` while beacons still arrive, and the error now says where to allow it.
+  Open: pairing and forgetting from the cockpit (the helper's `forget` exists: a brick reset
+  without a clean shutdown loses its side of the pairing, macOS keeps its key, and the system
+  settings offer no way out); Bluetooth presence on macOS; a signed and notarised helper for the
+  Marketplace (an ad-hoc signature runs, Gatekeeper never saw a quarantine flag on it). Seen on the
+  way: CCC froze when USB was plugged in during a Bluetooth session, right after a Wi-Fi run; the same
+  step on a freshly started brick did not (owner's hypothesis: Wi-Fi leaves the firmware fragile).
 - [ ] 4.10.2 **A daemon and a thin CLI.** The daemon holds the bricks: connections (a Bluetooth
   connect takes 2–20 s, so a command must not open one each time), presence, telemetry and the
   transfer ledger; the first CLI command starts it and it ends after a quiet spell. Only it holds a

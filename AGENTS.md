@@ -41,7 +41,7 @@ Source code under `src/`, split in two:
   - `src/core/contracts/` — shared types and contracts
   - `src/core/events/` — the core's own event emitter, delivering as VS Code's does
   - `src/core/runtime/` — sessions, bricks, presence, the runtime factory
-  - `src/core/transports/` — USB, BT, TCP, Mock providers
+  - `src/core/transports/` — USB, BT, TCP, Mock providers; Bluetooth backends per OS: Winsock (Windows), BlueZ (Linux), the IOBluetooth helper (macOS, `macBluetooth.ts`)
   - `src/core/fs/`, `src/core/programs/`, `src/core/telemetry/`, `src/core/protocol/`, `src/core/commands/`, `src/core/errors/`
   - `src/core/api/` — public API for dependent extensions
   - `src/core/mock/` — simulated bricks
@@ -50,6 +50,8 @@ Source code under `src/`, split in two:
 - `src/test/` — test utilities: the `vscode` stub and the shared emitter scenarios
 
 `scripts/core-smoke.js` runs the core in plain Node against a real brick (`node scripts/core-smoke.js <brick> <usb|bt|tcp>`).
+
+Native helpers under `native/`: the Windows pairing helper (`bt-pairing-helper/`, .NET, `npm run build:helper`), the macOS Bluetooth helper (`macos/ev3-bt-helper.swift`, built on a Mac with `npm run build:helper:macos`), and the Linux udev rules (`linux/`). Builds land in `native/bin/`, which is not committed.
 
 Unit tests: `src/__tests__/*.test.ts`, compiled to `out/__tests__`.  
 Playwright tests: `tests/*.spec.ts`.  
