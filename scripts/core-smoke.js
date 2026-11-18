@@ -1,7 +1,7 @@
 /**
  * Does the cockpit core work in plain Node, with no VS Code at all?
  *
- *   node scripts/core-smoke.js <brick name or id> <usb|bt|tcp> [--wait <seconds>]
+ *   node scripts/core-smoke.js <brick name or id> <usb|bt|tcp> [--wait <seconds>] [--verbose]
  *
  * Builds the runtime and the public API the way the extension does, but in a bare Node process:
  * no `vscode` module, not even a stub. That is how a daemon or a command-line tool will run it.
@@ -10,8 +10,8 @@
  * Then, as a consumer of the API would: waits for the brick to be heard on the named channel, signs
  * in, checks that the route is that channel, reads the brick's name, firmware and storage through
  * the public API, and disconnects. The battery is read through the runtime directly, since API v1
- * offers it only as a telemetry row. One line per step. Any failed step, or a route over another
- * channel, ends with a non-zero exit code.
+ * offers it only as a telemetry row. One line per step. Any failed step, a route over another
+ * channel, or an event listener that threw ends with a non-zero exit code.
  *
  * Make the named channel the only one the brick can use before running: for USB, Bluetooth off on
  * the brick; for Bluetooth, no cable; for TCP, Bluetooth off and no cable. Only one process may hold
@@ -32,7 +32,7 @@ const WAIT_MS = 1000 * (waitIndex > 0 ? Number(process.argv[waitIndex + 1]) : 90
 const CHANNELS = ['usb', 'bt', 'tcp'];
 
 if (!target || !CHANNELS.includes(channel)) {
-	console.error('usage: node scripts/core-smoke.js <brick name or id> <usb|bt|tcp> [--wait <seconds>]');
+	console.error('usage: node scripts/core-smoke.js <brick name or id> <usb|bt|tcp> [--wait <seconds>] [--verbose]');
 	process.exit(2);
 }
 
@@ -48,6 +48,13 @@ async function main() {
 		telemetrySettingsFromPackage, throttleSettingsFromPackage, programPresetSettingsFromPackage,
 	} = require(core('telemetry/telemetrySettings'));
 	const manifest = require(path.join(REPO, 'package.json'));
+
+	// A listener that throws does not stop the core, so it would not stop this run either: count it.
+	let listenerErrors = 0;
+	require(core('events')).setListenerErrorHandler((error) => {
+		listenerErrors++;
+		step('listener FAILED', error instanceof Error ? error.message : String(error));
+	});
 
 	const verbose = process.argv.includes('--verbose');
 	const log = {
@@ -123,6 +130,7 @@ async function main() {
 		api.dispose();
 		runtime.dispose();
 	}
+	if (listenerErrors > 0) { failed = true; }
 	step(failed ? 'RESULT: FAIL' : 'RESULT: OK');
 	process.exit(failed ? 1 : 0);
 }
