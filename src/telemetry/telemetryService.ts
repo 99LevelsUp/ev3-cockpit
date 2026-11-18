@@ -35,7 +35,7 @@
  * really runs at — slower after a route change or under throttling — travels in the data.
  */
 
-import * as vscode from 'vscode';
+import { Disposable, Event, EventEmitter } from '../events';
 
 import { BrickCommand, BrickRef, BrickResponse, SendCommandOptions, Transport } from '../contracts';
 import { ActivityMode, ConnectionState } from '../contracts/enums';
@@ -120,11 +120,11 @@ export interface TelemetryHost {
 	transportOf?(brickKey: BrickRef): Transport | undefined;
 	getActiveBrickKey(): BrickRef | undefined;
 	getSession(brickKey: BrickRef): { readonly connectionState: ConnectionState } | undefined;
-	readonly onSessionStateChange: vscode.Event<{
+	readonly onSessionStateChange: Event<{
 		readonly brickKey: BrickRef;
 		readonly newState: ConnectionState;
 	}>;
-	readonly onActiveBrickChange: vscode.Event<{
+	readonly onActiveBrickChange: Event<{
 		readonly previousBrickKey: BrickRef | undefined;
 		readonly newBrickKey: BrickRef | undefined;
 	}>;
@@ -135,7 +135,7 @@ export interface TelemetryHost {
 	 * changed restarts: one that began at USB's 100 ms would otherwise keep that period over
 	 * Bluetooth, whose floor is 250 ms, and crowd out every other command.
 	 */
-	readonly onRouteChange?: vscode.Event<{ readonly brickKey: BrickRef }>;
+	readonly onRouteChange?: Event<{ readonly brickKey: BrickRef }>;
 }
 
 export interface TelemetryServiceOptions {
@@ -175,7 +175,7 @@ interface RunningLoop {
 	readonly transport: Transport | undefined;
 }
 
-export class TelemetryService implements vscode.Disposable {
+export class TelemetryService implements Disposable {
 	private readonly loops = new Map<BrickRef, RunningLoop>();
 	/** Each brick's claims, kept apart from its loop so they outlive a lost link. */
 	private readonly claims = new Map<BrickRef, TelemetryClaims>();
@@ -188,31 +188,31 @@ export class TelemetryService implements vscode.Disposable {
 	private readonly announced = new Map<BrickRef, ReadonlyMap<string, number | 'once'>>();
 	/** Bricks read since their session began: the ones whose end is worth announcing. */
 	private readonly read = new Set<BrickRef>();
-	private readonly subscriptions: vscode.Disposable[] = [];
+	private readonly subscriptions: Disposable[] = [];
 	private nextHandle = 1;
 	private disposed = false;
 	private throttleSettings: ThrottleSettings | undefined;
 	private programPreset: ProgramPresetSettings | undefined;
 
-	private readonly _onValues = new vscode.EventEmitter<TelemetryValuesEvent>();
+	private readonly _onValues = new EventEmitter<TelemetryValuesEvent>();
 	readonly onValues = this._onValues.event;
 
-	private readonly _onError = new vscode.EventEmitter<TelemetryErrorEvent>();
+	private readonly _onError = new EventEmitter<TelemetryErrorEvent>();
 	readonly onError = this._onError.event;
 
-	private readonly _onClaimsEnded = new vscode.EventEmitter<ClaimsEndedEvent>();
+	private readonly _onClaimsEnded = new EventEmitter<ClaimsEndedEvent>();
 	/** Claims that ended with their brick (4.5.4); the API's hook to tell their makers. */
 	readonly onClaimsEnded = this._onClaimsEnded.event;
 
-	private readonly _onPlanChange = new vscode.EventEmitter<PlanChangeEvent>();
+	private readonly _onPlanChange = new EventEmitter<PlanChangeEvent>();
 	/** A brick's rows or their intervals changed; empty when it stops being read. */
 	readonly onPlanChange = this._onPlanChange.event;
 
-	private readonly _onSessionEnded = new vscode.EventEmitter<SessionEndedEvent>();
+	private readonly _onSessionEnded = new EventEmitter<SessionEndedEvent>();
 	/** A brick this service read has no session any more. */
 	readonly onSessionEnded = this._onSessionEnded.event;
 
-	private readonly _onThrottleChange = new vscode.EventEmitter<ThrottleChangeEvent>();
+	private readonly _onThrottleChange = new EventEmitter<ThrottleChangeEvent>();
 	/** A brick's throttle moved its tick. */
 	readonly onThrottleChange = this._onThrottleChange.event;
 

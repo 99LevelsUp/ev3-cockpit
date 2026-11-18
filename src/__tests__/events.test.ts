@@ -7,6 +7,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { EventEmitter, setListenerErrorHandler } from '../events';
@@ -85,6 +89,35 @@ describe('EventEmitter listener errors', () => {
 		} finally {
 			console.error = quiet;
 			setListenerErrorHandler(previous);
+		}
+	});
+
+	it('fails a unit test whose listener throws, under the suite\'s preload', () => {
+		// The preload turns a listener's error into a failed test; without it an assertion inside a
+		// listener would only reach the console. Run a one-test file under the same preload.
+		const repo = path.resolve(__dirname, '..', '..');
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-listener-'));
+		const file = path.join(dir, 'listener.test.js');
+		fs.writeFileSync(file, [
+			`const { it } = require('node:test');`,
+			`const assert = require('node:assert/strict');`,
+			`const { EventEmitter } = require(${JSON.stringify(path.join(repo, 'out', 'events'))});`,
+			`it('asserts inside a listener', () => {`,
+			`  const emitter = new EventEmitter();`,
+			`  emitter.event((n) => assert.equal(n, 2));`,
+			`  emitter.fire(1);`,
+			`});`,
+		].join('\n'));
+		try {
+			// A fresh runner: without this test's own NODE_TEST_CONTEXT, which would make the preload
+			// treat the runner as a test file and hold it open.
+			const env = { ...process.env };
+			delete env.NODE_TEST_CONTEXT;
+			const run = spawnSync(process.execPath, ['--require', path.join(repo, 'scripts', 'test-setup.cjs'), '--test', file], { encoding: 'utf8', env, timeout: 60_000 });
+			assert.notEqual(run.status, 0, `the test passed:\n${run.stdout}`);
+			assert.match(run.stdout + run.stderr, /An event listener threw 1 time/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

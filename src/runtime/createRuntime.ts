@@ -6,10 +6,9 @@
  * probe that rebuilt the wiring by hand has diverged from the shipped code five times before.
  */
 
-import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { BrickId, BrickKey, TransportProvider } from '../contracts';
-import { DisposableStore } from '../events';
+import { Disposable, DisposableStore } from '../events';
 import {
 	ProviderRegistry,
 	UsbTransportProvider, TcpTransportProvider, BtTransportProvider, BtSppBackend,
@@ -90,7 +89,7 @@ export interface RuntimeOptions {
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
-export interface Runtime extends vscode.Disposable {
+export interface Runtime extends Disposable {
 	readonly registry: ProviderRegistry;
 	readonly sessionManager: SessionManager;
 	readonly scheduler: DiscoveryScheduler;

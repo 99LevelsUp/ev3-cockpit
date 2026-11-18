@@ -1,9 +1,8 @@
-import * as vscode from 'vscode';
 import {
 	Transport, BrickKey, PresenceState, brickIdOf,
 	TransportProvider, DiscoveryScanResult, DiscoveryItem,
 } from '../contracts';
-import { createTypedEvent, TypedEvent } from '../events';
+import { createTypedEvent, Disposable, Event, TypedEvent } from '../events';
 import { ProviderRegistry } from '../transports/providerRegistry';
 
 // ── Configuration ───────────────────────────────────────────────────
@@ -60,12 +59,12 @@ interface TrackedBrick {
  * are automatically included in polling — no sequential coupling between
  * provider registration and scheduler startup.
  */
-export class DiscoveryScheduler implements vscode.Disposable {
+export class DiscoveryScheduler implements Disposable {
 	private readonly options: DiscoverySchedulerOptions;
 	private readonly registry: ProviderRegistry;
 	private readonly tracked = new Map<BrickKey, TrackedBrick>();
 	private readonly timers = new Map<Transport, ReturnType<typeof setInterval>>();
-	private readonly subscriptions: vscode.Disposable[] = [];
+	private readonly subscriptions: Disposable[] = [];
 	/**
 	 * Transports with a scan already running. `setInterval` fires regardless of
 	 * whether the previous scan finished, and a slow transport (a BT inquiry runs for
@@ -93,15 +92,15 @@ export class DiscoveryScheduler implements vscode.Disposable {
 	private readonly scanFailed: TypedEvent<ScanFailedEvent>;
 
 	/** Fired whenever a brick's presence state changes. */
-	readonly onPresenceChanged: vscode.Event<PresenceChangeEvent>;
+	readonly onPresenceChanged: Event<PresenceChangeEvent>;
 	/** Fired after each full scan cycle completes. */
-	readonly onScanCompleted: vscode.Event<undefined>;
+	readonly onScanCompleted: Event<undefined>;
 	/**
 	 * Fired when a provider's scan throws. A failing provider still costs its bricks
 	 * a missed scan, so without this a transport could go dark and march every brick
 	 * to `Removed` with nothing surfaced anywhere.
 	 */
-	readonly onScanFailed: vscode.Event<ScanFailedEvent>;
+	readonly onScanFailed: Event<ScanFailedEvent>;
 
 	constructor(registry: ProviderRegistry, options?: Partial<DiscoverySchedulerOptions>) {
 		this.registry = registry;

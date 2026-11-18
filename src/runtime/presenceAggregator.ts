@@ -1,9 +1,8 @@
-import * as vscode from 'vscode';
 import {
 	BrickEntry, BrickId, BrickKey, BrickName, ChannelState, ConnectionState, DiscoveryItem,
 	NameSource, PresenceState, Transport, brickIdOf, brickKeyTransport,
 } from '../contracts';
-import { createTypedEvent, TypedEvent } from '../events';
+import { createTypedEvent, Disposable, Event, TypedEvent } from '../events';
 import { ProviderRegistry } from '../transports/providerRegistry';
 import { BrickChannel } from './brickChannel';
 import { ChannelEvent } from './channelStateMachine';
@@ -61,7 +60,7 @@ interface BrickRecord {
  * dropped only if nothing ties it to this user — never connected this session and not
  * remembered — so the strangers' bricks a competition room is full of do not pile up.
  */
-export class PresenceAggregator implements vscode.Disposable {
+export class PresenceAggregator implements Disposable {
 	private readonly bricks = new Map<BrickId, BrickRecord>();
 
 	private readonly listChanged: TypedEvent<DiscoveryListChangeEvent>;
@@ -69,16 +68,16 @@ export class PresenceAggregator implements vscode.Disposable {
 	private readonly heardChanged: TypedEvent<HeardChangeEvent>;
 
 	/** Fired whenever the discovery list changes. */
-	readonly onListChanged: vscode.Event<DiscoveryListChangeEvent>;
+	readonly onListChanged: Event<DiscoveryListChangeEvent>;
 	/** Fired on individual channel presence transitions (forwarded from the scheduler). */
-	readonly onPresenceChanged: vscode.Event<PresenceChangeEvent>;
+	readonly onPresenceChanged: Event<PresenceChangeEvent>;
 	/**
 	 * Fired when the Bluetooth presence checks stop hearing a channel, which the list then shows
 	 * lost ("BT not heard"), or hear it again (step-4 plan, KTD9). Not for a flag a scan repeats.
 	 */
-	readonly onHeardChange: vscode.Event<HeardChangeEvent>;
+	readonly onHeardChange: Event<HeardChangeEvent>;
 
-	private readonly disposables: vscode.Disposable[] = [];
+	private readonly disposables: Disposable[] = [];
 
 	constructor(
 		private readonly scheduler: DiscoveryScheduler,
