@@ -7,7 +7,7 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { createNotifier } from '../ui/notify';
+import { createNotifier } from '../vscode/ui/notify';
 
 function fakes() {
 	const logged: string[] = [];

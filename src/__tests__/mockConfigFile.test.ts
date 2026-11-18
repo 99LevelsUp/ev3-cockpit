@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { DEFAULT_MOCK_CONFIG, MOCK_CONFIG_FILE, loadMockConfigFile, validateMockConfig } from '../mock';
+import { DEFAULT_MOCK_CONFIG, MOCK_CONFIG_FILE, loadMockConfigFile, validateMockConfig } from '../core/mock';
 
 const notThere = (): never => { throw Object.assign(new Error('no such file'), { code: 'ENOENT' }); };
 const files = (byPath: Record<string, string>) => (file: string): string => {

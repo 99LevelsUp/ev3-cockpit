@@ -9,10 +9,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, makeBrickKey } from '../contracts';
-import { UsbTransportProvider } from '../transports/usbTransportProvider';
-import { USB } from '../transports/transportConstants';
-import { ConnectionError, DevicePermissionError } from '../errors/CockpitError';
+import { Transport, makeBrickKey } from '../core/contracts';
+import { UsbTransportProvider } from '../core/transports/usbTransportProvider';
+import { USB } from '../core/transports/transportConstants';
+import { ConnectionError, DevicePermissionError } from '../core/errors/CockpitError';
 
 const KEY = makeBrickKey(Transport.USB, '001653AABBCC');
 

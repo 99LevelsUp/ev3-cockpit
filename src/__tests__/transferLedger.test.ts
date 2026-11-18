@@ -13,11 +13,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickId, BrickResponse } from '../contracts';
-import { LinkLostError, ProtocolError, TransportError } from '../errors/CockpitError';
-import { FileTransferService } from '../fs/fileTransferService';
-import { ReleaseScope, TransferLedger, ledgerFor } from '../fs/transferLedger';
-import { buildCommand } from '../protocol/ev3Commands';
+import { BrickCommand, BrickId, BrickResponse } from '../core/contracts';
+import { LinkLostError, ProtocolError, TransportError } from '../core/errors/CockpitError';
+import { FileTransferService } from '../core/fs/fileTransferService';
+import { ReleaseScope, TransferLedger, ledgerFor } from '../core/fs/transferLedger';
+import { buildCommand } from '../core/protocol/ev3Commands';
 
 const HANDLE = 3;
 const PATH = '/home/root/lms2012/prjs/x.rbf';

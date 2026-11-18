@@ -1,22 +1,22 @@
 import * as fs from 'node:fs';
 import * as vscode from 'vscode';
-import { DisposableStore } from './events';
-import { loadMockConfigFile } from './mock';
-import { createBrickFilesystem, BrickFilesystem } from './fs/brickFilesystem';
-import { setSweepConfirmation } from './fs/transferLedger';
-import { createRuntime } from './runtime/createRuntime';
-import { brickLabel } from './runtime/brickLabels';
-import { BrickId, Transport } from './contracts';
+import { DisposableStore } from '../core/events';
+import { loadMockConfigFile } from '../core/mock';
+import { createBrickFilesystem, BrickFilesystem } from '../core/fs/brickFilesystem';
+import { setSweepConfirmation } from '../core/fs/transferLedger';
+import { createRuntime } from '../core/runtime/createRuntime';
+import { brickLabel } from '../core/runtime/brickLabels';
+import { BrickId, Transport } from '../core/contracts';
 import { createBluetoothAccessOffer } from './ui/bluetoothAccess';
 import { BrickPickRow, describeChannels } from './ui/brickPickRows';
 import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 import { createNotifier } from './ui/notify';
-import { AccessMode } from './api/accessPolicy';
-import { CockpitApi, createCockpitApi } from './api/cockpitApi';
-import { NotConnectedError } from './errors/CockpitError';
-import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from './telemetry/telemetrySettings';
+import { AccessMode } from '../core/api/accessPolicy';
+import { CockpitApi, createCockpitApi } from '../core/api/cockpitApi';
+import { NotConnectedError } from '../core/errors/CockpitError';
+import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from '../core/telemetry/telemetrySettings';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';

@@ -10,8 +10,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { UsbLibusbAdapter } from '../transports/usbLibusbAdapter';
-import { DevicePermissionError } from '../errors/CockpitError';
+import { UsbLibusbAdapter } from '../core/transports/usbLibusbAdapter';
+import { DevicePermissionError } from '../core/errors/CockpitError';
 
 const FRAME = 1024;
 const INTERRUPT = 0x03;

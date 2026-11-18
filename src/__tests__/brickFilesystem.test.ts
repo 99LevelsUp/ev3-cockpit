@@ -10,9 +10,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickKey, BrickResponse, Transport, makeBrickKey } from '../contracts';
-import { createBrickFilesystem, maxPacketBytesFor } from '../fs/brickFilesystem';
-import { USB } from '../transports/transportConstants';
+import { BrickCommand, BrickKey, BrickResponse, Transport, makeBrickKey } from '../core/contracts';
+import { createBrickFilesystem, maxPacketBytesFor } from '../core/fs/brickFilesystem';
+import { USB } from '../core/transports/transportConstants';
 
 describe('maxPacketBytesFor', () => {
 	it('falls back to what a HID write delivers when nothing knows better', () => {

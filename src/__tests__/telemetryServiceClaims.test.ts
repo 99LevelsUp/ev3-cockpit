@@ -12,14 +12,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickId, BrickResponse, TransportProvider } from '../contracts';
-import { ActivityMode, ConnectionState, Transport } from '../contracts/enums';
-import { ErrorCode } from '../errors/CockpitError';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { ClaimsEndedEvent, PlanChangeEvent, TelemetryService, TelemetryValuesEvent } from '../telemetry/telemetryService';
-import type { TelemetryRow } from '../telemetry/telemetryRow';
-import type { ThrottleSettings } from '../telemetry/telemetrySettings';
+import { BrickId, BrickResponse, TransportProvider } from '../core/contracts';
+import { ActivityMode, ConnectionState, Transport } from '../core/contracts/enums';
+import { ErrorCode } from '../core/errors/CockpitError';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { createEv3RowRegistry } from '../core/telemetry/rowRegistry';
+import { ClaimsEndedEvent, PlanChangeEvent, TelemetryService, TelemetryValuesEvent } from '../core/telemetry/telemetryService';
+import type { TelemetryRow } from '../core/telemetry/telemetryRow';
+import type { ThrottleSettings } from '../core/telemetry/telemetrySettings';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;

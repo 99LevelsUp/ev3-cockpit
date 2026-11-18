@@ -10,11 +10,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { TelemetryScheduler, SETTLE_LIMIT_MS } from '../telemetry/telemetryScheduler';
-import { RowLifetime, TelemetryRow, withLifetime } from '../telemetry/telemetryRow';
-import { createBrickTelemetry } from '../telemetry/brickTelemetry';
-import { makeBrickKey, Transport } from '../contracts';
-import { cadenceFor } from '../telemetry/telemetryConstants';
+import { TelemetryScheduler, SETTLE_LIMIT_MS } from '../core/telemetry/telemetryScheduler';
+import { RowLifetime, TelemetryRow, withLifetime } from '../core/telemetry/telemetryRow';
+import { createBrickTelemetry } from '../core/telemetry/brickTelemetry';
+import { makeBrickKey, Transport } from '../core/contracts';
+import { cadenceFor } from '../core/telemetry/telemetryConstants';
 
 const LIBUSB = { maxPacketBytes: 1024 };
 const HID = { maxPacketBytes: 64 };

@@ -13,11 +13,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickId, BrickResponse, TransportProvider } from '../contracts';
-import { ConnectionState, Transport } from '../contracts/enums';
-import { executeTelemetryFrame, MockBrickView } from '../mock/mockFrameInterpreter';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { PlanChangeEvent, TelemetryService } from '../telemetry/telemetryService';
+import { BrickId, BrickResponse, TransportProvider } from '../core/contracts';
+import { ConnectionState, Transport } from '../core/contracts/enums';
+import { executeTelemetryFrame, MockBrickView } from '../core/mock/mockFrameInterpreter';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { PlanChangeEvent, TelemetryService } from '../core/telemetry/telemetryService';
 
 const A = 'AAA' as BrickId;
 const TACHO = 'ports.motor.A.tacho';

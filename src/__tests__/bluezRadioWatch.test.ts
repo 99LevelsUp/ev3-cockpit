@@ -10,10 +10,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BluezRadioWatch, linuxBtRestartAdvice, LINUX_BT_RESTART_RULE_PATH, type RadioSysfs } from '../transports/bluezRadioWatch';
-import type { BluezAdapter } from '../transports/bluezObjects';
-import type { DBusValue, Variant } from '../transports/dbus/wire';
-import { DBusError } from '../transports/dbus/connection';
+import { BluezRadioWatch, linuxBtRestartAdvice, LINUX_BT_RESTART_RULE_PATH, type RadioSysfs } from '../core/transports/bluezRadioWatch';
+import type { BluezAdapter } from '../core/transports/bluezObjects';
+import type { DBusValue, Variant } from '../core/transports/dbus/wire';
+import { DBusError } from '../core/transports/dbus/connection';
 
 const AUTH = '/sys/devices/pci0000:00/usb4/4-4/authorized';
 const STUCK = { radio: 'stuck', detail: 'StopDiscovery: org.bluez.Error.InProgress: Operation already in progress' } as const;

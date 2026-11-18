@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { UsbTransportProvider } from '../transports/usbTransportProvider';
+import { UsbTransportProvider } from '../core/transports/usbTransportProvider';
 
 const SERIAL = '00165300000A';
 

@@ -7,8 +7,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Variant, marshal, unmarshal, splitSignature } from '../transports/dbus/wire';
-import { MessageType, decodeMessage, encodeMessage, type DBusMessage } from '../transports/dbus/message';
+import { Variant, marshal, unmarshal, splitSignature } from '../core/transports/dbus/wire';
+import { MessageType, decodeMessage, encodeMessage, type DBusMessage } from '../core/transports/dbus/message';
 import * as F from './fixtures/dbusFixtures';
 
 const bytes = (hex: string): Buffer => Buffer.from(hex, 'hex');

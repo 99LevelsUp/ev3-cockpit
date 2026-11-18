@@ -1,11 +1,11 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, PresenceState, makeBrickKey, BrickKey, DiscoveryItem } from '../contracts';
-import type { TransportProvider, SessionHandle, DiscoveryScanResult, TransportCapabilities, BrickCommand, BrickResponse } from '../contracts';
-import { ProviderRegistry } from '../transports/providerRegistry';
+import { Transport, PresenceState, makeBrickKey, BrickKey, DiscoveryItem } from '../core/contracts';
+import type { TransportProvider, SessionHandle, DiscoveryScanResult, TransportCapabilities, BrickCommand, BrickResponse } from '../core/contracts';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
 import { waitFor } from './waitFor';
-import { DiscoveryScheduler, PresenceChangeEvent } from '../runtime/discoveryScheduler';
+import { DiscoveryScheduler, PresenceChangeEvent } from '../core/runtime/discoveryScheduler';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

@@ -12,10 +12,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { BrickCommand, BrickResponse, makeBrickKey, Transport } from '../contracts';
-import { ErrorCode } from '../errors/CockpitError';
-import { ProgramFollow, ProgramService } from '../programs/programService';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { BrickCommand, BrickResponse, makeBrickKey, Transport } from '../core/contracts';
+import { ErrorCode } from '../core/errors/CockpitError';
+import { ProgramFollow, ProgramService } from '../core/programs/programService';
 import { waitFor } from './waitFor';
 
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

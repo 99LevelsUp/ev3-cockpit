@@ -11,10 +11,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as net from 'node:net';
 
-import { BtSppAdapter } from '../transports/btSppAdapter';
-import { createPendingReply } from '../transports/pendingReply';
-import { TcpSocketAdapter } from '../transports/tcpSocketAdapter';
-import { TimeoutError, TransportError } from '../errors/CockpitError';
+import { BtSppAdapter } from '../core/transports/btSppAdapter';
+import { createPendingReply } from '../core/transports/pendingReply';
+import { TcpSocketAdapter } from '../core/transports/tcpSocketAdapter';
+import { TimeoutError, TransportError } from '../core/errors/CockpitError';
 import { waitFor } from './waitFor';
 
 // ═══════════════════════════════════════════════════════════════════════

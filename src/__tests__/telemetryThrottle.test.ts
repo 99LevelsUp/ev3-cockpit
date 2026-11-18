@@ -10,11 +10,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickId, BrickResponse, TransportProvider } from '../contracts';
-import { ConnectionState, Transport } from '../contracts/enums';
-import { ProviderRegistry } from '../transports/providerRegistry';
-import { PlanChangeEvent, TelemetryService, ThrottleChangeEvent } from '../telemetry/telemetryService';
-import type { ThrottleSettings } from '../telemetry/telemetrySettings';
+import { BrickId, BrickResponse, TransportProvider } from '../core/contracts';
+import { ConnectionState, Transport } from '../core/contracts/enums';
+import { ProviderRegistry } from '../core/transports/providerRegistry';
+import { PlanChangeEvent, TelemetryService, ThrottleChangeEvent } from '../core/telemetry/telemetryService';
+import type { ThrottleSettings } from '../core/telemetry/telemetrySettings';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;

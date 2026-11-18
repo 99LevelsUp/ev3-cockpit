@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { FdSet, RawWinsock2, SOCKET_ERROR, SocketHandle, bindWinsock2, macToBtAddr } from '../transports/windowsWinsock';
+import { FdSet, RawWinsock2, SOCKET_ERROR, SocketHandle, bindWinsock2, macToBtAddr } from '../core/transports/windowsWinsock';
 
 const SOL_SOCKET = 0xffff;
 const SO_ERROR = 0x1007;

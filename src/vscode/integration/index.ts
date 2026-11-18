@@ -10,8 +10,8 @@
 
 import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
-import { EventEmitter, setListenerErrorHandler } from '../events';
-import { observeEmitter } from '../test/emitterScenarios';
+import { EventEmitter, setListenerErrorHandler } from '../../core/events';
+import { observeEmitter } from '../../test/emitterScenarios';
 
 const EXTENSION_ID = '99LevelsUp.ev3-cockpit';
 

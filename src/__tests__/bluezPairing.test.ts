@@ -10,12 +10,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createBluezPairing, type PairingBus, type PairingCache } from '../transports/bluezPairing';
-import type { ExportedMethod } from '../transports/dbus/connection';
-import { DBusError } from '../transports/dbus/connection';
-import { Variant, type DBusValue } from '../transports/dbus/wire';
-import type { BluezDevice } from '../transports/bluezObjects';
-import { PAIRING_CANCELLED, type BtPairingEvent } from '../transports/btPairingHelper';
+import { createBluezPairing, type PairingBus, type PairingCache } from '../core/transports/bluezPairing';
+import type { ExportedMethod } from '../core/transports/dbus/connection';
+import { DBusError } from '../core/transports/dbus/connection';
+import { Variant, type DBusValue } from '../core/transports/dbus/wire';
+import type { BluezDevice } from '../core/transports/bluezObjects';
+import { PAIRING_CANCELLED, type BtPairingEvent } from '../core/transports/btPairingHelper';
 
 const MAC = '00:16:53:F0:0A:0A';
 const DEV = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';

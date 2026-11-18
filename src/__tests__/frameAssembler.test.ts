@@ -25,9 +25,9 @@ import {
 	parseFrame,
 	validateRow,
 	FrameAssemblyError,
-} from '../telemetry/frameAssembler';
-import { TelemetryRow } from '../telemetry/telemetryRow';
-import { readFloat32le } from '../protocol/ev3Bytecode';
+} from '../core/telemetry/frameAssembler';
+import { TelemetryRow } from '../core/telemetry/telemetryRow';
+import { readFloat32le } from '../core/protocol/ev3Bytecode';
 
 const HID = { maxPacketBytes: 64 };
 const LIBUSB = { maxPacketBytes: 1024 };

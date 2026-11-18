@@ -39,7 +39,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const { ProviderRegistry, UsbTransportProvider } = require(out('transports'));
 const { SessionManager } = require(out('runtime/sessionManager'));
 const { Transport } = require(out('contracts/enums'));

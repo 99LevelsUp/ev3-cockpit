@@ -11,10 +11,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { createEv3RowRegistry } from '../telemetry/rowRegistry';
-import { TelemetryClaims } from '../telemetry/telemetryClaims';
-import { ErrorCode } from '../errors/CockpitError';
-import type { TelemetryRow } from '../telemetry/telemetryRow';
+import { createEv3RowRegistry } from '../core/telemetry/rowRegistry';
+import { TelemetryClaims } from '../core/telemetry/telemetryClaims';
+import { ErrorCode } from '../core/errors/CockpitError';
+import type { TelemetryRow } from '../core/telemetry/telemetryRow';
 
 const USB = { floorMs: 50, foregroundMs: 100 };
 

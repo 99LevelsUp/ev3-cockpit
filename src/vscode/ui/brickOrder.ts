@@ -14,7 +14,7 @@
  * person reading the list.
  */
 
-import { BrickEntry, ChannelState, Transport } from '../contracts';
+import { BrickEntry, ChannelState, Transport } from '../../core/contracts';
 
 const USB_STATES: ReadonlySet<ChannelState> = new Set([ChannelState.Available, ChannelState.Connected]);
 

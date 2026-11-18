@@ -10,14 +10,14 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { EventEmitter } from '../events';
+import { EventEmitter } from '../core/events';
 
-import type { BrickId } from '../contracts';
-import type { RowValue } from '../telemetry/telemetryRow';
+import type { BrickId } from '../core/contracts';
+import type { RowValue } from '../core/telemetry/telemetryRow';
 import {
 	ReadModelChange, ReadModelTimer, TelemetryReadModel, TelemetrySource,
-} from '../telemetry/telemetryReadModel';
-import type { PlanChangeEvent, TelemetryValuesEvent } from '../telemetry/telemetryService';
+} from '../core/telemetry/telemetryReadModel';
+import type { PlanChangeEvent, TelemetryValuesEvent } from '../core/telemetry/telemetryService';
 
 const A = 'AAA' as BrickId;
 const B = 'BBB' as BrickId;

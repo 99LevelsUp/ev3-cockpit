@@ -9,9 +9,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PassThrough, Duplex } from 'node:stream';
 
-import { Variant, marshal, unmarshal, splitSignature } from '../transports/dbus/wire';
-import { MessageType, decodeMessage, encodeMessage } from '../transports/dbus/message';
-import { DBusConnection } from '../transports/dbus/connection';
+import { Variant, marshal, unmarshal, splitSignature } from '../core/transports/dbus/wire';
+import { MessageType, decodeMessage, encodeMessage } from '../core/transports/dbus/message';
+import { DBusConnection } from '../core/transports/dbus/connection';
 
 /** A raw message: the header written field by field, so a test can make it wrong. */
 function rawMessage(type: number, serial: number, fields: [number, Variant][], body = Buffer.alloc(0)): Buffer {
@@ -231,7 +231,7 @@ describe('DBusConnection hardening — receiving (review #0, #2)', () => {
 
 	it('answers an invalid error name from a handler as a plain failure', async () => {
 		const { conn, theirs, bus } = await opened();
-		const { DBusError } = await import('../transports/dbus/connection');
+		const { DBusError } = await import('../core/transports/dbus/connection');
 		conn.exportObject('/a', 'x.y', { Odd: { returns: '', handler: () => { throw new DBusError('not a valid name', 'x'); } } });
 		theirs.write(encodeMessage({ type: MessageType.MethodCall, flags: 0, serial: 12, path: '/a', interface: 'x.y', member: 'Odd', sender: ':1.2', body: [] }));
 		await settle();

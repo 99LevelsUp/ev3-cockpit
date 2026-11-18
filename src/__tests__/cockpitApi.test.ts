@@ -10,11 +10,11 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickCommand, BrickId, BrickResponse, ChannelState, Transport, makeBrickKey } from '../contracts';
-import type { BrickEntry } from '../contracts';
-import { ErrorCode } from '../errors/CockpitError';
-import type { AccessMode } from '../api/accessPolicy';
-import { API_VERSION, CockpitApiDeps, createCockpitApi } from '../api/cockpitApi';
+import { BrickCommand, BrickId, BrickResponse, ChannelState, Transport, makeBrickKey } from '../core/contracts';
+import type { BrickEntry } from '../core/contracts';
+import { ErrorCode } from '../core/errors/CockpitError';
+import type { AccessMode } from '../core/api/accessPolicy';
+import { API_VERSION, CockpitApiDeps, createCockpitApi } from '../core/api/cockpitApi';
 
 const A = 'A1' as BrickId;
 const B = 'B1' as BrickId;

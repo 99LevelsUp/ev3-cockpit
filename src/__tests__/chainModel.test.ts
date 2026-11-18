@@ -9,8 +9,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { chainOf } from '../telemetry/chainModel';
-import type { ReadValue } from '../telemetry/telemetryReadModel';
+import { chainOf } from '../core/telemetry/chainModel';
+import type { ReadValue } from '../core/telemetry/telemetryReadModel';
 
 const depth = (value: number, stale = false): ReadValue => ({ rowId: 'chain.depth', value, sampledAt: 1, stale });
 

@@ -7,12 +7,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { BluezObjectCache, type BusLike } from '../transports/bluezObjects';
-import { bluezListDevices, bluezRadioName } from '../transports/bluezDiscovery';
-import { Variant, type DBusValue } from '../transports/dbus/wire';
-import { MessageType, type DBusMessage } from '../transports/dbus/message';
-import { DBusError } from '../transports/dbus/connection';
-import { BtClassicDiscovery } from '../transports/btClassicDiscovery';
+import { BluezObjectCache, type BusLike } from '../core/transports/bluezObjects';
+import { bluezListDevices, bluezRadioName } from '../core/transports/bluezDiscovery';
+import { Variant, type DBusValue } from '../core/transports/dbus/wire';
+import { MessageType, type DBusMessage } from '../core/transports/dbus/message';
+import { DBusError } from '../core/transports/dbus/connection';
+import { BtClassicDiscovery } from '../core/transports/btClassicDiscovery';
 
 const AAA = '/org/bluez/hci0/dev_00_16_53_F0_0A_0A';
 const BBB = '/org/bluez/hci0/dev_00_16_53_F0_0B_0B';

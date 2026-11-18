@@ -29,7 +29,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const { BtTransportProvider, BtWinsockAdapter, BtConnectionQueue } = require(out('transports'));
 const { makeBrickKey } = require(out('contracts/brickKey'));
 const { Transport } = require(out('contracts/enums'));

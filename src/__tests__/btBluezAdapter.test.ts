@@ -9,12 +9,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BtBluezAdapter } from '../transports/btBluezAdapter';
+import { BtBluezAdapter } from '../core/transports/btBluezAdapter';
 import {
 	LinuxBtSocketApi, AF_BLUETOOTH, BTPROTO_RFCOMM, SOCK_STREAM, SOCK_NONBLOCK, SOCK_CLOEXEC,
 	EINPROGRESS, EAGAIN, EBUSY, ECONNREFUSED, EHOSTDOWN, ETIMEDOUT, EINTR,
-} from '../transports/linuxBluetoothSocket';
-import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../errors/CockpitError';
+} from '../core/transports/linuxBluetoothSocket';
+import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../core/errors/CockpitError';
 
 const MAC = '00:16:53:F0:0A:0B';
 const EAFNOSUPPORT = 97;

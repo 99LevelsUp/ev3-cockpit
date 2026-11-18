@@ -12,10 +12,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildCommand } from '../protocol/ev3Commands';
-import { parseResponse } from '../protocol/ev3Responses';
-import { EV3_COMMAND, EV3_REPLY } from '../protocol/ev3Packet';
-import type { BrickCommand } from '../contracts';
+import { buildCommand } from '../core/protocol/ev3Commands';
+import { parseResponse } from '../core/protocol/ev3Responses';
+import { EV3_COMMAND, EV3_REPLY } from '../core/protocol/ev3Packet';
+import type { BrickCommand } from '../core/contracts';
 
 const PATH = '../prjs/Demo/Demo.rbf';
 /** LCS: 0x84, the bytes, a terminating zero. */

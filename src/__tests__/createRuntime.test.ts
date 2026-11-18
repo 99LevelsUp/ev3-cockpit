@@ -7,12 +7,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { Transport, makeBrickKey, brickIdOf } from '../contracts';
-import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../mock';
-import { createRuntime } from '../runtime/createRuntime';
-import { createBrickFilesystem } from '../fs/brickFilesystem';
-import { ActivityMode } from '../contracts/enums';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../telemetry/telemetrySettings';
+import { Transport, makeBrickKey, brickIdOf } from '../core/contracts';
+import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../core/mock';
+import { createRuntime } from '../core/runtime/createRuntime';
+import { createBrickFilesystem } from '../core/fs/brickFilesystem';
+import { ActivityMode } from '../core/contracts/enums';
+import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };

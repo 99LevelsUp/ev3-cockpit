@@ -4,15 +4,15 @@ import { describe, it } from 'node:test';
 import {
 	uint16le, uint32le, readUint16le, readUint32le, readInt32le, readFloat32le,
 	concatBytes, lc0, lc1, lc2, lcs, cString, gv0, gv1, readFixedCString,
-} from '../protocol/ev3Bytecode';
+} from '../core/protocol/ev3Bytecode';
 import {
 	encodeEv3Packet, decodeEv3Packet, extractLengthPrefixedPacket,
 	EV3_COMMAND, EV3_REPLY, EV3_SYSTEM, EV3_SYSTEM_STATUS,
-} from '../protocol/ev3Packet';
-import { buildCommand } from '../protocol/ev3Commands';
-import { parseResponse } from '../protocol/ev3Responses';
-import type { Ev3Packet } from '../protocol/ev3Packet';
-import { ProtocolError } from '../errors/CockpitError';
+} from '../core/protocol/ev3Packet';
+import { buildCommand } from '../core/protocol/ev3Commands';
+import { parseResponse } from '../core/protocol/ev3Responses';
+import type { Ev3Packet } from '../core/protocol/ev3Packet';
+import { ProtocolError } from '../core/errors/CockpitError';
 
 // ── Bytecode encoding ───────────────────────────────────────────────
 

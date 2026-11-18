@@ -12,12 +12,12 @@
  * never how to get around what protects it (R6, R11, KD3).
  */
 
-import { BrickEntry, BrickId, BrickKey } from '../contracts';
-import type { BrickManager } from '../runtime/brickManager';
-import { brickLabel, transportLabel } from '../runtime/brickLabels';
-import type { RuntimeLog } from '../runtime/createRuntime';
-import type { BrickSideOutcome, ForgetReport } from '../runtime/forgetReport';
-import type { PresenceAggregator } from '../runtime/presenceAggregator';
+import { BrickEntry, BrickId, BrickKey } from '../../core/contracts';
+import type { BrickManager } from '../../core/runtime/brickManager';
+import { brickLabel, transportLabel } from '../../core/runtime/brickLabels';
+import type { RuntimeLog } from '../../core/runtime/createRuntime';
+import type { BrickSideOutcome, ForgetReport } from '../../core/runtime/forgetReport';
+import type { PresenceAggregator } from '../../core/runtime/presenceAggregator';
 import { compareBricks } from './brickOrder';
 import { BrickPickRow, describeChannels } from './brickPickRows';
 

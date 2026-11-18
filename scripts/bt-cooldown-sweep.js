@@ -36,7 +36,7 @@ Module._resolveFilename = function (request, ...rest) {
 	return originalResolve.call(this, request, ...rest);
 };
 
-const out = (dir) => path.join(REPO, 'out', dir);
+const out = (dir) => path.join(REPO, 'out', 'core', dir);
 const {
 	BtTransportProvider, BtWinsockAdapter, BtConnectionQueue, BtSppBackend,
 } = require(out('transports'));

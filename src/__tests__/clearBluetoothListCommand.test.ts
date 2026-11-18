@@ -9,13 +9,13 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, ChannelState, Transport, brickIdOf, makeBrickKey } from '../contracts';
-import type { BrickKey, ForgetResidue } from '../contracts';
-import type { ClearListReport } from '../runtime/forgetReport';
-import type { BrickPickRow } from '../ui/brickPickRows';
+import { BrickEntry, BrickId, ChannelState, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
+import type { BrickKey, ForgetResidue } from '../core/contracts';
+import type { ClearListReport } from '../core/runtime/forgetReport';
+import type { BrickPickRow } from '../vscode/ui/brickPickRows';
 import {
 	clearBrickBluetoothList, clearConfirmation, clearDetails, clearNotification, clearPickRows,
-} from '../ui/clearBluetoothList';
+} from '../vscode/ui/clearBluetoothList';
 
 const CCC_MAC = '00:16:53:F0:0C:0C';
 const ZED_MAC = '00:16:53:00:00:FF';

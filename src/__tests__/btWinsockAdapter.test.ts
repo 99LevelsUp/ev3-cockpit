@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BtWinsockAdapter } from '../transports/btWinsockAdapter';
+import { BtWinsockAdapter } from '../core/transports/btWinsockAdapter';
 import {
 	Winsock2Api,
 	SocketHandle,
@@ -19,8 +19,8 @@ import {
 	isInvalidSocket,
 	SOCKET_ERROR,
 	WSAEWOULDBLOCK,
-} from '../transports/windowsWinsock';
-import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../errors/CockpitError';
+} from '../core/transports/windowsWinsock';
+import { BackendUnavailableError, BrickUnreachableError, TimeoutError, TransportError } from '../core/errors/CockpitError';
 
 const MAC = '00:16:53:aa:bb:cc';
 

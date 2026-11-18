@@ -1,20 +1,20 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport, makeBrickKey } from '../contracts';
+import { Transport, makeBrickKey } from '../core/contracts';
 import type {
 	BatteryResponse, PortsResponse, ButtonsResponse, FsListResponse, FsReadResponse, FsExistsResponse,
 	BluetoothPeerCountResponse, BluetoothPeerResponse,
-} from '../contracts';
+} from '../core/contracts';
 import {
 	MockTransportProvider,
 	validateMockConfig,
 	MockConfig,
-} from '../mock';
+} from '../core/mock';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function makeConfig(overrides?: Partial<import('../mock').MockBrickConfig>[]): MockConfig {
+function makeConfig(overrides?: Partial<import('../core/mock').MockBrickConfig>[]): MockConfig {
 	return validateMockConfig({
 		transport: 'mock',
 		bricks: (overrides ?? [{}]).map((o, i) => ({

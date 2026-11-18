@@ -5,12 +5,12 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { Transport } from '../contracts';
-import { BackendUnavailableError } from '../errors/CockpitError';
-import { BtConnectionQueue } from '../transports/btConnectionQueue';
-import { BtPresenceMonitor } from '../transports/btPresence';
-import { BtTransportProvider } from '../transports/btTransportProvider';
-import { ScannedBrick } from '../transports/btPairingHelper';
+import { Transport } from '../core/contracts';
+import { BackendUnavailableError } from '../core/errors/CockpitError';
+import { BtConnectionQueue } from '../core/transports/btConnectionQueue';
+import { BtPresenceMonitor } from '../core/transports/btPresence';
+import { BtTransportProvider } from '../core/transports/btTransportProvider';
+import { ScannedBrick } from '../core/transports/btPairingHelper';
 
 const AAA = '00:16:53:F0:0A:0A';
 const BBB = '00:16:53:F0:0B:0B';

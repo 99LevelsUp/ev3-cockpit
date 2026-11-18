@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { EventEmitter, setListenerErrorHandler } from '../events';
+import { EventEmitter, setListenerErrorHandler } from '../core/events';
 import { observeEmitter } from '../test/emitterScenarios';
 
 const RECORDED_FROM_VSCODE = [
@@ -101,7 +101,7 @@ describe('EventEmitter listener errors', () => {
 		fs.writeFileSync(file, [
 			`const { it } = require('node:test');`,
 			`const assert = require('node:assert/strict');`,
-			`const { EventEmitter } = require(${JSON.stringify(path.join(repo, 'out', 'events'))});`,
+			`const { EventEmitter } = require(${JSON.stringify(path.join(repo, 'out', 'core', 'events'))});`,
 			`it('asserts inside a listener', () => {`,
 			`  const emitter = new EventEmitter();`,
 			`  emitter.event((n) => assert.equal(n, 2));`,

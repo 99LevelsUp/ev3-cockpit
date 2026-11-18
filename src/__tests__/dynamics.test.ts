@@ -1,8 +1,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { evaluateDynamic } from '../mock/dynamics';
-import type { ValueDynamic } from '../mock/mockConfig';
+import { evaluateDynamic } from '../core/mock/dynamics';
+import type { ValueDynamic } from '../core/mock/mockConfig';
 
 describe('evaluateDynamic', () => {
 	it('returns static value', () => {

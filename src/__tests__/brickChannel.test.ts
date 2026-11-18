@@ -1,10 +1,10 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { ChannelState, Transport, makeBrickKey } from '../contracts';
-import { BaseChannelStateMachine, ChannelEvent, ChannelStateMachine } from '../runtime/channelStateMachine';
-import { BrickChannel } from '../runtime/brickChannel';
-import { InvalidTransitionError } from '../errors/CockpitError';
+import { ChannelState, Transport, makeBrickKey } from '../core/contracts';
+import { BaseChannelStateMachine, ChannelEvent, ChannelStateMachine } from '../core/runtime/channelStateMachine';
+import { BrickChannel } from '../core/runtime/brickChannel';
+import { InvalidTransitionError } from '../core/errors/CockpitError';
 
 /** Drives a fresh machine through `events` and returns the state after each. */
 function walk(events: ChannelEvent[]): ChannelState[] {

@@ -8,8 +8,8 @@
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { MockTransportProvider } from '../mock/mockTransportProvider';
-import { makeBrickKey, Transport } from '../contracts';
+import { MockTransportProvider } from '../core/mock/mockTransportProvider';
+import { makeBrickKey, Transport } from '../core/contracts';
 
 const KEY = makeBrickKey(Transport.Mock, 'M1');
 const PRG = '/home/root/lms2012/prjs/Demo/Demo.rbf';

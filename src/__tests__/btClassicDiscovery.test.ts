@@ -13,9 +13,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BtClassicDiscovery } from '../transports/btClassicDiscovery';
-import { BluetoothDeviceInfo, isLikelyEv3, removeBluetoothDevice } from '../transports/windowsBluetooth';
-import { BtDiscoveryDevice } from '../transports/btTransportProvider';
+import { BtClassicDiscovery } from '../core/transports/btClassicDiscovery';
+import { BluetoothDeviceInfo, isLikelyEv3, removeBluetoothDevice } from '../core/transports/windowsBluetooth';
+import { BtDiscoveryDevice } from '../core/transports/btTransportProvider';
 
 const LEGO_OUI = '001653';
 
