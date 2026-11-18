@@ -39,9 +39,25 @@ const LINUX_ARM64 = [
 	'extension/native/linux/71-ev3-cockpit-bluetooth-restart.rules',
 ];
 
+/**
+ * What a correct darwin-arm64 VSIX holds: `usb` and `@serialport/bindings-cpp` ship one folder for
+ * both Mac architectures, `node-hid` one per architecture (as installed on the Mac, 18.11.2026).
+ */
+const DARWIN_ARM64 = [
+	'extension.vsixmanifest', '[Content_Types].xml',
+	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js',
+	'extension/node_modules/usb/prebuilds/darwin-x64+arm64/node.napi.node',
+	'extension/node_modules/node-hid/prebuilds/HID-darwin-arm64/node-napi-v3.node',
+	'extension/node_modules/@serialport/bindings-cpp/prebuilds/darwin-x64+arm64/@serialport+bindings-cpp.node',
+	'extension/node_modules/@koromix/koffi-darwin-arm64/koffi.node',
+	'extension/node_modules/koffi/index.js',
+	'extension/node_modules/serialport/dist/index.js',
+];
+
 describe('Platform VSIX packaging (0.2.5)', () => {
-	it('builds Windows x64 with the pairing helper, and Linux x64 and arm64 without it', () => {
-		assert.deepEqual(Object.keys(packaging.TARGETS).sort(), ['linux-arm64', 'linux-x64', 'win32-x64']);
+	it('builds Windows x64 with the pairing helper, and Linux x64 and arm64 and macOS arm64 without it', () => {
+		assert.deepEqual(Object.keys(packaging.TARGETS).sort(), ['darwin-arm64', 'linux-arm64', 'linux-x64', 'win32-x64']);
+		assert.equal(packaging.TARGETS['darwin-arm64'].helper, false);
 		assert.equal(packaging.TARGETS['win32-x64'].helper, true);
 		assert.equal(packaging.TARGETS['linux-arm64'].helper, false);
 		assert.deepEqual([packaging.TARGETS['linux-arm64'].os, packaging.TARGETS['linux-arm64'].cpu], ['linux', 'arm64']);
@@ -59,6 +75,19 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		assert.equal(keep('node-hid', 'HID-linux-x64-musl', 'linux-x64'), true, 'musl Linux is Linux x64 too');
 		assert.equal(keep('node-hid', 'HID-win32-ia32', 'win32-x64'), false);
 		assert.equal(keep('@serialport/bindings-cpp', 'android-arm64', 'linux-arm64'), false, 'Android is not Linux');
+		assert.equal(keep('usb', 'darwin-x64+arm64', 'darwin-arm64'), true, 'one folder for both Mac architectures');
+		assert.equal(keep('node-hid', 'HID-darwin-arm64', 'darwin-arm64'), true);
+		assert.equal(keep('node-hid', 'HID-darwin-x64', 'darwin-arm64'), false);
+	});
+
+	it('passes a macOS VSIX whose binaries sit in a folder shared by both Mac architectures (Mac visit, 18.11.2026)', () => {
+		assert.deepEqual(packaging.checkVsix('darwin-arm64', DARWIN_ARM64), { missing: [], unexpected: [] });
+		const withoutUsb = DARWIN_ARM64.filter((entry) => !entry.includes('/usb/prebuilds/'));
+		assert.deepEqual(packaging.checkVsix('darwin-arm64', withoutUsb).missing, ['extension/node_modules/usb/prebuilds/<darwin-arm64>/']);
+		const intelOnly = DARWIN_ARM64.map((entry) => entry.replace('HID-darwin-arm64', 'HID-darwin-x64'));
+		const { missing, unexpected } = packaging.checkVsix('darwin-arm64', intelOnly);
+		assert.deepEqual(missing, ['extension/node_modules/node-hid/prebuilds/<darwin-arm64>/']);
+		assert.deepEqual(unexpected, ['extension/node_modules/node-hid/prebuilds/HID-darwin-x64/node-napi-v3.node']);
 	});
 
 	it('reads the names in a zip', () => {

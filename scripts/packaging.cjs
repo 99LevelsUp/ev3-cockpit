@@ -9,12 +9,19 @@
  */
 'use strict';
 
-/** The platforms a release ships for (REQUIREMENTS §12: Windows and Linux). */
+/**
+ * The platforms a release ships for (REQUIREMENTS §12: Windows and Linux; macOS on Apple Silicon
+ * from the Mac visit, IMPLEMENTATION_PLAN item 8, 18.11.2026).
+ */
 const TARGETS = {
 	'win32-x64': { os: 'win32', cpu: 'x64', helper: true, udevRule: false },
 	'linux-x64': { os: 'linux', cpu: 'x64', helper: false, udevRule: true },
 	'linux-arm64': { os: 'linux', cpu: 'arm64', helper: false, udevRule: true },
+	'darwin-arm64': { os: 'darwin', cpu: 'arm64', helper: false, udevRule: false },
 };
+
+/** The modules that ship prebuilt binaries in a `prebuilds/` folder, one of which a target needs. */
+const PREBUILT_MODULES = ['usb', 'node-hid', '@serialport/bindings-cpp'];
 
 /** The modules the bundle leaves external and loads at run time. */
 const NATIVE_MODULES = ['usb', 'node-hid', 'serialport', 'koffi'];
@@ -91,7 +98,12 @@ function allowed(target, entry) {
 	return true;
 }
 
-/** What a target's VSIX must hold: the extension, and each native module's binary for it. */
+/**
+ * What a target's VSIX must hold: the extension, and each native module's binary for it. Each need
+ * is a path prefix, or a module's `prebuilds/` folder, met by any folder of it for this target: on
+ * macOS `usb` and `@serialport/bindings-cpp` ship one folder for both architectures
+ * (`darwin-x64+arm64`), so the folder is not always named after the target.
+ */
 function required(target) {
 	const needs = [
 		'extension/package.json',
@@ -99,9 +111,7 @@ function required(target) {
 		'extension/out/extension.js',
 		'extension/node_modules/koffi/',
 		`extension/node_modules/@koromix/koffi-${target}/`,
-		`extension/node_modules/usb/prebuilds/${target}/`,
-		`extension/node_modules/node-hid/prebuilds/HID-${target}/`,
-		`extension/node_modules/@serialport/bindings-cpp/prebuilds/${target}/`,
+		...PREBUILT_MODULES.map((module) => ({ module })),
 		'extension/node_modules/serialport/',
 	];
 	if (TARGETS[target].helper) { needs.push('extension/native/bin/bt-pairing-helper.exe'); }
@@ -109,9 +119,18 @@ function required(target) {
 	return needs;
 }
 
+/** Whether an entry meets a need of {@link required}. */
+function meets(target, need, entry) {
+	if (typeof need === 'string') { return entry === need || entry.startsWith(need); }
+	const prebuild = PREBUILD.exec(entry);
+	return prebuild !== null && prebuild[1] === need.module && keepPrebuild(need.module, prebuild[2], target);
+}
+
 /** Checks a built VSIX's entries: what it lacks, and what it carries that it should not. */
 function checkVsix(target, entries) {
-	const missing = required(target).filter((need) => !entries.some((entry) => entry === need || entry.startsWith(need)));
+	const missing = required(target)
+		.filter((need) => !entries.some((entry) => meets(target, need, entry)))
+		.map((need) => (typeof need === 'string' ? need : `extension/node_modules/${need.module}/prebuilds/<${target}>/`));
 	const unexpected = entries.filter((entry) => !allowed(target, entry));
 	return { missing, unexpected };
 }
