@@ -52,7 +52,7 @@ Two things the Mac visit needs sit outside this plan. The VSIX build has no macO
 
 **Structure**
 
-- R5. The sources are split into `src/core/` (works anywhere) and `src/vscode/` (only what needs VS Code), and a lint rule plus a test fail when core code imports `vscode`.
+- R5. The sources are split into `src/core/` (works anywhere) and `src/vscode/` (the extension host, its integration tests, and the `ui` flows, which stay there until 4.10.2 decides where the CLI's flows live), and a lint rule plus a test fail when core code depends on `vscode` or on `src/vscode/`.
 - R6. Every tool keeps working after the move: `tsc`, the bundle, unit and extension-host tests, the VSIX build and its checks, the probe scripts, and the API check extension.
 
 **Plain-Node proof**
@@ -61,7 +61,7 @@ Two things the Mac visit needs sit outside this plan. The VSIX build has no macO
 
 **Documentation**
 
-- R8. The wiki, the project `CLAUDE.md` source map and IMPLEMENTATION_PLAN 4.10.1 name the new paths; earlier IMPLEMENTATION_PLAN entries keep the paths they were written with, with one note on the move.
+- R8. The wiki, the `src/` module map in `AGENTS.md` and IMPLEMENTATION_PLAN 4.10.1 name the new paths; earlier IMPLEMENTATION_PLAN entries keep the paths they were written with, with one note on the move.
 
 ### Key Decisions
 
@@ -87,11 +87,11 @@ Two things the Mac visit needs sit outside this plan. The VSIX build has no macO
 
 ### Key Technical Decisions
 
-- KTD1. **Own event primitives, characterized against VS Code's.** The core gets its own emitter, event and disposable in `src/events/` with the delivery semantics of `vscode.EventEmitter`. The semantics are pinned by a characterization test that runs the same scenarios against the real `vscode.EventEmitter` in the extension host and against the core's emitter (U1). Rejected: Node's `EventEmitter`, which would turn a mechanical change into a rewrite of every subscription; keeping the stub's semantics, under which the tests pass while production behaves differently (R4).
+- KTD1. **Own event primitives, characterized against VS Code's.** The core gets its own emitter, event and disposable in `src/events/` with the delivery semantics of `vscode.EventEmitter`. The semantics are pinned by a characterization test that runs the same scenarios against the real `vscode.EventEmitter` in the extension host and against the core's emitter (U1). Where a listener's error goes cannot be observed on the real emitter (it has no error hook; the host routes the error internally), so that part is a decision of this plan, not a copy: the core reports a listener's error through a replaceable handler that writes to the console by default, and delivery continues. Rejected: Node's `EventEmitter`, which would turn a mechanical change into a rewrite of every subscription; keeping the stub's semantics, under which the tests pass while production behaves differently (R4).
 - KTD2. **The core's event type keeps VS Code's call shape** (a listener, optional `this`, optional disposables collection, returning a disposable), so the extension can hand a core event to a VS Code API that expects `vscode.Event` without an adapter. This also keeps U2 a type substitution.
 - KTD3. **Decouple in place, then move, then fence.** U1–U2 change code where it lives, so their diffs show only real changes; U3 is a pure move with import-path edits and nothing else; U4 adds the boundary once the folder exists. (session-settled: user-approved — chosen over moving and changing in one step: a move mixed with edits cannot be reviewed.)
-- KTD4. **Layout:** `src/core/` holds `api`, `commands`, `contracts`, `errors`, `events`, `fs`, `mock`, `programs`, `protocol`, `runtime`, `telemetry`, `transports`; `src/vscode/` holds `extension.ts`, `ui` and `integration`. Tests stay in one suite in `src/__tests__/`, and `src/test/vscodeStub.cjs` stays where the probe scripts and the test preload find it. The bundle keeps its output `out/extension.js`, so `package.json` `main`, `.vscodeignore` and the VSIX allow-list do not change.
-- KTD5. **The boundary is enforced twice:** a lint rule forbids importing `vscode` under `src/core/`, and a unit test starts a fresh Node process without the stub preload and loads the core's entry modules, so a run-time `require('vscode')` that types do not show also fails (R1, R5).
+- KTD4. **Layout:** `src/core/` holds `api`, `commands`, `contracts`, `errors`, `events`, `fs`, `mock`, `programs`, `protocol`, `runtime`, `telemetry`, `transports`; `src/vscode/` holds `extension.ts`, `ui` and `integration`. Tests stay in one suite in `src/__tests__/`, and `src/test/vscodeStub.cjs` stays where the probe scripts and the test preload find it. The bundle keeps its output `out/extension.js`, so `package.json` `main`, `.vscodeignore` and the VSIX allow-list do not change. Today `tsc` also writes `out/extension.js` (rootDir `src`), and `test:ci` runs the extension-host tests on that compile output without bundling; after the move `tsc` writes `out/vscode/extension.js`, so `test:host` builds the bundle before launching VS Code and the host tests run the shipped file.
+- KTD5. **The boundary is enforced statically and at run time.** Statically: under `src/core/`, lint forbids imports, re-exports and type-only references of `vscode` and of anything under `src/vscode/`, and forbids `require('vscode')` calls, the form the core already uses for lazily loaded optional modules. At run time: a unit test scans the text of every compiled `out/core/**/*.js` for a `vscode` require (an `import` compiles to one too), and starts a fresh Node process without the stub preload that loads the core entry modules `runtime/index`, `transports/index` and `api/cockpitApi` (R1, R5).
 - KTD6. **The proof is a probe-style script, not the CLI:** `scripts/core-smoke.js` loads the compiled core directly, as the other probes do, but without the `vscode` stub; it builds the runtime with the defaults `package.json` declares and logs to the console. It is not shipped in the VSIX.
 
 ### High-Level Technical Design
@@ -157,7 +157,8 @@ scripts/
 |---|---|
 | VS Code's emitter has delivery details (re-entrant fire, listeners added or removed during fire) that the core's emitter misses | U1 characterizes them against the real emitter in the extension host before the core switches |
 | Tests that passed because the stub rethrows a listener's error now pass or fail differently | U2 runs the suite after the switch and examines every changed result; a test that relied on rethrow is rewritten to the production semantics, not the emitter bent back |
-| The move breaks something no test covers: a probe script's `out(...)` path, the host test entry, a `require` in the API check | U3 checks every `out(...)` target in `scripts/` resolves, runs the host tests, builds the VSIX with its checks and loads the natives from staging |
+| The move breaks something no test covers: a probe script's `out(...)` path, a path written as a string in a test, the host test entry | U3 deletes `out/` before every post-move check, so a missed path fails instead of resolving to stale compiled code; it then checks every `out(...)` target, runs the host tests, builds the VSIX with its checks and loads the natives from staging |
+| Listener errors are no longer rethrown, so an assertion inside a listener in a test stops failing that test | U2 makes the test preload install the core's error handler as a recorder that fails the running test (production keeps the console handler) |
 | An unmerged worktree conflicts with the move | none open: the only other worktree, `ev3-cockpit-wt-linux`, is a detached old checkout with no branch to merge |
 
 ---
@@ -179,7 +180,7 @@ scripts/
 
 **Approach:**
 1. Write the characterization scenarios first and run them in the extension host against the real `vscode.EventEmitter`, recording what it does.
-2. Implement the core's emitter to the recorded behaviour; a listener's error is reported through a replaceable handler that by default writes to the console, as VS Code's unexpected-error path does.
+2. Implement the core's emitter to the recorded behaviour, with the listener-error handler KTD1 decides.
 3. Run the same scenarios against the core's emitter in the host and in the unit suite.
 
 **Execution note:** characterization first: what VS Code's emitter does is learned from the real one in the host, not assumed.
@@ -189,14 +190,15 @@ scripts/
 **Test scenarios:**
 - Listeners are called in subscription order with the fired value.
 - Disposing a subscription stops its deliveries and leaves the others.
-- A listener that throws: the remaining listeners of that fire are still called, and the error reaches the error handler once.
+- A listener that throws, on both emitters: fire does not throw and the remaining listeners of that fire are still called.
+- A listener that throws, on the core emitter only: the replaceable error handler receives that error exactly once.
 - A listener added during a fire: whether it is called in that same fire matches VS Code.
 - A listener removed during a fire before its turn: whether it is still called matches VS Code.
 - A fire from inside a listener of the same emitter: the order of deliveries matches VS Code.
 - After the emitter is disposed, fire does nothing and subscribing returns a disposable that does nothing.
 - The optional disposables collection receives the subscription, and the optional `this` binds the listener.
 
-**Verification:** the characterization scenarios pass against both emitters in the extension host, and the unit tests pass in plain Node.
+**Verification:** the scenarios shared by both emitters pass against both in the extension host, the core-only scenario passes, and the unit tests pass in plain Node.
 
 ### U2. The core uses its own events
 
@@ -212,16 +214,19 @@ scripts/
 - `src/telemetry/telemetryReadModel.ts`, `src/telemetry/telemetryService.ts`
 - `src/__tests__/telemetryReadModel.test.ts` (the one test that builds a `vscode.EventEmitter` itself)
 - `src/__tests__/sessionRuntime.test.ts` or the nearest existing runtime test, for the integration scenario below
+- `scripts/test-setup.cjs` (the listener-error recorder)
 
 **Approach:**
 1. Replace the `vscode` event and disposable types with the core's in each file; no other edit.
-2. Run the whole suite and examine every result that changes now that core events no longer rethrow a listener's error; rewrite such a test to production semantics.
-3. Confirm with a search that no file outside `src/extension.ts` and `src/integration/` imports `vscode`.
+2. Make the unit-test preload install the core's error handler as a recorder that fails the running test when a listener threw, so an assertion inside a listener still guards its test (production keeps the console handler).
+3. Run the whole suite and examine every result that changes; rewrite a test only when it relied on the old rethrow, never bend the emitter back.
+4. Confirm with a search that no file outside `src/extension.ts` and `src/integration/` imports `vscode`.
 
 **Patterns to follow:** the existing `createTypedEvent` call sites.
 
 **Test scenarios:**
 - Integration: a session state change with two subscribers, the first of which throws, still reaches the second, and the error is reported (a behaviour the extension already had in production).
+- An assertion that fails inside an event listener in a unit test fails that test.
 - The existing suite passes unchanged apart from tests that relied on the stub's rethrow, each named in the commit message with the reason.
 
 **Verification:** the suite is green, the extension-host tests pass, and the extension started in the development host logs the same start-up lines as before.
@@ -236,22 +241,24 @@ scripts/
 
 **Files:**
 - every file under `src/` except `src/__tests__/` and `src/test/`, moved per KTD4
-- `src/__tests__/*.ts` (import paths)
-- `package.json` (the esbuild entry in `bundle`, `build:dev`, `watch:bundle`)
+- `src/__tests__/*.ts` (import paths, and compiled paths written as strings, such as the child-process require of `out/transports/bluezBluetooth.js` in `src/__tests__/bluezBluetooth.test.ts`)
+- `package.json` (the esbuild entry in `bundle`, `build:dev`, `watch:bundle`; `test:host` builds the bundle first, KTD4)
 - `scripts/runTests.js` (the host test entry path)
-- the probe scripts in `scripts/` that load `out/...` (their path helper)
+- the probe scripts in `scripts/` that load `out/...` (their path helper), and any other `out/<folder>/` string a search of `src/__tests__/` and `scripts/` finds
 - `scripts/api-check/` only if it loads a compiled path (it uses the public API today)
 
 **Approach:**
-1. Move with git so history follows; change only import paths, the three script entries and the probe path helper.
-2. Compare the new bundle with the one built before the move after normalizing module path comments: they must match (R2).
-3. Check that every `out(...)` target named in `scripts/` exists after compiling.
+1. Before the move, build the bundle and keep a copy of `out/extension.js` outside `out/` as the baseline.
+2. Move with git so history follows; change only paths and the script entries named above.
+3. Delete `out/`, then compile and bundle; every check below runs on that clean output, so a missed path fails instead of resolving to stale code.
+4. Compare the new bundle with the baseline after normalizing module path comments: they must match (R2).
+5. Check that every `out(...)` target named in `scripts/` exists, and load a few probe scripts far enough to import the core without touching a brick.
 
 **Execution note:** mostly mechanical; prove it by equivalence (bundle comparison, the full suite, the host tests, the VSIX checks), not by new unit tests.
 
 **Test expectation:** none -- a pure move; the existing suite, the host tests and the VSIX checks are the proof.
 
-**Verification:** compile, lint, unit and host tests pass; the bundle comparison shows no difference beyond paths; the win32-x64 VSIX builds, passes its packaging checks and its native modules load from the staging folder.
+**Verification:** from a deleted `out/`, `npm run test:ci` passes (compile, lint, unit and host tests); the bundle comparison shows no difference beyond paths; the win32-x64 VSIX builds, passes its packaging checks and its native modules load from the staging folder.
 
 ### U4. Enforce the boundary
 
@@ -262,16 +269,16 @@ scripts/
 **Dependencies:** U3.
 
 **Files:**
-- `.eslintrc.json` (an override for `src/core/**` restricting the `vscode` import)
+- `.eslintrc.json` (an override for `src/core/**`, per KTD5)
 - `src/__tests__/coreBoundary.test.ts` (new)
 
 **Approach:**
-1. Add the lint override.
-2. The test starts a child Node process without the test preload and loads the compiled core entry modules (`runtime`, `api`, `transports`); it passes when they load and fails when any of them reaches for `vscode`.
+1. Add the lint override KTD5 describes.
+2. Add the test KTD5 describes: the text scan of compiled core output, then the fresh-process load of the entry modules.
 
 **Test scenarios:**
-- The core entry modules load in a fresh Node process with no `vscode` module available.
-- Seen failing before it counts: with a temporary `vscode` import added to a core file (by reverse patch, not checkout), both the lint rule and the test fail.
+- The core entry modules load in a fresh Node process with no `vscode` module available, and no compiled core file contains a `vscode` require.
+- Seen failing before it counts, each by reverse patch, not checkout: a top-level `vscode` import in a core file, a lazy `require('vscode')` inside a function body, and a core import from `src/vscode/` each make lint fail, and the first two also make the test fail.
 
 **Verification:** lint and the new test pass on the real tree and fail on the deliberately broken one.
 
@@ -279,7 +286,7 @@ scripts/
 
 **Goal:** the core connects and talks to a real brick from plain Node, the way the daemon will.
 
-**Requirements:** R7; KTD6.
+**Requirements:** R7, and the hardware side of R2, R3 and R6; KTD6.
 
 **Dependencies:** U3 (paths); U4 is not required.
 
@@ -288,8 +295,9 @@ scripts/
 
 **Approach:**
 1. Build the runtime with the real transport providers, the defaults from `package.json`, a console log and the repository root as the folder that holds `native/bin`.
-2. Sign in to a named brick and, for each channel it is reachable on, read its name, battery and storage, print one line per step, then disconnect and exit with a non-zero code on any failure.
-3. Run it on HOSTA with the owner: USB, Bluetooth and TCP (Wi-Fi dongle), one channel at a time, VS Code closed or the cockpit extension disabled so only one process holds the brick.
+2. Sign in to a named brick over the channel the run names (USB, Bluetooth or TCP), read its name, battery and storage, print one line per step, then disconnect; a channel the brick cannot be reached on, or any failed step, exits non-zero.
+3. Run it on HOSTA with the owner for each of USB, Bluetooth and TCP (Wi-Fi dongle), with VS Code closed or the cockpit extension disabled so only one process holds the brick.
+4. Then install the new win32-x64 VSIX from U3 on HOSTA, reload the window, connect one brick from VS Code and compare the start-up log lines with the pre-move log; run the API check's connect-and-read path once to confirm the public API answers with `apiVersion` 1.
 
 **Execution note:** smoke-first: this unit is proven on hardware, not by unit tests.
 
@@ -297,7 +305,7 @@ scripts/
 
 **Test expectation:** none -- a hardware smoke runner; U4's test covers loading without `vscode`.
 
-**Verification:** on HOSTA the runner reports name, battery and storage for one brick over USB, over Bluetooth and over TCP, with no `vscode` stub loaded.
+**Verification:** on HOSTA the runner reports name, battery and storage for one brick over USB, over Bluetooth and over TCP, with no `vscode` stub loaded; the installed extension starts with the same log lines and connects a brick, and the API check reads it.
 
 ### U6. Documentation to the new paths
 
@@ -309,7 +317,7 @@ scripts/
 
 **Files:**
 - `wiki/` articles that cite `src/` paths
-- `CLAUDE.md` (project source map)
+- `AGENTS.md` (the `src/` module map)
 - `DESIGN.md` and `docs/api-for-consumers.md` where they cite moved paths
 - `IMPLEMENTATION_PLAN.md` (4.10.1 checked with the outcome, and one note that sources moved under `src/core/` and `src/vscode/` on this date)
 
@@ -317,7 +325,7 @@ scripts/
 
 **Test expectation:** none -- documentation.
 
-**Verification:** a search for old core paths (`src/runtime/`, `src/transports/` and the like) finds them only in dated IMPLEMENTATION_PLAN history and in this plan.
+**Verification:** a search for old core paths (`src/runtime/`, `src/transports/` and the like) over `AGENTS.md`, `CLAUDE.md`, `DESIGN.md`, `docs/api-for-consumers.md` and the wiki articles finds none. Dated records (earlier plans in `docs/plans/`, `.notes/`, `CHANGELOG.md`, IMPLEMENTATION_PLAN history) keep their paths.
 
 ---
 
@@ -326,13 +334,15 @@ scripts/
 | Gate | When | What passes |
 |---|---|---|
 | `npm run compile`, `npm run lint`, `npm run test:unit` | after every unit | all green |
-| `npm run test:host` | U1, U2, U3 | extension-host tests green, including U1's characterization |
+| `npm run test:host` | U1, U2, U3 | extension-host tests green, including U1's characterization; from U3 on it builds the bundle first |
+| `npm run test:ci` from a deleted `out/` | U3, U4 | green on a clean output, so no check passes on stale compiled code |
 | Reverse-patch check (project rule) | U1, U2, U4 | each new test fails without its change |
 | Bundle equivalence | U3 | `out/extension.js` before and after the move match after normalizing module paths |
 | `node scripts/package-vsix.cjs win32-x64` and the native load check from `.vsix-staging/win32-x64` | U3 | VSIX builds, passes its checks, `usb`, `node-hid`, `serialport`, `koffi` load |
 | Codex review on an inline packet | each unit | READY, no surviving blocker or major |
 | Identifier scan of the unpushed range | before each push | no findings |
 | Hardware run of `scripts/core-smoke.js` | U5 | USB, Bluetooth and TCP each report name, battery and storage |
+| Installed VSIX on HOSTA, then the API check | U5 | same start-up log lines, a brick connects, the API answers with `apiVersion` 1 |
 
 ## Definition of Done
 
