@@ -40,6 +40,15 @@ export const USB = {
 	 * backend the connection landed on.
 	 */
 	MAX_WRITE_PACKET_BYTES: 64,
+	/**
+	 * The HID packet on macOS. The descriptor's Report Count is `96 00 04`, a two-byte 1024, and
+	 * macOS reads it so (`MaxOutputReportSize` and `MaxInputReportSize` 1024 in ioreg), where
+	 * Windows derives none. Measured on the Mac visit (M4, CCC, 18.11.2026): 300 KB written and read
+	 * back identical at 337 KB/s each way, against 15 and 22 KB/s with 64-byte packets. On macOS
+	 * HID is the only USB path a user gets — the system's HID driver holds the interface, and
+	 * libusb may not claim it without root.
+	 */
+	MAC_HID_PACKET_BYTES: 1024,
 	/** HID report ID used for EV3 communication. */
 	REPORT_ID: 0,
 	/** Discovery scan interval (ms). */

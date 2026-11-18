@@ -50,6 +50,11 @@ export interface UsbHidAdapterOptions {
 	reportId?: number;
 	/** Total HID report size in bytes including the report ID byte. */
 	reportSize?: number;
+	/**
+	 * Largest EV3 packet one HID write carries: 64 where the OS derives no report length from the
+	 * brick's descriptor (Windows), 1024 on macOS ({@link USB.MAC_HID_PACKET_BYTES}).
+	 */
+	maxPacketBytes?: number;
 }
 
 function loadNodeHid(): NodeHidModule {
@@ -82,6 +87,7 @@ export class UsbHidAdapter implements TransportAdapter {
 	private readonly productId: number;
 	private readonly reportId: number;
 	private readonly reportSize: number;
+	private readonly packetBytes: number;
 
 	private device?: HidDeviceLike;
 	private _isOpen = false;
@@ -96,6 +102,7 @@ export class UsbHidAdapter implements TransportAdapter {
 		this.productId = options.productId ?? USB.PRODUCT_ID;
 		this.reportId = options.reportId ?? USB.REPORT_ID;
 		this.reportSize = options.reportSize ?? USB.REPORT_SIZE;
+		this.packetBytes = options.maxPacketBytes ?? USB.MAX_WRITE_PACKET_BYTES;
 	}
 
 	get isOpen(): boolean {
@@ -103,11 +110,11 @@ export class UsbHidAdapter implements TransportAdapter {
 	}
 
 	/**
-	 * What a HID write actually delivers, which is far below the frame the brick's own
-	 * endpoints advertise. See {@link USB.MAX_WRITE_PACKET_BYTES} for why.
+	 * What a HID write actually delivers: on Windows far below the frame the brick's own
+	 * endpoints advertise (see {@link USB.MAX_WRITE_PACKET_BYTES} for why), on macOS all of it.
 	 */
 	get maxPacketBytes(): number {
-		return USB.MAX_WRITE_PACKET_BYTES;
+		return this.packetBytes;
 	}
 
 	async open(_options?: OpenOptions): Promise<void> {
@@ -180,7 +187,7 @@ export class UsbHidAdapter implements TransportAdapter {
 				if (typeof written === 'number' && written < report.length) {
 					throw new TransportError(
 						`USB HID write delivered ${written} of ${report.length} bytes. `
-						+ `Packets must stay within ${USB.MAX_WRITE_PACKET_BYTES} bytes on this `
+						+ `Packets must stay within ${this.packetBytes} bytes on this `
 						+ 'transport.'
 					);
 				}
@@ -254,17 +261,17 @@ export class UsbHidAdapter implements TransportAdapter {
 	}
 
 	private formatWriteBuffer(packet: Uint8Array): number[] {
-		if (packet.length > USB.MAX_WRITE_PACKET_BYTES) {
+		if (packet.length > this.packetBytes) {
 			throw new TransportError(
 				`USB packet of ${packet.length} bytes exceeds the `
-				+ `${USB.MAX_WRITE_PACKET_BYTES} bytes a HID write delivers on this transport. `
+				+ `${this.packetBytes} bytes a HID write delivers on this transport. `
 				+ 'Split it, or move bulk transfer to the libusb path.'
 			);
 		}
 
 		// Sized to what actually goes out rather than to REPORT_SIZE: handing the OS a
 		// 1025-byte report it truncates to 65 is what hid this for so long.
-		const report = new Array<number>(USB.MAX_WRITE_PACKET_BYTES + 1).fill(0);
+		const report = new Array<number>(this.packetBytes + 1).fill(0);
 		report[0] = this.reportId & 0xff;
 		for (let i = 0; i < packet.length; i += 1) {
 			report[i + 1] = packet[i];

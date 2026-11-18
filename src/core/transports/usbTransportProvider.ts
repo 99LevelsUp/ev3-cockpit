@@ -528,9 +528,11 @@ export class UsbTransportProvider implements TransportProvider {
 		libusbFailure: LibusbFailure,
 		signal: AbortSignal,
 	): Promise<SessionHandle> {
-		const hid = this.makeHidAdapter(
-			serial ? { path: `serial:${serial.toLowerCase()}` } : {}
-		);
+		const hid = this.makeHidAdapter({
+			...(serial ? { path: `serial:${serial.toLowerCase()}` } : {}),
+			// macOS reads the brick's 1024-byte report from its descriptor, so HID carries full frames there.
+			...(this.platform === 'darwin' ? { maxPacketBytes: USB.MAC_HID_PACKET_BYTES } : {}),
+		});
 		try {
 			await hid.open({ signal });
 		} catch (hidError) {
@@ -567,11 +569,17 @@ export class UsbTransportProvider implements TransportProvider {
 		// Said only once the fallback has actually happened: while a cable is out, every
 		// reconnect attempt fails both ways, and warning about a fallback that never came
 		// filled the log with a cost nobody was paying.
-		this.log?.warn(
-			`${describeChannel(brickKey)}: libusb unavailable (${libusbFailure.message}). Fell back to HID, `
-			+ `which delivers ${USB.MAX_WRITE_PACKET_BYTES} bytes per packet — transfers run `
-			+ 'about forty times slower and copy/move cannot be sent at all.'
-		);
+		if (hid.maxPacketBytes >= USB.MAC_HID_PACKET_BYTES) {
+			// macOS: the system's HID driver always holds the interface, and HID carries full frames.
+			this.log?.info(`${describeChannel(brickKey)}: over HID with ${hid.maxPacketBytes}-byte packets `
+				+ `(libusb: ${libusbFailure.message}).`);
+		} else {
+			this.log?.warn(
+				`${describeChannel(brickKey)}: libusb unavailable (${libusbFailure.message}). Fell back to HID, `
+				+ `which delivers ${hid.maxPacketBytes} bytes per packet — transfers run `
+				+ 'about forty times slower and copy/move cannot be sent at all.'
+			);
+		}
 		return { brickKey, transport: Transport.USB };
 	}
 
