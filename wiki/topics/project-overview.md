@@ -22,7 +22,7 @@ The codebase is a single TypeScript project (`package.json` name: `ev3-cockpit`,
 - **runtime/** — `SessionManager`, `PresenceAggregator`, `DiscoveryScheduler`, `CommandQueue`, `HeartbeatMonitor`, `ReconnectStrategy`
 - **mock/** — `MockTransportProvider`, mock filesystem, dynamics engine, configuration schema
 
-Entry point: `src/extension.ts` — `activate()` wires all services using a `DisposableStore` pattern with reverse-order teardown.
+Entry point: `src/vscode/extension.ts` — `activate()` wires all services using a `DisposableStore` pattern with reverse-order teardown.
 
 Architecture layers (bottom to top): Transport Providers → Presence Aggregator → Session Manager → (future) Telemetry Runtime → Public API Layer → Cockpit UI Layer.
 
@@ -77,5 +77,5 @@ State enums: `Transport` (mock/usb/tcp/bt), `PresenceState` (remembered/availabl
 - [IMPLEMENTATION_PLAN.md](../../IMPLEMENTATION_PLAN.md)
 - [AGENTS.md](../../AGENTS.md)
 - [CHANGELOG.md](../../CHANGELOG.md)
-- [src/extension.ts](../../src/extension.ts)
+- [src/vscode/extension.ts](../../src/vscode/extension.ts)
 - [package.json](../../package.json)

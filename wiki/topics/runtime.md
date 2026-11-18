@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 7 sources]
 
-The `src/runtime/` module is the central coordination layer of EVƎ Cockpit. It manages the lifecycle of connected brick sessions (connect, disconnect, heartbeat, reconnect), unified discovery (aggregating results from all transport providers), foreground/background switching, and command dispatch. The runtime is the single source of truth for connection state — the webview and public API are strictly read-only consumers.
+The `src/core/runtime/` module is the central coordination layer of EVƎ Cockpit. It manages the lifecycle of connected brick sessions (connect, disconnect, heartbeat, reconnect), unified discovery (aggregating results from all transport providers), foreground/background switching, and command dispatch. The runtime is the single source of truth for connection state — the webview and public API are strictly read-only consumers.
 
 ## Architecture [coverage: high — 7 sources]
 
@@ -32,7 +32,7 @@ Six classes, re-exported via `index.ts`:
 
 - **transports/ProviderRegistry** — `SessionManager` looks up providers for connect/disconnect/send; `DiscoveryScheduler` iterates all providers for discovery polling
 - **contracts/** — uses all enums, `BrickKey`, `DiscoveryItem`, `ConnectedSession`, `BrickCommand`/`BrickResponse`
-- **events/** — `PresenceAggregator` uses `createTypedEvent`; `SessionManager` uses `vscode.EventEmitter` directly
+- **events/** — `PresenceAggregator` uses `createTypedEvent`; `SessionManager` uses the core's `EventEmitter` directly
 - **extension.ts** — instantiates `SessionManager`, `DiscoveryScheduler`, `PresenceAggregator`; subscribes to events for logging
 
 ## API Surface [coverage: high — 7 sources]
@@ -86,11 +86,11 @@ Default configuration values (from `FIRMWARE_SAFETY` constants): heartbeat inter
 
 ## Sources
 
-- [src/runtime/index.ts](../../src/runtime/index.ts)
-- [src/runtime/sessionManager.ts](../../src/runtime/sessionManager.ts)
-- [src/runtime/presenceAggregator.ts](../../src/runtime/presenceAggregator.ts)
-- [src/runtime/discoveryScheduler.ts](../../src/runtime/discoveryScheduler.ts)
-- [src/runtime/sessionEntry.ts](../../src/runtime/sessionEntry.ts)
-- [src/runtime/commandQueue.ts](../../src/runtime/commandQueue.ts)
-- [src/runtime/heartbeatMonitor.ts](../../src/runtime/heartbeatMonitor.ts)
-- [src/runtime/reconnectStrategy.ts](../../src/runtime/reconnectStrategy.ts)
+- [src/core/runtime/index.ts](../../src/core/runtime/index.ts)
+- [src/core/runtime/sessionManager.ts](../../src/core/runtime/sessionManager.ts)
+- [src/core/runtime/presenceAggregator.ts](../../src/core/runtime/presenceAggregator.ts)
+- [src/core/runtime/discoveryScheduler.ts](../../src/core/runtime/discoveryScheduler.ts)
+- [src/core/runtime/sessionEntry.ts](../../src/core/runtime/sessionEntry.ts)
+- [src/core/runtime/commandQueue.ts](../../src/core/runtime/commandQueue.ts)
+- [src/core/runtime/heartbeatMonitor.ts](../../src/core/runtime/heartbeatMonitor.ts)
+- [src/core/runtime/reconnectStrategy.ts](../../src/core/runtime/reconnectStrategy.ts)

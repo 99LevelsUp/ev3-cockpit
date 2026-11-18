@@ -2,7 +2,7 @@
 
 For ev3-c (formerly ev3-native), ev3-explorer, and later ev3-python, ev3-blockly or an MCP server.
 It answers IMPLEMENTATION_PLAN 4.9.4: what the cockpit provides, and where the sibling designs
-assumed something else. The reference is DESIGN §10 and `src/api/cockpitApi.ts`.
+assumed something else. The reference is DESIGN §10 and `src/core/api/cockpitApi.ts`.
 
 ## Getting it
 

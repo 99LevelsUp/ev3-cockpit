@@ -35,16 +35,21 @@ The only exception is conversation with the user, which is conducted in the user
 
 ## Project Structure
 
-Source code under `src/`, entry point `src/extension.ts`. Modules are split by responsibility:
+Source code under `src/`, split in two:
 
-- `src/contracts/` — shared types and contracts
-- `src/runtime/` — session manager, presence aggregator
-- `src/transports/` — USB, BT, TCP, Mock providers
-- `src/api/` — public API for dependent extensions
-- `src/ui/` — webview panel
-- `src/mock/` — mock runtime and settings editor
-- `src/persistence/` — globalState adapter
-- `src/test/` — test utilities
+- `src/core/` — everything that works with bricks, and runs anywhere: in the extension, and in plain Node for the daemon and CLI to come (IMPLEMENTATION_PLAN 4.10). It never imports `vscode` or anything under `src/vscode/`; lint and `src/__tests__/coreBoundary.test.ts` enforce it.
+  - `src/core/contracts/` — shared types and contracts
+  - `src/core/events/` — the core's own event emitter, delivering as VS Code's does
+  - `src/core/runtime/` — sessions, bricks, presence, the runtime factory
+  - `src/core/transports/` — USB, BT, TCP, Mock providers
+  - `src/core/fs/`, `src/core/programs/`, `src/core/telemetry/`, `src/core/protocol/`, `src/core/commands/`, `src/core/errors/`
+  - `src/core/api/` — public API for dependent extensions
+  - `src/core/mock/` — simulated bricks
+- `src/vscode/` — what needs VS Code: the entry point `src/vscode/extension.ts`, the `ui/` flows, and the extension-host tests in `integration/`
+- `src/persistence/` — globalState adapter (placeholder)
+- `src/test/` — test utilities: the `vscode` stub and the shared emitter scenarios
+
+`scripts/core-smoke.js` runs the core in plain Node against a real brick (`node scripts/core-smoke.js <brick> <usb|bt|tcp>`).
 
 Unit tests: `src/__tests__/*.test.ts`, compiled to `out/__tests__`.  
 Playwright tests: `tests/*.spec.ts`.  

@@ -23,7 +23,7 @@ Dokumentuje konfiguraci VS Code workspace pro bezproblémový vývoj extension. 
 
 ```
 launch.json → preLaunchTask: "build:dev"
-                └─ esbuild src/extension.ts → out/extension.js  (114 KB bundle)
+                └─ esbuild src/vscode/extension.ts → out/extension.js  (114 KB bundle)
              → type: "extensionHost"
                 └─ otevře nové okno s --extensionDevelopmentPath
                    a načte out/extension.js

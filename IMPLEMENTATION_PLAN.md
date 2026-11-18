@@ -1984,7 +1984,21 @@ Asked for by an experienced programmer who wants the cockpit from Claude Code wi
 The model is adb's: a command-line tool that starts a background server on first use, which holds
 the devices.
 
-- [ ] 4.10.1 **The core without VS Code — right after item 7 (2.8.12).** The transports, sessions,
+- [x] 4.10.1 **Done 18.11.2026** (plan `docs/plans/2026-11-18-1008-refactor-core-without-vscode-plan.md`,
+  branch `refactor/core-without-vscode`, each step codex READY). **The sources moved on this date:**
+  what this file cites before it as `src/<module>/` now lives in `src/core/<module>/`, and
+  `src/extension.ts`, `src/ui/`, `src/integration/` in `src/vscode/`; earlier entries keep the paths
+  they were written with. The core has its own event emitter, characterized against VS Code's in the
+  extension host (it delivers a fire from inside a listener synchronously, after finishing the fire
+  in progress, which the old unit-test stub did not), and imports no `vscode`; lint and a test hold
+  that. The bundle the extension ships is the same as before the move once the paths are written
+  back. `scripts/core-smoke.js` drove real bricks from plain Node on HOSTA: USB on AAA, BBB and CCC
+  (V1.10E, V1.10E, V1.09H), TCP on AAA, Bluetooth on BBB and CCC; the VSIX built from the new layout
+  started with the same log lines and connected. Found on the way and fixed: a link's own error
+  reached API consumers without a code (all adapters); a USB exchange cut by a close failed with a
+  `TypeError`. Still to carry to the Mac visit: a macOS VSIX target and a macOS Bluetooth backend
+  (item 8).
+  Original entry: **The core without VS Code — right after item 7 (2.8.12).** The transports, sessions,
   filesystem, telemetry, programs and API take from `vscode` only `EventEmitter`, `Event` and
   `Disposable` (11 files of 194 on 18.11.2026) and one log channel; the unit tests already run in
   plain Node over `test/vscodeStub.cjs`. Replace those with our own, take the settings (access mode,

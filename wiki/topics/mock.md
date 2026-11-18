@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 6 sources]
 
-The `src/mock/` module implements a complete mock transport provider that simulates EV3 bricks without physical hardware. It is a first-class transport channel — equal in contract compliance to USB, TCP, and BT — and was implemented early in the project to support development and testing of all higher layers (runtime, telemetry, API, UI). Mock bricks are defined via a JSON configuration with support for dynamic sensor values (oscillators), error simulation, loss/recovery simulation, and an in-memory filesystem.
+The `src/core/mock/` module implements a complete mock transport provider that simulates EV3 bricks without physical hardware. It is a first-class transport channel — equal in contract compliance to USB, TCP, and BT — and was implemented early in the project to support development and testing of all higher layers (runtime, telemetry, API, UI). Mock bricks are defined via a JSON configuration with support for dynamic sensor values (oscillators), error simulation, loss/recovery simulation, and an in-memory filesystem.
 
 ## Architecture [coverage: high — 6 sources]
 
@@ -63,9 +63,9 @@ BrickKey format: `mock:<id>` where `id` comes from the config file.
 
 ## Sources
 
-- [src/mock/index.ts](../../src/mock/index.ts)
-- [src/mock/mockTransportProvider.ts](../../src/mock/mockTransportProvider.ts)
-- [src/mock/mockConfig.ts](../../src/mock/mockConfig.ts)
-- [src/mock/defaultConfig.ts](../../src/mock/defaultConfig.ts)
-- [src/mock/dynamics.ts](../../src/mock/dynamics.ts)
-- [src/mock/mockFilesystem.ts](../../src/mock/mockFilesystem.ts)
+- [src/core/mock/index.ts](../../src/core/mock/index.ts)
+- [src/core/mock/mockTransportProvider.ts](../../src/core/mock/mockTransportProvider.ts)
+- [src/core/mock/mockConfig.ts](../../src/core/mock/mockConfig.ts)
+- [src/core/mock/defaultConfig.ts](../../src/core/mock/defaultConfig.ts)
+- [src/core/mock/dynamics.ts](../../src/core/mock/dynamics.ts)
+- [src/core/mock/mockFilesystem.ts](../../src/core/mock/mockFilesystem.ts)

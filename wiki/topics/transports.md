@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 8 sources]
 
-The `src/transports/` module provides the physical I/O layer for communicating with EV3 bricks over USB, TCP, and Bluetooth. It contains transport adapters (raw I/O), transport providers (implementing the `TransportProvider` contract), a provider registry, and infrastructure components (TransportGuard, BtConnectionQueue, PendingReply, ProtocolBridge). Mock transport is handled separately in `src/mock/`.
+The `src/core/transports/` module provides the physical I/O layer for communicating with EV3 bricks over USB, TCP, and Bluetooth. It contains transport adapters (raw I/O), transport providers (implementing the `TransportProvider` contract), a provider registry, and infrastructure components (TransportGuard, BtConnectionQueue, PendingReply, ProtocolBridge). Mock transport is handled separately in `src/core/mock/`.
 
 ## Architecture [coverage: high — 8 sources]
 
@@ -79,17 +79,17 @@ Transport timing constants (from `transportConstants.ts`):
 
 ## Sources
 
-- [src/transports/index.ts](../../src/transports/index.ts)
-- [src/transports/transportAdapter.ts](../../src/transports/transportAdapter.ts)
-- [src/transports/providerRegistry.ts](../../src/transports/providerRegistry.ts)
-- [src/transports/usbHidAdapter.ts](../../src/transports/usbHidAdapter.ts)
-- [src/transports/tcpSocketAdapter.ts](../../src/transports/tcpSocketAdapter.ts)
-- [src/transports/btSppAdapter.ts](../../src/transports/btSppAdapter.ts)
-- [src/transports/usbTransportProvider.ts](../../src/transports/usbTransportProvider.ts)
-- [src/transports/tcpTransportProvider.ts](../../src/transports/tcpTransportProvider.ts)
-- [src/transports/btTransportProvider.ts](../../src/transports/btTransportProvider.ts)
-- [src/transports/transportGuard.ts](../../src/transports/transportGuard.ts)
-- [src/transports/btConnectionQueue.ts](../../src/transports/btConnectionQueue.ts)
-- [src/transports/pendingReply.ts](../../src/transports/pendingReply.ts)
-- [src/transports/protocolBridge.ts](../../src/transports/protocolBridge.ts)
-- [src/transports/transportConstants.ts](../../src/transports/transportConstants.ts)
+- [src/core/transports/index.ts](../../src/core/transports/index.ts)
+- [src/core/transports/transportAdapter.ts](../../src/core/transports/transportAdapter.ts)
+- [src/core/transports/providerRegistry.ts](../../src/core/transports/providerRegistry.ts)
+- [src/core/transports/usbHidAdapter.ts](../../src/core/transports/usbHidAdapter.ts)
+- [src/core/transports/tcpSocketAdapter.ts](../../src/core/transports/tcpSocketAdapter.ts)
+- [src/core/transports/btSppAdapter.ts](../../src/core/transports/btSppAdapter.ts)
+- [src/core/transports/usbTransportProvider.ts](../../src/core/transports/usbTransportProvider.ts)
+- [src/core/transports/tcpTransportProvider.ts](../../src/core/transports/tcpTransportProvider.ts)
+- [src/core/transports/btTransportProvider.ts](../../src/core/transports/btTransportProvider.ts)
+- [src/core/transports/transportGuard.ts](../../src/core/transports/transportGuard.ts)
+- [src/core/transports/btConnectionQueue.ts](../../src/core/transports/btConnectionQueue.ts)
+- [src/core/transports/pendingReply.ts](../../src/core/transports/pendingReply.ts)
+- [src/core/transports/protocolBridge.ts](../../src/core/transports/protocolBridge.ts)
+- [src/core/transports/transportConstants.ts](../../src/core/transports/transportConstants.ts)

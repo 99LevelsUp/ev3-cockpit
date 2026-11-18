@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 5 sources]
 
-The `src/protocol/` module implements the EV3 communication protocol as pure functions with no I/O. It handles bytecode encoding primitives, packet framing, command building (from `BrickCommand` to raw bytes), and response parsing (from raw bytes to typed `BrickResponse`). This layer sits between the transport adapters (raw I/O) and the higher-level transport providers.
+The `src/core/protocol/` module implements the EV3 communication protocol as pure functions with no I/O. It handles bytecode encoding primitives, packet framing, command building (from `BrickCommand` to raw bytes), and response parsing (from raw bytes to typed `BrickResponse`). This layer sits between the transport adapters (raw I/O) and the higher-level transport providers.
 
 ## Architecture [coverage: high — 5 sources]
 
@@ -59,8 +59,8 @@ EV3 opcodes and sub-commands are defined as numeric constants (`EV3_OPCODE`, `UI
 
 ## Sources
 
-- [src/protocol/index.ts](../../src/protocol/index.ts)
-- [src/protocol/ev3Bytecode.ts](../../src/protocol/ev3Bytecode.ts)
-- [src/protocol/ev3Packet.ts](../../src/protocol/ev3Packet.ts)
-- [src/protocol/ev3Commands.ts](../../src/protocol/ev3Commands.ts)
-- [src/protocol/ev3Responses.ts](../../src/protocol/ev3Responses.ts)
+- [src/core/protocol/index.ts](../../src/core/protocol/index.ts)
+- [src/core/protocol/ev3Bytecode.ts](../../src/core/protocol/ev3Bytecode.ts)
+- [src/core/protocol/ev3Packet.ts](../../src/core/protocol/ev3Packet.ts)
+- [src/core/protocol/ev3Commands.ts](../../src/core/protocol/ev3Commands.ts)
+- [src/core/protocol/ev3Responses.ts](../../src/core/protocol/ev3Responses.ts)

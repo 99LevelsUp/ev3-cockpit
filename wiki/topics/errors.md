@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 2 sources]
 
-The `src/errors/` module provides a typed error hierarchy for the entire EVƎ Cockpit extension. Every error thrown within the codebase can be narrowed to a specific category (transport, session, or API) via the `ErrorCode` field, enabling consistent error handling and logging across all layers.
+The `src/core/errors/` module provides a typed error hierarchy for the entire EVƎ Cockpit extension. Every error thrown within the codebase can be narrowed to a specific category (transport, session, or API) via the `ErrorCode` field, enabling consistent error handling and logging across all layers.
 
 ## Architecture [coverage: high — 2 sources]
 
@@ -54,5 +54,5 @@ Each subclass sets its own `name` property and delegates to a specific error cod
 
 ## Sources
 
-- [src/errors/index.ts](../../src/errors/index.ts)
-- [src/errors/CockpitError.ts](../../src/errors/CockpitError.ts)
+- [src/core/errors/index.ts](../../src/core/errors/index.ts)
+- [src/core/errors/CockpitError.ts](../../src/core/errors/CockpitError.ts)
