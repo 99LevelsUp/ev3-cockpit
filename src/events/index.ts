@@ -1,5 +1,3 @@
-import * as vscode from 'vscode';
-
 /** Anything that can be released. */
 export interface Disposable {
 	dispose(): void;
@@ -122,14 +120,14 @@ function reportListenerError(error: unknown): void {
 	}
 }
 
-/** A typed event source that wraps vscode.EventEmitter. */
-export interface TypedEvent<T> extends vscode.Disposable {
-    readonly event: vscode.Event<T>;
+/** A typed event source over the core's EventEmitter. */
+export interface TypedEvent<T> extends Disposable {
+    readonly event: Event<T>;
     fire(data: T): void;
 }
 
 export function createTypedEvent<T>(): TypedEvent<T> {
-	const emitter = new vscode.EventEmitter<T>();
+	const emitter = new EventEmitter<T>();
 	return {
 		event: emitter.event,
 		fire: (data: T) => emitter.fire(data),
@@ -142,10 +140,10 @@ export function createTypedEvent<T>(): TypedEvent<T> {
  * Use in activate() to register services, then push the registry itself into
  * context.subscriptions.
  */
-export class DisposableStore implements vscode.Disposable {
-	private readonly items: vscode.Disposable[] = [];
+export class DisposableStore implements Disposable {
+	private readonly items: Disposable[] = [];
 
-	add<T extends vscode.Disposable>(item: T): T {
+	add<T extends Disposable>(item: T): T {
 		this.items.push(item);
 		return item;
 	}

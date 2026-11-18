@@ -24,7 +24,22 @@ Module._resolveFilename = function (request, parent, isMain, options) {
 // The root `after` hook releases it, so a file still exits once its tests are done. Only in a test
 // file's own process: the preload runs in the runner that spawns them too, which it would hold open.
 if (process.env.NODE_TEST_CONTEXT) {
-	const { after } = require('node:test');
+	const { after, afterEach } = require('node:test');
 	const keepAlive = setInterval(() => {}, 1 << 30);
 	after(() => clearInterval(keepAlive));
+
+	// The core's events, like VS Code's, never let a listener's error reach the code that fired: in
+	// production it goes to the console. Here it fails the running test instead, so an assertion
+	// inside a listener still guards its test. A test that expects a listener to throw installs its
+	// own handler for the duration.
+	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'events'));
+	const listenerErrors = [];
+	setListenerErrorHandler((error) => listenerErrors.push(error));
+	afterEach(() => {
+		const errors = listenerErrors.splice(0);
+		if (errors.length > 0) {
+			const first = errors[0];
+			throw new Error(`An event listener threw ${errors.length} time(s) during this test: ${first instanceof Error ? first.stack ?? first.message : String(first)}`);
+		}
+	});
 }

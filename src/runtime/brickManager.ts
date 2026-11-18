@@ -9,7 +9,7 @@
  * back in moves it back.
  */
 
-import * as vscode from 'vscode';
+import { Disposable, EventEmitter } from '../events';
 import {
 	BrickCommand, BrickId, BrickKey, BrickPeer, BrickPeerList, BrickResponse, ChannelState, ConnectionState, ForgetResidue,
 	PresenceState, SendCommandOptions, Transport, brickIdOf, brickKeyId, brickKeyTransport, describeChannel, makeBrickKey,
@@ -196,7 +196,7 @@ const bluetoothKeyOf = (brickId: BrickId): BrickKey | undefined =>
 /** How many entries of a brick's Bluetooth list carry exactly `name`; the brick tells entries apart by nothing else. */
 const countOf = (names: readonly string[], name: string): number => names.filter((n) => n === name).length;
 
-export class BrickManager implements vscode.Disposable {
+export class BrickManager implements Disposable {
 	private readonly sessionManager: SessionManager;
 	private readonly aggregator: PresenceAggregator;
 	private readonly registry: ProviderRegistry;
@@ -279,32 +279,32 @@ export class BrickManager implements vscode.Disposable {
 	 */
 	private readonly ownPairings = new Map<BrickId, { readonly blanksBefore: number; rereads: number; timer?: ReturnType<typeof setTimeout> }>();
 
-	private readonly _onRouteChange = new vscode.EventEmitter<RouteChangeEvent>();
+	private readonly _onRouteChange = new EventEmitter<RouteChangeEvent>();
 	/** Fired when the channel a brick's traffic goes over changes, including to none. */
 	readonly onRouteChange = this._onRouteChange.event;
 
-	private readonly _onActiveBrickChange = new vscode.EventEmitter<ActiveBrickIdChangeEvent>();
+	private readonly _onActiveBrickChange = new EventEmitter<ActiveBrickIdChangeEvent>();
 	readonly onActiveBrickChange = this._onActiveBrickChange.event;
 
 	/**
 	 * A brick's sign-in ended. Its own event because a route event cannot carry it: a brick that
 	 * lost its link has no route left to lose, so signing it out changes no route (step-6 U5 review).
 	 */
-	private readonly _onSignInEnded = new vscode.EventEmitter<BrickId>();
+	private readonly _onSignInEnded = new EventEmitter<BrickId>();
 
-	private readonly _onPairingStarted = new vscode.EventEmitter<PairingStartedEvent>();
+	private readonly _onPairingStarted = new EventEmitter<PairingStartedEvent>();
 	/** Fired when a pairing starts, so whoever shows progress can tell the user to look at the brick. */
 	readonly onPairingStarted = this._onPairingStarted.event;
 
-	private readonly _onPeerListChange = new vscode.EventEmitter<PeerListChangeEvent>();
+	private readonly _onPeerListChange = new EventEmitter<PeerListChangeEvent>();
 	/** Fired when a read of a brick's list finds it changed, and when the brick is forgotten. */
 	readonly onPeerListChange = this._onPeerListChange.event;
 
-	private readonly _onOneSidedRepair = new vscode.EventEmitter<OneSidedRepair>();
+	private readonly _onOneSidedRepair = new EventEmitter<OneSidedRepair>();
 	/** Fired when a pairing broken on one side is found over USB or TCP, with what was done (R6). */
 	readonly onOneSidedRepair = this._onOneSidedRepair.event;
 
-	private readonly subscriptions: vscode.Disposable[] = [];
+	private readonly subscriptions: Disposable[] = [];
 
 	constructor(options: BrickManagerOptions) {
 		this.sessionManager = options.sessionManager;

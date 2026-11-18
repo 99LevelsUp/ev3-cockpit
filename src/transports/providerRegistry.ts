@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import { Disposable, Event, EventEmitter } from '../events';
 import { Transport, TransportProvider } from '../contracts';
 
 /**
@@ -11,16 +11,16 @@ import { Transport, TransportProvider } from '../contracts';
  * Fires `onProviderRegistered` and `onProviderUnregistered` so that consumers
  * (e.g. DiscoveryScheduler) can react to provider changes without polling.
  */
-export class ProviderRegistry implements vscode.Disposable {
+export class ProviderRegistry implements Disposable {
 	private readonly providers = new Map<Transport, TransportProvider>();
 
-	private readonly _onProviderRegistered = new vscode.EventEmitter<TransportProvider>();
-	private readonly _onProviderUnregistered = new vscode.EventEmitter<Transport>();
+	private readonly _onProviderRegistered = new EventEmitter<TransportProvider>();
+	private readonly _onProviderUnregistered = new EventEmitter<Transport>();
 
 	/** Fired when a provider is registered (or replaces an existing one for the same transport). */
-	readonly onProviderRegistered: vscode.Event<TransportProvider> = this._onProviderRegistered.event;
+	readonly onProviderRegistered: Event<TransportProvider> = this._onProviderRegistered.event;
 	/** Fired when a provider is unregistered (after it has been disposed). */
-	readonly onProviderUnregistered: vscode.Event<Transport> = this._onProviderUnregistered.event;
+	readonly onProviderUnregistered: Event<Transport> = this._onProviderUnregistered.event;
 
 	/** Register a provider. Replaces any existing provider for the same transport. */
 	register(provider: TransportProvider): void {

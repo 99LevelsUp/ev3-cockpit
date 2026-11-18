@@ -27,6 +27,7 @@ import { MockTransportProvider } from '../mock/mockTransportProvider';
 import { ConnectionState, Transport } from '../contracts/enums';
 import { BrickKey, makeBrickKey } from '../contracts/brickKey';
 
+import { setListenerErrorHandler } from '../events';
 import { waitFor } from './waitFor';
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1698,6 +1699,40 @@ describe('SessionManager — a busy brick on USB (N2, owner 14.11.2026)', () => 
 			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected,
 				'the answer in between reset the count: two misses in a row reconnect, not two in all');
 		} finally {
+			manager.dispose();
+		}
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// SessionManager events with a listener that throws
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('SessionManager events with a listener that throws', () => {
+	it('still reach the next listener, and the error is reported, not thrown at the session', async () => {
+		// VS Code's emitter has always done this in the extension; the unit suite's stub rethrew, so
+		// a throwing listener aborted the state change here and nowhere else.
+		const registry = new ProviderRegistry();
+		registry.register(new MockTransportProvider({
+			transport: Transport.Mock,
+			bricks: [{ id: 'brick-a', displayName: 'Brick Alpha', battery: { level: 75, voltage: 7.2 }, motorPorts: [], sensorPorts: [] }],
+		}));
+		const manager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 3000, heartbeatMissThreshold: 2 });
+		const errors: unknown[] = [];
+		const previous = setListenerErrorHandler((error) => errors.push(error));
+		try {
+			const failure = new Error('first listener failed');
+			const heard: ConnectionState[] = [];
+			manager.onSessionStateChange(() => { throw failure; });
+			manager.onSessionStateChange((e) => heard.push(e.newState));
+			const key = makeBrickKey(Transport.Mock, 'brick-a');
+			await manager.connect(key, Transport.Mock);
+			assert.equal(manager.getSession(key)?.connectionState, ConnectionState.Connected);
+			assert.ok(heard.includes(ConnectionState.Connected), `the second listener heard ${heard.join(', ')}`);
+			assert.ok(errors.length > 0 && errors.every((e) => e === failure), 'every error came from the failing listener');
+			assert.equal(errors.length, heard.length, 'one report per state change the first listener failed on');
+		} finally {
+			setListenerErrorHandler(previous);
 			manager.dispose();
 		}
 	});

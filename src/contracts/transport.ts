@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import { Disposable } from '../events';
 import { Transport } from './enums';
 import { BrickKey } from './brickKey';
 import { DiscoveryItem, PortState } from './models';
@@ -436,7 +436,7 @@ export interface ProbeLink {
  * `recover` and `forget` are optional — implement them only when the transport
  * supports these operations. Check for method presence (`provider.recover?.`) before calling.
  */
-export interface TransportProvider extends vscode.Disposable {
+export interface TransportProvider extends Disposable {
 	/** Which transport this provider handles. */
 	readonly transport: Transport;
 

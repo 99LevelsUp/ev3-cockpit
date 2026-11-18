@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import * as vscode from 'vscode';
+import { EventEmitter } from '../events';
 
 import type { BrickId } from '../contracts';
 import type { RowValue } from '../telemetry/telemetryRow';
@@ -29,9 +29,9 @@ function world(
 	settings = { staleFactor: 3, staleTimeoutMs: 1000 },
 	running: ReadonlyMap<BrickId, ReadonlyMap<string, number | 'once'>> = new Map(),
 ) {
-	const values = new vscode.EventEmitter<TelemetryValuesEvent>();
-	const plans = new vscode.EventEmitter<PlanChangeEvent>();
-	const ended = new vscode.EventEmitter<{ readonly brickKey: BrickId }>();
+	const values = new EventEmitter<TelemetryValuesEvent>();
+	const plans = new EventEmitter<PlanChangeEvent>();
+	const ended = new EventEmitter<{ readonly brickKey: BrickId }>();
 	const source: TelemetrySource = {
 		onValues: values.event, onPlanChange: plans.event, onSessionEnded: ended.event,
 		currentPlans: () => running,

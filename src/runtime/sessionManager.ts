@@ -6,7 +6,7 @@
  * and is the single source of truth for connection state.
  */
 
-import * as vscode from 'vscode';
+import { Disposable, EventEmitter } from '../events';
 import { ConnectionState, Transport } from '../contracts/enums';
 import { BrickKey, brickIdOf, describeChannel } from '../contracts/brickKey';
 import { ConnectedSession } from '../contracts/models';
@@ -80,7 +80,7 @@ interface SessionResources {
 /**
  * Central coordinator for all connected brick sessions.
  */
-export class SessionManager implements vscode.Disposable {
+export class SessionManager implements Disposable {
 	private readonly providerRegistry: ProviderRegistry;
 	private readonly sessions = new Map<BrickKey, SessionResources>();
 	private readonly suppressedBricks = new Set<BrickKey>();
@@ -89,13 +89,13 @@ export class SessionManager implements vscode.Disposable {
 
 	private activeBrickKey?: BrickKey;
 
-	private readonly _onSessionStateChange = new vscode.EventEmitter<SessionStateChangeEvent>();
+	private readonly _onSessionStateChange = new EventEmitter<SessionStateChangeEvent>();
 	readonly onSessionStateChange = this._onSessionStateChange.event;
 
-	private readonly _onActiveBrickChange = new vscode.EventEmitter<ActiveBrickChangeEvent>();
+	private readonly _onActiveBrickChange = new EventEmitter<ActiveBrickChangeEvent>();
 	readonly onActiveBrickChange = this._onActiveBrickChange.event;
 
-	private readonly _onReconnectFailed = new vscode.EventEmitter<ReconnectFailedEvent>();
+	private readonly _onReconnectFailed = new EventEmitter<ReconnectFailedEvent>();
 	readonly onReconnectFailed = this._onReconnectFailed.event;
 
 	private readonly heartbeatIntervalMs: number;

@@ -28,7 +28,7 @@
  * were last told and what holds now, so a change cannot go untold.
  */
 
-import * as vscode from 'vscode';
+import { Disposable, Event, EventEmitter } from '../events';
 
 import { BrickRef } from '../contracts';
 import { RowValue } from './telemetryRow';
@@ -57,9 +57,9 @@ export interface ReadModelChange {
 
 /** Where the values come from: the telemetry service, or a test's stand-in. */
 export interface TelemetrySource {
-	readonly onValues: vscode.Event<TelemetryValuesEvent>;
-	readonly onPlanChange: vscode.Event<PlanChangeEvent>;
-	readonly onSessionEnded: vscode.Event<SessionEndedEvent>;
+	readonly onValues: Event<TelemetryValuesEvent>;
+	readonly onPlanChange: Event<PlanChangeEvent>;
+	readonly onSessionEnded: Event<SessionEndedEvent>;
 	/**
 	 * What each brick is read for right now: a reader attached to a source that already runs learns
 	 * the plans announced before it subscribed (review of U6, round 1).
@@ -118,7 +118,7 @@ const realTimer: ReadModelTimer = {
 	},
 };
 
-export class TelemetryReadModel implements vscode.Disposable {
+export class TelemetryReadModel implements Disposable {
 	private readonly bricks = new Map<BrickRef, Map<string, Entry>>();
 	/** What each brick is read for now, as the source last said. */
 	private readonly plans = new Map<BrickRef, ReadonlyMap<string, number | 'once'>>();
@@ -128,14 +128,14 @@ export class TelemetryReadModel implements vscode.Disposable {
 	private readonly planned = new Map<BrickRef, Map<string, RowPlan>>();
 	/** Bricks whose session ended and that are not read again yet: their late replies are not taken. */
 	private readonly ended = new Set<BrickRef>();
-	private readonly subscriptions: vscode.Disposable[];
+	private readonly subscriptions: Disposable[];
 	private readonly now: () => number;
 	private readonly timer: ReadModelTimer;
 	private settings: TelemetrySettings;
 	private cancelTimer: (() => void) | undefined;
 	private disposed = false;
 
-	private readonly _onChange = new vscode.EventEmitter<ReadModelChange>();
+	private readonly _onChange = new EventEmitter<ReadModelChange>();
 	readonly onChange = this._onChange.event;
 
 	constructor(options: TelemetryReadModelOptions) {
