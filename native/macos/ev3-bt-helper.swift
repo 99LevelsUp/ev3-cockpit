@@ -15,6 +15,7 @@
 //   ev3-bt-helper inquire <s>    an inquiry of <s> seconds; JSON {"devices": [...]} with names,
 //                                paired or not
 //   ev3-bt-helper pair <mac>     pairs; one JSON event per line on stdout, the last {"type":"result"}
+//   ev3-bt-helper radio          JSON {"name": ...}: this Mac's Bluetooth name, as a brick lists it
 //
 // Bluetooth needs the user's consent (TCC). The prompt names the app that started the helper (VS
 // Code, or the Terminal), never the helper. Before consent IOBluetooth answers as if nothing were
@@ -317,7 +318,13 @@ case "forget" where args.count > 2: forget(args[2])
 case "check" where args.count > 2: check(args[2])
 case "inquire" where args.count > 2: inquire(args[2])
 case "pair" where args.count > 2: pair(args[2])
+case "radio":
+	// The name a brick shows for this Mac in its own Bluetooth list, which is how Forget a Brick
+	// finds the entry to remove there.
+	guard bluetoothAllowed() else { printJSON(["error": "denied"]); exit(3) }
+	printJSON(["name": IOBluetoothHostController.default()?.nameAsString() ?? ""])
+	exit(0)
 default:
-	status("usage: ev3-bt-helper list | connect <mac> | forget <mac> | check <mac> | inquire <seconds> | pair <mac>")
+	status("usage: ev3-bt-helper list | connect <mac> | forget <mac> | check <mac> | inquire <seconds> | pair <mac> | radio")
 	exit(2)
 }
