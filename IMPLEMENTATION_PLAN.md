@@ -2024,10 +2024,18 @@ the devices.
     and the helper says `denied` rather than listing nothing). Pairing stays in the system settings.
   - **TCP** works once the user allows VS Code onto the local network; before that a connect fails
     with `EHOSTUNREACH` while beacons still arrive, and the error now says where to allow it.
-  Open: pairing and forgetting from the cockpit (the helper's `forget` exists: a brick reset
-  without a clean shutdown loses its side of the pairing, macOS keeps its key, and the system
-  settings offer no way out); Bluetooth presence on macOS; a signed and notarised helper for the
-  Marketplace (an ad-hoc signature runs, Gatekeeper never saw a quarantine flag on it). Seen on the
+  Second day (19.11.2026), the Mac to be returned the next: the helper also pairs (it answers the
+  brick's PIN request; the user accepts on the brick, 16 s), forgets (macOS keeps a key the brick lost
+  on a reset without a clean shutdown, and its settings offer no way out), checks presence (a
+  baseband connection, closed at once — a name request answered for a switched-off brick from
+  macOS's cache) and inquires; and it gives the Mac's Bluetooth name, so Forget a Brick also removes
+  the Mac from the brick's own list. On hardware: forget → the inquiry found the unpaired brick
+  40 s later → Connect paired and connected it; Bluetooth off on the brick → "not heard" after the
+  three checks, on → heard again within a minute. The darwin-arm64 VSIX is built by
+  `.github/workflows/vsix-macos.yml` on a GitHub macOS runner (helper, unit tests, VSIX); that
+  VSIX, installed on the Mac, is the one these checks ran on. Still open: a signed and notarised
+  helper for the Marketplace (an ad-hoc signature runs, Gatekeeper never saw a quarantine flag on
+  it; notarising needs a paid Apple Developer account). Seen on the
   way: CCC froze when USB was plugged in during a Bluetooth session, right after a Wi-Fi run; the same
   step on a freshly started brick did not (owner's hypothesis: Wi-Fi leaves the firmware fragile).
 - [ ] 4.10.2 **A daemon and a thin CLI.** The daemon holds the bricks: connections (a Bluetooth
