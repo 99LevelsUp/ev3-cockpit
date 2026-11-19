@@ -179,6 +179,13 @@ export interface MacPairingOptions {
 	helperPath: string;
 	/** For tests: starts the helper. */
 	spawnHelper?: SpawnHelper;
+	/**
+	 * How long a pairing may take in all before the helper is stopped (default 240 s): the helper's
+	 * own limits are up to 120 s for the consent prompt and 90 s for the user to accept on the brick,
+	 * but they start only once its native calls return, and a stalled one would hold the pairing for
+	 * good (review of the second day).
+	 */
+	timeoutMs?: number;
 }
 
 /** What a user reads when a pairing ends with the helper's status. */
@@ -197,14 +204,23 @@ export function createMacPairing(options: MacPairingOptions): (
 	mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
 ) => Promise<HelperPairingResult> {
 	const spawnHelper = options.spawnHelper ?? spawnerFor(options.helperPath);
+	const timeoutMs = options.timeoutMs ?? 240_000;
 	return (mac, onEvent, signal) => new Promise<HelperPairingResult>((resolve) => {
 		if (signal?.aborted) { resolve({ ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' }); return; }
 		const helper = spawnHelper(['pair', bareOf(mac)]);
 		let result: HelperPairingResult | undefined;
 		let pending = '';
 		let stderr = '';
+		let settled = false;
+		let timedOut = false;
 		const onAbort = () => helper.kill('SIGTERM');
 		signal?.addEventListener('abort', onAbort, { once: true });
+		const watchdog = setTimeout(() => {
+			timedOut = true;
+			helper.kill('SIGKILL');
+			finish('The Bluetooth helper did not finish the pairing in time.');
+		}, timeoutMs);
+		watchdog.unref?.();
 		helper.stdin?.on('error', () => { /* the helper reads nothing; a closed pipe changes nothing */ });
 		helper.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
 		helper.stdout?.on('data', (chunk: Buffer) => {
@@ -214,7 +230,8 @@ export function createMacPairing(options: MacPairingOptions): (
 				const line = pending.slice(0, newline).trim();
 				pending = pending.slice(newline + 1);
 				if (!line.startsWith('{')) { continue; }
-				const event = JSON.parse(line) as BtPairingEvent;
+				let event: BtPairingEvent;
+				try { event = JSON.parse(line) as BtPairingEvent; } catch { continue; }
 				onEvent?.(event);
 				if (event.type === 'result') {
 					const { ok, status } = event as { ok?: unknown; status?: unknown };
@@ -223,11 +240,16 @@ export function createMacPairing(options: MacPairingOptions): (
 				}
 			}
 		});
-		const finish = (fallback: string) => {
+		// Settles once, whichever comes first: the helper's end, its failure to start, or the watchdog.
+		function finish(fallback: string): void {
+			if (settled) { return; }
+			settled = true;
+			clearTimeout(watchdog);
 			signal?.removeEventListener('abort', onAbort);
 			if (signal?.aborted) { resolve({ ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' }); return; }
+			if (timedOut) { resolve({ ok: false, reason: fallback, status: 'HelperTimeout' }); return; }
 			resolve(result ?? { ok: false, reason: /error (.*)/.exec(stderr)?.[1] ?? fallback });
-		};
+		}
 		helper.on('error', (error) => finish(`The Bluetooth helper did not start: ${error.message}`));
 		helper.on('close', (code) => finish(`The Bluetooth helper ended (${code}) without a result.`));
 	});
