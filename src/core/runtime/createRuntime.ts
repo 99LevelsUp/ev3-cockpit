@@ -224,12 +224,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 			btPresence.start();
 			log.info('Bluetooth presence started (inquiry and paired-brick checks, every minute)');
 		} else {
-			// Windows runs both jobs through its helper, Linux through BlueZ; macOS has neither job yet, and
+			// Windows runs both jobs through its helper, Linux through BlueZ, macOS through its own helper;
 			// elsewhere they would only report that.
-			const platform = options.platform ?? process.platform;
-			log.info(platform === 'darwin'
-				? 'Bluetooth presence not started on macOS: the list shows the bricks macOS has paired'
-				: `Bluetooth presence not started: no Bluetooth backend for ${platform}`);
+			log.info(`Bluetooth presence not started: no Bluetooth backend for ${options.platform ?? process.platform}`);
 		}
 	}
 	void scheduler.scanOnce().then(() => {
@@ -329,7 +326,7 @@ function registerRealProviders(
 		return { ...registerBluezBluetooth(services, registry, options, btQueue, refreshDiscovery, platform), presenceRuns: true };
 	}
 	if (platform === 'darwin') {
-		return { ...registerMacBluetooth(services, registry, options, btQueue, refreshDiscovery), presenceRuns: false };
+		return { ...registerMacBluetooth(services, registry, options, btQueue, refreshDiscovery), presenceRuns: true };
 	}
 	const btBackend = new BtSppBackend();
 	const btHelperPath = path.join(options.extensionPath, 'native', 'bin', 'bt-pairing-helper.exe');
@@ -387,8 +384,9 @@ function registerRealProviders(
 /**
  * Bluetooth on macOS, through the cockpit's IOBluetooth helper (the Mac visit, 18.11.2026): the
  * paired bricks with their names from `list`, RFCOMM through `connect`. The serial port macOS
- * creates for a paired brick opens but never brings up the link, so it is not used. Pairing stays
- * in the system settings and presence does not run: the list shows what macOS has paired.
+ * creates for a paired brick opens but never brings up the link, so it is not used. Since the
+ * second day (19.11.2026) the helper also pairs, forgets, checks and inquires, so pairing from the
+ * cockpit, Forget a Brick and presence work as on the other hosts.
  *
  * Required here rather than imported, like BlueZ: no other host loads it.
  */
@@ -412,21 +410,27 @@ function registerMacBluetooth(
 		}),
 		// The helper's list is the whole answer; there is no separate device cache to read.
 		listDevices: () => [],
+		pairDevice: mac.createMacPairing({ helperPath }),
+		unpairDevice: mac.createMacUnpair({ helperPath }),
 		connectionQueue: btQueue,
+		onPairingEvent: (address, event, elapsedMs) => log.info(`Pairing ${address} +${elapsedMs} ms: ${JSON.stringify(event)}`),
 	});
-	// Never started on macOS (presenceRuns is false): the provider takes a monitor, and this one
-	// has nothing to check with yet.
+	// Presence as on the other hosts: an inquiry finds the bricks around, a check asks each paired
+	// brick without a session whether it is in range (second day of the Mac visit, 19.11.2026).
+	const presence = mac.createMacPresence({ helperPath });
 	const btPresence: BtPresenceMonitor = new BtPresenceMonitor({
 		queue: btQueue,
-		check: () => Promise.resolve(true),
-		inquire: () => Promise.resolve([]),
+		check: presence.check,
+		inquire: presence.inquire,
 		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable, the list shows macOS's paired bricks only: ${reason}`),
 		onChange: refreshDiscovery,
 	});
 	services.add({ dispose: () => btPresence.dispose() });
 	const btProvider: BtTransportProvider = services.add(new BtTransportProvider({
 		presence: btPresence,
 		discoverDevices: btDiscovery.discover,
+		unpairDevice: btDiscovery.unpair,
 		backends: new Map<BtBackend, BtAdapterFactory>([
 			['iobluetooth', (address) => new mac.BtMacAdapter({ mac: address, helperPath })],
 		]),

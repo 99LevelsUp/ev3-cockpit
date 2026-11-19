@@ -7,8 +7,12 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, it } from 'node:test';
-import { BtMacAdapter, HelperProcess, MAC_BT_DENIED, createMacPairedScan, parsePairedList } from '../core/transports/macBluetooth';
-import { TransportError } from '../core/errors/CockpitError';
+import {
+	BtMacAdapter, HelperProcess, MAC_BT_DENIED, createMacPairedScan, createMacPairing, createMacPresence, createMacUnpair,
+	parsePairedList,
+} from '../core/transports/macBluetooth';
+import { BackendUnavailableError, TransportError } from '../core/errors/CockpitError';
+import type { BtPairingEvent } from '../core/transports/btPairingHelper';
 import { MAC_LOCAL_NETWORK_HINT, codedForTests } from '../core/transports/tcpSocketAdapter';
 
 /** A helper process whose streams and exit the test drives; its stdin can hold a write's callback. */
@@ -65,6 +69,99 @@ describe('macOS local network consent for TCP (Mac visit, 18.11.2026)', () => {
 		assert.ok(!(codedForTests(unreachable, 'win32') as Error).message.includes('macOS'));
 		const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
 		assert.ok(!(codedForTests(refused, 'darwin') as Error).message.includes('macOS'));
+	});
+});
+
+describe('macOS pairing, forgetting and presence through the helper (second day of the Mac visit, 19.11.2026)', () => {
+	const pairingWith = (helpers: FakeHelper[]) => createMacPairing({
+		helperPath: '/nowhere',
+		spawnHelper: (args) => { const helper = new FakeHelper(args); helpers.push(helper); return helper as unknown as HelperProcess; },
+	});
+
+	it('pairs, passing on each event, and succeeds on the helper\'s result', async () => {
+		const helpers: FakeHelper[] = [];
+		const events: BtPairingEvent[] = [];
+		const pairing = pairingWith(helpers)('00:16:53:AA:BB:CC', (event) => events.push(event));
+		await tick();
+		assert.deepEqual(helpers[0].args, ['pair', '001653aabbcc']);
+		helpers[0].stdout.write('{"type":"pairingRequested","kind":"confirm","value":123456}\n{"type":"res');
+		helpers[0].stdout.write('ult","status":"Paired","ok":true}\n');
+		helpers[0].exit(0);
+		assert.deepEqual(await pairing, { ok: true, status: 'Paired' });
+		assert.deepEqual(events.map((event) => event.type), ['pairingRequested', 'result']);
+	});
+
+	it('says what to do when the brick was not confirmed in time, and when Bluetooth is refused', async () => {
+		const helpers: FakeHelper[] = [];
+		const pair = pairingWith(helpers);
+		const late = pair('00:16:53:AA:BB:CC');
+		await tick();
+		helpers[0].stdout.write('{"type":"result","status":"AuthenticationTimeout","ok":false}\n');
+		helpers[0].exit(5);
+		const timedOut = await late;
+		assert.equal(timedOut.ok, false);
+		assert.match(timedOut.reason ?? '', /brick's screen/);
+
+		const refused = pair('00:16:53:AA:BB:CC');
+		await tick();
+		helpers[1].stdout.write('{"type":"result","status":"Denied","ok":false}\n');
+		helpers[1].exit(3);
+		assert.equal((await refused).reason, MAC_BT_DENIED);
+	});
+
+	it('fails a pairing whose helper ends without a result, with the helper\'s own reason', async () => {
+		const helpers: FakeHelper[] = [];
+		const pairing = pairingWith(helpers)('00:16:53:AA:BB:CC');
+		await tick();
+		helpers[0].stderr.write('error no pairing for this device\n');
+		helpers[0].exit(4);
+		assert.deepEqual(await pairing, { ok: false, reason: 'no pairing for this device' });
+	});
+
+	it('stops the helper and reports a cancelled pairing when the caller gives up', async () => {
+		const helpers: FakeHelper[] = [];
+		const abort = new AbortController();
+		const pairing = pairingWith(helpers)('00:16:53:AA:BB:CC', undefined, abort.signal);
+		await tick();
+		abort.abort();
+		assert.equal(helpers[0].killed, 'SIGTERM');
+		assert.deepEqual(await pairing, { ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' });
+	});
+
+	it('forgets through the helper, and says why when it could not', async () => {
+		const asked: Array<readonly string[]> = [];
+		assert.deepEqual(await createMacUnpair({ helperPath: '/nowhere', run: async (args) => { asked.push(args); } })('00:16:53:AA:BB:CC'), { ok: true });
+		assert.deepEqual(asked, [['forget', '001653aabbcc']]);
+		const failed = await createMacUnpair({ helperPath: '/nowhere', run: () => Promise.reject(new Error('the pairing is still there')) })('00:16:53:AA:BB:CC');
+		assert.deepEqual(failed, { ok: false, reason: 'the pairing is still there' });
+	});
+
+	it('checks a paired brick by whether it answered', async () => {
+		const answers = ['{"answered":true,"name":"CCC"}', '{"answered":false,"name":""}'];
+		const asked: Array<readonly string[]> = [];
+		const presence = createMacPresence({ helperPath: '/nowhere', run: async (args) => { asked.push(args); return answers.shift()!; } });
+		assert.equal(await presence.check('00:16:53:AA:BB:CC'), true);
+		assert.equal(await presence.check('00:16:53:AA:BB:CC'), false);
+		assert.deepEqual(asked[0], ['check', '001653aabbcc']);
+	});
+
+	it('finds the EV3s an inquiry heard, paired or not, with their names and no made-up signal', async () => {
+		const presence = createMacPresence({ helperPath: '/nowhere', run: async () => JSON.stringify({ devices: [
+			{ mac: '001653aabbcc', name: 'CCC', paired: false, rssi: -40 },
+			{ mac: '001653ddeeff', name: 'BBB', paired: true, rssi: 127 },
+			{ mac: '88c9e84741fc', name: 'Headphones', paired: true, rssi: -50 },
+		] }) });
+		const found = await presence.inquire();
+		assert.deepEqual(found.map(({ mac, name, paired, signal }) => ({ mac, name, paired, signal })), [
+			{ mac: '00:16:53:AA:BB:CC', name: 'CCC', paired: false, signal: -40 },
+			{ mac: '00:16:53:DD:EE:FF', name: 'BBB', paired: true, signal: null },
+		]);
+	});
+
+	it('stops presence with the reason when Bluetooth is refused, rather than failing every round', async () => {
+		const presence = createMacPresence({ helperPath: '/nowhere', run: async () => '{"error":"denied"}' });
+		await assert.rejects(presence.inquire(), (error: unknown) => error instanceof BackendUnavailableError && error.message === MAC_BT_DENIED);
+		await assert.rejects(presence.check('00:16:53:AA:BB:CC'), BackendUnavailableError);
 	});
 });
 
