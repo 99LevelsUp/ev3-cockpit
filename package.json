@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.425",
+  "version": "0.2.426",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -163,7 +163,7 @@
     "compile": "tsc",
     "lint": "eslint src --ext .ts",
     "build:helper": "dotnet publish native/bt-pairing-helper -c Release -o native/bin",
-    "build:helper:macos": "swiftc -O -o native/bin/ev3-bt-helper native/macos/ev3-bt-helper.swift",
+    "build:helper:macos": "mkdir -p native/bin && swiftc -O -o native/bin/ev3-bt-helper native/macos/ev3-bt-helper.swift",
     "build:dev": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap",
     "package": "npm run build:helper && npm run bundle",
     "bundle": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js",
