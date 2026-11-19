@@ -679,9 +679,11 @@ export class BrickManager implements Disposable {
 	/**
 	 * Send a command to a brick over its best connected channel.
 	 *
-	 * A command that fails on a link fault is not resent: its caller hears the failure. The
-	 * channel leaves routing at once, so the next command goes over the next channel, and is
-	 * probed straight away — back in routing if it answers, reconnecting if not.
+	 * A command that fails on a link fault is not resent: its caller hears the failure. When the
+	 * brick has another connected channel, this one leaves routing at once, so the next command
+	 * goes over that, and is probed straight away — back in routing if it answers, reconnecting if
+	 * not. When it is the only one, it stays the route and is probed: leaving it would only make the
+	 * next commands fail until the probe answered.
 	 */
 	async send(brickId: BrickId, command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> {
 		const route = this.routes.get(brickId);
@@ -692,7 +694,7 @@ export class BrickManager implements Disposable {
 		try {
 			response = await this.sessionManager.send(route, command, options);
 		} catch (error) {
-			if (isLinkFailure(error, options)) { this.dropFromRouting(route); }
+			if (isLinkFailure(error, options)) { this.dropFromRouting(route, error); }
 			throw error;
 		}
 		// The brick answers a rename with a bare status, and rejects a bad name in silence; the
@@ -730,7 +732,7 @@ export class BrickManager implements Disposable {
 				try {
 					return await this.sessionManager.send(key, command);
 				} catch (error) {
-					if (isLinkFailure(error, undefined)) { this.dropFromRouting(key); }
+					if (isLinkFailure(error, undefined)) { this.dropFromRouting(key, error); }
 					throw error;
 				}
 			},
@@ -1864,10 +1866,26 @@ export class BrickManager implements Disposable {
 
 	// ── Internal: routing ───────────────────────────────────────────
 
-	private dropFromRouting(key: BrickKey): void {
+	private dropFromRouting(key: BrickKey, error: unknown): void {
 		// A brick being forgotten loses its links on purpose, and the probe below would put a
 		// lost one into reconnecting (KTD4).
 		if (this.dropped.has(key) || this.forgetting.has(brickIdOf(key))) { return; }
+		const brickId = brickIdOf(key);
+		const another = this.sessionManager.getAllSessions().some((s) => s.brickKey !== key
+			&& brickIdOf(s.brickKey) === brickId
+			&& s.connectionState === ConnectionState.Connected
+			&& !this.dropped.has(s.brickKey));
+		this.log?.warn(`A command over ${channelLabel(this.aggregator, key)} failed: ${messageOf(error)}; `
+			+ (another ? 'traffic moves to another channel while this one is checked.'
+				: 'it stays the route, as no other channel is connected, and is checked.'));
+		if (!another) {
+			// Dropping the only channel moves traffic nowhere: it left a gap of a few milliseconds,
+			// until the check below answered, in which every command failed "no connected channel"
+			// (EVƎ C's uploads, 3 of 5, 18.11.2026; 130 such gaps in an evening). The channel stays
+			// routed; the check still runs at once, and the heartbeat ends a link that is really gone.
+			void this.sessionManager.probeNow(key);
+			return;
+		}
 		this.dropped.add(key);
 		this.recomputeRoute(brickIdOf(key));
 		this.probeDropped(key);

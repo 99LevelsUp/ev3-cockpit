@@ -411,6 +411,27 @@ describe('BrickManager — failing over', () => {
 		w.done();
 	});
 
+	it('keeps the only channel routed when a command fails on it, so the next command does not fail "no connected channel" (EVƎ C, 19.11.2026)', async () => {
+		const w = world();
+		w.show.usb();
+		await w.scheduler.scanOnce();
+		await w.bricks.signIn(CCC);
+		await waitFor(() => w.usb.peerReads === 1, 1000);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		const routes: Array<string | undefined> = [];
+		w.bricks.onRouteChange((e) => routes.push(e.current));
+
+		w.usb.failing = true;
+		const failed = w.bricks.send(CCC, battery);
+		w.usb.failing = false;
+		await assert.rejects(failed);
+
+		assert.equal(w.bricks.routeOf(CCC), usbKey, 'there is nowhere to move traffic to');
+		await w.bricks.send(CCC, battery);   // at once, with no gap
+		assert.deepEqual(routes, [], 'the route never went to none and back');
+		w.done();
+	});
+
 	it('does not fail over on a command the caller aborted', async () => {
 		const w = world();
 		w.show.usb(); w.show.bt();
