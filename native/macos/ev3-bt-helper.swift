@@ -228,7 +228,13 @@ func check(_ address: String) -> Never {
 
 final class Inquiry: NSObject, IOBluetoothDeviceInquiryDelegate {
 	var done = false
-	func deviceInquiryComplete(_ sender: IOBluetoothDeviceInquiry!, error: IOReturn, aborted: Bool) { done = true }
+	var error: IOReturn = kIOReturnSuccess
+	var aborted = false
+	func deviceInquiryComplete(_ sender: IOBluetoothDeviceInquiry!, error: IOReturn, aborted: Bool) {
+		self.error = error
+		self.aborted = aborted
+		done = true
+	}
 }
 
 /** Every device heard in a window of the given seconds, with the names the inquiry resolved. */
@@ -246,7 +252,17 @@ func inquire(_ secondsText: String) -> Never {
 	while !delegate.done && Date() < deadline {
 		RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.2))
 	}
-	if !delegate.done { inquiry.stop() }
+	// A window that failed, was cut short or never finished is not a scan that heard nothing: say so,
+	// so presence fails the round instead of taking an empty list as the truth.
+	if !delegate.done {
+		inquiry.stop()
+		printJSON(["error": "the inquiry did not finish"])
+		exit(4)
+	}
+	if delegate.error != kIOReturnSuccess || delegate.aborted {
+		printJSON(["error": "the inquiry failed (\(delegate.error)\(delegate.aborted ? ", aborted" : ""))"])
+		exit(4)
+	}
 	let found = (inquiry.foundDevices() as? [IOBluetoothDevice]) ?? []
 	printJSON(["devices": found.map { device in [
 		"mac": bareMac(device.addressString),

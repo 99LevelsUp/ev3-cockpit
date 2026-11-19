@@ -128,6 +128,18 @@ describe('macOS pairing, forgetting and presence through the helper (second day 
 		assert.deepEqual(await pairing, { ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' });
 	});
 
+	it('gives up on a helper that never finishes, stops it, and settles once (review of the second day)', async () => {
+		const helpers: FakeHelper[] = [];
+		const pairing = createMacPairing({
+			helperPath: '/nowhere', timeoutMs: 30,
+			spawnHelper: (args) => { const helper = new FakeHelper(args); helpers.push(helper); return helper as unknown as HelperProcess; },
+		})('00:16:53:AA:BB:CC');
+		const outcome = await pairing;
+		assert.equal(outcome.ok, false);
+		assert.equal(outcome.status, 'HelperTimeout');
+		assert.equal(helpers[0].killed, 'SIGKILL');
+	});
+
 	it('forgets through the helper, and says why when it could not', async () => {
 		const asked: Array<readonly string[]> = [];
 		assert.deepEqual(await createMacUnpair({ helperPath: '/nowhere', run: async (args) => { asked.push(args); } })('00:16:53:AA:BB:CC'), { ok: true });
@@ -166,6 +178,12 @@ describe('macOS pairing, forgetting and presence through the helper (second day 
 		const refused = createMacRadioName({ helperPath: '/nowhere', run: async () => '{"error":"denied"}' });
 		await refused.read();
 		assert.equal(refused.name(), undefined);
+	});
+
+	it('fails the round when the inquiry did not finish, rather than reporting that it heard nothing (review of the second day)', async () => {
+		const presence = createMacPresence({ helperPath: '/nowhere', run: async () => '{"error":"the inquiry failed (-536870212)"}' });
+		await assert.rejects(presence.inquire(), (error: unknown) => error instanceof TransportError
+			&& !(error instanceof BackendUnavailableError) && /inquiry failed/.test(error.message));
 	});
 
 	it('stops presence with the reason when Bluetooth is refused, rather than failing every round', async () => {
