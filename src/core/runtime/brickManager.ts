@@ -1868,8 +1868,12 @@ export class BrickManager implements Disposable {
 
 	private dropFromRouting(key: BrickKey, error: unknown): void {
 		// A brick being forgotten loses its links on purpose, and the probe below would put a
-		// lost one into reconnecting (KTD4).
-		if (this.dropped.has(key) || this.forgetting.has(brickIdOf(key))) { return; }
+		// lost one into reconnecting (KTD4). Every failed command is logged all the same.
+		if (this.dropped.has(key) || this.forgetting.has(brickIdOf(key))) {
+			this.log?.warn(`A command over ${channelLabel(this.aggregator, key)} failed: ${messageOf(error)}; `
+				+ (this.dropped.has(key) ? 'the channel is already being checked.' : 'the brick is being forgotten.'));
+			return;
+		}
 		const brickId = brickIdOf(key);
 		const another = this.sessionManager.getAllSessions().some((s) => s.brickKey !== key
 			&& brickIdOf(s.brickKey) === brickId
