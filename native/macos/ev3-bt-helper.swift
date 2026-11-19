@@ -206,14 +206,21 @@ func printJSON(_ object: Any) {
 // ── check ────────────────────────────────────────────────────────────
 
 /**
- * Whether a device answers in range: a remote name request pages it without a link or a pairing,
- * like the L2CAP connect the cockpit uses for this on Linux. A switched-off brick does not answer.
+ * Whether a device answers in range: a baseband connection pages it, with no pairing and no
+ * channel, like the L2CAP connect the cockpit uses for this on Linux; it is closed again at once.
+ * A remote name request was tried first and answered for a switched-off brick (the Mac visit,
+ * 19.11.2026): macOS served the name it had, so it could not tell.
  */
 func check(_ address: String) -> Never {
 	guard bluetoothAllowed() else { printJSON(["error": "denied"]); exit(3) }
 	let device = deviceFor(address)
-	let result = device.remoteNameRequest(nil, withPageTimeout: BluetoothHCIPageTimeout(8000))
-	printJSON(["answered": result == kIOReturnSuccess, "name": device.name ?? ""])
+	// A link that is already up (a session of the cockpit's own) answers for itself.
+	if device.isConnected() { printJSON(["answered": true, "name": device.name ?? "", "via": "connected"]); exit(0) }
+	// Page timeout in baseband slots of 0.625 ms: 8000 is 5 s.
+	let result = device.openConnection(nil, withPageTimeout: BluetoothHCIPageTimeout(8000), authenticationRequired: false)
+	let answered = result == kIOReturnSuccess && device.isConnected()
+	if device.isConnected() { device.closeConnection() }
+	printJSON(["answered": answered, "name": device.name ?? "", "result": Int(result)])
 	exit(0)
 }
 
