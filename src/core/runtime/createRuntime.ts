@@ -403,7 +403,10 @@ function registerMacBluetooth(
 	const helperPath = path.join(options.extensionPath, mac.MAC_BT_HELPER_PATH);
 	const pairedScan = mac.createMacPairedScan({ helperPath });
 	const unavailable = logOnChange((message) => log.warn(message));
+	const radio = mac.createMacRadioName({ helperPath });
+	void radio.read();
 	const btDiscovery = new BtClassicDiscovery({
+		radioName: radio.name,
 		portScan: () => pairedScan().catch((error: unknown) => {
 			unavailable(`BT devices unavailable: ${error instanceof Error ? error.message : String(error)}`);
 			return [];
@@ -431,6 +434,8 @@ function registerMacBluetooth(
 		presence: btPresence,
 		discoverDevices: btDiscovery.discover,
 		unpairDevice: btDiscovery.unpair,
+		// macOS keeps nothing of a pairing it removed; Windows' registry and device record do not apply.
+		forgetResidue: () => [],
 		backends: new Map<BtBackend, BtAdapterFactory>([
 			['iobluetooth', (address) => new mac.BtMacAdapter({ mac: address, helperPath })],
 		]),

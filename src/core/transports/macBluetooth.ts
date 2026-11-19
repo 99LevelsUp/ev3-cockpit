@@ -254,6 +254,30 @@ export function createMacUnpair(options: { helperPath: string; run?: (args: read
 	};
 }
 
+/**
+ * This Mac's Bluetooth name, which a brick shows for it in its own list: Forget a Brick removes the
+ * entry by that name. Discovery asks for it synchronously, so it is read once in the background and
+ * kept; until then, or when Bluetooth is refused, it is unknown and the brick's list is left alone.
+ */
+export function createMacRadioName(options: { helperPath: string; run?: (args: readonly string[]) => Promise<string> }): {
+	read: () => Promise<void>;
+	name: () => string | undefined;
+} {
+	const run = options.run ?? runnerFor(options.helperPath, 150_000);
+	let known: string | undefined;
+	return {
+		read: async () => {
+			try {
+				const answer = JSON.parse(await run(['radio'])) as { name?: unknown };
+				if (typeof answer.name === 'string' && answer.name.trim()) { known = answer.name; }
+			} catch {
+				// Unknown stays unknown: forgetting then leaves the brick's list as it is, and says so.
+			}
+		},
+		name: () => known,
+	};
+}
+
 function bareOf(mac: string): string {
 	return mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
 }

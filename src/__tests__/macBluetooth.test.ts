@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, it } from 'node:test';
 import {
-	BtMacAdapter, HelperProcess, MAC_BT_DENIED, createMacPairedScan, createMacPairing, createMacPresence, createMacUnpair,
+	BtMacAdapter, HelperProcess, MAC_BT_DENIED, createMacPairedScan, createMacPairing, createMacPresence, createMacRadioName, createMacUnpair,
 	parsePairedList,
 } from '../core/transports/macBluetooth';
 import { BackendUnavailableError, TransportError } from '../core/errors/CockpitError';
@@ -156,6 +156,16 @@ describe('macOS pairing, forgetting and presence through the helper (second day 
 			{ mac: '00:16:53:AA:BB:CC', name: 'CCC', paired: false, signal: -40 },
 			{ mac: '00:16:53:DD:EE:FF', name: 'BBB', paired: true, signal: null },
 		]);
+	});
+
+	it('knows this Mac\'s Bluetooth name once read, and stays unknown when it cannot be', async () => {
+		const radio = createMacRadioName({ helperPath: '/nowhere', run: async () => '{"name":"HOSTM"}' });
+		assert.equal(radio.name(), undefined, 'unknown until read');
+		await radio.read();
+		assert.equal(radio.name(), 'HOSTM');
+		const refused = createMacRadioName({ helperPath: '/nowhere', run: async () => '{"error":"denied"}' });
+		await refused.read();
+		assert.equal(refused.name(), undefined);
 	});
 
 	it('stops presence with the reason when Bluetooth is refused, rather than failing every round', async () => {
