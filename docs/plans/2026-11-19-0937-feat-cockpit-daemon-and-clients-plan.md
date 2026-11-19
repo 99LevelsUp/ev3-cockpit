@@ -6,6 +6,7 @@ topic: cockpit-daemon-and-clients
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-brainstorm
 execution: code
+deepened: 2026-11-19
 ---
 
 # Cockpit Daemon and Clients - Plan
@@ -357,7 +358,15 @@ scripts/
 
 ### Sequencing
 
-U1 gates everything after it. U2–U4 make the contract and the channel; the protocol draft goes to the EVƎ C session after U3, and U7 waits for its answer. U5–U10 build the daemon and the client library; U11–U13 move the clients onto it; U14–U16 remove API v1, package and document.
+U1 gates everything after it. U2–U4 make the contract and the channel; the protocol draft goes to the EVƎ C session after U3, and U7 waits for its answer. U17 changes the core and can run beside U2–U5. U5–U10 build the daemon and the client library; U11–U13 move the clients onto it; U14–U16 remove API v1, package and document.
+
+### System-Wide Impact
+
+- **EVƎ C:** loses API v1 and the `ev3-cockpit.*` VS Code settings it may read; it moves to `@ev3-cockpit/client` and `deployAndRun` in its own repo, after the protocol review gate.
+- **Users of the extension:** cockpit settings disappear from VS Code Settings and old values are not carried over (Scope Boundaries); the extension no longer runs on a remote host under Remote-SSH or WSL (KTD18).
+- **Agents:** the MCP server never exposes forget, Bluetooth-list clearing, pairing or daemon restart (KTD15); the CLI exposes them, and the CLI's confirmation is a guardrail, not a boundary.
+- **Release tooling:** the VSIX gains a second bundle and its packaging test changes; npm staging is new and publishes nothing (U15).
+- **Testing:** host tests and hardware rounds go through a development daemon on its own channel; daemon tests that cover reconnects remove the mock's `recover()`.
 
 ### Risks
 
@@ -386,7 +395,8 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 | U3 | Protocol connection and mutual `hello` | `src/contract/`, `src/client/connection.ts`, `src/daemon/hello.ts` | U2 |
 | U4 | Per-user channel, key and election | `src/daemon/channel.ts`, `src/daemon/paths.ts` | U3 |
 | U5 | Daemon host, state machine, log and settings store | `src/daemon/main.ts`, `stateMachine.ts`, `log.ts`, `settingsStore.ts`, `src/core/settings/` | U4 |
-| U6 | Holders, leases, compound operations and stop ordering | `src/daemon/holders.ts`, `leases.ts`, `src/core/programs/`, `src/core/fs/`, `src/core/runtime/brickManager.ts` | U5 |
+| U17 | Core operations the daemon needs: stop ordering, deploy-and-run, route wait, tree remove | `src/core/programs/`, `src/core/fs/`, `src/core/runtime/brickManager.ts` | U1 |
+| U6 | Holders and leases | `src/daemon/holders.ts`, `src/daemon/leases.ts` | U5, U17 |
 | U7 | Daemon RPC surface, questions and brick resolver | `src/daemon/surface.ts`, `questions.ts`, `brickResolver.ts` | U6, EVƎ C review |
 | U8 | Client library | `src/client/*` | U7 |
 | U9 | Version replacement and handover | `src/daemon/handover.ts`, `src/client/versions.ts` | U8 |
@@ -408,7 +418,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   1. The script, run from a throwaway VS Code extension host (or `code --extensionDevelopmentPath` with a minimal extension), spawns `process.execPath` with `ELECTRON_RUN_AS_NODE=1`, detached, `windowsHide`, `unref`, a child that loads `usb`, `node-hid`, `@serialport/bindings-cpp` and `koffi`, opens a pipe or socket and writes a heartbeat file.
   2. Close every VS Code window; check the heartbeat continues.
   3. On Windows, with the child running, rename the extension folder and the VS Code install folder the way an update does; record which file locks block it.
-  4. Repeat steps 1–2 on Linux (HOSTD over SSH, owner's desktop when available).
+  4. Repeat steps 1–2 on a Linux machine with VS Code installed, when the owner makes one available; until then KTD1 stands on the Windows result alone and the Linux measurement is listed as open.
   5. Record the result and the measured runtime versions in `IMPLEMENTATION_PLAN.md` 4.10.2.
 - **Execution note:** This is a measurement, not product code; prefer runtime evidence over unit tests and stop for the owner on a failure.
 - **Test scenarios:** Test expectation: none -- a one-off measurement whose result is recorded, not shipped behaviour.
@@ -498,30 +508,49 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - The log rotates at 5 MB and keeps three files.
 - **Verification:** `node out/daemon/main.js` with the simulated bricks serves a client from a test and ends on its own after the client leaves.
 
-### U6. Holders, leases, compound operations and stop ordering
+### U17. Core operations the daemon needs: stop ordering, deploy-and-run, route wait, tree remove
 
-- **Goal:** The per-brick layer that decides who holds a brick, who may write, and that stop always gets through.
-- **Requirements:** R5, R6, R20, R21, R29, R36; KTD6, KTD10.
-- **Dependencies:** U5.
+- **Goal:** The core changes R20, R21 and R29 ask for, made and tested in the core before any daemon wraps them.
+- **Requirements:** R20, R21, R29; KTD6, KTD10.
+- **Dependencies:** U1.
+- **Files:**
+  - `src/core/programs/programService.ts` (modify: `stop` outside `inTurn`; start outcome `started` / `not_seen_running` / `uncertain`), `src/core/programs/deployAndRun.ts` (create).
+  - `src/core/fs/filesystemService.ts` (modify: tree walk for recursive remove; `removePaths`).
+  - `src/core/runtime/brickManager.ts` (modify: `send` waits for a route within the operation's budget instead of throwing `NotConnectedError` at once).
+  - `src/__tests__/deployAndRun.test.ts`, `src/__tests__/programStop.test.ts`, `src/__tests__/removeTree.test.ts`, `src/__tests__/routeWait.test.ts` (create).
+- **Approach:** `deployAndRun` uploads each file (skipping a file whose MD5 matches, the check made inside the operation), checks nothing runs, starts and confirms; the lease that U6 wraps around it ends where this operation reports the start. The route wait reuses the operation's existing time budget. The tree remove walks with `list` and deletes bottom-up.
+- **Execution note:** For the stop and route-wait changes, add the failing test first and confirm it fails with the change reverted in a separate worktree.
+- **Patterns to follow:** `fileTransferService.ts` restart-from-first-chunk and ledger debts; `ProgramService.emergencyStop` skipping the turn.
+- **Test scenarios:**
+  - `stop` during a `run()` confirmation loop reaches the brick before the loop ends (Covers AE9's core half).
+  - `deployAndRun` with a program already running fails with `program_running` and uploads nothing.
+  - `deployAndRun` with an unchanged file skips its upload and still starts the program.
+  - A route that drops and returns within the budget lets a not-yet-sent command through (Covers AE7), with the mock's `recover()` removed.
+  - A lost reply mid-transfer restarts the transfer from its first chunk and does not resend the chunk (Covers AE10).
+  - A lost start reply yields `uncertain` and no second start.
+  - A route that stays down past the budget fails with the route's reason.
+  - Recursive remove of a three-level tree deletes everything, or returns the paths left behind.
+- **Verification:** The core tests pass on the simulated bricks with `recover()` removed, and the stop and route-wait tests fail with their change reverted.
+
+### U6. Holders and leases
+
+- **Goal:** The per-brick layer that decides who holds a brick and who may write.
+- **Requirements:** R5, R6, R20, R36, R37; KTD6.
+- **Dependencies:** U5, U17.
 - **Files:**
   - `src/daemon/holders.ts`, `src/daemon/leases.ts` (create).
-  - `src/core/programs/programService.ts` (modify: `stop` outside `inTurn`; start outcome three states), `src/core/programs/deployAndRun.ts` (create).
-  - `src/core/fs/filesystemService.ts` (modify: tree walk for recursive remove; `removePaths`), `src/core/runtime/brickManager.ts` (modify: `send` waits for a route within the operation's budget, R21).
-  - `src/__tests__/holders.test.ts`, `src/__tests__/leases.test.ts`, `src/__tests__/deployAndRun.test.ts`, `src/__tests__/programStop.test.ts`, `src/__tests__/removeTree.test.ts`, `src/__tests__/routeWait.test.ts` (create).
-- **Approach:** Holder sets and leases per KTD6, keyed by connection id; `brick_busy` built like `telemetryClaims`' conflict message; `deployAndRun` uploads each file (skipping same-MD5 files checked under the lease), checks nothing runs, starts, confirms, releases; the route wait reuses the operation's existing time budget.
-- **Execution note:** For the stop and route-wait changes, add the failing test first and confirm it fails with the change reverted in a separate worktree.
+  - `src/__tests__/holders.test.ts`, `src/__tests__/leases.test.ts` (create).
+- **Approach:** Holder sets and leases per KTD6, keyed by connection id; holder sets are plain data so U9 can save and restore them; `brick_busy` is built like `telemetryClaims`' conflict message; `stop` and `emergencyStop` pass the lease check and notify the holder.
+- **Patterns to follow:** `src/core/telemetry/telemetryClaims.ts` owner naming.
 - **Test scenarios:**
   - Two clients hold CCC; one leaves; CCC stays signed in; the other leaves; CCC is signed out.
   - Disconnect from client A while an `ev3 connect` hold exists keeps CCC and returns the remaining holders (Covers AE12).
   - A second writer during `deployAndRun` gets `brick_busy` naming the first; a read during it succeeds (Covers AE4).
   - The lease ends at the verified start: a write from another client right after the start succeeds while the program runs.
-  - `stop` during a `run()` confirmation loop reaches the brick before the loop ends (Covers AE9's daemon half).
-  - `deployAndRun` with a program already running fails with `program_running` and uploads nothing.
-  - A same-MD5 file is skipped only when the check runs under the lease.
-  - A route that drops and returns within the budget lets a not-yet-sent command through; a lost reply mid-transfer restarts the transfer from its first chunk and is not resent (Covers AE7, AE10), with the mock's `recover()` removed.
-  - A lost start reply yields `uncertain` and no second start.
-  - Recursive remove of a three-level tree deletes everything, or returns the paths left behind.
-- **Verification:** The daemon-level tests pass on the simulated bricks with `recover()` removed.
+  - A client's connection closing mid-operation releases its lease, and the next writer gets through.
+  - `stop` from a client without the lease stops the program, and the holder receives a program-state event naming that client (Covers AE9's daemon half).
+  - Holder sets saved and restored compare equal.
+- **Verification:** The holder and lease tests pass against fake connections and the simulated bricks.
 
 ### U7. Daemon RPC surface, questions and brick resolver
 
@@ -709,7 +738,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 | Unit tests | `npm run test:unit` (new tests live flat in `src/__tests__/`) | every unit |
 | Host tests | `npm run test:host` | U11, U14 |
 | Core without VS Code | `src/__tests__/coreBoundary.test.ts` extended with `contract`, `client`, `daemon` entry points | U2, U5, U8 |
-| Reverse-patch check | In a separate worktree, revert the fix and see its new test fail | U6 stop and route wait, U7 `keep` answer, U9 no ping-pong |
+| Reverse-patch check | In a separate worktree, revert the fix and see its new test fail | U17 stop and route wait, U7 `keep` answer, U9 no ping-pong |
 | VSIX | `npm run package:vsix` plus the load-natives check of each staging target | U15 |
 | macOS | `.github/workflows/vsix-macos.yml` green | U4, U15 |
 | Hardware, Windows | USB, Bluetooth and TCP through the daemon: F1, F2, F3, AE2, AE9, AE13, AE14 | U10–U13 |
