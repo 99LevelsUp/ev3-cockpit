@@ -51,6 +51,7 @@ EVƎ C's hardware acceptance on API v1 also exposed what a shared owner must get
 - **One repo publishes VSIX and npm packages with the same version; if a client and the daemon differ, the newest wins with a warning.** Governs R11, R31. (session-settled: user-directed — chosen over side-by-side daemons per version: the daemon holds the only hardware connection)
 - **A newer client waits until the daemon is idle before replacing it.** Governs R11. (session-settled: user-approved — chosen over asking the user and over replacing at once: no running operation or connection is cut)
 - **The daemon holds all settings; VS Code and the CLI change any of them, MCP servers cannot change dangerous ones.** Governs R22, R23. (session-settled: user-directed — chosen over allowing only a human at the CLI to switch to full mode and over letting every client change everything: an agent must never widen its own rights)
+- **A dangerous setting needs a confirmation only a person can give.** Governs R22, R23. (session-settled: user-directed — chosen over relying on the agent host's own command approval and over guarding only the MCP path: an agent with a shell can run `ev3 config` itself, and command approvals differ per user — auto mode, allowlists — while a confirmation typed in a real terminal or clicked in VS Code does not)
 - **Reader/writer concurrency with a write lease.** Governs R20. (session-settled: user-approved — chosen over serialising all clients and over silent interleaving)
 - **OS consent is asked in the name of whoever starts the daemon.** Governs R24. (session-settled: user-approved — chosen over a separate consent step)
 - **Clients are TypeScript/Node only for now.** Governs R17. (session-settled: user-approved — chosen over a language-neutral schema from the start: every known client is TypeScript; a schema can be generated later)
@@ -100,7 +101,7 @@ EVƎ C's hardware acceptance on API v1 also exposed what a shared owner must get
 
 **Settings, access and consent**
 
-- R22. The daemon holds every cockpit setting; the VS Code extension and `ev3 config` read and change all of them, access mode `full` included.
+- R22. The daemon holds every cockpit setting; the VS Code extension and `ev3 config` read and change all of them, access mode `full` included. A dangerous setting (as R23 defines it) changes only after a person confirms it: in VS Code through a confirmation dialog, through `ev3 config` by an answer typed in an interactive terminal; without an interactive terminal, or with `--json`, the change is refused with a message saying a person has to run and confirm it.
 - R23. An MCP server, the cockpit's or an add-on's, cannot change a dangerous setting — access mode `full` and anything that widens rights or allows deleting outside `/home/root/lms2012/prjs` — and shows the user the exact command to run instead.
 - R24. OS consent (Bluetooth and local network on macOS, BlueZ access and udev on Linux, Bluetooth on Windows) is asked in the name of whoever starts the daemon.
 
@@ -144,6 +145,7 @@ EVƎ C's hardware acceptance on API v1 also exposed what a shared owner must get
 - AE3. **Covers R8.** Given the setting is `auto` and the user was signed in to CCC, when the computer restarts and the user opens VS Code, CCC connects as soon as the daemon sees it. Given `wait` instead, CCC is listed but stays disconnected until Connect.
 - AE4. **Covers R20.** Given a run from the terminal holds the write lease on CCC, when VS Code tries to upload a file to CCC, the upload fails with `brick_busy` naming the terminal client, and reading CCC's files from VS Code still works.
 - AE5. **Covers R23.** Given an agent asks the cockpit MCP server to switch to access mode `full`, the server refuses and replies with the exact `ev3 config set access-mode full` command for the user to run.
+- AE11. **Covers R22.** Given an agent runs `ev3 config set access-mode full` through its own shell tool, with no interactive terminal, the change is refused, the message says a person has to run and confirm it, and the mode stays `safe`; the same command typed by the user in a terminal asks for confirmation and switches to `full` once confirmed.
 - AE6. **Covers R11, R26.** Given the daemon has CCC connected, when a newer CLI connects, the CLI works with the older daemon and shows that a new version is available; after CCC is disconnected and nothing runs, or right away on `ev3 daemon restart`, the newer daemon takes over.
 - AE9. **Covers R20.** Given a run from the terminal holds the write lease on CCC and its program is running, when A1 presses Stop in VS Code, the program stops at once and the terminal run reports that VS Code stopped it.
 - AE10. **Covers R21.** Given the reply to a chunk of an upload is lost when CCC's route drops, the daemon does not send that chunk again; once the route is back, the upload starts over from its first chunk.
@@ -196,15 +198,3 @@ EVƎ C's hardware acceptance on API v1 also exposed what a shared owner must get
 - `src/core/api/cockpitApi.ts` (API v1: `apiVersion` 1, `registerConsumer`, events without a reconnect event), `docs/api-for-consumers.md`, `src/vscode/extension.ts` (settings read from `ev3-cockpit` configuration), `scripts/api-check/`, `scripts/core-smoke.js`.
 - EVƎ C's requirements, from its session on 19.11.2026; its plan in the ev3-c repo: `docs/plans/2026-11-18-1038-feat-program-run-contract-plan.md`.
 - Prior art for the daemon's shape: adb (auto-start, version check, kill-server), Watchman and gpg-agent (per-user socket, single instance), LSP (JSON-RPC, cancellation, progress, capabilities).
-
----
-
-## Deferred / Open Questions
-
-Review items left for the author; they do not block implementation.
-
-### From 2026-11-19 review
-
-- **An agent with a shell can switch to full access mode by itself** — Key Decisions (settings and access), R22 (VS Code and `ev3 config` change every setting), R23 (MCP servers cannot change dangerous settings), AE5 (MCP refusal shows the command) (P1, product-lens, security-lens, adversarial, confidence 75)
-
-  An agent in Claude Code can run `ev3 config set access-mode full` exactly as a person would, and then delete files on the brick outside the projects folder; the daemon cannot tell who typed the command, so today only the MCP path is guarded and the decision's promise that an agent never widens its own rights does not hold. Two outcomes were weighed: dangerous settings changed outside VS Code require an interactive confirmation in a real terminal that an agent cannot give (refused without a terminal or with `--json`), or the promise is narrowed to the MCP path and relies on Claude Code asking before it runs a command.
