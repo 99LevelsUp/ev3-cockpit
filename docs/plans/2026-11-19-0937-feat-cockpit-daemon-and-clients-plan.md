@@ -16,9 +16,9 @@ deepened: 2026-11-19
 - **Objective:** Any tool on a user's computer — VS Code, a terminal command, a script, a Claude Code agent, an add-on such as EVƎ C — works with the user's EV3 bricks through one cockpit, and an add-on is written once for all of those environments.
 - **Means:** A per-user cockpit daemon that alone holds the bricks and the settings, one typed client contract with one client library, and three clients built on it: the VS Code extension, the `ev3` CLI and the cockpit MCP server (IMPLEMENTATION_PLAN 4.10.2 and 4.10.3; KTD1–KTD18).
 - **Product authority:** The owner, through the decisions of 19.11.2026 recorded below. The EVƎ C session reviews the protocol draft before the daemon's surface is built (see Open Questions).
-- **Execution profile:** Deep. One body of work, committed unit by unit on `master` as this repo does, each commit with the pre-commit gate green; pushed only after the identifier scan of the pushed range. No pull-request split.
+- **Execution profile:** Deep. One body of work, committed unit by unit on `master` as this repo does, each commit with the Verification Contract's gates green; pushed only after the identifier scan of the pushed range. No pull-request split.
 - **Stop conditions:**
-  - U1's measurement fails (the daemon on VS Code's Node dies with VS Code or blocks VS Code or extension updates): stop before U5 and bring the owner the fallback named in KTD1.
+  - U1's measurement fails (the daemon on VS Code's Node dies with VS Code or blocks VS Code or extension updates): stop before U2 and bring the owner the fallback named in KTD1.
   - The EVƎ C review of the protocol draft asks for a contract change that contradicts a Key Decision: stop and ask the owner.
   - Any change would need a computer restart, the BTHPORT ACL, or restarting `bthserv`: stop.
 - **Who finishes:** The implementing agent builds and verifies every unit; hardware rounds follow the one-instruction-at-a-time protocol with the owner; the owner commands any publishing.
@@ -241,22 +241,22 @@ EVƎ C's hardware acceptance on API v1 also exposed what a shared owner must get
 
 - KTD1. **The daemon's runtime is measured before anything is built on it.** Started from VS Code, the daemon is VS Code's own executable (`process.execPath` of the extension host) run with `ELECTRON_RUN_AS_NODE=1`, detached, `windowsHide`, with that variable stripped from every child it starts (R32). Two risks are unmeasured: VS Code may end the daemon when it closes (a Windows job object), and a daemon kept alive by `ev3 connect` may block VS Code or extension updates by holding `Code.exe` or the extension folder's `.node` files and helper. U1 measures both on Windows and Linux. The named fallback, if either fails, is to run the daemon from a versioned per-user copy of its bundle and natives (so no extension folder stays locked) and, if VS Code itself cannot outlive it, the system Node with a clear message when none is installed; that choice goes to the owner. Conflict call-out: R32 is settled; the evidence against it is forum-grade, so it stands until U1 measures otherwise. Governs R32, R9, R10.
 - KTD2. **`vscode-jsonrpc` carries the protocol, behind the project's own connection wrapper.** One `net.createServer`, a `SocketMessageReader`/`SocketMessageWriter` pair per accepted socket, LSP-style `$/cancelRequest` and `$/progress`. The wrapper adds what the library lacks: it disposes the connection on close so pending calls reject at once, caps a message at 1 MiB, and answers a cancelled request with the contract's own `cancelled` code. Contract codes stay outside -32099..-32000. (session-settled: user-approved — chosen over an own JSON-RPC layer like the D-Bus client: framing, cancellation and progress are solved and widely used; the wrapper closes its two gaps) Governs R13, R16.
-- KTD3. **The channel is per user, and both sides prove themselves in `hello`.** Windows: `\\.\pipe\ev3-cockpit-<sha256 of the user SID, 16 hex>[-<channel>]`. Linux and macOS: a socket in `$XDG_RUNTIME_DIR/ev3-cockpit/` or, without it, `/tmp/ev3-cockpit-<uid>/` (created 0700, owner checked, sticky `/tmp` relied on), path kept under 95 bytes. A 32-byte key lives in a user-only state file (`%LOCALAPPDATA%\ev3-cockpit\key` with an owner-only ACL set through `icacls` at creation, `~/.local/state/ev3-cockpit/key` or `~/Library/Application Support/ev3-cockpit/key` mode 0600). `hello` is a mutual challenge: client nonce → daemon HMAC over both nonces → client HMAC; the daemon sends nothing before the client's proof, so a read-only opener learns nothing, and a client never talks to a pipe squatter that cannot prove the key. On Windows the daemon refuses to start elevated. This answers the deferred access-control question: the channel's rights alone are not enough on Windows. Governs R12, R14.
+- KTD3. **The channel is per user, and both sides prove themselves in `hello`.** Windows: `\\.\pipe\ev3-cockpit-<sha256 of the user SID, 16 hex>[-<channel>]`. Linux and macOS: a socket in `$XDG_RUNTIME_DIR/ev3-cockpit/` or, without it, `/tmp/ev3-cockpit-<uid>/` (created 0700, owner checked, sticky `/tmp` relied on), path kept under 95 bytes. A 32-byte key lives in a user-only state file (`%LOCALAPPDATA%\ev3-cockpit\key` with an owner-only ACL set through `icacls` at creation, `~/.local/state/ev3-cockpit/key` or `~/Library/Application Support/ev3-cockpit/key` mode 0600). `hello` is a mutual challenge: client nonce → daemon nonce and HMAC over both nonces → client HMAC → accepted. The daemon sends nothing before the client's `hello` and nothing beyond its own nonce and proof before the client's proof verifies, so a read-only opener learns nothing, and a client never talks to a pipe squatter that cannot prove the key. On Windows the daemon refuses to start elevated. Every executable the cockpit spawns is resolved to an absolute path first — system tools such as `icacls.exe` from `%SystemRoot%\System32`, `ev3` and add-ons through KTD14's PATH walk — and the daemon changes its working directory to its state directory at start, so a file planted in a project folder is never run. This answers the deferred access-control question: the channel's rights alone are not enough on Windows. Governs R12, R14.
 - KTD4. **Binding the channel is the election; nothing touches hardware before winning it.** Windows: `listen` on the pipe name fails with `EADDRINUSE` for a second starter. Unix: a start lock file next to the socket, then connect-probe, unlink a stale socket, listen, and a self-`hello` that must return this process's instance id. Transports, discovery and presence start only after the daemon has won; on exit or replacement the daemon releases every device before closing its listener. Governs R1, R2.
-- KTD5. **The daemon is a small state machine: Starting → Serving → HandingOver | Exiting.** Starting refuses clients until bricks restored from a handover are reconnected (R37). Serving tracks connections, holders and leases. Exiting is entered when R3's condition fails after a 10 s grace from start or from the last client's departure; a `hello` during Exiting is answered "exiting", which the client library treats as "wait, then start a new daemon". HandingOver is KTD7. Readiness for a starting client is connect + `hello` polled with backoff within 15 s; an early exit of the spawned process is reported with the tail of the daemon log (R10). Governs R3, R4, R10.
-- KTD6. **Holders and leases live in one per-brick layer above the existing per-brick services.** A brick's holder set has three kinds of member: a client connection, an `ev3 connect` hold, and the long-lived group for R8 `auto` bricks; `signOut` happens when the set empties (R5, R36). A write lease is taken by one contract call and released when that call settles or its connection closes (R20); the holder is named in `brick_busy` the way `telemetryClaims` names a mode conflict's owner. Compound operations — `program.deployAndRun` (files with local path or ≤ 4 KiB inline content, optional skip-if-same-MD5 checked under the lease, a "nothing running" check, start, lease ends at the verified start) and `files.removePaths` — exist so no client needs a lease across calls. `stop` leaves `ProgramService`'s turn so it is not queued behind a run's confirmation loop; `stop` and `emergencyStop` bypass leases and notify the holder (AE9). Governs R5, R20, R36, R37.
-- KTD7. **Replacement is a handover started by the older daemon on the newer client's behalf.** Versions compare directionally, so an older client never stops a newer daemon. A newer repo client registers "replace when idle" with its launch spec (runtime, entry, install root); `ev3 daemon restart` asks the same with "now". At handover the old daemon writes holders, the connected set and the transfer ledger to per-user state, answers new `hello`s with "handing over", releases its devices, closes its listener and spawns the successor; the successor restores before it accepts clients. In-flight mutating calls end with `outcome_unknown` and are never retried automatically. Subscriptions are renewed by the client library on reconnect, each with a fresh snapshot, which answers the deferred subscription question (R19). A newer CLI may replace a daemon VS Code started; on macOS the successor may then ask for consent again. Governs R11, R19, R26, R37.
+- KTD5. **The daemon is a small state machine: Starting → Serving ⇄ Lent, Serving → HandingOver | Exiting.** Starting refuses clients until bricks restored from a handover are reconnected (R37). Serving tracks connections, holders and leases; it starts discovery with an immediate scan of every transport, and until each started transport has finished its first scan, listing bricks and resolving a brick by name wait for that first round within the call's budget instead of answering "not found" or an empty list. Lent is KTD17's loan: devices released, discovery stopped, clients told the hardware is lent; it returns to Serving when the loan ends. Exiting is entered when R3's condition fails after a 10 s grace from start or from the last client's departure; a `hello` during Exiting is answered "exiting", which the client library treats as "wait, then start a new daemon". HandingOver is KTD7. Readiness for a starting client is connect + `hello` polled with backoff within 15 s; an early exit of the spawned process is reported with the tail of the daemon log (R10). Governs R3, R4, R10.
+- KTD6. **Holders and leases live in one per-brick layer above the existing per-brick services.** A brick's holder set has three kinds of member: a client connection, an `ev3 connect` hold, and the long-lived group for R8 `auto` bricks; `signOut` happens when the set empties (R5, R36). A write lease is taken by one contract call and released when that call settles; when a connection closes, the daemon aborts that connection's in-flight calls through their `AbortSignal` and releases each lease only once the aborted call has settled, so a dead client's upload never interleaves with the next writer (R20); the holder is named in `brick_busy` the way `telemetryClaims` names a mode conflict's owner. Compound operations — `program.deployAndRun` (files with local path or ≤ 4 KiB inline content, optional skip-if-same-MD5 checked under the lease, a "nothing running" check, start, lease ends at the verified start) and `files.removePaths` — exist so no client needs a lease across calls. `stop` leaves `ProgramService`'s turn so it is not queued behind a run's confirmation loop; `stop` and `emergencyStop` bypass leases and notify the holder (AE9), and they also end any `deployAndRun` on that brick that has not yet started its program — it ends with `cancelled` naming the stopper and starts nothing, so a stop pressed during an upload is never followed by a start. Governs R5, R20, R36, R37.
+- KTD7. **Replacement is a handover started by the older daemon on the newer client's behalf.** Versions compare directionally, so an older client never stops a newer daemon. A newer repo client registers "replace when idle" with its launch spec (runtime, entry, install root); `ev3 daemon restart` asks the same with "now". At handover the old daemon writes holders, the connected set and the transfer ledger to per-user state, then a handover marker (successor version, start time) to the state directory, answers new `hello`s with "handing over", releases its devices, closes its listener and spawns the successor; the successor restores before it accepts clients and removes the marker when it reaches Serving. A client that finds no listener while a marker younger than the restore budget exists waits for the successor instead of starting a daemon, which closes the gap between the old listener closing and the new one opening; an older marker is ignored. In-flight mutating calls end with `outcome_unknown` and are never retried automatically. Subscriptions are renewed by the client library on reconnect, each with a fresh snapshot, which answers the deferred subscription question (R19). A newer CLI may replace a daemon VS Code started; on macOS the successor may then ask for consent again. Governs R11, R19, R26, R37.
 - KTD8. **A question for a person is a contract primitive.** The daemon sends a server→client request carrying the operation it belongs to, a kind (`sweep`, `clearBluetoothList`, `bluetoothAccess`, `pairing`), a 60 s timeout and a withdrawal notice. Answers are `yes`, `no` or `keep`. A client without a person — CLI with `--json` or no terminal, MCP — answers `keep` at once; a timeout or a lost client counts as `keep`, never as `no`, so a transfer debt survives (R33). The question goes only to the connection that started the operation; for a sweep that has no live starter, it goes to the client starting the brick's next transfer. Governs R39.
 - KTD9. **The client library keeps a cache of bricks, settings and its own active brick, kept current by events.** Synchronous reads that API v1 and the extension use today (`listBricks`, active brick, access mode, chain, telemetry rows and snapshots) answer from the cache; everything that reaches a brick is async. Governs R16, R18, R38.
 - KTD10. **A wire error carries a code and a kind.** The contract keeps today's codes, adds `brick_busy`, `brick_ambiguous`, `needs_person`, `daemon_unavailable`, `outcome_unknown` and `cancelled`, and carries the core error's class as `kind` (`BrickUnreachable`, `LinkLost`, `ChannelChanged`, …) so clients keep deciding by kind as `connectBrick.ts` and `transferLedger.ts` decide by class today. A brick refusing a program (`program_not_found`, `program_running`, `access_denied`) is an error; `deployAndRun` resolves to `started`, `not_seen_running` or `uncertain`. Governs R18, R20, R21.
 - KTD11. **File contents travel as base64 chunks of 32–64 KiB behind a transfer handle, or not at all.** A JSON-RPC message never carries a whole file, so stop and emergency stop never wait behind a multi-megabyte message on the same connection. The CLI, MCP and add-ons pass a local path and the daemon reads or writes the file itself (same user, same computer); only the VS Code extension and small inline content use chunks. This answers the deferred file-size question. Governs R18, R20.
 - KTD12. **Settings live in one per-user JSON file with their spec in the core, not in `package.json`.** The spec (key, type, range, default, `dangerous`) moves into the core next to `telemetrySettings.ts`'s readers; `package.json` loses `contributes.configuration` and the workspace-trust `restrictedConfigurations` entry. Dangerous today is `accessMode` alone; `transfer.*PacketBytes` stays non-dangerous — it can corrupt a file but widens no right (R23). A change to a dangerous setting needs `confirmedByPerson`, which only the VS Code dialog and the CLI's typed answer on a real terminal send; the daemon refuses it from MCP connections in any case (AE5). When the CLI cannot see a terminal — Git Bash/mintty included — it refuses and points to `EVƎ: Settings`. State and log paths: `%LOCALAPPDATA%\ev3-cockpit\`, `~/Library/Application Support/ev3-cockpit/` with logs in `~/Library/Logs/ev3-cockpit/`, and `$XDG_STATE_HOME/ev3-cockpit/` (default `~/.local/state`); the log rotates at 5 MB keeping three files. This answers the deferred settings and log question. Governs R22, R23, R25, R30.
-- KTD13. **The CLI prints for people by default and for programs with `--json`, with fixed exit codes.** `0` success, `1` failure, `2` usage, `3` `brick_busy`, `4` `uncertain` start, `5` `needs_person`, `6` daemon unavailable. A brick is named by id or name; with none named and exactly one brick connected, that one is used (R38). Governs R26, R38.
+- KTD13. **The CLI prints for people by default and for programs with `--json`, with fixed exit codes.** `0` success, `1` failure, `2` usage, `3` `brick_busy`, `4` `uncertain` start, `5` `needs_person`, `6` daemon unavailable. A brick is named by id or name; with none named and exactly one brick connected, that one is used (R38). A name not found yet waits for the daemon's first discovery round (KTD5) within the command's budget before failing. Governs R26, R38.
 - KTD14. **Add-ons are resolved by the cockpit's own PATH walk.** Absolute PATH entries only, the name matched against `^[a-z][a-z0-9-]*$`, on Windows only `.exe` and npm `.cmd` shims, and a shim parsed to its Node script and run with the current Node instead of through `cmd.exe`; no shell anywhere. Governs R27.
-- KTD15. **The MCP server uses `@modelcontextprotocol/server` 2.x over stdio and connects to the daemon on its first tool call that needs a brick.** An agent session that never uses a brick neither starts the daemon nor connects remembered bricks. It is a long-lived client for R8 while connected. Its tools are the agent-safe subset: list and inspect bricks, files (local paths), deploy-and-run, stop, emergency stop, program status with a bounded wait, settings read; forget, clearing a Bluetooth list, pairing and `daemon restart` are not exposed. A version notice rides in the next tool result. Governs R23, R28.
+- KTD15. **The MCP server uses `@modelcontextprotocol/server` 2.x over stdio and connects to the daemon on its first tool call that needs a brick.** An agent session that never uses a brick neither starts the daemon nor connects remembered bricks. It is a long-lived client for R8 while connected. Its tools are the agent-safe subset: list and inspect bricks, files (local paths), deploy-and-run, stop, emergency stop, program status with a bounded wait, settings read and change (a dangerous change is refused with the exact `ev3 config` command, R23); forget, clearing a Bluetooth list, pairing and `daemon restart` are not exposed. Local paths are confined: the server makes each path absolute, resolves symbolic links and accepts it only inside the roots its MCP client declares, or inside its working directory when the client declares none, so the daemon cannot be used to read or write files the agent's own host would not let it touch. A version notice rides in the next tool result. Governs R23, R28.
 - KTD16. **The contract and client library ship separately from the daemon.** The source splits into `src/contract/` (types, method names, codes, contract version), `src/client/` (library), `src/daemon/`, `src/cli/` and `src/mcp/`. A staging script builds two npm packages from the root version: `@ev3-cockpit/client` (contract + library, no natives, what add-ons import) and `ev3-cockpit` (daemon, `ev3` and `ev3-cockpit-mcp` executables, natives as optional dependencies). The VSIX ships the daemon bundle next to `out/extension.js`. One version source — the root `package.json` the pre-commit hook bumps — keeps R31 true without workspaces. Governs R15, R16, R31, R35.
-- KTD17. **The development daemon runs on its own channel and borrows hardware through a lease tied to its connection.** The channel is chosen by `EV3_COCKPIT_CHANNEL` (`dev`, `dev-<suffix>`; tests use a unique suffix), which the extension sets in Development and Test mode and the client library and CLI honour. To use real bricks the development daemon connects to the user's daemon as a special `hardwareLoan` client: the user's daemon records its connected set as for a handover, releases its devices and stops discovery, and tells its clients that the hardware is lent; when that connection closes — the development daemon ended or crashed — it reclaims the devices and reconnects its bricks. Mock configuration from the workspace goes to the development daemon as a start argument. Governs R34.
-- KTD18. **The VS Code extension runs only on the user's machine and stops exporting an API.** `extensionKind: ["ui"]` keeps it with the bricks under Remote-SSH and WSL. Add-on extensions such as EVƎ C use `@ev3-cockpit/client` directly; the extension's `activate` returns nothing. Governs R15, R25.
+- KTD17. **The development daemon runs on its own channel and borrows hardware through a lease tied to its connection.** The channel is chosen by `EV3_COCKPIT_CHANNEL` (`dev`, `dev-<suffix>`; tests use a unique suffix), which the extension sets in Development and Test mode and the client library and CLI honour. Every daemon, on any channel, takes a per-user hardware lock in the state directory before it starts transports; a daemon that finds the lock held by another channel's daemon starts in Lent and takes the hardware when the lock is released, so a user's daemon started after a loan-less development daemon never opens the same devices. A daemon in Lent is never idle for replacement and refuses `daemon restart` with a message that the hardware is lent, and the loan connection never registers a replacement. To use real bricks while the user's daemon holds them, the development daemon connects to it as a special `hardwareLoan` client: the user's daemon records its connected set as for a handover, releases its devices and stops discovery, and tells its clients that the hardware is lent; when that connection closes — the development daemon ended or crashed — it reclaims the devices and reconnects its bricks. Mock configuration from the workspace goes to the development daemon as a start argument. Governs R34.
+- KTD18. **The VS Code extension stops exporting an API.** Add-on extensions such as EVƎ C use `@ev3-cockpit/client` directly; the extension's `activate` returns nothing. `extensionKind` stays unset as today: under Remote-SSH the extension keeps running on the remote host and starts its own per-user daemon there (R2), which is what a brick attached to that host needs. Governs R15, R25.
 
 ### High-Level Technical Design
 
@@ -363,7 +363,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 ### System-Wide Impact
 
 - **EVƎ C:** loses API v1 and the `ev3-cockpit.*` VS Code settings it may read; it moves to `@ev3-cockpit/client` and `deployAndRun` in its own repo, after the protocol review gate.
-- **Users of the extension:** cockpit settings disappear from VS Code Settings and old values are not carried over (Scope Boundaries); the extension no longer runs on a remote host under Remote-SSH or WSL (KTD18).
+- **Users of the extension:** cockpit settings disappear from VS Code Settings and old values are not carried over (Scope Boundaries).
 - **Agents:** the MCP server never exposes forget, Bluetooth-list clearing, pairing or daemon restart (KTD15); the CLI exposes them, and the CLI's confirmation is a guardrail, not a boundary.
 - **Release tooling:** the VSIX gains a second bundle and its packaging test changes; npm staging is new and publishes nothing (U15).
 - **Testing:** host tests and hardware rounds go through a development daemon on its own channel; daemon tests that cover reconnects remove the mock's `recover()`.
@@ -383,6 +383,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 
 - Gate before U7: the EVƎ C session reviews the protocol draft (contract types and method list from U2, `hello` and question shapes from U3). Its changes land in U2/U3 before U7 starts.
 - Gate after U1: the measurement result decides whether KTD1 stands; a failure stops the work for the owner's choice of fallback.
+- Final acceptance gate after U15, owned by the EVƎ C session in its own repo: EVƎ C moves its adapter to `@ev3-cockpit/client` and `deployAndRun`, then runs `ev3 c run` from a terminal and from a Claude Code agent while VS Code is open on the same brick. This work is done only when that run passes; the move itself is not a unit of this plan.
 
 ---
 
@@ -452,14 +453,15 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `src/client/connection.ts`, `src/daemon/hello.ts`, `src/contract/hello.ts` (create).
   - `src/__tests__/protocolConnection.test.ts`, `src/__tests__/hello.test.ts` (create).
   - `package.json` (add `vscode-jsonrpc` as a dependency).
-- **Approach:** Wrap `vscode-jsonrpc/node` per KTD2; `hello` per KTD3 with HMAC-SHA256 over the two nonces; the daemon side writes nothing until the client's proof verifies. Test in memory over `duplexPair()` the way `src/__tests__/dbusConnection.test.ts` drives `src/core/transports/dbus/connection.ts`.
+- **Approach:** Wrap `vscode-jsonrpc/node` per KTD2; `hello` per KTD3 with HMAC-SHA256 over the two nonces, in KTD3's order. Test in memory over `duplexPair()` the way `src/__tests__/dbusConnection.test.ts` drives `src/core/transports/dbus/connection.ts`.
 - **Test scenarios:**
   - A request and its response round-trip; a notification reaches its handler.
   - A cancelled request ends with code `cancelled` and the handler's `AbortSignal` fires.
   - Progress reports reach the caller in order before the response.
   - Closing the peer rejects every pending call at once with `daemon_unavailable`.
   - A message over 1 MiB closes the connection and is logged.
-  - `hello` with the right key succeeds both ways; a client with a wrong key is refused, and the daemon wrote nothing before the refusal.
+  - `hello` with the right key succeeds both ways; a client with a wrong key receives only the daemon's nonce and proof before it is refused.
+  - An opener that sends nothing reads nothing.
   - A fake daemon without the key cannot produce a valid proof, and the client refuses it.
 - **Verification:** The protocol tests pass with no socket and no daemon.
 
@@ -478,6 +480,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - Unix: a stale socket file left by a killed daemon is replaced; a live one is not.
   - A socket directory owned by another user or with wider mode is refused.
   - A key file readable by others is refused with a message naming the file.
+  - On Windows, a fake `icacls.exe` in the daemon's starting working directory is not run when the key file is created.
 - **Verification:** Socket tests pass on Windows locally and on Linux (HOSTD) and macOS in CI.
 
 ### U5. Daemon host, state machine, log and settings store
@@ -516,13 +519,22 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 - **Files:**
   - `src/core/programs/programService.ts` (modify: `stop` outside `inTurn`; start outcome `started` / `not_seen_running` / `uncertain`), `src/core/programs/deployAndRun.ts` (create).
   - `src/core/fs/filesystemService.ts` (modify: tree walk for recursive remove; `removePaths`).
-  - `src/core/runtime/brickManager.ts` (modify: `send` waits for a route within the operation's budget instead of throwing `NotConnectedError` at once).
-  - `src/__tests__/deployAndRun.test.ts`, `src/__tests__/programStop.test.ts`, `src/__tests__/removeTree.test.ts`, `src/__tests__/routeWait.test.ts` (create).
-- **Approach:** `deployAndRun` uploads each file (skipping a file whose MD5 matches, the check made inside the operation), checks nothing runs, starts and confirms; the lease that U6 wraps around it ends where this operation reports the start. The route wait reuses the operation's existing time budget. The tree remove walks with `list` and deletes bottom-up.
-- **Execution note:** For the stop and route-wait changes, add the failing test first and confirm it fails with the change reverted in a separate worktree.
-- **Patterns to follow:** `fileTransferService.ts` restart-from-first-chunk and ledger debts; `ProgramService.emergencyStop` skipping the turn.
+  - `src/core/runtime/brickManager.ts` (modify: `send` and `pin()` wait for a route within the operation's budget instead of throwing `NotConnectedError` or `ChannelChangedError` at once).
+  - `src/core/fs/fileTransferService.ts` (modify: restart loop for `writeFile`).
+  - `src/core/contracts/transport.ts` (modify: an operation deadline passed down beside the `AbortSignal`).
+  - `src/__tests__/deployAndRun.test.ts`, `src/__tests__/programStop.test.ts`, `src/__tests__/removeTree.test.ts`, `src/__tests__/routeWait.test.ts`, `src/__tests__/transferRestart.test.ts` (create).
+- **Approach:**
+  1. An operation budget is new: each contract operation carries a deadline with its `AbortSignal`, with a default per operation kind; today only a per-command round-trip `timeoutMs` exists.
+  2. `BrickManager.send` and `pin()` wait for a route until that deadline; `pin()` waits at the start and again before each restart.
+  3. `fileTransferService.writeFile` gains a restart loop: on a lost reply it abandons the slot (the ledger records the debt), waits for the route, settles the debt and writes again from the first chunk while the budget lasts. No such loop exists today.
+  4. `deployAndRun` uploads each file (skipping a file whose MD5 matches, the check made inside the operation), checks nothing runs, starts and confirms; the lease that U6 wraps around it ends where this operation reports the start. A stop on the brick before the start ends it with `cancelled` (KTD6).
+  5. The tree remove walks with `list` and deletes bottom-up.
+- **Execution note:** For the stop, route-wait and restart changes, add the failing test first and confirm it fails with the change reverted in a separate worktree.
+- **Patterns to follow:** `transferLedger.ts` debts and settlement; `ProgramService.emergencyStop` skipping the turn.
 - **Test scenarios:**
   - `stop` during a `run()` confirmation loop reaches the brick before the loop ends (Covers AE9's core half).
+  - `stop` or `emergencyStop` during `deployAndRun`'s upload ends it with `cancelled` and no program starts.
+  - An upload whose pinned channel drops and returns within the budget completes instead of failing with `ChannelChangedError`.
   - `deployAndRun` with a program already running fails with `program_running` and uploads nothing.
   - `deployAndRun` with an unchanged file skips its upload and still starts the program.
   - A route that drops and returns within the budget lets a not-yet-sent command through (Covers AE7), with the mock's `recover()` removed.
@@ -547,7 +559,8 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - Disconnect from client A while an `ev3 connect` hold exists keeps CCC and returns the remaining holders (Covers AE12).
   - A second writer during `deployAndRun` gets `brick_busy` naming the first; a read during it succeeds (Covers AE4).
   - The lease ends at the verified start: a write from another client right after the start succeeds while the program runs.
-  - A client's connection closing mid-operation releases its lease, and the next writer gets through.
+  - A client's connection closing mid-upload aborts the upload; the next writer gets through only after the abandoned upload has released its slot.
+  - `stop` from another client during the lease holder's `deployAndRun` upload ends the deployment with `cancelled` naming the stopper.
   - `stop` from a client without the lease stops the program, and the holder receives a program-state event naming that client (Covers AE9's daemon half).
   - Holder sets saved and restored compare equal.
 - **Verification:** The holder and lease tests pass against fake connections and the simulated bricks.
@@ -571,6 +584,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - Two bricks named "EV3": a name lookup returns `brick_ambiguous` with both ids; an id lookup succeeds.
   - A CLI connection with one connected brick and no name targets it; an MCP connection in the same state gets a usage error.
   - Each connection's active brick changes only by its own calls (a second client's connect leaves the first client's active brick unchanged).
+  - On a just-started daemon, a simulated Bluetooth brick that appears a few seconds later is found by a name lookup and listed, instead of "not found" or an empty list.
 - **Verification:** The surface tests drive the daemon through the real protocol connection over a duplex pair.
 
 ### U8. Client library
@@ -582,7 +596,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `src/client/index.ts`, `src/client/ensureDaemon.ts`, `src/client/cache.ts`, `src/client/subscriptions.ts`, `src/client/versions.ts`, `src/client/locate.ts` (create).
   - `src/__tests__/clientEnsureDaemon.test.ts`, `src/__tests__/clientResubscribe.test.ts`, `src/__tests__/clientCache.test.ts` (create).
 - **Approach:**
-  1. `ensureDaemon` connects; on "no daemon" it spawns the launch spec it was given (extension: VS Code's Node per KTD1; CLI: `process.execPath`; add-on: the installed cockpit found by `locate.ts` — the extension's install path recorded in the state directory, else `ev3` on PATH), then polls per KTD5 and returns R10's error with the log path on failure.
+  1. `ensureDaemon` connects; on "no daemon" it first checks for KTD7's handover marker and waits for the successor while the marker is fresh; otherwise it spawns the launch spec it was given (extension: VS Code's Node per KTD1; CLI: `process.execPath`; add-on: the installed cockpit found by `locate.ts` — the extension's install path recorded in the state directory, else `ev3` resolved by KTD14's PATH walk to an absolute path), then polls per KTD5 and returns R10's error with the log path on failure.
   2. Every subscription is recorded and renewed on reconnect with a fresh snapshot.
   3. The cache answers synchronous reads; it starts empty and fills from the first snapshot.
   4. Repo clients compare package versions and add-ons the contract version (R11, R35).
@@ -592,6 +606,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - A spawned daemon that exits at once yields an error carrying the log path and its last lines (Covers AE8's library half).
   - The daemon is killed and restarted: the client reconnects, a telemetry subscription continues with a fresh snapshot and no subscribe call from the caller.
   - A daemon answering "exiting" makes the library wait and start a new one.
+  - No listener but a fresh handover marker: the library waits and connects to the successor without spawning; with a stale marker it spawns.
   - An add-on with an older contract version than the daemon serves gets no warning; one needing a newer contract gets a warning and no replacement.
 - **Verification:** Library tests run against a real daemon process on the simulated bricks.
 
@@ -603,18 +618,18 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 - **Files:**
   - `src/daemon/handover.ts` (create), `src/daemon/stateMachine.ts` (modify), `src/client/versions.ts` (modify).
   - `src/__tests__/handover.test.ts` (create).
-- **Approach:** Registration of a replacement with launch spec; idle check (no lease, no operation, no brick connected) for the idle path; `restart` for the immediate path; order of save → refuse new `hello`s → release devices → close listener → spawn successor; successor restores holders and reconnects bricks in Starting.
+- **Approach:** Registration of a replacement with launch spec; idle check (no lease, no operation, no brick connected) for the idle path; `restart` for the immediate path; order of save → write handover marker → refuse new `hello`s → release devices → close listener → spawn successor; successor restores holders and reconnects bricks in Starting, then removes the marker.
 - **Test scenarios:**
   - An older client connecting to a newer daemon never triggers a replacement.
   - A newer client with the daemon busy gets the notice; replacement waits until idle, then happens once.
   - `daemon restart` with a held brick and a VS Code-held brick: the successor reconnects both and keeps running (Covers AE13).
-  - An older client reconnecting during a handover waits and does not spawn a daemon (no ping-pong).
+  - An older client reconnecting during a handover — including in the gap after the old listener closed and before the successor listens — waits and does not spawn a daemon (no ping-pong).
   - An in-flight `deployAndRun` during `restart` ends with `outcome_unknown` and is not retried.
 - **Verification:** A two-version test builds two daemon copies with different versions and runs the handover end to end on the simulated bricks.
 
 ### U10. Development channel and hardware loan
 
-- **Goal:** A development or test daemon never touches the user's daemon as a client and borrows the hardware when it needs real bricks.
+- **Goal:** A development or test daemon never reaches the user's daemon as an ordinary client — its only contact is the hardware loan — and never holds the same devices as another daemon.
 - **Requirements:** R34; KTD17.
 - **Dependencies:** U9.
 - **Files:**
@@ -626,6 +641,8 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - A development daemon starting with real bricks while the user's daemon holds CCC: the user's daemon releases CCC and reports "lent"; on the loan connection closing, it reconnects CCC (Covers AE14).
   - A development daemon killed during the loan: the user's daemon reclaims the hardware.
   - With no user daemon running, the development daemon uses the hardware without a loan.
+  - A user's daemon that starts while a loan-less development daemon holds the hardware lock starts in Lent, opens no device, and takes the hardware when the development daemon ends.
+  - A newer development build's loan connection never registers a replacement of the user's daemon, and `daemon restart` during a loan is refused.
 - **Verification:** Run once on hardware on Windows with the normal VS Code open and the Extension Development Host started.
 
 ### U11. VS Code extension as a daemon client
@@ -637,7 +654,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `src/vscode/extension.ts` (modify: no `createRuntime`; `ensureDaemon` with VS Code's Node launch spec; dev channel in Development/Test mode).
   - `src/vscode/ui/connectBrick.ts`, `forgetBrick.ts`, `clearBluetoothList.ts`, `bluetoothAccess.ts` (modify: their `Pick<…>` deps satisfied by the client library).
   - `src/vscode/ui/settings.ts` (create: `EVƎ: Settings` QuickPick with the dangerous-change dialog), `src/vscode/ui/questions.ts` (create: KTD8 answers), `src/vscode/ui/disconnect.ts` (modify or create: holders message and "disconnect for everyone").
-  - `package.json` (modify: remove `contributes.configuration` and `restrictedConfigurations`, add the settings command, `extensionKind: ["ui"]`).
+  - `package.json` (modify: remove `contributes.configuration` and `restrictedConfigurations`, add the settings command).
   - `src/vscode/integration/index.ts`, `src/__tests__/workspaceTrust.test.ts` (modify or remove), `src/__tests__/vscodeSettingsCommand.test.ts` (create).
 - **Approach:** Keep the UI flows; replace their dependencies with library calls of the same shape; notifications shown by the extension are also sent to the daemon log through a `log.notice` call (R30); the version notice uses a status-bar item with a Restart action.
 - **Test scenarios:**
@@ -666,6 +683,7 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `ev3 foo` with `ev3-foo` only in the current directory is not found; with it on PATH it runs by its absolute path.
   - On Windows an npm `.cmd` shim for `ev3-foo` runs its Node script without a shell; a name with `..` or shell characters is rejected.
   - With exactly one connected brick, `ev3 info` targets it; with two, it fails with the candidates.
+  - `ev3 connect CCC` on a cold daemon, with the simulated brick appearing a few seconds after start, succeeds; `ev3 list --json` run right after start includes it.
 - **Verification:** On hardware: F2 from a PowerShell terminal and from Git Bash on Windows, and from a shell on HOSTD.
 
 ### U13. Cockpit MCP server
@@ -683,6 +701,9 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `set_setting accessMode full` returns refusal text containing `ev3 config set access-mode full` (Covers AE5).
   - `deploy_and_run` that ends `uncertain` returns that outcome with the next-step text, not an error.
   - `forget`, `clear_bluetooth_list`, `pair` and `daemon_restart` are not in the tool list.
+  - `set_setting` with a non-dangerous key (a telemetry interval) changes it.
+  - A file tool given a `../` path outside the declared roots, or a symbolic link inside them pointing outside, is refused with a structured result and the daemon receives no request.
+  - The first `list_bricks` on a cold daemon lists a brick that appears a few seconds after start.
 - **Verification:** A real Claude Code session with the server configured runs F2 on CCC while VS Code is open on it.
 
 ### U14. Remove API v1; move api-check and core-smoke
@@ -710,11 +731,12 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
   - `scripts/packaging.cjs`, `src/__tests__/packaging.test.ts` (modify: allow and require `out/daemon.js`).
   - `scripts/package-vsix.cjs` (modify), `scripts/package-npm.cjs` (create), `src/__tests__/packageNpm.test.ts` (create).
   - `.github/workflows/ci.yml`, `.github/workflows/vsix-macos.yml` (modify: build the new bundles; run daemon tests).
-- **Approach:** The staging script writes `dist/npm/client/` and `dist/npm/cockpit/` with versions copied from the root `package.json`, `bin` entries for `ev3` and `ev3-cockpit-mcp`, and natives as optional dependencies of `ev3-cockpit` only; nothing is published.
+- **Approach:** The staging script writes `dist/npm/client/` and `dist/npm/cockpit/` with versions copied from the root `package.json`, `bin` entries for `ev3` and `ev3-cockpit-mcp`, natives as optional dependencies of `ev3-cockpit` only, and `native/bin` (the Windows pairing helper and the macOS helper) plus `native/linux/*.rules` copied into `dist/npm/cockpit/` at the relative paths `createRuntime` resolves from its install root; nothing is published.
 - **Test scenarios:**
   - The packaging rules accept a VSIX with `out/extension.js` and `out/daemon.js` and reject one missing `out/daemon.js`.
   - Both staged npm packages carry the root version; `@ev3-cockpit/client` has no native dependency.
   - The staged `ev3-cockpit` package's `ev3 --version` prints the root version.
+  - Every path `createRuntime` joins to its install root (pairing helper, macOS helper, udev rules) exists in the staged `ev3-cockpit` package.
 - **Verification:** Load-natives check on each VSIX staging target; the macOS workflow builds a VSIX whose daemon starts in CI on simulated bricks.
 
 ### U16. Documentation and plan sync
@@ -745,15 +767,51 @@ U1 gates everything after it. U2–U4 make the contract and the channel; the pro
 | Hardware, Linux | HOSTD over SSH: F2 with `ev3` over USB and Bluetooth | U12 |
 | Identifier scan | scan of the pushed range before every push | every push |
 
-The pre-commit hook already runs compile, lint, unit and host tests; a unit is not committed with any of them red.
+The pre-commit hook only bumps the version. Before each commit the implementer runs `npm run compile`, `npm run lint`, `npm run test:unit` and, for U11 and U14, `npm run test:host`, and does not commit a unit with any of them red.
 
 ---
 
 ## Definition of Done
 
 - Every unit's Verification holds and every gate in the Verification Contract that applies to it is green.
-- The Success Criteria are met: EVƎ C's `ev3 c run` (after its own move to the contract) runs from a terminal and from an agent while VS Code is open on the same brick; the extension's commands behave as before; Windows and Linux hardware rounds pass.
+- The Success Criteria are met: the final acceptance gate in Open Questions has passed (EVƎ C's `ev3 c run`, run by the EVƎ C session); the extension's commands behave as before; Windows and Linux hardware rounds pass.
 - The EVƎ C session has reviewed the protocol draft and its answer is reflected in `docs/protocol.md`.
 - API v1 is gone from code, tests, scripts and current-state documents.
 - `IMPLEMENTATION_PLAN.md` marks 4.10.2 and 4.10.3 done with what was measured.
 - No experimental or abandoned code remains: U1's script stays only as the documented measurement, and no unused fallback path ships.
+
+---
+
+## Deferred / Open Questions
+
+Review items left for the author; they do not block implementation.
+
+### From 2026-11-19 review
+
+- **Idle replacement has no bricks to carry over, and the successor cannot wait for Bluetooth reconnects before serving** — R37 (replacement keeps held and connected bricks), F4, KTD5 (P1, coherence, adversarial, feasibility, confidence 75)
+
+  R11 lets a newer client replace the daemon only when no brick is connected, so the carry-over in R37 and F4 can only ever happen on `ev3 daemon restart`. On that restart, R37 makes the successor refuse every client until all restored bricks are back; a Bluetooth brick needs the 5 s gap after close plus up to 15 s to connect, clients give up after 15 s and report "daemon cannot start", and a brick switched off during the restart keeps the successor in Starting forever. Recommended: carry-over applies to `daemon restart`; the successor accepts clients once it has won the channel and loaded the handover state, reports restored bricks as reconnecting (R21's route wait covers operations meanwhile), and the handover carries each Bluetooth brick's release time.
+
+- **The CLI does not cover forgetting a brick, clearing its Bluetooth list or pairing** — R26 (what the `ev3` CLI covers), System-Wide Impact (P2, coherence, confidence 75)
+
+  The plan says the CLI is the person's path for these operations and the MCP server never exposes them, but R26's list omits them, so after this work only VS Code can forget or pair a brick. Recommended: add the three to R26, each asking for confirmation on a real terminal.
+
+- **An agent can still switch to `full` without a person** — R22, R23 (person confirmation), KTD12 (P2, security-lens, confidence 75)
+
+  An agent refused by `ev3 config` can edit the daemon's settings file and run `ev3 daemon restart`, or call the published client library with the confirmation flag set; an add-on's MCP server depends only on its own code to refuse. The only bypass the plan names is faking a terminal, so the guardrail reads stronger than it is. Recommended: `full` is never read back from the settings file (it lasts until the daemon really ends and survives only a handover), the confirmation flag is honoured only from connections that declare the VS Code or CLI client kind and is left out of the add-on library's types, and the plan names the remaining bypasses.
+
+- **A transfer debt nobody can answer stops every later agent run on that brick** — R39 (questions for a person), KTD8 (P1, adversarial, confidence 75)
+
+  A lost reply leaves an uncertain transfer debt; from then on every `ev3 c run` from an agent, script or CI on that brick ends with `needs_person`, until a person answers in VS Code or a terminal. Today the transfer proceeds and the debt stays. Recommended: for the transfer-slot question a `keep` answer keeps the debt and lets the transfer proceed with a warning saying what a person can release; ending with `needs_person` stays for pairing, Bluetooth access and clearing a Bluetooth list.
+
+- **R34 says the development daemon never reaches the user's daemon as a client, yet the hardware loan is such a connection** — R34 (P3, coherence, confidence 75)
+
+  An implementer writing the channel-isolation test could forbid the loan connection. Change: in R34, "never reaches the user's daemon as an ordinary client; its only contact is the hardware loan connection".
+
+- **Deploy-and-run uploads before it checks that nothing runs** — U17 (core deploy-and-run) (P2, cross-model codex, confidence 100)
+
+  A deployment onto a brick with a running program would overwrite files before failing, contrary to U17's own test that nothing is uploaded. Change: check that no program is running before uploading any file, inside the same lease.
+
+- **A PATH entry that resolves to the current directory still lets a project-supplied add-on run** — KTD14 (add-on resolution) (P1, cross-model codex security-lens, confidence 75)
+
+  KTD14 accepts any absolute PATH entry, so a PATH containing the absolute form of the current directory brings back the risk R27 rules out. Change: skip PATH entries that resolve to the current working directory before looking for `ev3-<name>`.
