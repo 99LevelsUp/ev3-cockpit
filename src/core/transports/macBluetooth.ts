@@ -10,16 +10,19 @@
  * started the helper (VS Code). Until it is given the helper says so (`denied`) instead of listing
  * nothing, so the cockpit can tell the user where to allow it.
  *
- * Pairing stays in the system settings for now; this module neither pairs nor unpairs.
+ * Since the second day of the visit (19.11.2026) the helper also pairs (`pair`), forgets a pairing
+ * (`forget`), checks a paired brick is in range (`check`) and runs an inquiry (`inquire`), so the
+ * cockpit pairs, forgets and follows presence on macOS as it does on Windows and Linux.
  */
 
 import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import { TransportAdapter, SendOptions, OpenOptions } from './transportAdapter';
-import { BtDiscoveryDevice } from './btTransportProvider';
+import { BtDiscoveryDevice, UnpairResult } from './btTransportProvider';
 import { formatMac } from './btSppDiscovery';
 import { BT } from './transportConstants';
-import { TransportError, TimeoutError } from '../errors/CockpitError';
+import { BackendUnavailableError, TransportError, TimeoutError } from '../errors/CockpitError';
+import type { BtPairingEvent, HelperPairingResult, ScannedBrick } from './btPairingHelper';
 import {
 	PendingReply, drainPendingReply, rejectPendingReply, extractLengthPrefixedPacket, createPendingReply,
 } from './pendingReply';
@@ -101,21 +104,158 @@ export interface MacPairedScanOptions {
  * comes meanwhile shares the running one rather than starting another.
  */
 export function createMacPairedScan(options: MacPairedScanOptions): () => Promise<BtDiscoveryDevice[]> {
-	const timeoutMs = options.timeoutMs ?? 150_000;
-	let executableChecked = false;
-	const run = options.run ?? ((args: readonly string[]) => new Promise<string>((resolve, reject) => {
-		if (!executableChecked) { ensureExecutable(options.helperPath); executableChecked = true; }
-		childProcess.execFile(options.helperPath, [...args], { timeout: timeoutMs }, (error, stdout) => {
-			// `denied` comes with exit code 3 and its own JSON; the parse below says what it means.
-			if (stdout.trim().startsWith('{')) { resolve(stdout); return; }
-			reject(new TransportError(`The Bluetooth helper failed: ${error instanceof Error ? error.message : 'no answer'}`));
-		});
-	}));
+	const run = options.run ?? runnerFor(options.helperPath, options.timeoutMs ?? 150_000);
 	let running: Promise<BtDiscoveryDevice[]> | undefined;
 	return () => {
 		running ??= run(['list']).then(parsePairedList).finally(() => { running = undefined; });
 		return running;
 	};
+}
+
+/**
+ * Runs one helper command and gives back its stdout, which is JSON for every command but `connect`.
+ * A refusal comes with its own JSON and a non-zero exit, so stdout is taken whenever it is JSON.
+ */
+function runnerFor(helperPath: string, timeoutMs: number): (args: readonly string[]) => Promise<string> {
+	let executableChecked = false;
+	return (args) => new Promise<string>((resolve, reject) => {
+		if (!executableChecked) { ensureExecutable(helperPath); executableChecked = true; }
+		childProcess.execFile(helperPath, [...args], { timeout: timeoutMs }, (error, stdout, stderr) => {
+			if (stdout.trim().startsWith('{')) { resolve(stdout); return; }
+			const said = /error (.*)/.exec(String(stderr))?.[1];
+			reject(new TransportError(`The Bluetooth helper failed: ${said ?? (error instanceof Error ? error.message : 'no answer')}`));
+		});
+	});
+}
+
+/** Options for {@link createMacPresence}. */
+export interface MacPresenceOptions {
+	helperPath: string;
+	/** For tests: runs the helper and gives back its stdout. */
+	run?: (args: readonly string[]) => Promise<string>;
+}
+
+/**
+ * Presence on macOS, for `BtPresenceMonitor`: a check of one paired brick (a name request that
+ * pages it, with no link and no pairing, as the L2CAP connect does on Linux) and an inquiry that
+ * finds the bricks around, paired or not, with their names. A refused Bluetooth stops the monitor
+ * with its reason, said once, rather than failing every round.
+ */
+export function createMacPresence(options: MacPresenceOptions): {
+	check: (mac: string) => Promise<boolean>;
+	inquire: () => Promise<ScannedBrick[]>;
+} {
+	// The inquiry window plus the name requests it makes afterwards, with room.
+	const run = options.run ?? runnerFor(options.helperPath, (BT.PRESENCE_INQUIRY_SECONDS + 40) * 1000);
+	const answer = (text: string): Record<string, unknown> => {
+		const parsed = JSON.parse(text) as Record<string, unknown>;
+		if (parsed.error === 'denied') { throw new BackendUnavailableError(MAC_BT_DENIED); }
+		if (parsed.error) { throw new TransportError(`The Bluetooth helper failed: ${String(parsed.error)}`); }
+		return parsed;
+	};
+	return {
+		check: async (mac) => answer(await run(['check', bareOf(mac)])).answered === true,
+		inquire: async () => {
+			const started = Date.now();
+			const devices = (answer(await run(['inquire', String(BT.PRESENCE_INQUIRY_SECONDS)])).devices ?? []) as
+				Array<{ mac?: string; name?: string; paired?: boolean; rssi?: number }>;
+			const atMs = Date.now() - started;
+			return devices
+				.filter((device) => typeof device.mac === 'string' && device.mac.length === 12 && device.mac.startsWith(LEGO_OUI))
+				.map((device) => ({
+					mac: formatMac(device.mac!),
+					name: device.name ?? '',
+					paired: device.paired === true,
+					// IOBluetooth reports 127 when it has no reading.
+					signal: typeof device.rssi === 'number' && device.rssi !== 127 ? device.rssi : null,
+					atMs,
+				}));
+		},
+	};
+}
+
+/** Options for {@link createMacPairing}. */
+export interface MacPairingOptions {
+	helperPath: string;
+	/** For tests: starts the helper. */
+	spawnHelper?: SpawnHelper;
+}
+
+/** What a user reads when a pairing ends with the helper's status. */
+function pairingReason(status: string): string {
+	if (status === 'Denied') { return MAC_BT_DENIED; }
+	if (status === 'AuthenticationTimeout') { return 'The brick did not confirm the pairing in time. Accept it on the brick\'s screen and try again.'; }
+	return `Pairing failed (${status}).`;
+}
+
+/**
+ * Pairs through the helper's `pair`, for `BtClassicDiscovery`. The helper answers the PIN or the
+ * numeric confirmation itself; the brick asks its user to accept on its screen. Each JSON line it
+ * prints is a pairing event, the last one the result.
+ */
+export function createMacPairing(options: MacPairingOptions): (
+	mac: string, onEvent?: (event: BtPairingEvent) => void, signal?: AbortSignal,
+) => Promise<HelperPairingResult> {
+	const spawnHelper = options.spawnHelper ?? spawnerFor(options.helperPath);
+	return (mac, onEvent, signal) => new Promise<HelperPairingResult>((resolve) => {
+		if (signal?.aborted) { resolve({ ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' }); return; }
+		const helper = spawnHelper(['pair', bareOf(mac)]);
+		let result: HelperPairingResult | undefined;
+		let pending = '';
+		let stderr = '';
+		const onAbort = () => helper.kill('SIGTERM');
+		signal?.addEventListener('abort', onAbort, { once: true });
+		helper.stdin?.on('error', () => { /* the helper reads nothing; a closed pipe changes nothing */ });
+		helper.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+		helper.stdout?.on('data', (chunk: Buffer) => {
+			pending += chunk.toString('utf8');
+			let newline: number;
+			while ((newline = pending.indexOf('\n')) >= 0) {
+				const line = pending.slice(0, newline).trim();
+				pending = pending.slice(newline + 1);
+				if (!line.startsWith('{')) { continue; }
+				const event = JSON.parse(line) as BtPairingEvent;
+				onEvent?.(event);
+				if (event.type === 'result') {
+					const { ok, status } = event as { ok?: unknown; status?: unknown };
+					const said = String(status ?? '');
+					result = ok === true ? { ok: true, status: said } : { ok: false, status: said, reason: pairingReason(said) };
+				}
+			}
+		});
+		const finish = (fallback: string) => {
+			signal?.removeEventListener('abort', onAbort);
+			if (signal?.aborted) { resolve({ ok: false, reason: 'Pairing was cancelled.', status: 'Cancelled' }); return; }
+			resolve(result ?? { ok: false, reason: /error (.*)/.exec(stderr)?.[1] ?? fallback });
+		};
+		helper.on('error', (error) => finish(`The Bluetooth helper did not start: ${error.message}`));
+		helper.on('close', (code) => finish(`The Bluetooth helper ended (${code}) without a result.`));
+	});
+}
+
+/** Removes the Mac's pairing with a brick, through the helper's `forget`. */
+export function createMacUnpair(options: { helperPath: string; run?: (args: readonly string[]) => Promise<void> }): (mac: string) => Promise<UnpairResult> {
+	let executableChecked = false;
+	const run = options.run ?? ((args: readonly string[]) => new Promise<void>((resolve, reject) => {
+		if (!executableChecked) { ensureExecutable(options.helperPath); executableChecked = true; }
+		childProcess.execFile(options.helperPath, [...args], { timeout: 30_000 }, (error, _stdout, stderr) => {
+			if (!error) { resolve(); return; }
+			const said = /error (.*)/.exec(String(stderr))?.[1];
+			reject(new TransportError((error as { code?: unknown }).code === 3 ? MAC_BT_DENIED : (said ?? error.message)));
+		});
+	}));
+	return async (mac) => {
+		try {
+			await run(['forget', bareOf(mac)]);
+			return { ok: true };
+		} catch (error) {
+			return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	};
+}
+
+function bareOf(mac: string): string {
+	return mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
 }
 
 /** Options for {@link BtMacAdapter}. */
