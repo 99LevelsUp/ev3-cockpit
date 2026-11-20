@@ -15,7 +15,7 @@ import { WireErrorCode } from '../contract/errors';
 import type {
 	BrickStatus, ContractBrick, ContractChain, DaemonStatus, DeployResult, ProgramState, StartOutcome, TelemetryValue,
 } from '../contract/models';
-import { CockpitApi, CockpitConsumer, CockpitServices, ApiChain, createCockpitApi } from '../core/api/cockpitApi';
+import { BrickServices, ClientSession, PerBrickServices, ApiChain, createBrickServices } from '../core/api/cockpitApi';
 import { assertAllowed, type AccessMode } from '../core/api/accessPolicy';
 import { BrickEntry, BrickId, BrickRef, ChannelState, Transport, operationDeadline } from '../core/contracts';
 import { setSweepConfirmation } from '../core/fs/transferLedger';
@@ -54,7 +54,7 @@ interface Handle {
 export interface Surface {
 	readonly holders: HolderSets;
 	readonly leases: Leases;
-	readonly api: CockpitApi & CockpitServices;
+	readonly api: BrickServices & PerBrickServices;
 	attach(client: DaemonClient): void;
 	/** Bricks reported as reconnecting after a restart. */
 	readonly reconnecting: Set<string>;
@@ -122,7 +122,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	});
 	const leases = new Leases();
 
-	const api = createCockpitApi({
+	const api = createBrickServices({
 		bricks: runtime.bricks,
 		aggregator: runtime.aggregator,
 		telemetry: {
@@ -237,7 +237,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	const attach = (client: DaemonClient): void => {
 		const { endpoint, identity } = client;
 		const owner = { clientId: client.id, name: identity.name };
-		const consumer: CockpitConsumer = api.registerConsumer(identity.name);
+		const consumer: ClientSession = api.openSession(identity.name);
 		// A client back after a handover takes over the holds its old connection had.
 		if (restoredClients.size > 0) { holders.reclaim(identity.name, client.id, restoredClients); }
 		const subscriptions = new Map<string, { dispose(): void }>();

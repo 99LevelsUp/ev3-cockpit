@@ -1,22 +1,16 @@
 /**
- * The cockpit's public API: what `activate()` returns to other extensions (step-5 plan, U6;
- * IMPLEMENTATION_PLAN 4.2–4.4, 4.7, 4.9; DESIGN §10).
- *
- * Consumers today are VS Code extensions (ev3-c, ev3-explorer; later ev3-python, ev3-blockly);
- * an MCP server may wrap the same object later. So everything that crosses it is plain,
- * serialisable data and promises, apart from the `dispose` handles of subscriptions (KTD6), and
- * every error carries a stable `code`.
+ * The cockpit's per-brick services, as the daemon runs them for its clients (U14; before the daemon
+ * this was the extension's public API v1, step-5 plan U6). One object for the daemon, with a session
+ * per connected client: every client's stop reaches the same program service, and each client's
+ * telemetry arrives in order. Clients reach it only through the contract (`src/contract/`).
  *
  * - A brick is named by its id or by `'active'`, resolved when the call is made; an id the cockpit
- *   does not know is refused. Program, shell and brick-info answers and every event name the brick
- *   by id; file answers are the file data asked for, so a consumer that needs to know which brick
- *   answered takes `getActiveBrickId()` first and passes that id, not `'active'` (KD1).
- * - The access mode is checked here, for every write, removal, run and shell command (KD2, KD3),
- *   so no consumer routes around it.
- * - Connecting and disconnecting go through the brick layer's own paths — sign-in with pairing and
- *   the brick's dialog as consent, sign-out — so the connection lifecycle keeps one owner (KD4).
- * - A consumer's subscriptions end when it unregisters (R8).
- * - Telemetry (step-6 U8): a consumer subscribes to rows of a brick at an interval and gets back what
+ *   does not know is refused.
+ * - The access mode is checked here, for every write, removal, run and shell command (KD2, KD3).
+ * - Connecting and disconnecting go through the brick layer's own paths, so the connection lifecycle
+ *   keeps one owner (KD4).
+ * - A session's subscriptions end when it closes (R8).
+ * - Telemetry (step-6 U8): a session subscribes to rows of a brick at an interval and gets back what
  *   each row was granted, then a snapshot, then only the rows that changed, each value with when it
  *   was sampled, the interval it runs at now and whether it is stale (D2, D10). Disposing the handle
  *   releases exactly that claim; a brick that goes ends its subscriptions with an `ended` update.
@@ -40,8 +34,6 @@ import type { ClaimRequest, Grant } from '../telemetry/telemetryClaims';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 import { AccessMode, assertAllowed } from './accessPolicy';
 import { TelemetryDelivery, toTelemetryValue } from './telemetryDelivery';
-
-export const API_VERSION = 1;
 
 /**
  * A brick by its id, or `'active'` for the active brick at the time of the call (KD1). A plain
@@ -145,7 +137,7 @@ export interface ShellResult {
 }
 
 /** What one registered extension works with. */
-export interface CockpitConsumer extends Subscription {
+export interface ClientSession extends Subscription {
 	readonly name: string;
 	// Bricks (KD4)
 	listBricks(): ApiBrick[];
@@ -193,13 +185,12 @@ export interface CockpitConsumer extends Subscription {
 /** How often a followed chain is read: a chain changes when a cable or a device does. */
 const CHAIN_FOLLOW_INTERVAL_MS = 1000;
 
-export interface CockpitApi {
-	readonly apiVersion: typeof API_VERSION;
-	registerConsumer(name: string): CockpitConsumer;
+export interface BrickServices {
+	openSession(name: string): ClientSession;
 }
 
 /** What the API needs of the runtime. Narrow, so a test can stand in for it. */
-export interface CockpitApiDeps {
+export interface BrickServicesDeps {
 	readonly bricks: {
 		send(brickId: BrickId, command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse>;
 		getActiveBrickId(): BrickId | undefined;
@@ -235,14 +226,14 @@ export interface CockpitApiDeps {
 
 /** Builds the API object; `dispose` ends every consumer and every program service. */
 /** The per-brick services behind the API, shared by everyone: one program service per brick, so every stop goes through it. */
-export interface CockpitServices {
+export interface PerBrickServices {
 	programsOf(brickId: BrickId): ProgramService;
 	filesOf(brickId: BrickId): ReturnType<typeof createBrickFilesystem>;
 }
 
-export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription & CockpitServices {
+export function createBrickServices(deps: BrickServicesDeps): BrickServices & Subscription & PerBrickServices {
 	const programs = new Map<BrickId, ProgramService>();
-	const consumers = new Set<CockpitConsumer>();
+	const consumers = new Set<ClientSession>();
 	/** Set before anything is disposed, so nothing registered on the way out escapes it (review 4). */
 	let disposed = false;
 
@@ -281,7 +272,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	const intervalWatch = deps.telemetry?.onProgramStatusIntervalChange?.(() => {
 		for (const service of programs.values()) { service.followAgain(); }
 	});
-	const telemetryOf = (): { telemetry: NonNullable<CockpitApiDeps['telemetry']>; delivery: TelemetryDelivery } => {
+	const telemetryOf = (): { telemetry: NonNullable<BrickServicesDeps['telemetry']>; delivery: TelemetryDelivery } => {
 		if (!deps.telemetry || !delivery) { throw new SubscriptionError('Telemetry is not available in this cockpit.'); }
 		return { telemetry: deps.telemetry, delivery };
 	};
@@ -313,7 +304,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	/** Runs `work` for the brick `brick` names, resolved now; a refusal inside `work` sends nothing. */
 	const on =async <T>(brick: BrickTarget, work: (brickId: BrickId) => Promise<T>): Promise<T> => work(resolve(brick));
 
-	const registerConsumer = (name: string): CockpitConsumer => {
+	const openSession = (name: string): ClientSession => {
 		if (disposed) { throw new ConsumerError(`The cockpit's API has been disposed; ${name} cannot register.`); }
 		const subscriptions = new Set<Subscription>();
 		let closed = false;
@@ -328,7 +319,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		};
 		const programState = (brickId: BrickId, running: boolean): ProgramState => ({ brickId, running });
 
-		const consumer: CockpitConsumer = {
+		const consumer: ClientSession = {
 			name,
 			listBricks: () => deps.aggregator.getDiscoveryList().map(toApiBrick),
 			getActiveBrickId: () => deps.bricks.getActiveBrickId(),
@@ -508,8 +499,7 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	};
 
 	return {
-		apiVersion: API_VERSION,
-		registerConsumer,
+		openSession,
 		programsOf,
 		filesOf,
 		dispose: () => {
