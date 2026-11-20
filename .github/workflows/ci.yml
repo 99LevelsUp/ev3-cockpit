@@ -28,7 +28,15 @@ jobs:
         run: npm audit --audit-level=high --omit=dev
 
       - name: Run CI release gate suite
+        # Its `npm run package` builds all four bundles: extension, daemon, ev3 command, MCP server.
         run: npm run test:ci:release
+
+      - name: The bundled daemon answers the ev3 command on simulated bricks
+        run: node scripts/daemon-smoke.cjs
+
+      - name: Stage the npm packages (nothing is published)
+        # The macOS Bluetooth helper only builds on a Mac; this Windows job stages without it.
+        run: node scripts/package-npm.cjs --skip-build --allow-missing-helpers
 
       - name: Upload release-gate artifacts
         if: always()

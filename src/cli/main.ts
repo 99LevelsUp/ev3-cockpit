@@ -49,6 +49,7 @@ export function cliLaunch(dir: string = __dirname): LaunchSpec {
 interface Parsed {
 	json: boolean;
 	help: boolean;
+	version: boolean;
 	brick?: string;
 	channel?: string;
 	command?: string;
@@ -59,7 +60,7 @@ interface Parsed {
 }
 
 function parse(argv: readonly string[]): Parsed {
-	const parsed: Parsed = { json: false, help: false, rest: [], args: [], flags: new Set() };
+	const parsed: Parsed = { json: false, help: false, version: false, rest: [], args: [], flags: new Set() };
 	let command: Command | undefined;
 	let optionsDone = false;
 	for (let i = 0; i < argv.length; i++) {
@@ -85,6 +86,7 @@ function parse(argv: readonly string[]): Parsed {
 		if (token === '--') { optionsDone = true; continue; }
 		if (token === '--json') { parsed.json = true; continue; }
 		if (token === '-h' || token === '--help') { parsed.help = true; continue; }
+		if (token === '--version') { parsed.version = true; continue; }
 		if (token === '--brick' || token.startsWith('--brick=')) { parsed.brick = valueOf('--brick'); continue; }
 		if (token === '--channel' || token.startsWith('--channel=')) { parsed.channel = valueOf('--channel'); continue; }
 		const flag = SHORT_FLAGS[token] ?? (token.startsWith('--') ? token.slice(2) : undefined);
@@ -98,6 +100,7 @@ function helpText(): string[] {
 	const width = Math.max(...Object.values(COMMANDS).map((c) => c.usage.length));
 	return [
 		'Usage: ev3 [--json] [--brick <brick>] [--channel <name>] <command> [arguments]',
+		'       ev3 --version',
 		'',
 		...Object.values(COMMANDS).map((c) => `  ${c.usage.padEnd(width)}  ${c.summary}`),
 		'',
@@ -117,6 +120,11 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
 		return printError(io, argv.includes('--json'), error);
 	}
 	const { json } = parsed;
+	// This installation's version, from its package.json: no daemon is asked or started.
+	if (parsed.version) {
+		io.stdout.write(`${cliLaunch().version}\n`);
+		return ExitCode.Ok;
+	}
 	if (parsed.command === undefined || parsed.command === 'help' || parsed.help) {
 		const lines = helpText();
 		const command = parsed.command ? COMMANDS[parsed.command] : undefined;
