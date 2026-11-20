@@ -64,6 +64,42 @@ export interface SendCommandOptions {
 	readonly timeoutMs?: number;
 	/** Abort signal for cooperative cancellation. */
 	readonly signal?: AbortSignal;
+	/**
+	 * When the operation this command belongs to must be done, in `Date.now()` milliseconds.
+	 *
+	 * A brick whose route is lost for a moment does not fail the operation by itself: a command
+	 * not yet sent waits for the route until then, and fails with the route's reason after. Absent,
+	 * nothing waits — a command with no route fails at once, as it always has. A budget, not a
+	 * round-trip timeout: `timeoutMs` still bounds each exchange.
+	 */
+	readonly deadline?: number;
+}
+
+/**
+ * How long each kind of operation may wait out a lost route, by default (ms). A caller passes its
+ * own deadline to override it.
+ *
+ * Long enough for a Bluetooth link to come back after a brief drop — the reconnect's backoff starts
+ * at a second and doubles — and short enough that a brick that is really gone is reported while
+ * the user still waits for the answer. A transfer's and a deploy's budget bounds the waiting and
+ * the restarts, not a transfer that is moving: a 1 MB file over Bluetooth takes about 90 seconds.
+ */
+export const OPERATION_BUDGET_MS = {
+	/** One command: a reading, a status, a stop. */
+	command: 15_000,
+	/** One file uploaded or downloaded. */
+	transfer: 60_000,
+	/** A tree removed, or a list of paths. */
+	remove: 60_000,
+	/** Files put on the brick and a program started. */
+	deployAndRun: 120_000,
+} as const;
+
+export type OperationKind = keyof typeof OPERATION_BUDGET_MS;
+
+/** The deadline an operation of `kind` gets when its caller names none. */
+export function operationDeadline(kind: OperationKind, now: number = Date.now()): number {
+	return now + OPERATION_BUDGET_MS[kind];
 }
 
 /** Result of a single discovery scan for one transport. */

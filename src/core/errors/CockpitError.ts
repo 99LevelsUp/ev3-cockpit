@@ -30,6 +30,8 @@ export const ErrorCode = {
 	ModeConflict: 'mode_conflict',
 	/** The cockpit's access mode does not allow the operation on that path (step-5 KD2). */
 	AccessDenied: 'access_denied',
+	/** A stop on the brick, or the caller, ended an operation before it started its program. */
+	Cancelled: 'cancelled',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -253,6 +255,20 @@ export class ProgramError extends CockpitError {
 	) {
 		super(code, message, cause);
 		this.name = 'ProgramError';
+	}
+}
+
+/**
+ * A stop pressed on the brick ended an operation before it started its program, so it starts
+ * nothing: a stop pressed during an upload is never followed by a start.
+ */
+export class CancelledError extends CockpitError {
+	/**
+	 * @param stoppedBy Who stopped the brick, as the stop named itself; undefined when it gave no name.
+	 */
+	constructor(message: string, readonly stoppedBy?: string, cause?: unknown) {
+		super(ErrorCode.Cancelled, message, cause);
+		this.name = 'CancelledError';
 	}
 }
 

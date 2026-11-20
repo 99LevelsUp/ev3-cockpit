@@ -51,6 +51,20 @@ export interface FileSize {
 	readonly files: number;
 }
 
+/** What a remove could not delete. */
+export interface RemoveReport {
+	/**
+	 * The paths still on the brick: each one the brick refused to delete, or could not be
+	 * addressed. A directory that stays only because something in it stayed is not listed.
+	 */
+	readonly leftBehind: readonly string[];
+}
+
+export interface RemovePathsOptions extends SendCommandOptions {
+	/** Remove a directory with everything in it; without, a directory that is not empty stays. */
+	readonly recursive?: boolean;
+}
+
 export class FilesystemService {
 	constructor(private readonly send: SendCommand) {}
 
@@ -160,10 +174,84 @@ export class FilesystemService {
 		}
 	}
 
-	/** Removes a path and everything beneath it. No confirmation, no undo on the brick. */
-	async removeTree(path: string, options?: SendCommandOptions): Promise<void> {
+	/**
+	 * Removes a path and everything beneath it, and says what it could not. No confirmation, no
+	 * undo on the brick.
+	 *
+	 * Walked here with {@link list} and deleted from the bottom up, one entry at a time: the
+	 * firmware's own remove is one level deep (`cMemoryDeleteSubFolders`, `c_memory.c` 931–968),
+	 * so a subdirectory with anything in it would stay, and the directory with it, without a word.
+	 */
+	async removeTree(path: string, options?: SendCommandOptions): Promise<RemoveReport> {
 		this.assertPathFits(path);
-		await this.expect('fs:removeTree', { kind: 'fs:removeTree', path }, options);
+		const leftBehind: string[] = [];
+		await this.removeWalk(trimSlash(path), leftBehind, options);
+		return { leftBehind };
+	}
+
+	/**
+	 * Removes several paths in one operation, each with everything beneath it when `recursive`;
+	 * otherwise a directory that is not empty stays and is reported.
+	 */
+	async removePaths(paths: readonly string[], options?: RemovePathsOptions): Promise<RemoveReport> {
+		for (const path of paths) { this.assertPathFits(path); }
+		const leftBehind: string[] = [];
+		for (const path of paths) {
+			if (options?.recursive) {
+				await this.removeWalk(trimSlash(path), leftBehind, options);
+			} else if (!(await this.deleteOne(path, options))) {
+				leftBehind.push(path);
+			}
+		}
+		return { leftBehind };
+	}
+
+	/** Deletes what is under `path`, then `path`; adds what stays to `leftBehind`. Resolves whether `path` went. */
+	private async removeWalk(path: string, leftBehind: string[], options?: SendCommandOptions): Promise<boolean> {
+		let entries: FsEntry[] = [];
+		try {
+			entries = await this.list(path, options);
+		} catch (error) {
+			// The brick will not list a file: the path is removed as one.
+			if (!(error instanceof ProtocolError)) { throw error; }
+		}
+		let emptied = true;
+		for (const entry of entries) {
+			const child = `${path}/${entry.name}`;
+			if (Buffer.byteLength(child, 'utf8') >= MAX_PATH_BYTES) {
+				// Out of the brick's reach by name: it stays, and so does everything above it.
+				leftBehind.push(child);
+				emptied = false;
+				continue;
+			}
+			const gone = entry.kind === 'directory'
+				? await this.removeWalk(child, leftBehind, options)
+				: await this.deleteOne(child, options);
+			if (!gone) {
+				if (entry.kind !== 'directory') { leftBehind.push(child); }
+				emptied = false;
+			}
+		}
+		// A directory that keeps something cannot go; what it keeps is already reported.
+		if (!emptied) { return false; }
+		if (await this.deleteOne(path, options)) { return true; }
+		leftBehind.push(path);
+		return false;
+	}
+
+	/**
+	 * Deletes one file or empty directory. Resolves false when it is still there: the brick
+	 * refused (the firmware answers an error, the mock `deleted: false`) and it still exists.
+	 */
+	private async deleteOne(path: string, options?: SendCommandOptions): Promise<boolean> {
+		try {
+			const reply = await this.expect('fs:delete', { kind: 'fs:delete', path }, options);
+			if (reply.deleted) { return true; }
+		} catch (error) {
+			if (!(error instanceof ProtocolError)) { throw error; }
+		}
+		// A refused delete of something already gone is not something left behind.
+		return !(await this.exists(path, options));
 	}
 
 	/**
@@ -192,13 +280,20 @@ export class FilesystemService {
 	 */
 	async move(from: string, to: string, options?: SendCommandOptions): Promise<void> {
 		await this.copy(from, to, options);
+		let leftBehind: readonly string[];
 		try {
-			await this.removeTree(from, options);
+			({ leftBehind } = await this.removeTree(from, options));
 		} catch (error) {
 			throw new TransportError(
 				`Copied ${from} to ${to} but could not remove the original, so both now exist. `
 				+ 'The protocol has no atomic rename; remove the source manually.',
 				error,
+			);
+		}
+		if (leftBehind.length > 0) {
+			throw new TransportError(
+				`Copied ${from} to ${to} but the brick kept ${leftBehind.join(', ')} of the original, so both now exist. `
+				+ 'The protocol has no atomic rename; remove the source manually.',
 			);
 		}
 	}
@@ -233,6 +328,8 @@ export class FilesystemService {
 		return reply as Extract<BrickResponse, { kind: K }>;
 	}
 }
+
+const trimSlash = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
 
 /**
  * Continuations allowed for one listing before giving up.

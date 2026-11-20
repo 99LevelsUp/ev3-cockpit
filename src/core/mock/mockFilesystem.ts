@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { MockFileEntry } from './mockConfig';
 
 /** One entry as the mock reports it, mirroring what a brick listing distinguishes. */
@@ -5,6 +7,8 @@ export interface MockEntry {
 	readonly name: string;
 	readonly kind: 'file' | 'directory';
 	readonly bytes?: number;
+	/** MD5 of a file's content, lowercase hex. */
+	readonly md5?: string;
 }
 
 /**
@@ -49,6 +53,8 @@ export class MockFilesystem {
 					name: relative,
 					kind: 'file',
 					bytes: Buffer.byteLength(content, 'utf8'),
+					// The brick lists each file's MD5 (`cComGetFileInfo`), which an unchanged upload is skipped by.
+					md5: createHash('md5').update(content, 'utf8').digest('hex'),
 				});
 			} else {
 				const child = relative.slice(0, slash);
@@ -101,18 +107,18 @@ export class MockFilesystem {
 		return this.directories.delete(dir);
 	}
 
-	/** Removes a path and everything beneath it, matching `opFILE/REMOVE`. */
+	/**
+	 * `opFILE/REMOVE`, one level deep as the firmware's is (`cMemoryDeleteSubFolders`,
+	 * `c_memory.c` 931–968): each entry of the directory goes through `remove()`, so its files and
+	 * its empty subdirectories go and a subdirectory with anything in it stays; then the directory
+	 * itself, which stays too when something stayed in it. A file is removed as a file.
+	 */
 	removeTree(path: string): void {
 		const dir = this.trimSlash(path);
-		const prefix = dir + '/';
-		this.files.delete(dir);
-		for (const p of [...this.files.keys()]) {
-			if (p.startsWith(prefix)) { this.files.delete(p); }
-		}
-		this.directories.delete(dir);
-		for (const d of [...this.directories]) {
-			if (d.startsWith(prefix)) { this.directories.delete(d); }
-		}
+		if (this.files.delete(dir)) { return; }
+		if (!this.directories.has(dir)) { return; }
+		for (const entry of this.list(dir)) { this.delete(`${dir}/${entry.name}`); }
+		this.delete(dir);
 	}
 
 	private addAncestors(path: string): void {

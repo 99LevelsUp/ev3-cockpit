@@ -677,6 +677,57 @@ export class BrickManager implements Disposable {
 	}
 
 	/**
+	 * The brick's route, waiting for one until the operation's deadline when it has none now: a
+	 * momentary loss of the route does not fail an operation by itself.
+	 *
+	 * Without a deadline nothing waits. Neither does a brick that is not signed in: no channel of
+	 * it is joining, so none can come back.
+	 *
+	 * @throws {NotConnectedError} When the deadline passes, the brick is signed out, or the caller
+	 *   aborts first, with what the brick's channels last failed with. Nothing was sent.
+	 */
+	async waitForRoute(brickId: BrickId, options?: Pick<SendCommandOptions, 'deadline' | 'signal'>): Promise<BrickKey> {
+		const now = this.routes.get(brickId);
+		if (now) { return now; }
+		const deadline = options?.deadline;
+		const signal = options?.signal;
+		if (deadline === undefined || Date.now() >= deadline || !this.signedIn.has(brickId) || this.disposed) {
+			throw this.noRoute(brickId, deadline === undefined ? undefined : 'no channel came back in time');
+		}
+		if (signal?.aborted) { throw this.noRoute(brickId, 'the operation was cancelled while it waited'); }
+		return new Promise<BrickKey>((resolve, reject) => {
+			const finish = (settle: () => void): void => {
+				clearTimeout(timer);
+				routes.dispose();
+				signIns.dispose();
+				signal?.removeEventListener('abort', aborted);
+				settle();
+			};
+			const routes = this.onRouteChange((e) => {
+				const current = e.current;
+				if (e.brickId === brickId && current) { finish(() => resolve(current)); }
+			});
+			const signIns = this._onSignInEnded.event((ended) => {
+				if (ended === brickId) { finish(() => reject(this.noRoute(brickId, 'it was disconnected while the operation waited'))); }
+			});
+			const aborted = (): void => finish(() => reject(this.noRoute(brickId, 'the operation was cancelled while it waited')));
+			signal?.addEventListener('abort', aborted, { once: true });
+			const timer = setTimeout(() => finish(() => reject(this.noRoute(brickId, 'no channel came back in time'))),
+				deadline - Date.now());
+			timer.unref?.();
+		});
+	}
+
+	/** No route to the brick, with why: what each of its channels last failed with. */
+	private noRoute(brickId: BrickId, why: string | undefined): NotConnectedError {
+		const reasons = this.sessionManager.getAllSessions()
+			.filter((s) => brickIdOf(s.brickKey) === brickId && s.lastError)
+			.map((s) => `${describeChannel(s.brickKey)} ${s.connectionState}: ${s.lastError}`);
+		const because = reasons.length > 0 ? ` Last failure: ${reasons.join('; ')}.` : '';
+		return new NotConnectedError(`Brick ${brickId} has no connected channel${why ? `; ${why}` : ''}.${because}`);
+	}
+
+	/**
 	 * Send a command to a brick over its best connected channel.
 	 *
 	 * A command that fails on a link fault is not resent: its caller hears the failure. When the
@@ -684,12 +735,12 @@ export class BrickManager implements Disposable {
 	 * goes over that, and is probed straight away — back in routing if it answers, reconnecting if
 	 * not. When it is the only one, it stays the route and is probed: leaving it would only make the
 	 * next commands fail until the probe answered.
+	 *
+	 * With no route now, a command with a deadline waits for one until then: it was not sent, so
+	 * nothing is lost by waiting ({@link waitForRoute}).
 	 */
 	async send(brickId: BrickId, command: BrickCommand, options?: SendCommandOptions): Promise<BrickResponse> {
-		const route = this.routes.get(brickId);
-		if (!route) {
-			throw new NotConnectedError(`Brick ${brickId} has no connected channel.`);
-		}
+		const route = this.routes.get(brickId) ?? await this.waitForRoute(brickId, options);
 		let response: BrickResponse;
 		try {
 			response = await this.sessionManager.send(route, command, options);
@@ -710,6 +761,9 @@ export class BrickManager implements Disposable {
 	 * started over Bluetooth finishes there when a cable is plugged in; a step fails with
 	 * {@link ChannelChangedError} only once that channel is lost. A link fault on a step
 	 * fails over for everyone else as an ordinary send would.
+	 *
+	 * Takes the route there is now; an operation that may wait for one first awaits
+	 * {@link waitForRoute}, at its start and again before each restart.
 	 */
 	pin(brickId: BrickId): PinnedLink {
 		const key = this.routes.get(brickId);

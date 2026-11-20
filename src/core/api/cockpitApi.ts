@@ -27,7 +27,7 @@
 import {
 	BrickCommand, BrickEntry, BrickId, BrickResponse, ChannelState, FsEntry, SendCommandOptions,
 } from '../contracts';
-import { CockpitError, ConsumerError, NotConnectedError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
+import { CockpitError, ConsumerError, NotConnectedError, ProtocolError, SubscriptionError, TransportError } from '../errors/CockpitError';
 import { createBrickFilesystem, BrickSender } from '../fs/brickFilesystem';
 import { TransferOptions } from '../fs/fileTransferService';
 import { FileSize, StorageUsage } from '../fs/filesystemService';
@@ -207,7 +207,7 @@ export interface CockpitApiDeps {
 		signOut(brickId: BrickId): Promise<void>;
 		isSignedIn(brickId: BrickId): boolean;
 		onActiveBrickChange(listener: (event: { current: BrickId | undefined }) => void): Subscription;
-	} & Partial<Pick<BrickSender, 'maxPacketBytes' | 'pin'>>;
+	} & Partial<Pick<BrickSender, 'maxPacketBytes' | 'pin' | 'waitForRoute'>>;
 	readonly aggregator: {
 		getDiscoveryList(): ReadonlyArray<BrickEntry>;
 		onListChanged(listener: () => void): Subscription;
@@ -258,7 +258,9 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 		if (!service) {
 			// Its run state follows the telemetry row (U9); without telemetry it cannot be followed.
 			const telemetry = deps.telemetry;
-			service = new ProgramService((command) => deps.bricks.send(brickId, command), deps.programOptions,
+			const wait = deps.bricks.waitForRoute?.bind(deps.bricks);
+			service = new ProgramService((command, options) => deps.bricks.send(brickId, command, options),
+				{ ...deps.programOptions, ...(wait ? { waitForRoute: (options) => wait(brickId, options) } : {}) },
 				telemetry ? followProgramRow(telemetry, brickId, () => telemetry.programStatusIntervalMs()) : undefined);
 			programs.set(brickId, service);
 		}
@@ -354,9 +356,14 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 				allowed('write', path);
 				return filesOf(brickId).files.makeDirectory(path);
 			}),
-			remove: (brick, path, options) => on(brick, (brickId) => {
+			remove: (brick, path, options) => on(brick, async (brickId) => {
 				allowed('delete', path);
-				return options?.recursive ? filesOf(brickId).files.removeTree(path) : filesOf(brickId).files.remove(path);
+				if (!options?.recursive) { return filesOf(brickId).files.remove(path); }
+				// This surface returns nothing, so what stayed on the brick is its error.
+				const { leftBehind } = await filesOf(brickId).files.removeTree(path);
+				if (leftBehind.length > 0) {
+					throw new TransportError(`Removed ${path} but the brick kept ${leftBehind.join(', ')}.`);
+				}
 			}),
 			move: (brick, from, to) => on(brick, (brickId) => {
 				allowed('delete', from);

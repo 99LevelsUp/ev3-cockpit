@@ -20,7 +20,7 @@
  */
 
 import { BrickCommand, BrickRef, BrickResponse } from '../contracts';
-import { ChannelChangedError, LinkLostError, ProtocolError } from '../errors/CockpitError';
+import { ChannelChangedError, LinkLostError, NotConnectedError, ProtocolError } from '../errors/CockpitError';
 import { FILE_HANDLE_SLOTS } from '../protocol/ev3Commands';
 
 type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
@@ -56,11 +56,13 @@ function brickAnswered(error: unknown): boolean {
 
 /**
  * A failure that does not prove the command stayed on this side: it may have reached the brick and
- * run, with only its reply lost. Three settle it: an answer from the brick, a session's refusal
- * before it left (2.8.14), and a pinned channel's refusal before it left (`BrickManager.pin`).
+ * run, with only its reply lost. Four settle it: an answer from the brick, a session's refusal
+ * before it left (2.8.14), a pinned channel's refusal before it left (`BrickManager.pin`), and no
+ * route to send it over (`BrickManager.send`, once its wait for one is over).
  */
 export function mayHaveRun(error: unknown): boolean {
-	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError) && !brickAnswered(error);
+	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError)
+		&& !(error instanceof NotConnectedError) && !brickAnswered(error);
 }
 
 export class TransferLedger {
