@@ -67,7 +67,8 @@ export function daemonPaths(inputs: PathInputs): DaemonPaths {
 	const channel = inputs.channel === undefined ? undefined : checkChannelName(inputs.channel);
 	const suffix = channel ? `-${channel}` : '';
 	const env = inputs.env;
-	const join = inputs.platform === 'win32' ? path.win32.join : path.posix.join;
+	const flavour = inputs.platform === 'win32' ? path.win32 : path.posix;
+	const join = (...parts: string[]): string => flavour.join(...parts);
 
 	let root: string;
 	let logDir: string;
