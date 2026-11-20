@@ -16,6 +16,7 @@ Total topics: 9 | Total sources: 53
 | [Runtime](topics/runtime.md) | SessionManager, PresenceAggregator, DiscoveryScheduler, CommandQueue, HeartbeatMonitor, ReconnectStrategy | 8 | 2026-04-13 | active |
 | [Mock](topics/mock.md) | MockTransportProvider, mock bricks, dynamics, simulation, testing | 6 | 2026-04-13 | active |
 | [Testing](topics/testing.md) | unit tests, test runner, CI, Playwright, test:unit, test:host | 11 | 2026-04-13 | active |
+| [Daemon and Clients](topics/daemon.md) | daemon, CLI, ev3, MCP, client library, contract, protocol, leases, handover, loans | 8 | 2026-11-20 | active |
 | [Development Environment](topics/dev-environment.md) | VS Code setup, F5 launch, EMFILE bug, Copilot Chat, launch.json, tasks.json | 4 | 2026-04-13 | active |
 
 ## Concepts
@@ -26,5 +27,6 @@ Total topics: 9 | Total sources: 53
 | [Firmware Safety Constraints](concepts/firmware-safety-constraints.md) | transports, runtime, protocol | 2026-04-13 |
 
 ## Recent Changes
+- 2026-11-20: Added the daemon topic (4.10.2); project-overview, contracts, errors and runtime no longer describe API v1
 - 2026-04-13: Added dev-environment topic — VS Code workspace setup, Copilot Chat EMFILE bug, launch.json fix
 - 2026-04-13: Initial compilation — 9 topics and 2 concepts from 53 source files

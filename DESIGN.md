@@ -17,24 +17,22 @@ This document describes the target architecture of EVƎ Cockpit so that it:
 EVƎ Cockpit has two primary roles:
 
 - a panel UI for brick discovery, connection, and monitoring,
-- a runtime and public API for other extensions.
+- a daemon that holds the bricks, with a contract for other programs: the `ev3` command, an MCP
+  server and add-ons.
 
-Cockpit is the sole authority for physical `connect` and `disconnect`.
-Other extensions do not communicate with bricks directly — they go through the exported Cockpit API.
+The cockpit is the sole authority for physical `connect` and `disconnect`.
+Other programs do not communicate with bricks directly — they go through the cockpit daemon.
 
-### 2.1 Integration of Dependent Extensions
+### 2.1 Integration of Add-ons
 
-Dependent extensions access the Cockpit API via the standard VS Code mechanism:
+Add-ons (EVƎ C and others) are separate clients of the daemon, not VS Code extensions that import
+the cockpit's exports:
 
-- A dependent extension declares Cockpit in `extensionDependencies` in its `package.json`.
-- VS Code installs and activates it only after Cockpit.
-- The Cockpit API is obtained by calling `vscode.extensions.getExtension('ev3-cockpit')?.exports`.
-
-Consequences:
-
-- A dependent extension cannot be installed without Cockpit.
-- A dependent extension will not start if Cockpit is not running.
-- Cockpit guarantees that its API is initialized before any consumer begins using it.
+- An add-on uses `@ev3-cockpit/client` and connects with kind `addon`.
+- When no daemon runs, it starts the one the installed cockpit recorded, or tells the user to
+  install the cockpit.
+- It compares only the contract version; it never replaces the daemon.
+- An add-on's own command line is `ev3 <name>`: the `ev3` command runs `ev3-<name>` from the PATH.
 
 ## 3. Core Principles
 
@@ -49,7 +47,7 @@ The source of truth is the runtime layer, which manages:
 - connected sessions,
 - the active brick,
 - telemetry,
-- the public API,
+- the daemon and its contract,
 - metadata persistence.
 
 ### 3.2 One Foreground Brick
@@ -109,7 +107,7 @@ graph TD
         FS[Filesystem]
         PC[Program Control]
     end
-    API[Public API Layer]
+    API[Daemon + Contract]
     UI[Cockpit UI Layer]
 
     Providers --> PA
@@ -122,7 +120,7 @@ graph TD
     Services --> API
     SM --> UI
     Services --> UI
-    API -->|events + snapshots| EXT[External Extensions]
+    API -->|JSON-RPC: requests, events, snapshots| EXT[VS Code, ev3, MCP, add-ons]
     UI -->|read model| PANEL[Webview Panel]
     PANEL -->|actions| UI
 ```
@@ -458,7 +456,7 @@ Responsibilities:
 - explicit disconnect (via an internal API for the Cockpit UI),
 - switching between `foreground / subscribed / minimal`.
 
-The Public API is strictly read-only for session management; it cannot trigger `connect` or `disconnect`.
+Clients never open a brick themselves: `bricks/connect` and `bricks/disconnect` go through the brick layer's own sign-in and sign-out, so the session lifecycle keeps one owner (§10.4).
 
 ### 4.3a Command Layer
 
@@ -485,7 +483,7 @@ real EV3 framing back into commands would be work in service of nothing.
 
 ### 4.3b Service Tier
 
-Between the command layer and the public API sits one tier of peer services: **telemetry**,
+Between the command layer and the daemon's contract sits one tier of peer services: **telemetry**,
 **filesystem**, and **program control**. They are siblings, not a chain.
 
 **What earns a service.** Not a command group — a group is not a reason for a layer.
@@ -616,21 +614,16 @@ Three consequences for the design:
 Throttling must also be **per brick**: in a three-brick session, one brick with its port
 screen open must not slow telemetry for the other two.
 
-### 4.6 Public API Layer
+### 4.6 Daemon and Contract
 
-The Public API layer exports:
-
-- consumer registration,
-- snapshot of connected bricks,
-- state events,
-- active brick,
-- subscription telemetry,
-- filesystem services.
+The daemon (`src/daemon/`) serves the runtime to its clients over the contract (`src/contract/`,
+§10): brick list and holders, write leases, files, programs, telemetry subscriptions, the daisy
+chain, settings, and questions for a person. Clients use the client library (`src/client/`).
 
 ### 4.6a The `ev3://` Scheme Is Not Cockpit's
 
 The cockpit does **not** register a `vscode.FileSystemProvider` for `ev3://`. Consumers
-reach the filesystem through the public API (§10).
+reach the filesystem through the daemon's contract (§10).
 
 A `FileSystemProvider` exists to make a remote filesystem appear inside VS Code — in
 editors, `vscode.workspace.fs`, drag and drop. That is a UI-integration concern, and the
@@ -748,24 +741,17 @@ Model for the foreground panel:
 - preferred value display style,
 - status bar configuration.
 
-### 5.4 Public API Models
+### 5.4 Contract Models
 
-The API does not use UI models.
-
-It requires its own explicit models:
-
-- `ConnectedBrickSnapshot`,
-- `BrickStateChangeEvent`,
-- `ActiveBrickSnapshot`,
-- `TelemetryRowInfo` — a row's identity and schema: stable id, tier, unit, port (`listTelemetryRows`),
-- `TelemetryValue` — one row's value with its own `sampledAt`, `effectiveIntervalMs` and `stale`,
-- `TelemetryUpdate` — a `snapshot` first, then each `change` (the rows that changed and the rows
-  dropped), and `ended` when the brick goes,
-- `TelemetrySubscription` — the handle, the interval each row was granted, and `snapshot()`,
-- `FilesystemEvent`.
+The contract does not use UI models or the core's internal ones. Its own models are in
+`src/contract/models.ts`: `ContractBrick` (a brick with its channels, holders, and whether it is
+reconnecting or blocked), `DaemonStatus`, `ProgramState` (with `runSeq` and `stoppedBy`),
+`DeployResult`, `TelemetryRowInfo`, `TelemetryValue` (one row's value with its own `sampledAt`,
+`effectiveIntervalMs` and `stale`), `TelemetryUpdate` (a `snapshot` first, then each `change`, and
+`ended` when the brick goes), `ContractChain`, `SettingValue` and `Question`.
 
 A `TelemetryUpdate` carries typed `TelemetryValue`s, not a `data: unknown` payload. A typed
-surface that gives up its type at the one point a consumer reads it is not a typed surface.
+surface that gives up its type at the one point a client reads it is not a typed surface.
 
 ## 6. State Model
 
@@ -1453,7 +1439,7 @@ each needs more than a value:
 | | Why a consumer needs it |
 |---|---|
 | stable **row id** in a namespace | to name a row across versions; `ports.sensor.1.value`, not an index into an array (format: owner, 11.11.2026) |
-| **`apiVersion`** on the subscription call | to detect that the row vocabulary changed |
+| the **contract version** in the handshake | to detect that the row vocabulary changed |
 | **`sampledAt`** per row value | rows in one snapshot come from different ticks; without this a consumer cannot tell fresh from carried-over |
 | the **granted interval** | what the consumer asked for is a request, not a guarantee — see below |
 | raw type code beside the resolved name | a closed vocabulary cannot name a device we have not heard of; the code lets a consumer recognise one anyway |
@@ -1531,15 +1517,15 @@ The current telemetry speed is visible in the Cockpit panel (diagnostic display)
 
 ```mermaid
 sequenceDiagram
-    participant Ext as External Extension
-    participant API as Public API Layer
+    participant Ext as Client
+    participant API as Daemon
     participant TM as Telemetry Runtime
     participant SM as Session Manager
 
-    Ext->>API: registerConsumer()
-    API-->>Ext: ConnectedBricksSnapshot
+    Ext->>API: hello (key proof, contract version)
+    API-->>Ext: accepted; bricks/list
 
-    Ext->>API: subscribeTelemetry(brickKey, rows, intervalMs, apiVersion)
+    Ext->>API: telemetry/subscribe(brick, rows, intervalMs)
     API->>TM: claimRows(brickKey, rows, intervalMs)
     TM-->>Ext: Subscription { id, grantedIntervalMs per row }
     TM-->>Ext: TelemetrySnapshot (initial, each row with sampledAt)
@@ -1549,77 +1535,74 @@ sequenceDiagram
         TM-->>Ext: TelemetryEvent (changed rows only)
     end
 
-    Ext->>API: unsubscribeTelemetry(subscriptionId)
+    Ext->>API: subscriptions/cancel(subscriptionId)
     API->>TM: releaseRows(subscriptionId)
     note over TM: effective interval recomputed<br/>from the claims that remain
 
     note over SM,TM: On disconnect
     SM->>API: brick disconnected
-    API-->>Ext: BrickStateChangeEvent('disconnected')
+    API-->>Ext: bricks/changed; telemetry/update(ended)
     TM->>TM: cancel all subscriptions for brick
 ```
 
-## 10. Public API Design
+## 10. Daemon and Clients
 
-Built in step 5 (`docs/plans/2026-11-11-step5-programs-and-api.md`), `src/core/api/cockpitApi.ts`.
-Consumers: VS Code extensions today (ev3-c, formerly ev3-native; ev3-explorer; later ev3-python,
-ev3-blockly), and possibly an MCP server that wraps the same object (IMPLEMENTATION_PLAN §13).
+Built in 4.10.2 (`docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`). The wire
+protocol is described in `docs/protocol.md`; add-on authors start with `docs/api-for-consumers.md`.
 
-### 10.1 Entry Model
+### 10.1 One Daemon, Many Clients
 
-A dependent extension:
+One daemon per user holds the bricks: their connections, presence, telemetry, programs, files,
+the transfer ledger and the settings. Every client goes through it:
 
-1. declares Cockpit in `extensionDependencies` and takes
-   `vscode.extensions.getExtension('99LevelsUp.ev3-cockpit')?.exports` after activation,
-2. checks `apiVersion` (1),
-3. calls `registerConsumer(name)` and works with the consumer it gets,
-4. disposes the consumer when it is done; its subscriptions end with it.
+- the VS Code extension, one client per window, on VS Code's own Node (R32);
+- the `ev3` command, for a shell, scripts and agents;
+- the MCP server `ev3-cockpit-mcp`;
+- add-ons such as EVƎ C, through the client library `@ev3-cockpit/client`.
 
-Everything that crosses the API is plain data and promises — no `vscode` types, apart from the
-`dispose` handles of subscriptions — so it serialises and an MCP wrapper needs no translation.
-Every error is a `CockpitError` with a stable `code` (`not_connected`, `access_denied`,
-`program_running`, `program_not_found`, `program_cancelled`, …).
+The first client starts the daemon; it ends 10 s after its last client has gone and no brick is
+held through `ev3 connect`. Only the daemon opens a brick, so two programs never pull at one.
+The extension exports no API (KTD18).
 
-### 10.2 What the API Exports
+### 10.2 The Contract
 
-A brick is named by its id or by `'active'`, resolved when the call is made; an id the cockpit
-does not know is refused. Program, shell and brick-info answers and every event name the brick
-by id; file answers carry only the file data (owner, 11.11.2026; both sibling designs use
-`'active'`; narrowed after review round 2).
+One contract for every client: `src/contract/` holds the method names, parameters, results,
+notifications, error codes and the contract version; `src/client/` is the library that finds or
+starts the daemon, proves the user's key, keeps the brick list and settings current, and renews
+subscriptions after the daemon is replaced. Everything that crosses it is plain JSON; every error
+carries a stable code. A brick is named by id or name; a write takes the brick's lease for one
+request, and a second writer gets `brick_busy` naming the holder; stop and emergency stop never
+wait. Questions for a person go to the client that started the operation; a client without a
+person answers `keep`, which changes nothing.
 
-- **Bricks:** `listBricks` (every brick the cockpit knows, with its channels and their states,
-  signed in, active, paired), `getActiveBrickId`, `setActiveBrick`, `connect` ("Connect a Brick":
-  every channel, pairing on the way with the brick's dialog as consent), `disconnect`,
-  `getBrickInfo` (the brick's name, firmware and OS versions), `onBricksChanged`,
-  `onActiveBrickChanged`.
-- **Files:** `list`, `exists`, `size`, `storage`, `readFile` and `writeFile` (chunked, with
-  progress and cancellation), `makeDirectory`, `remove` (`recursive` for a folder with content),
-  `move` (a copy then a removal on the brick, not atomic).
-- **Programs:** `runProgram` (an `.rbf` in the user slot; refused while a program runs unless
-  `replace`; answers `running: false` when the brick never showed it running — a short program
-  may have ended already, or the brick refused it; the slot's state cannot tell which), `stopProgram`, `emergencyStop` (the brick's own power-off sequence: user and debug
-  slots, then every motor; it does not wait its turn, and cancels a run asked before it whose
-  start is not sent yet), `isProgramRunning`, `onProgramStateChanged` (polled while anyone
-  listens). A native program runs through a launcher `.rbf` its consumer puts beside it.
-- **Shell:** `runShell` — a command on the brick through `opSYSTEM`, only in full mode, logged.
-- **Access mode:** `getAccessMode`, `onAccessModeChanged`.
-- **Telemetry:** `listTelemetryRows`, `subscribeTelemetry`, `unsubscribeTelemetry` — step 6.
+The per-brick services behind the contract (`src/core/api/cockpitApi.ts`) run one session per
+client: one program service per brick for everyone, so every stop reaches it, and each client's
+telemetry in its own order. Until 4.10.2 this was the extension's public API v1.
 
 ### 10.3 Access Mode
 
-The setting `ev3-cockpit.accessMode` (owner, 11.11.2026). **safe**, the default: a consumer
-writes, deletes and runs only under `/home/root/lms2012/prjs` and `/media/card`, and reads
-everywhere; paths are resolved as the brick resolves them, so `..` cannot climb out, and a user
-area itself cannot be removed. **full**: the whole brick, shell included. The cockpit enforces it
-in the API, so no consumer — ev3-explorer's `ev3://` included — routes around it. **It is a guardrail against mistakes, not a sandbox:** a program run in safe mode can do anything on the brick (`opSYSTEM` is open to every `.rbf`), and the check reads paths as written, so a symbolic link inside a user area that points outside it is not caught.
+The daemon's setting `accessMode` (owner, 11.11.2026; moved to the daemon in 4.10.2). **safe**, the
+default: a client writes, deletes and runs only under `/home/root/lms2012/prjs` and `/media/card`,
+and reads everywhere; paths are resolved as the brick resolves them, so `..` cannot climb out, and
+a user area itself cannot be removed. **full**: the whole brick, shell included. Switching to full
+needs a person's confirmation from VS Code (`EVƎ: Settings`) or the `ev3` command; an MCP server or
+an add-on cannot switch it. Full lasts until the daemon ends (a restart keeps it). The daemon
+enforces it for every client. **It is a guardrail against mistakes, not a sandbox:** a program run
+in safe mode can do anything on the brick (`opSYSTEM` is open to every `.rbf`), and the check
+reads paths as written, so a symbolic link inside a user area that points outside it is not caught.
 
-### 10.4 Connecting Through the API
+### 10.4 Connecting
 
-An earlier revision kept `connect`, `disconnect` and the list of unconnected bricks out of the
-API, so the session lifecycle stayed in one place. The owner chose to expose them (11.11.2026,
-ev3-explorer needs them). The lifecycle still has one owner: `connect` runs the brick layer's
-sign-in exactly as "Connect a Brick" does, with its pairing, progress and messages, and
-`disconnect` its sign-out.
+A client connects a brick with `bricks/connect`, which runs the brick layer's sign-in exactly as
+"Connect a Brick" does — pairing first a brick only an inquiry has heard, the brick's dialog as
+consent — and makes the client one of the brick's holders. A brick stays connected while it has a
+holder; a disconnect drops only the caller's own hold (R36).
+
+### 10.5 Replacement and Development
+
+A newer client replaces an idle daemon with its own version; `ev3 daemon restart` does it now,
+keeping held and connected bricks (R37). The extension's development host runs its own daemon on
+the `dev` channel, which borrows bricks from the user's daemon with their holders' consent (KTD17).
 
 ## 11. Filesystem Design
 
@@ -1717,7 +1700,7 @@ Displays:
 - status bar configuration.
 
 **Auto-save and Optimistic Updates**: After each edit action (keystroke, checkbox toggle, etc.), a timer starts for that specific field. The change is written to the brick on focus loss or after 1 second from the last action.
-- **Optimistic Update**: The Session Manager immediately emits a local event with the new value so the UI and Public API reflect the change instantly.
+- **Optimistic Update**: The Session Manager immediately emits a local event with the new value so the UI and the daemon's clients see the change at once.
 - **Telemetry Confirmation**: The final source of truth remains the physical brick. Telemetry eventually confirms whether the change was successful or if the value has changed externally (e.g., physically on the brick).
 
 **The star toggle is not available in config mode.**

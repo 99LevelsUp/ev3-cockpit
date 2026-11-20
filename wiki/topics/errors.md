@@ -24,7 +24,7 @@ Each subclass sets its own `name` property and delegates to a specific error cod
 
 - **transports/** — throws `TransportError`, `ConnectionError`, `TimeoutError` during I/O operations
 - **runtime/** — `SessionManager` catches transport errors and may throw `SessionError`; `HeartbeatMonitor` triggers on `HeartbeatError`
-- **api/** (planned) — will use `ConsumerError`, `SubscriptionError` for API consumer issues
+- **api/** — the per-brick services use `ConsumerError` and `SubscriptionError`; the daemon's contract maps every error to a stable wire code (`src/contract/errors.ts`)
 
 ## API Surface [coverage: high — 2 sources]
 
@@ -50,7 +50,7 @@ Each subclass sets its own `name` property and delegates to a specific error cod
 
 ## Gotchas [coverage: low — 1 source]
 
-- `ConsumerError` and `SubscriptionError` are defined but not yet used — they're reserved for the Phase 4 public API implementation.
+- On the wire every error becomes a code from `src/contract/errors.ts`; the daemon adds codes of its own (`brick_busy`, `needs_person`, `outcome_unknown`, …).
 
 ## Sources
 
