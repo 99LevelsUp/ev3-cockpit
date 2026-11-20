@@ -106,44 +106,80 @@ export function createBrickLoans(deps: BrickLoansDeps): BrickLoans {
 		return undefined;
 	};
 
+	/** Bricks a loan is being asked for now, and whether a loan of everything is. */
+	const pending = new Set<string>();
+	let pendingAll = false;
+	const sameHolders = (a: Readonly<Record<string, readonly Holder[]>>, b: Readonly<Record<string, readonly Holder[]>>): boolean =>
+		JSON.stringify(a) === JSON.stringify(b);
+	/**
+	 * What changed while the holders were being asked, if anything: the peer went, the daemon stopped
+	 * serving, something else was lent, or someone took or dropped a hold nobody asked about.
+	 */
+	const changedWhileAsking = (peer: DaemonClient, asked: Readonly<Record<string, readonly Holder[]>>): string | undefined => {
+		if (peer.endpoint.closed || !clients.has(peer.id)) { return 'The development daemon went while its holders were asked.'; }
+		if (lifecycle.state !== 'serving' || gate.everything) { return 'The user\'s daemon has nothing to lend now.'; }
+		const now = surface.holders.snapshot();
+		const current = Object.fromEntries(Object.keys(asked).map((id) => [id, now[id] ?? []]));
+		if (!sameHolders(current, asked)) { return 'Who holds the brick changed while its holders were asked; ask again.'; }
+		return undefined;
+	};
+
 	const borrowBrick = async (peer: DaemonClient, brickId: string): Promise<LoanResult> => {
 		if (lifecycle.state !== 'serving' || gate.everything) { return { lent: false, reason: 'The user\'s daemon has nothing to lend now.' }; }
 		if (loans.has(brickId)) { return { lent: false, reason: `${nameOf(brickId)} is lent already.` }; }
+		if (pending.has(brickId) || pendingAll) { return { lent: false, reason: `A loan of ${nameOf(brickId)} is being asked for already.` }; }
 		if (!runtime.aggregator.getBrick(brickId as BrickId)) { return { lent: false, reason: `The user's daemon does not see ${brickId}.` }; }
-		const held = surface.holders.snapshot()[brickId] ?? [];
-		const refusal = await consent(peer, { [brickId]: held });
-		if (refusal) { return refusal; }
-		// Where it sits on the bus is read before its session goes.
-		const usb = usbOf(brickId);
-		surface.holders.forget(brickId);
-		await runtime.bricks.signOut(brickId as BrickId);
-		gate.add(brickId, usb);
-		surface.blocked.set(brickId, { by: LENT_TO, holder: peer.identity.name });
-		loans.set(brickId, { peerId: peer.id, holders: held, usb });
-		log.info(`Lent ${nameOf(brickId)} to ${peer.identity.name}`);
-		announce([brickId], true, false);
-		return { lent: true, ...(usb.length > 0 ? { usb } : {}) };
+		pending.add(brickId);
+		try {
+			const held = surface.holders.snapshot()[brickId] ?? [];
+			const refusal = await consent(peer, { [brickId]: held });
+			if (refusal) { return refusal; }
+			const changed = changedWhileAsking(peer, { [brickId]: held });
+			if (changed) { return { lent: false, reason: changed }; }
+			// Lent before the sign-out is awaited: from here no client of this daemon can take the brick,
+			// and a peer that leaves now finds its loan and gives it back.
+			const usb = usbOf(brickId);
+			surface.holders.forget(brickId);
+			gate.add(brickId, usb);
+			surface.blocked.set(brickId, { by: LENT_TO, holder: peer.identity.name });
+			loans.set(brickId, { peerId: peer.id, holders: held, usb });
+			await runtime.bricks.signOut(brickId as BrickId);
+			log.info(`Lent ${nameOf(brickId)} to ${peer.identity.name}`);
+			announce([brickId], true, false);
+			return { lent: true, ...(usb.length > 0 ? { usb } : {}) };
+		} finally {
+			pending.delete(brickId);
+		}
 	};
 
 	const borrowAll = async (peer: DaemonClient): Promise<LoanResult> => {
-		if (lifecycle.state !== 'serving' || gate.everything || loans.size > 0) {
-			return { lent: false, reason: 'The user\'s daemon has bricks lent already; end those loans first.' };
+		if (lifecycle.state !== 'serving' || gate.everything || loans.size > 0 || pending.size > 0 || pendingAll) {
+			return { lent: false, reason: 'The user\'s daemon has bricks lent already, or a loan is being asked for; end those first.' };
 		}
-		const snapshot = surface.holders.snapshot();
-		const refusal = await consent(peer, snapshot);
-		if (refusal) { return refusal; }
-		for (const brickId of Object.keys(snapshot)) {
-			surface.holders.forget(brickId);
-			await runtime.bricks.signOut(brickId as BrickId).catch((error: unknown) => log.warn(`Releasing ${brickId} for the loan failed: ${String(error)}`));
+		pendingAll = true;
+		try {
+			const snapshot = surface.holders.snapshot();
+			const refusal = await consent(peer, snapshot);
+			if (refusal) { return refusal; }
+			const changed = changedWhileAsking(peer, snapshot) ?? (sameHolders(surface.holders.snapshot(), snapshot) ? undefined : 'Who holds the bricks changed while their holders were asked; ask again.');
+			if (changed) { return { lent: false, reason: changed }; }
+			if (loans.size > 0) { return { lent: false, reason: 'A brick was lent while the holders were asked; end that loan first.' }; }
+			// Everything is lent before the sign-outs are awaited, for the same reason as one brick.
+			gate.setAll(true);
+			lifecycle.lend();
+			all = { peerId: peer.id, holders: snapshot };
+			const listed = runtime.aggregator.getDiscoveryList().map((b) => b.brickId as string);
+			for (const brickId of listed) { surface.blocked.set(brickId, { by: LENT_TO, holder: peer.identity.name }); }
+			for (const brickId of Object.keys(snapshot)) { surface.holders.forget(brickId); }
+			for (const brickId of Object.keys(snapshot)) {
+				await runtime.bricks.signOut(brickId as BrickId).catch((error: unknown) => log.warn(`Releasing ${brickId} for the loan failed: ${String(error)}`));
+			}
+			log.info(`Lent every brick to ${peer.identity.name}`);
+			announce(listed, true, true);
+			return { lent: true };
+		} finally {
+			pendingAll = false;
 		}
-		gate.setAll(true);
-		lifecycle.lend();
-		all = { peerId: peer.id, holders: snapshot };
-		const listed = runtime.aggregator.getDiscoveryList().map((b) => b.brickId as string);
-		for (const brickId of listed) { surface.blocked.set(brickId, { by: LENT_TO, holder: peer.identity.name }); }
-		log.info(`Lent every brick to ${peer.identity.name}`);
-		announce(listed, true, true);
-		return { lent: true };
 	};
 
 	/** Holders whose clients are still here, and holds that belong to nobody's connection. */

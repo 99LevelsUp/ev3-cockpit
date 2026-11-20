@@ -10,12 +10,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import * as nodePath from 'node:path';
 import { ContractError, needsPerson } from '../client/connection';
 import { WireErrorCode } from '../contract/errors';
 import type {
 	BrickStatus, ContractBrick, ContractChain, DaemonStatus, DeployResult, ProgramState, StartOutcome, TelemetryValue,
 } from '../contract/models';
-import { isPersonClient } from '../contract/models';
+import { holderName, isPersonClient } from '../contract/models';
 import { BrickServices, ClientSession, PerBrickServices, ApiChain, createBrickServices } from '../core/api/cockpitApi';
 import { assertAllowed, type AccessMode } from '../core/api/accessPolicy';
 import { BrickEntry, BrickId, BrickRef, ChannelState, Transport, operationDeadline } from '../core/contracts';
@@ -255,7 +256,8 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			}, typeof params.brick === 'string' ? params.brick : undefined, identity.kind);
 			const block = blocked.get(id);
 			if (block && !allowBlocked) {
-				throw new ContractError(WireErrorCode.NotConnected, `Brick ${id} is ${block.by}${block.holder ? ` (${block.holder})` : ''}; this daemon does not touch it now.`);
+				throw new ContractError(WireErrorCode.NotConnected, `Brick ${id} is ${block.by}${block.holder ? ` (${block.holder})` : ''}; this daemon does not touch it now.`,
+					{ holder: block.holder ?? block.by, kind: 'NotConnectedError' });
 			}
 			return id;
 		};
@@ -274,6 +276,11 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		};
 		const str = (value: unknown, name: string): string => {
 			if (typeof value !== 'string' || value === '') { throw new ContractError(WireErrorCode.InvalidRequest, `${name} is missing.`); }
+			return value;
+		};
+		/** A path on this computer: absolute, because the daemon's working directory is not the client's. */
+		const local = (value: string, name: string): string => {
+			if (!nodePath.isAbsolute(value)) { throw new ContractError(WireErrorCode.InvalidRequest, `${name} must be an absolute path, not ${value}.`); }
 			return value;
 		};
 		const subscribe = (dispose: { dispose(): void }): string => {
@@ -315,6 +322,12 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				}
 				await runtime.bricks.signIn(brickId as BrickId);
 			}
+			// The client went away while the brick was being connected: a holder for it would never be
+			// released, so the brick stays connected only if someone else holds it.
+			if (!params.hold && client.endpoint.closed) {
+				if (holders.holdersOf(brickId).length === 0) { await runtime.bricks.signOut(brickId as BrickId).catch(() => undefined); }
+				throw new ContractError(WireErrorCode.Cancelled, 'The client went away while its brick was being connected.');
+			}
 			holders.add(brickId, params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name });
 			log.info(`Connected ${brickId}${params.hold ? ' and held' : ''}`, identity.name);
 			const entry = runtime.aggregator.getBrick(brickId as BrickId);
@@ -331,7 +344,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				await holders.drop(brickId, { kind: 'client', clientId: client.id, name: identity.name });
 			}
 			log.info(`Disconnect ${brickId}${params.forEveryone ? ' for everyone' : ''}`, identity.name);
-			return { stillHeldBy: holders.holdersOf(brickId).map((h) => h.client ?? (h.kind === 'hold' ? 'ev3 connect' : 'remembered')) };
+			return { stillHeldBy: holders.holdersOf(brickId).map(holderName) };
 		});
 		on('bricks/info', async (params) => consumer.getBrickInfo(await brickOf(params)));
 		on('bricks/storage', async (params) => consumer.storage(await brickOf(params)));
@@ -397,9 +410,10 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		on('files/size', async (params) => consumer.size(await brickOf(params), str(params.path, 'path')));
 		on('files/read', async (params, signal) => {
 			const brickId = await brickOf(params);
+			const target = typeof params.toLocalPath === 'string' ? local(params.toLocalPath, 'toLocalPath') : undefined;
 			const data = Buffer.from(await consumer.readFile(brickId, str(params.path, 'path'), { signal, deadline: operationDeadline('transfer') }));
-			if (typeof params.toLocalPath === 'string') {
-				await fs.writeFile(params.toLocalPath, data);
+			if (target) {
+				await fs.writeFile(target, data);
 				return { bytes: data.length };
 			}
 			if (params.inline) {
@@ -417,7 +431,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			const path = str(params.path, 'path');
 			let data: Buffer;
 			if (typeof params.fromLocalPath === 'string') {
-				data = await fs.readFile(params.fromLocalPath);
+				data = await fs.readFile(local(params.fromLocalPath, 'fromLocalPath'));
 			} else if (typeof params.content === 'string') {
 				data = Buffer.from(params.content, 'base64');
 				if (data.length > MAX_INLINE_WRITE_BYTES) {
@@ -500,7 +514,10 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			const brickId = await brickOf(params);
 			const runPath = str(params.runPath, 'runPath');
 			const files = Array.isArray(params.files) ? params.files as Record<string, unknown>[] : [];
-			for (const file of files) { assertAllowed(accessMode(), 'write', str(file.remotePath, 'remotePath')); }
+			for (const file of files) {
+				assertAllowed(accessMode(), 'write', str(file.remotePath, 'remotePath'));
+				if (typeof file.localPath === 'string') { local(file.localPath, 'localPath'); }
+			}
 			assertAllowed(accessMode(), 'run', runPath);
 			const services = api.filesOf(brickId as BrickId);
 			return leased(brickId, signal, async (leaseSignal) => {

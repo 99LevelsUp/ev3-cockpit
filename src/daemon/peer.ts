@@ -14,7 +14,7 @@ import { ContractError, Endpoint } from '../client/connection';
 import { connectToDaemon } from '../client/ensureDaemon';
 import { WireErrorCode } from '../contract/errors';
 import type { LoanResult } from '../contract/methods';
-import type { BrickStatus } from '../contract/models';
+import { type BrickStatus, holderName } from '../contract/models';
 import type { Runtime } from '../core/runtime/createRuntime';
 import type { LoanGate } from '../core/runtime/deviceGate';
 import type { DaemonPaths } from './paths';
@@ -168,7 +168,7 @@ export class PeerLink implements SurfaceLoans {
 				}
 				for (const brick of held) {
 					if (gate.allowsBrick(brick.brickId)) { continue; }
-					const names = brick.holders.map((h) => h.client ?? (h.kind === 'hold' ? 'ev3 connect' : 'remembered bricks'));
+					const names = brick.holders.map(holderName);
 					surface.blocked.set(brick.brickId, { by: HELD_THERE, ...(names.length > 0 ? { holder: names.join(', ') } : {}) });
 				}
 				// The user's daemon announces many changes that do not change what it holds.

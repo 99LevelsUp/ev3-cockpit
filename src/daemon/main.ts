@@ -32,6 +32,7 @@ import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
 import { fileLedgerStore } from './stateStore';
 import { BrickLoans, createBrickLoans } from './brickLoans';
 import { HardwareLock } from './hardwareLock';
+import { createBluetoothAccessQuestion } from './bluetoothAccess';
 import { PeerLink } from './peer';
 import { isDevelopmentChannel, withoutChannel } from '../client/channel';
 import { LoanGate } from '../core/runtime/deviceGate';
@@ -237,6 +238,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	const devChannel = isDevelopmentChannel(paths.channelName);
 	const lock = (options.hardwareLock ?? !options.simulated) ? new HardwareLock(paths.hardwareLock, paths.channelName) : undefined;
 	let role: 'alone' | 'owner' | 'borrower' | 'waiting' = 'alone';
+	/** The hardware lock, taken from a timer or a closed connection: a failure there is logged, never thrown. */
+	const takeLock = (): boolean => {
+		try {
+			return lock?.tryTake() ?? false;
+		} catch (error) {
+			log.warn(`The hardware lock could not be taken: ${error instanceof Error ? error.message : String(error)}`);
+			return false;
+		}
+	};
+	/** A VS Code window first, else a terminal: a person who can answer a question. */
+	const askablePerson = (): DaemonClient | undefined => [...clients.values()].find((c) => c.identity.kind === 'vscode')
+		?? [...clients.values()].find((c) => c.identity.kind === 'cli');
 	const gate = new LoanGate('owner');
 	if (lock) {
 		if (lock.tryTake()) {
@@ -267,17 +280,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		...(mockConfig && !options.simulated ? { mockConfig } : {}),
 		// Linux: BlueZ refused this user. Ask a person through a VS Code window or a terminal that is
 		// connected; with nobody to ask, say in the log what to run.
-		onBluetoothAccessDenied: (fix) => {
-			const person = [...clients.values()].find((c) => c.identity.kind === 'vscode')
-				?? [...clients.values()].find((c) => c.identity.kind === 'cli');
-			log.warn(`Bluetooth: BlueZ refused this user. The fix: ${fix.command}`);
-			if (!person) { return; }
-			void fix.offer(async (prompt) => (await ask(person.endpoint, {
-				kind: 'bluetoothAccess', text: prompt.message, details: [prompt.command],
-			})) === 'yes').then(() => fix.checkAgain()).catch((error: unknown) => {
-				log.warn(`Bluetooth access fix failed: ${error instanceof Error ? error.message : String(error)}`);
-			});
-		},
+		onBluetoothAccessDenied: createBluetoothAccessQuestion({
+			canAsk: () => askablePerson() !== undefined,
+			ask: async (question) => {
+				const person = askablePerson();
+				return person ? ask(person.endpoint, question) : 'keep';
+			},
+			log: { info: (m) => log.info(m), warn: (m) => log.warn(m) },
+		}),
 		telemetrySettings: readTelemetrySettings(settingsSection(current), warn),
 		throttleSettings: readThrottleSettings(settingsSection(current), warn),
 		programPreset: readProgramPresetSettings(settingsSection(current), warn),
@@ -307,7 +317,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 			}),
 			name: `development daemon (${paths.channelName ?? 'dev'}, pid ${process.pid})`,
 			version, gate, surface, runtime, log,
-			takeHardware: () => lock?.tryTake() ?? false,
+			takeHardware: takeLock,
 		});
 		built.peer.start();
 	}
@@ -414,7 +424,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		// A development daemon has the hardware: wait in Lent, opening nothing, until it ends.
 		lifecycle.lend();
 		lockTimer = setInterval(() => {
-			if (!lock?.tryTake()) { return; }
+			if (!takeLock()) { return; }
 			clearInterval(lockTimer);
 			lockTimer = undefined;
 			gate.own();

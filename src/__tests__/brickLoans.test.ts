@@ -45,7 +45,7 @@ const opened: CockpitClient[] = [];
 const pids = new Set<number>();
 
 async function connect(pair: Pair, side: 'user' | 'dev', name: string, kind: ClientKind = 'vscode',
-	answer?: (q: Question) => QuestionAnswer): Promise<CockpitClient & { asked: Question[] }> {
+	answer?: (q: Question) => QuestionAnswer | Promise<QuestionAnswer>): Promise<CockpitClient & { asked: Question[] }> {
 	const channel = pair[side];
 	const client = await CockpitClient.connect({
 		name, kind, version: VERSION, reconnect: false,
@@ -143,6 +143,31 @@ describe('brick loans between daemons', () => {
 		assert.equal(terminal.asked.length, 0);
 		await sleep(200);
 		assert.equal(brick(dev, 'SkyNet')?.connected, false);
+	});
+
+	it('lends nothing when the development daemon goes away while the holder is still being asked', async (t) => {
+		t.after(endAll);
+		const pair = channels();
+		let answer!: (a: QuestionAnswer) => void;
+		const answered = new Promise<QuestionAnswer>((resolve) => { answer = resolve; });
+		const window = await connect(pair, 'user', 'VS Code window', 'vscode', () => answered);
+		await window.request('bricks/list', { waitForDiscovery: true });
+		await window.request('bricks/connect', { brick: 'Marvin' });
+
+		const dev = await connect(pair, 'dev', 'development window');
+		await dev.request('bricks/list', { waitForDiscovery: true });
+		const borrowing = dev.request('bricks/connect', { brick: 'Marvin' }).catch(() => undefined);
+		await waitFor(() => window.asked.some((q) => q.kind === 'brickLoan'), 10_000);
+		process.kill(dev.daemon.pid);
+		await waitFor(() => !alive(dev.daemon.pid), 5000);
+		await sleep(300);
+		answer('yes');
+		await borrowing;
+		await sleep(500);
+
+		assert.equal(brick(window, 'Marvin')?.connected, true);
+		assert.equal(brick(window, 'Marvin')?.blocked, undefined);
+		assert.equal((await window.request('daemon/status', {})).lent, undefined);
 	});
 
 	it('lends everything: the user\'s daemon enters Lent and leaves it when the development daemon ends', async (t) => {

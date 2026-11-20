@@ -159,6 +159,17 @@ describe('the daemon surface', () => {
 		w.done();
 	});
 
+	it('refuses a local path that is not absolute: the daemon\'s working directory is not the client\'s', async () => {
+		const w = world();
+		const cli = w.connect('ev3', 'cli');
+		await w.runtime.scheduler.scanOnce();
+		await cli.request('bricks/connect', { brick: 'Robot' });
+		const relative = (e: unknown) => e instanceof ContractError && e.code === WireErrorCode.InvalidRequest && /absolute/.test(e.message);
+		await assert.rejects(cli.request('files/write', { brick: 'Robot', path: '/home/root/lms2012/prjs/x.rbf', fromLocalPath: 'x.rbf' }), relative);
+		await assert.rejects(cli.request('files/read', { brick: 'Robot', path: '/home/root/lms2012/prjs/x.rbf', toLocalPath: 'x.rbf' }), relative);
+		w.done();
+	});
+
 	it('lets a transfer proceed and keeps the debt when nobody can answer the release question', async () => {
 		const w = world();
 		const agent = w.connect('agent', 'mcp', 'keep');

@@ -12,6 +12,13 @@
 export const CLIENT_KINDS = ['vscode', 'cli', 'mcp', 'addon', 'peer'] as const;
 export type ClientKind = (typeof CLIENT_KINDS)[number];
 
+/** What a holder is called where a person reads it. */
+export function holderName(holder: BrickHolder): string {
+	if (holder.kind === 'hold') { return 'ev3 connect'; }
+	if (holder.kind === 'remembered') { return 'remembered'; }
+	return holder.client ?? 'a client';
+}
+
 /** VS Code and the `ev3` command have a person at them; the daemon honours their confirmations. */
 export function isPersonClient(kind: ClientKind): boolean {
 	return kind === 'vscode' || kind === 'cli';
@@ -193,7 +200,11 @@ export interface SettingSpec {
 	readonly key: string;
 	readonly type: 'boolean' | 'number' | 'string';
 	readonly default: boolean | number | string;
+	/** A number that must be whole. */
+	readonly integer?: boolean;
 	readonly minimum?: number;
+	/** Values must be greater than `minimum`, not equal to it. */
+	readonly exclusiveMinimum?: boolean;
 	readonly maximum?: number;
 	readonly enum?: readonly string[];
 	readonly description: string;
@@ -245,7 +256,7 @@ export interface LaunchSpec {
 }
 
 /** What a question from the daemon is about. */
-export type QuestionKind = 'sweep' | 'forget' | 'clearBluetoothList' | 'bluetoothAccess' | 'brickLoan';
+export type QuestionKind = 'sweep' | 'forget' | 'clearBluetoothList' | 'bluetoothAccess' | 'bluetoothCheckAgain' | 'brickLoan';
 
 /** A question the daemon puts to a client for a person to answer. */
 export interface Question {

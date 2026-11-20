@@ -232,6 +232,7 @@ export class CockpitClient {
 	dispose(): void {
 		this.disposed = true;
 		this.renewables.clear();
+		this.unrenewed.clear();
 		this.endpoint?.close();
 	}
 
@@ -281,8 +282,32 @@ export class CockpitClient {
 		this.checkVersions(hello);
 	}
 
+	/** Subscriptions a reconnect could not renew, because their brick was not back yet. */
+	private readonly unrenewed = new Set<string>();
+	private renewing = false;
+
+	/** Tries the subscriptions a reconnect could not renew again, one round at a time. */
+	private async renewPending(): Promise<void> {
+		if (this.renewing || this.unrenewed.size === 0 || this.endpoint.closed) { return; }
+		this.renewing = true;
+		try {
+			for (const id of [...this.unrenewed]) {
+				const renewable = this.renewables.get(id);
+				if (!renewable) { this.unrenewed.delete(id); continue; }
+				try {
+					renewable.wireId = await renewable.renew();
+					this.unrenewed.delete(id);
+				} catch { /* still not back: the next change of the bricks tries again */ }
+			}
+		} finally {
+			this.renewing = false;
+		}
+	}
+
 	private dispatch(name: string, params: unknown): void {
+		if (name === 'bricks/reconnected') { void this.renewPending(); }
 		if (name === 'bricks/changed') {
+			void this.renewPending();
 			this.brickList = [...(params as Notifications['bricks/changed']).bricks];
 			this.bricksChanged.fire(this.brickList);
 		} else if (name === 'settings/changed') {
@@ -316,21 +341,29 @@ export class CockpitClient {
 	private connectAgain(): Promise<void> {
 		if (this.disposed || this.options.reconnect === false) { return Promise.resolve(); }
 		this.reconnecting ??= (async () => {
+			const before = this.endpoint;
 			try {
 				await this.open();
 				// A daemon that crashed knew nothing of this client's bricks; one that handed over did.
 				for (const brickId of [...this.myBricks]) {
 					await this.endpoint.request('bricks/connect', { brick: brickId }).catch(() => undefined);
 				}
-				for (const renewable of this.renewables.values()) {
-					try { renewable.wireId = await renewable.renew(); } catch { /* renewed when its brick is back */ }
+				for (const [id, renewable] of this.renewables) {
+					try {
+						renewable.wireId = await renewable.renew();
+						this.unrenewed.delete(id);
+					} catch { this.unrenewed.add(id); }
 				}
-				this.reconnected.fire(this.helloInfo);
+				if (!this.endpoint.closed) { this.reconnected.fire(this.helloInfo); }
 			} catch (error) {
 				if (!this.disposed) { this.lost.fire(error instanceof Error ? error : new ContractError(WireErrorCode.DaemonUnavailable, String(error))); }
 			} finally {
 				this.reconnecting = undefined;
 			}
+			// The daemon this client just reached went again while it was getting back to it: that close was
+			// absorbed by the reconnect in progress, so go round once more. Only for a new connection, so a
+			// daemon that cannot be reached at all ends in `lost`, not in a loop.
+			if (!this.disposed && this.endpoint !== before && this.endpoint.closed) { await this.connectAgain(); }
 		})();
 		return this.reconnecting;
 	}

@@ -16,7 +16,8 @@ import { CockpitClient, ContractError } from '../client';
 import { spawnDaemon } from '../client/ensureDaemon';
 import { WireErrorCode } from '../contract/errors';
 import type { ClientKind, LaunchSpec, TelemetryUpdate } from '../contract/models';
-import { writeHandoverState } from '../daemon/handover';
+import { HANDOVER_STATE_MS, takeHandoverState, writeHandoverState } from '../daemon/handover';
+import type { DaemonPaths } from '../daemon/paths';
 import { REPO, privateHome, sleep, testDaemon } from './clientDaemonHelpers';
 import { waitFor } from './waitFor';
 
@@ -116,6 +117,22 @@ describe('handing the daemon over', () => {
 		await sleep(2000);
 		assert.equal((await vscode.request('daemon/status', {})).pid, vscode.daemon.pid, 'the successor did not keep running');
 		await cli.request('bricks/disconnect', { brick: 'R2D2', releaseHold: true });
+	});
+
+	it('takes a handover state once, and only a fresh one: not a stale one, nor one from the future', () => {
+		const dir = fs.mkdtempSync(path.join(privateHome(), 'state-'));
+		const paths = { handoverState: path.join(dir, 'handover-state.json') } as DaemonPaths;
+		const state = (at: number) => ({ at, from: '0.0.1', holders: {}, unstored: {}, btCloseTimes: {} });
+		const now = 1_000_000_000;
+		writeHandoverState(paths, state(now - 1000));
+		assert.equal(takeHandoverState(paths, now)?.from, '0.0.1');
+		assert.equal(takeHandoverState(paths, now), undefined, 'read twice');
+		writeHandoverState(paths, state(now - HANDOVER_STATE_MS - 1));
+		assert.equal(takeHandoverState(paths, now), undefined, 'stale');
+		// A clock set back after it was written must not keep it fresh for as long as the difference.
+		writeHandoverState(paths, state(now + 60 * 60_000));
+		assert.equal(takeHandoverState(paths, now), undefined, 'from the future');
+		assert.equal(fs.existsSync(paths.handoverState), false);
 	});
 
 	it('serves at once after a handover whose held brick does not answer, and keeps it held', async (t) => {

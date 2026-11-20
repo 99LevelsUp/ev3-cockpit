@@ -44,7 +44,7 @@ export function writeHandoverState(paths: DaemonPaths, state: HandoverState): vo
 export function takeHandoverState(paths: DaemonPaths, now = Date.now()): HandoverState | undefined {
 	const state = readJson<HandoverState | undefined>(paths.handoverState, undefined);
 	try { fs.rmSync(paths.handoverState, { force: true }); } catch { /* gone already */ }
-	if (!state || typeof state.at !== 'number' || now - state.at > HANDOVER_STATE_MS) { return undefined; }
+	if (!state || typeof state.at !== 'number' || now - state.at > HANDOVER_STATE_MS || now < state.at) { return undefined; }
 	return state;
 }
 

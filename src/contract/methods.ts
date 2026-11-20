@@ -63,13 +63,13 @@ export interface Methods {
 	'bricks/pair': { params: OnBrick; result: { readonly paired: boolean; readonly message?: string } };
 	/** Unpair on this computer and on the brick; asks the person first. */
 	'bricks/forget': {
-		params: OnBrick & PersonConfirmed;
+		params: OnBrick;
 		/** `details` is the cockpit's own report, for clients built with the same cockpit; others read `report`. */
 		result: { readonly forgotten: boolean; readonly report: readonly string[]; readonly details?: unknown };
 	};
 	/** Remove entries from the brick's list of paired devices; asks the person first. */
 	'bricks/clearBluetoothList': {
-		params: OnBrick & PersonConfirmed;
+		params: OnBrick;
 		result: { readonly removed: readonly string[]; readonly kept: readonly string[]; readonly details?: unknown };
 	};
 	/** Look for Bluetooth bricks now. */

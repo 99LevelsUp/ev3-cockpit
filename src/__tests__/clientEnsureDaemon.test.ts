@@ -2,12 +2,14 @@
 
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 import { CockpitClient, ContractError } from '../client';
 import { WireErrorCode } from '../contract/errors';
 import { recordInstall } from '../client/locate';
 import { compareVersions, versionNotice } from '../client/versions';
+import { ensureKey } from '../daemon/key';
 import { privateHome, testDaemon } from './clientDaemonHelpers';
 
 const home = privateHome();
@@ -46,6 +48,20 @@ describe('reaching the daemon', () => {
 		await assert.rejects(CockpitClient.connect({ name: 'x', kind: 'addon', version: '0.0.1', paths: d.paths, readinessMs: 500 }),
 			(e: unknown) => e instanceof ContractError && e.code === WireErrorCode.DaemonUnavailable);
 		assert.equal(fs.existsSync(d.paths.handoverMarker), false);
+	});
+
+	it('gives up on a process that takes the connection and never answers the handshake', { timeout: 15_000 }, async (t) => {
+		const d = testDaemon(home);
+		ensureKey(d.paths.keyFile);
+		const sockets: net.Socket[] = [];
+		const silent = net.createServer((socket) => { sockets.push(socket); });
+		await new Promise<void>((resolve) => silent.listen(d.paths.channel, resolve));
+		t.after(() => { for (const s of sockets) { s.destroy(); } silent.close(); });
+		const started = Date.now();
+		await assert.rejects(CockpitClient.connect({ name: 'x', kind: 'cli', version: '0.0.1', paths: d.paths, launch: d.launch, readinessMs: 1500 }),
+			(e: unknown) => e instanceof ContractError && e.code === WireErrorCode.DaemonUnavailable);
+		assert.ok(sockets.length > 0, 'the client never reached the silent process');
+		assert.ok(Date.now() - started < 8000);
 	});
 
 	it('starts the installed cockpit\'s daemon for an add-on given no launch', async () => {

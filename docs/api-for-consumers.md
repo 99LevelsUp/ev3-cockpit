@@ -172,7 +172,8 @@ File content never travels as one large message:
 - inline base64: `files/write` with `content` up to 4 KiB, `files/read` with `inline: true` up
   to 64 KiB;
 - a local path the daemon reads or writes itself (`fromLocalPath`, `toLocalPath`): the daemon
-  runs as the same user on the same computer, so this is the normal way for larger files;
+  runs as the same user on the same computer, so this is the normal way for larger files. The
+  path must be absolute: the daemon's working directory is not the client's;
 - a transfer handle filled or drained in chunks (`transfer/begin`, `write`, `read`, `close`),
   for clients that cannot share a file system path with the daemon.
 

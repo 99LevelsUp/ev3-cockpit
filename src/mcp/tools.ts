@@ -32,7 +32,7 @@ import { ContractError } from '../client/connection';
 import type { RequestOptions } from '../client/connection';
 import { versionNotice } from '../client/versions';
 import { WireErrorCode } from '../contract/errors';
-import type { DeployResult, Question, QuestionAnswer } from '../contract/models';
+import { type DeployResult, type Question, type QuestionAnswer, holderName } from '../contract/models';
 
 /** What the server needs of the client library. */
 export type CockpitConnection = Pick<CockpitClient, 'request' | 'onQuestion' | 'onNotice' | 'onLost' | 'dispose' | 'daemon' | 'bricks'>;
@@ -298,7 +298,12 @@ export class CockpitMcp {
 			inputSchema: z.object({}), annotations: readOnly,
 		}, (_args, ctx) => this.run(async (client) => {
 			const bricks = await client.request('bricks/list', { waitForDiscovery: true }, requestOptions(ctx));
-			const lines = bricks.map((b) => `${b.name} (${b.brickId}): ${b.connected ? 'connected' : 'not connected'}, ${b.channels.map((c) => c.transport).join('+') || 'no channel'}`);
+			const lines = bricks.map((b) => {
+				const state = b.blocked ? `blocked: ${b.blocked.by}${b.blocked.holder ? ` (${b.blocked.holder})` : ''}`
+					: b.reconnecting ? 'reconnecting after a daemon restart' : b.connected ? 'connected' : 'not connected';
+				const holders = b.holders.map(holderName).join(', ');
+				return `${b.name} (${b.brickId}): ${state}, ${b.channels.map((c) => c.transport).join('+') || 'no channel'}${holders ? `, held by ${holders}` : ''}`;
+			});
 			return plain(bricks.length > 0 ? lines.join('\n') : 'No bricks found.', { bricks });
 		}));
 
@@ -529,7 +534,13 @@ export function errorResult(error: unknown): CallToolResult {
 		next = candidates ? `Name the brick by its id: ${candidates.map((c) => `${c.brickId} (${c.name})`).join(', ')}.` : 'Name the brick by its id.';
 		break;
 	case WireErrorCode.NotConnected:
-		next = 'If the brick is not connected, connect it with connect_brick.';
+		// A brick another cockpit daemon has (lent, or held in a development daemon) is not this agent's to connect.
+		next = holder
+			? `The brick is held by ${holder} through another cockpit daemon; connect_brick cannot take it. Ask the user.`
+			: 'If the brick is not connected, connect it with connect_brick.';
+		break;
+	case WireErrorCode.AccessDenied:
+		next = 'Safe mode refuses this. Only the user can switch on full mode. Ask them to run: ev3 config set access-mode full';
 		break;
 	case WireErrorCode.DaemonUnavailable:
 		next = 'The cockpit daemon is not reachable. The user can check it with ev3 daemon status.';
@@ -611,6 +622,12 @@ export function confineLocalPath(given: string, roots: readonly string[], option
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { return { ok: false, reason: `${absolute} cannot be resolved: ${(error as Error).message}` }; }
 		if (options.mustExist) { return { ok: false, reason: `${absolute} does not exist.` }; }
+		// A name that is there but does not resolve is a link to nowhere: writing to it would follow
+		// the link wherever it points, so it is refused rather than resolved through its folder.
+		try {
+			fs.lstatSync(absolute);
+			return { ok: false, reason: `${absolute} is a link to something that does not exist.` };
+		} catch { /* truly missing: resolved through its folder below */ }
 		try {
 			real = path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
 		} catch {

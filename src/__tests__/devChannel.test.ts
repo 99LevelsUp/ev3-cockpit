@@ -58,6 +58,33 @@ describe('the hardware lock', () => {
 		fs.writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 12345, at: Date.now() }));
 		assert.equal(new HardwareLock(file, undefined).tryTake(), true);
 	});
+
+	it('appears with its holder in it, and takes over a damaged lock', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-'));
+		const file = path.join(dir, 'hardware.lock');
+		const lock = new HardwareLock(file, 'dev-x');
+		assert.equal(lock.tryTake(), true);
+		assert.deepEqual({ ...JSON.parse(fs.readFileSync(file, 'utf8')), at: 0 }, { pid: process.pid, channel: 'dev-x', at: 0 });
+		assert.deepEqual(fs.readdirSync(dir), ['hardware.lock']);
+		lock.release();
+		fs.writeFileSync(file, '{"pid":');
+		assert.equal(new HardwareLock(file, undefined).tryTake(), true);
+	});
+
+	it('leaves a dead holder\'s lock to the daemon already taking it over, and clears a guard a dead one left', () => {
+		const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-')), 'hardware.lock');
+		fs.writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 12345, at: Date.now() }));
+		const guard = `${file}.takeover`;
+		fs.writeFileSync(guard, '');
+		assert.equal(new HardwareLock(file, undefined).tryTake(), false);
+		assert.ok(fs.existsSync(file), 'the lock was removed under another daemon\'s takeover');
+		const old = new Date(Date.now() - 60_000);
+		fs.utimesSync(guard, old, old);
+		const lock = new HardwareLock(file, undefined);
+		assert.equal(lock.tryTake(), false);
+		assert.equal(fs.existsSync(guard), false);
+		assert.equal(lock.tryTake(), true);
+	});
 });
 
 describe('replacement inside a development channel', () => {

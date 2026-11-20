@@ -41,11 +41,13 @@ export interface Connected {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-function connectSocket(where: string): Promise<net.Socket | undefined> {
+/** A connection to the channel, or undefined when nothing answers there within `timeoutMs`. */
+function connectSocket(where: string, timeoutMs: number): Promise<net.Socket | undefined> {
 	return new Promise((resolve) => {
 		const socket = net.connect(where);
-		socket.once('connect', () => { socket.removeAllListeners('error'); resolve(socket); });
-		socket.once('error', () => resolve(undefined));
+		const timer = setTimeout(() => { socket.destroy(); resolve(undefined); }, Math.max(timeoutMs, 1));
+		socket.once('connect', () => { clearTimeout(timer); socket.removeAllListeners('error'); resolve(socket); });
+		socket.once('error', () => { clearTimeout(timer); resolve(undefined); });
 	});
 }
 
@@ -94,9 +96,12 @@ export async function connectToDaemon(options: ConnectOptions): Promise<Connecte
 	let started: (() => number | null | undefined) | undefined;
 	let delay = 50;
 	for (;;) {
-		const socket = await connectSocket(paths.channel);
+		const socket = await connectSocket(paths.channel, until - Date.now());
 		if (socket) {
 			const endpoint = createEndpoint(socket);
+			// Within what is left of the budget: a process that takes the connection and never answers
+			// is hung up on, which ends the handshake waiting for it.
+			const hangUp = setTimeout(() => endpoint.close(), Math.max(until - Date.now(), 1));
 			try {
 				const hello = await performHello(endpoint, readKey(paths.keyFile), options.client);
 				if (hello.state === 'exiting' || hello.state === 'handingOver') {
@@ -107,6 +112,8 @@ export async function connectToDaemon(options: ConnectOptions): Promise<Connecte
 			} catch (error) {
 				endpoint.close();
 				if (error instanceof ContractError && error.code === WireErrorCode.DaemonUnavailable && !/closed/.test(error.message)) { throw error; }
+			} finally {
+				clearTimeout(hangUp);
 			}
 		} else if (!handoverUnderway(paths)) {
 			if (!started) {

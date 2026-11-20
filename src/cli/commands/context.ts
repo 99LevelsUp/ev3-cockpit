@@ -4,7 +4,7 @@
  */
 
 import type { CockpitClient } from '../../client';
-import type { BrickHolder, LaunchSpec } from '../../contract/models';
+import type { LaunchSpec } from '../../contract/models';
 import type { Confirmer } from '../confirm';
 import { CommandResult, CliIo, UsageError } from '../output';
 
@@ -81,8 +81,4 @@ export async function stopTarget(ctx: CommandContext, ref: string | undefined): 
 }
 
 /** Who a holder is, as a person reads it. */
-export function holderName(holder: BrickHolder): string {
-	if (holder.kind === 'hold') { return 'ev3 connect'; }
-	if (holder.kind === 'remembered') { return 'remembered'; }
-	return holder.client ?? 'a client';
-}
+export { holderName } from '../../contract/models';

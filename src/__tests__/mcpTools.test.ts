@@ -426,6 +426,22 @@ describe('what reaches the daemon', () => {
 			assert.equal(standIn.requests.length, 0);
 		});
 
+		it('refuses a link inside the roots that points to nothing yet, outside them', async (t) => {
+			const link = path.join(root, `dangling-${process.pid}`);
+			try {
+				fs.symlinkSync(path.join(outside, `not-yet-${process.pid}`), link, process.platform === 'win32' ? 'junction' : 'file');
+			} catch (error) {
+				t.skip(`cannot create a link here: ${(error as Error).message}`);
+				return;
+			}
+			t.after(() => { try { fs.unlinkSync(link); } catch { /* gone */ } });
+			const { standIn, cockpit } = withStandIn(() => ({ bytes: 1 }));
+			const { call } = await host(cockpit, { roots: [root] });
+			const read = await call('read_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: link });
+			assert.equal(read.isError, true, textOf(read));
+			assert.equal(standIn.requests.length, 0);
+		});
+
 		it('sends a path inside the roots as its absolute real path', async () => {
 			const { standIn, cockpit } = withStandIn(() => ({ bytes: 2 }));
 			const { call } = await host(cockpit, { roots: [root] });

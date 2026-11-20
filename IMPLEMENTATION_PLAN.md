@@ -2070,6 +2070,33 @@ the devices.
   before updating VS Code, over copying the runtime (~250 MB per VS Code version) or requiring a
   system Node. USB discovery over libusb opens each device to read its serial, so a brick lent to
   another daemon has to be skipped before opening. Linux not measured yet (no machine with VS Code).
+  **Code review 20.11.2026** (internal reviewers plus codex): 20 findings, 6 of them P1. All were fixed except
+  the ones below, which are deferred. Each is an owner decision, a change to the contract's shape, or a
+  structural cleanup:
+  - MCP has no daemon status and no disconnect-for-everyone, though the CLI has both. Deciding this
+    widens 4.10.3's tool set, so it is the owner's call.
+  - Client `kind` and `confirmedByPerson` are self-asserted. A process holding the user's key can
+    act as a person (the plan accepts this; it is a guardrail, not a security boundary). Binding
+    the handover state to a token would not change that, so it was not done.
+  - The handover marker outlives a successor that dies at start. Clients then wait up to 30 s
+    instead of starting a daemon.
+  - The brick name match is written three times: in the daemon, in the client library and in MCP.
+    The client copy has no ambiguity check.
+  - Access checks sit in two layers: the session object, and `assertAllowed` in the surface for
+    handlers that go around the session.
+  - The `blocked` map is written from three modules, and each writer must remember to broadcast.
+  - `src/client` and `src/daemon` import each other. An add-on bundling the client pulls in
+    daemon modules.
+  - Smaller items, not yet traced:
+    - re-plugging a lent USB brick changes its bus address, so neither daemon's gate lists it;
+    - a transfer debt cut off during a loan lands in the development channel's ledger;
+    - a peer can take the hardware lock in the gap of a handover;
+    - a lease waits on work that ignores its AbortSignal;
+    - the daemon does not compare `contractVersion`;
+    - the 64 MiB `transfer/begin` cap is not in the contract.
+  - Untested wiring: the device gate in the real USB provider, Bluetooth presence and
+    `createRuntime` (only `LoanGate` and simulated bricks are tested). A contract snapshot test is
+    also missing.
 - [~] 4.10.3 **An MCP server** over the same daemon: `ev3-cockpit-mcp` (`src/mcp/`), 22 tools for
   bricks, files, programs and settings. Built 20.11.2026 with 4.10.2. Forget and clearing a
   Bluetooth list ask the user through MCP elicitation, and without it refuse with the `ev3` command;
