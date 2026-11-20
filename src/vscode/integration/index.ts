@@ -12,6 +12,7 @@ import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
 import { EventEmitter, setListenerErrorHandler } from '../../core/events';
 import { observeEmitter } from '../../test/emitterScenarios';
+import { CockpitClient } from '../../client';
 
 const EXTENSION_ID = '99LevelsUp.ev3-cockpit';
 
@@ -68,22 +69,41 @@ const tests: IntegrationTest[] = [
 		},
 	},
 	{
-		name: 'activation returns the public API, versioned, safe by default (step-5 U6)',
+		name: 'activation exports nothing: add-ons use the client library (KTD18)',
 		fn: async () => {
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);
 			assert.ok(ext);
-			const api = await ext.activate() as {
-				apiVersion: number;
-				registerConsumer(name: string): { listBricks(): unknown[]; getAccessMode(): string; dispose(): void };
-			};
-			assert.equal(api.apiVersion, 1);
-			const consumer = api.registerConsumer('integration-test');
-			assert.ok(Array.isArray(consumer.listBricks()));
-			assert.equal(consumer.getAccessMode(), 'safe');
-			consumer.dispose();
+			assert.equal(await ext.activate(), undefined);
 		},
 	},
 	{
+		name: 'the extension starts its own daemon on simulated bricks, which lists and connects a brick (U11)',
+		fn: async () => {
+			const ext = vscode.extensions.getExtension(EXTENSION_ID);
+			assert.ok(ext);
+			await ext.activate();
+			// The test host's channel, as the extension names it; this suite runs in the same process.
+			// The extension starts it as it activates; this client cannot start one, so it waits for it.
+			let client: CockpitClient | undefined;
+			for (const until = Date.now() + 30_000; !client;) {
+				try {
+					client = await CockpitClient.connect({ name: 'integration test', kind: 'addon', version: '0.0.0', channel: `test-${process.pid}` });
+				} catch (error) {
+					if (Date.now() > until) { throw error; }
+					await new Promise((resolve) => setTimeout(resolve, 250));
+				}
+			}
+			try {
+				const bricks = await client.request('bricks/list', { waitForDiscovery: true });
+				assert.ok(bricks.length > 0, 'the simulated bricks are not listed');
+				const connected = await client.request('bricks/connect', { brick: bricks[0].brickId });
+				assert.equal(connected.connected, true);
+				assert.equal(await client.request('settings/accessMode', {}), 'safe');
+			} finally {
+				client.dispose();
+			}
+		},
+	},	{
 		name: 'filesystem commands are registered and declared',
 		fn: async () => {
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);

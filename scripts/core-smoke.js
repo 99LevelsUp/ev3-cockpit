@@ -45,9 +45,8 @@ async function main() {
 	const { createCockpitApi } = require(core('api/cockpitApi'));
 	const { brickKeyTransport } = require(core('contracts/brickKey'));
 	const {
-		telemetrySettingsFromPackage, throttleSettingsFromPackage, programPresetSettingsFromPackage,
+		defaultTelemetrySettings, defaultThrottleSettings, defaultProgramPresetSettings,
 	} = require(core('telemetry/telemetrySettings'));
-	const manifest = require(path.join(REPO, 'package.json'));
 
 	// A listener that throws does not stop the core, so it would not stop this run either: count it.
 	let listenerErrors = 0;
@@ -68,9 +67,9 @@ async function main() {
 		extensionPath: REPO,
 		log,
 		startPresence: true,
-		telemetrySettings: telemetrySettingsFromPackage(manifest),
-		throttleSettings: throttleSettingsFromPackage(manifest),
-		programPreset: programPresetSettingsFromPackage(manifest),
+		telemetrySettings: defaultTelemetrySettings(),
+		throttleSettings: defaultThrottleSettings(),
+		programPreset: defaultProgramPresetSettings(),
 	});
 	const none = { dispose: () => { /* nothing to release */ } };
 	const api = createCockpitApi({

@@ -249,6 +249,9 @@ export interface Question {
 	readonly text: string;
 	/** Detail lines, for example the Bluetooth entries a clearing would remove. */
 	readonly details?: readonly string[];
+	/** For clearing a Bluetooth list: this computer's Bluetooth name, and whether it is among the entries. */
+	readonly thisComputer?: string;
+	readonly includesThisComputer?: boolean;
 	/** After this many milliseconds the question counts as unanswered. */
 	readonly timeoutMs: number;
 }

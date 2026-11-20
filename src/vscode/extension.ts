@@ -1,30 +1,38 @@
+/**
+ * The VS Code extension: a client of the cockpit daemon (U11).
+ *
+ * It finds this user's daemon or starts it on VS Code's own Node (R32), and runs every command
+ * through the client library; the daemon holds the bricks and the settings. In the Extension
+ * Development Host it talks to a development daemon on the `dev` channel, which borrows bricks from
+ * the user's daemon (KTD17); in the extension test host, to a daemon of its own on simulated bricks.
+ *
+ * The extension exports no API: add-ons use `@ev3-cockpit/client` (KTD18).
+ */
+
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { DisposableStore } from '../core/events';
-import { loadMockConfigFile } from '../core/mock';
-import { createBrickFilesystem, BrickFilesystem } from '../core/fs/brickFilesystem';
-import { setSweepConfirmation } from '../core/fs/transferLedger';
-import { createRuntime } from '../core/runtime/createRuntime';
-import { brickLabel } from '../core/runtime/brickLabels';
-import { BrickId, Transport } from '../core/contracts';
-import { createBluetoothAccessOffer } from './ui/bluetoothAccess';
-import { BrickPickRow, describeChannels } from './ui/brickPickRows';
+import { CockpitClient } from '../client';
+import { channelFromEnv } from '../client/channel';
+import { clientPaths, recordInstall, thisInstallLaunch } from '../client/locate';
+import { versionNotice } from '../client/versions';
+import type { ContractBrick, LaunchSpec } from '../contract/models';
+import { DaemonBridge } from './daemonBridge';
+import { BrickPickRow } from './ui/brickPickRows';
 import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
+import { disconnectBrick } from './ui/disconnect';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 import { createNotifier } from './ui/notify';
-import { AccessMode } from '../core/api/accessPolicy';
-import { CockpitApi, createCockpitApi } from '../core/api/cockpitApi';
-import { NotConnectedError } from '../core/errors/CockpitError';
-import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from '../core/telemetry/telemetrySettings';
+import { answerQuestion } from './ui/questions';
+import { editSettings } from './ui/settings';
 
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
 
 /**
- * Whether to show the simulated bricks. The `ev3-cockpit.mockBricks` setting decides when
- * someone has set it; otherwise they appear only while the extension runs from source (F5),
- * so an installed build never shows six robots that are not there.
+ * Whether the development daemon shows simulated bricks: the `ev3-cockpit.mockBricks` user setting
+ * when someone set it, otherwise yes while the extension runs from source (F5).
  */
 function mockBricksWanted(context: vscode.ExtensionContext): boolean {
 	const setting = vscode.workspace.getConfiguration('ev3-cockpit').inspect<boolean>('mockBricks');
@@ -32,224 +40,203 @@ function mockBricksWanted(context: vscode.ExtensionContext): boolean {
 	return chosen ?? context.extensionMode === vscode.ExtensionMode.Development;
 }
 
-export function activate(context: vscode.ExtensionContext): CockpitApi {
+/** This user's daemon, a development daemon (F5), or a test host's own (KTD17). */
+function channelFor(context: vscode.ExtensionContext): string | undefined {
+	const named = channelFromEnv();
+	if (named) { return named; }
+	if (context.extensionMode === vscode.ExtensionMode.Development) { return 'dev'; }
+	if (context.extensionMode === vscode.ExtensionMode.Test) { return `test-${process.pid}`; }
+	return undefined;
+}
+
+/** The daemon in this extension, on VS Code's own Node; from source, tsc's output instead of the bundle. */
+function launchOf(context: vscode.ExtensionContext): LaunchSpec {
+	const version = (context.extension.packageJSON as { version?: string }).version ?? '0.0.0';
+	const launch = thisInstallLaunch(context.extensionPath, version);
+	const fromSource = path.join(context.extensionPath, 'out', 'daemon', 'main.js');
+	return fs.existsSync(launch.entry) || !fs.existsSync(fromSource) ? launch : { ...launch, entry: fromSource };
+}
+
+/** What the daemon is started with besides its launch: the channel, and simulated bricks where wanted. */
+function launchArgsFor(context: vscode.ExtensionContext, channel: string | undefined): string[] {
+	const args = channel ? ['--channel', channel] : [];
+	if (context.extensionMode === vscode.ExtensionMode.Test) { return [...args, '--simulated']; }
+	if (context.extensionMode === vscode.ExtensionMode.Development && mockBricksWanted(context)) {
+		const folder = (vscode.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === 'file')?.uri.fsPath;
+		return [...args, '--mock-bricks', ...(folder ? ['--mock-workspace', folder] : [])];
+	}
+	return args;
+}
+
+interface Cockpit {
+	readonly client: CockpitClient;
+	readonly bridge: DaemonBridge;
+}
+
+export function activate(context: vscode.ExtensionContext): void {
 	const logger = vscode.window.createOutputChannel('EVƎ Cockpit', { log: true });
 	context.subscriptions.push(logger);
-
 	logger.info('EVƎ Cockpit activated');
 
-	const services = new DisposableStore();
-	context.subscriptions.push(services);
-
-	// Linux, D4: BlueZ refused this user (a distribution limiting it to the bluetooth group). Ask,
-	// let polkit run the fix, then offer to check again (step-7 plan, U8 review #11).
-	const offerBluetoothAccess = createBluetoothAccessOffer({
-		confirm: async (message, command) => (await vscode.window.showWarningMessage(
-			message, { modal: true, detail: `It runs: ${command}` }, 'Add me')) === 'Add me',
-		added: async (message) => (await vscode.window.showInformationMessage(message, 'Check again')) === 'Check again',
-		manual: async (command, reason) => {
-			const choice = await vscode.window.showWarningMessage(
-				`Bluetooth: BlueZ refused this user, and the fix cannot run here (${reason}). Run in a terminal: ${command}`,
-				'Copy command');
-			if (choice === 'Copy command') { await vscode.env.clipboard.writeText(command); }
-		},
-	}, logger);
-
-	const mockBricks = mockBricksWanted(context);
-	// The workspace's own simulated bricks, read at activation like the setting (1.6.10).
-	const mockFile = mockBricks
-		? loadMockConfigFile(
-			(vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath),
-			(file) => fs.readFileSync(file, 'utf8'))
-		: undefined;
-	const runtime = services.add(createRuntime({
-		extensionPath: context.extensionPath,
-		log: logger,
-		onBluetoothAccessDenied: offerBluetoothAccess,
-		// Not in the extension test host: its suite must not page real bricks around the desk.
-		startPresence: context.extensionMode !== vscode.ExtensionMode.Test,
-		mockBricks,
-		...(mockFile?.kind === 'loaded' ? { mockConfig: mockFile.config } : {}),
-		// The user's settings; VS Code hands back package.json's default for what nobody set (D9).
-		telemetrySettings: readTelemetrySettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
-		throttleSettings: readThrottleSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
-		programPreset: readProgramPresetSettings(vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)),
-		// Read at each transfer's start, so a changed setting applies to the next one (4.6.4).
-		// A value outside the declared range (settings.json is not checked against it) keeps the link's size.
-		transferPacketBytes: (transport) => {
-			const bytes = vscode.workspace.getConfiguration('ev3-cockpit.transfer')
-				.get<number>(transport === Transport.BT ? 'btPacketBytes' : 'tcpPacketBytes');
-			return Number.isInteger(bytes) && bytes! >= 64 && bytes! <= 65535 ? bytes : undefined;
-		},
-	}));
-	// A changed program status interval: every program followed now is followed again at it (U9 review 1).
-	const programStatusIntervalChanged = services.add(new vscode.EventEmitter<void>());
-	// A changed setting applies at once, no reload.
-	services.add(vscode.workspace.onDidChangeConfiguration((e) => {
-		if (e.affectsConfiguration('ev3-cockpit.programs')) { programStatusIntervalChanged.fire(); }
-		if (!e.affectsConfiguration('ev3-cockpit.telemetry')) { return; }
-		const section = vscode.workspace.getConfiguration('ev3-cockpit');
-		runtime.telemetryView.configure(readTelemetrySettings(section, (m) => logger.warn(m)));
-		runtime.telemetry.configureThrottle(readThrottleSettings(section, (m) => logger.warn(m)));
-		runtime.telemetry.configureProgramPreset(readProgramPresetSettings(section, (m) => logger.warn(m)));
-		logger.info('Telemetry settings changed');
-	}));
-	const { bricks, aggregator, btPresence } = runtime;
-	/** What a user calls a brick: its name, or its id until it has one. */
-	const nameOf = (brickId: BrickId): string => aggregator.getBrick(brickId)?.name.value ?? brickId;
-	// Every notification is written to the log too (owner, 09.11.2026), so the log alone says
-	// what the person was told while they watched the brick.
-	const notify = createNotifier(logger, vscode.window);
-	if (mockFile?.kind === 'loaded') { logger.info(`Simulated bricks from ${mockFile.file}`); }
-	if (mockFile?.kind === 'invalid') {
-		void notify.warn(`The simulated bricks in ${mockFile.file} were not used: the file ${mockFile.reason}. `
-			+ 'The built-in set is shown instead; fix the file and reload the window.');
-	}
-	// A transfer whose first reply was lost may have left a slot, and its file's space, taken on the
-	// brick until a reboot. Releasing it means closing every open file there, another computer's
-	// live transfer included, so it is the user's call (4.6.17; owner decision 13.11.2026).
-	// A slot whose number is known but which the brick may already have handed on is asked about
-	// too, for that slot alone (owner decision 17.11.2026).
-	setSweepConfirmation(bricks, async (scope) => {
-		const release = 'Release';
-		const pick = await notify.info(scope === 'all'
-			? 'A file transfer to the brick was cut off before the brick said which file it opened, '
-				+ 'so its space may stay taken until the brick restarts. Release it now? This closes every '
-				+ 'file the brick has open, including a transfer another computer may be running.'
-			: 'A file transfer to the brick was cut off just as it finished, so the cockpit cannot tell '
-				+ 'whether the brick already let go of its file. Release it now? If another computer is '
-				+ 'sending a file to this brick at this moment, this may cut its transfer off.', release);
-		return pick === release;
-	});
-	const notificationProgress: ShowProgress = (title, task) => {
+	const channel = channelFor(context);
+	const launch = launchOf(context);
+	const paths = clientPaths(channel ? { channel } : {});
+	let connected: Cockpit | undefined;
+	// Every notification goes to this window's log and, once connected, to the daemon's (R30).
+	const notify = createNotifier({
+		info: (m) => { logger.info(m); void connected?.client.request('log/notice', { level: 'info', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
+		warn: (m) => { logger.warn(m); void connected?.client.request('log/notice', { level: 'warning', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
+		error: (m) => { logger.error(m); void connected?.client.request('log/notice', { level: 'error', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
+	}, vscode.window);
+	const progress: ShowProgress = (title, task) => {
 		notify.progressShown(title);
 		return vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title, cancellable: false },
-			(progress) => task((message) => {
+			(p) => task((message) => {
 				notify.progressShown(`${title} — ${message}`);
-				progress.report({ message });
+				p.report({ message });
 			}));
 	};
 
-	// ── Filesystem ──────────────────────────────────────────────
-	// Palette commands are diagnostics, not the primary UX (DESIGN §14). They exist here
-	// so the filesystem layer has a consumer before the API and panel arrive, and so it
-	// can be exercised by hand against a real brick.
-	const withActiveFilesystem = async (
-		what: string,
-		body: (fs: BrickFilesystem, brickId: BrickId) => Promise<void>,
-	): Promise<void> => {
-		const brickId = bricks.getActiveBrickId();
-		if (!brickId) {
-			void notify.warn(
-				`EVƎ Cockpit: no active brick, so ${what} has nothing to talk to.`);
-			return;
-		}
-		try {
-			await body(createBrickFilesystem(bricks, brickId), brickId);
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error(String(error));
-			logger.error(`${what} failed on ${brickLabel(aggregator, brickId)}:`, err);
-			void notify.error(`EVƎ Cockpit: ${what} on ${nameOf(brickId)} failed — ${err.message}`);
-		}
+	// A newer cockpit than the running daemon: offered as a restart in the status bar.
+	const update = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+	update.command = 'ev3-cockpit.restartDaemon';
+	context.subscriptions.push(update);
+	const showNotice = (notice: { readonly text: string; readonly newerIs?: string }): void => {
+		logger.info(`Version: ${notice.text}`);
+		if (notice.newerIs !== 'client') { void notify.warn(`EVƎ Cockpit: ${notice.text}`); return; }
+		update.text = '$(sync) EVƎ daemon update';
+		update.tooltip = notice.text;
+		update.show();
 	};
 
-	services.add(vscode.commands.registerCommand('ev3-cockpit.listProjects', () =>
-		withActiveFilesystem('listing projects', async (fs, brickId) => {
-			const entries = await fs.files.list(PROJECTS_PATH);
-			logger.info(`Files on ${brickLabel(aggregator, brickId)} at ${PROJECTS_PATH} (${entries.length}):`);
-			for (const e of entries) {
-				const size = e.bytes === undefined ? '' : ` ${e.bytes} B`;
-				logger.info(`  ${e.kind === 'directory' ? '[dir] ' : '      '}${e.name}${size}`);
+	const connecting: Promise<Cockpit> = CockpitClient.connect({
+		name: `VS Code (${vscode.workspace.name ?? 'no folder'}, pid ${process.pid})`,
+		kind: 'vscode',
+		version: launch.version,
+		launch,
+		launchArgs: launchArgsFor(context, channel),
+		paths,
+	}).then((client) => {
+		// Only the user's own cockpit is the one add-ons should start.
+		if (!channel) { recordInstall(paths, launch); }
+		const bridge = new DaemonBridge(client, {
+			askPerson: (question) => {
+				logger.info(`Asked: ${question.text}`);
+				return answerQuestion(question, {
+					notify: (message, ...actions) => notify.info(message, ...actions),
+					modal: (message, detail, ...actions) => vscode.window.showWarningMessage(message, { modal: true, detail }, ...actions),
+				}).then((answer) => { logger.info(`Answered: ${answer}`); return answer; });
+			},
+		});
+		context.subscriptions.push(bridge, { dispose: () => client.dispose() });
+		// Every pairing shows its progress, whoever started it: the person at the brick has to know
+		// when to look at its display.
+		context.subscriptions.push(bridge.bricks.onPairingStarted((event) => {
+			void followPairing(event, { aggregator: bridge.aggregator, progress, showError: (m) => { void notify.error(m); } });
+		}));
+		// A pairing broken on one side, found over USB or TCP: what was found and done (step-4 R6).
+		context.subscriptions.push(bridge.bricks.onOneSidedRepair((repair) => {
+			const { message, warning } = describeRepair(repair, bridge.aggregator.getBrick(repair.brickId)?.name.value ?? repair.brickId);
+			void (warning ? notify.warn(message) : notify.info(message));
+		}));
+		client.onNotice((notice) => showNotice(notice));
+		client.onLost((error) => { void notify.error(`EVƎ Cockpit: the cockpit daemon went and could not be reached again — ${error.message}`); });
+		client.onReconnected((hello) => { logger.info(`Connected again to the cockpit daemon ${hello.version} (pid ${hello.pid})`); });
+		const first = versionNotice(launch.version, client.daemon.version);
+		if (first) { showNotice(first); }
+		logger.info(`Connected to the cockpit daemon ${client.daemon.version} (pid ${client.daemon.pid}) on ${channel ?? 'the user\'s channel'}`);
+		connected = { client, bridge };
+		return connected;
+	});
+	connecting.catch((error: unknown) => {
+		logger.error(`The cockpit daemon could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+		void notify.error(`EVƎ Cockpit: the cockpit daemon could not be started — ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+	});
+
+	/** Runs a command once the daemon is there; says so when it is not. */
+	const command = (id: string, body: (cockpit: Cockpit) => Promise<void> | void): void => {
+		context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
+			let cockpit: Cockpit;
+			try {
+				cockpit = await connecting;
+			} catch {
+				void notify.error('EVƎ Cockpit: the cockpit daemon is not running; see the EVƎ Cockpit log.');
+				return;
 			}
-			logger.show(true);
-		})));
+			try {
+				await body(cockpit);
+			} catch (error) {
+				const err = error instanceof Error ? error : new Error(String(error));
+				logger.error(`${id} failed:`, err);
+				void notify.error(`EVƎ Cockpit: ${err.message}`);
+			}
+		}));
+	};
 
-	services.add(vscode.commands.registerCommand('ev3-cockpit.showStorage', () =>
-		withActiveFilesystem('reading storage', async (fs, brickId) => {
-			const usage = await fs.files.storage();
-			const used = usage.totalKb - usage.freeKb;
-			void notify.info(
-				`EVƎ Cockpit: ${nameOf(brickId)} — ${usage.freeKb} KB free of ${usage.totalKb} KB `
-				+ `(${used} KB used).`);
-		})));
+	/** This window's active brick, or the one connected brick when it has none. */
+	const activeBrick = ({ client }: Cockpit, what: string): ContractBrick | undefined => {
+		const id = client.activeBrick();
+		const brick = (id ? client.brick(id) : undefined) ?? (() => {
+			const connectedBricks = client.bricks().filter((b) => b.connected);
+			return connectedBricks.length === 1 ? connectedBricks[0] : undefined;
+		})();
+		if (!brick?.connected) {
+			void notify.warn(`EVƎ Cockpit: no active brick, so ${what} has nothing to talk to.`);
+			return undefined;
+		}
+		return brick;
+	};
 
-	logger.info('Filesystem commands registered');
+	// ── Filesystem diagnostics (DESIGN §14) ─────────────────────
+	command('ev3-cockpit.listProjects', async (cockpit) => {
+		const brick = activeBrick(cockpit, 'listing projects');
+		if (!brick) { return; }
+		const entries = await cockpit.client.request('files/list', { brick: brick.brickId, path: PROJECTS_PATH });
+		logger.info(`Files on ${brick.name} at ${PROJECTS_PATH} (${entries.length}):`);
+		for (const e of entries) {
+			logger.info(`  ${e.kind === 'directory' ? '[dir] ' : '      '}${e.name}${e.bytes === undefined ? '' : ` ${e.bytes} B`}`);
+		}
+		logger.show(true);
+	});
+	command('ev3-cockpit.showStorage', async (cockpit) => {
+		const brick = activeBrick(cockpit, 'reading storage');
+		if (!brick) { return; }
+		const usage = await cockpit.client.request('bricks/storage', { brick: brick.brickId });
+		void notify.info(`EVƎ Cockpit: ${brick.name} — ${usage.freeKb} KB free of ${usage.totalKb} KB (${usage.totalKb - usage.freeKb} KB used).`);
+	});
 
 	// ── Connect a brick ─────────────────────────────────────────
-	// A palette command for the same reason the filesystem ones exist: it needs a consumer
-	// before the panel arrives (Phase 5), and it has to be exercisable by hand on real bricks.
-	//
-	// The whole interaction is picking a brick by name. One row per brick, whatever reaches
-	// it, in the owner's order (D5); picking it signs it in over every channel it is available
-	// on (KD1). Pairing is not something a user should have to think about, let alone do first
-	// in Windows: a brick only an inquiry has heard is paired first, then connected.
-	services.add(vscode.commands.registerCommand('ev3-cockpit.connectBrick', async () => {
+	// Picking a brick by name, in the owner's order (D5); picking signs it in over every channel it
+	// is available on (KD1), pairing first a brick only an inquiry has heard.
+	command('ev3-cockpit.connectBrick', async ({ client, bridge }) => {
 		const picker = vscode.window.createQuickPick<BrickPickRow>();
 		picker.title = 'EVƎ Cockpit: connect a brick';
 		picker.placeholder = 'Pick a brick';
-		// The list changes while someone is choosing from it; the highlight has to stay on the
-		// brick they arrowed to, not on whatever row it used to be.
 		picker.keepScrollPosition = true;
-
-		const picked = await pickBrick(picker, aggregator, (brickId) => bricks.isSignedIn(brickId),
-			btPresence && (() => btPresence.runInquiry()));
+		const picked = await pickBrick(picker, bridge.aggregator as never, (brickId) => bridge.bricks.isSignedIn(brickId),
+			() => client.request('bricks/inquiry', {}).then(() => undefined));
 		if (!picked) { return; }
-
-		await connectPickedBrick(picked, connectUi());
-	}));
-	/** What "Connect a Brick" needs, for the palette command and for the public API alike. */
-	function connectUi(): Parameters<typeof connectPickedBrick>[1] {
-		return {
-			aggregator, bricks, log: logger, progress: notificationProgress,
+		await connectPickedBrick(picked, {
+			aggregator: bridge.aggregator, bricks: bridge.bricks, log: logger, progress,
 			showInfo: (message) => { void notify.info(message); },
 			showError: (message) => { void notify.error(message); },
-		};
-	}
-
-	// Every pairing shows its progress, whoever started it: the person at the brick has to know
-	// when to look at its display.
-	services.add(bricks.onPairingStarted((event) => {
-		void followPairing(event, {
-			aggregator, progress: notificationProgress,
-			showError: (message) => { void notify.error(message); },
 		});
-	}));
-
-	// A pairing broken on one side, found over USB or TCP: what was found and done (step-4 R6).
-	services.add(bricks.onOneSidedRepair((repair) => {
-		const { message, warning } = describeRepair(repair, nameOf(repair.brickId));
-		void (warning ? notify.warn(message) : notify.info(message));
-	}));
+	});
 
 	// ── Disconnect a brick ──────────────────────────────────────
-	// Per brick, never per channel (KD7): every channel closes, and nothing reconnects until
-	// the user connects it again.
-	services.add(vscode.commands.registerCommand('ev3-cockpit.disconnectBrick', async () => {
-		const signedIn = bricks.signedInBricks();
-		if (signedIn.length === 0) {
-			void notify.info('EVƎ Cockpit: no brick is connected.');
-			return;
-		}
-		const picked = await vscode.window.showQuickPick(
-			signedIn.map((brickId) => {
-				const brick = aggregator.getBrick(brickId);
-				return {
-					label: brick?.name.value ?? brickId,
-					description: brick ? describeChannels(brick) : '',
-					brickId,
-				};
-			}),
-			{ title: 'EVƎ Cockpit: disconnect a brick', placeHolder: 'Pick a brick to disconnect' },
-		);
-		if (!picked) { return; }
-		await bricks.signOut(picked.brickId);
-		logger.info(`Disconnected ${brickLabel(aggregator, picked.brickId)}`);
-	}));
+	// This window's hold only (R36); the person hears who else holds it and may end it for all.
+	command('ev3-cockpit.disconnectBrick', async ({ client }) => {
+		await disconnectBrick(client, {
+			pick: (items) => vscode.window.showQuickPick([...items], { title: 'EVƎ Cockpit: disconnect a brick', placeHolder: 'Pick a brick to disconnect' }),
+			notify: (message, ...actions) => notify.info(message, ...actions),
+			log: (message) => logger.info(message),
+		}, (brick) => brick.channels.map((c) => `${c.transport.toUpperCase()} ${c.state}`).join(' · '));
+	});
 
 	// The picker, modal confirmation, progress and messages the forget and clear-list commands share.
-	const brickCommandUi = (title: string, placeHolder: string): BrickCommandDeps<typeof bricks> => ({
-		aggregator, bricks, log: logger,
+	const brickCommandUi = <B>(bridge: DaemonBridge, bricks: B, title: string, placeHolder: string): BrickCommandDeps<B> => ({
+		aggregator: bridge.aggregator, bricks, log: logger,
 		pick: (rows) => vscode.window.showQuickPick(rows, { title, placeHolder }),
 		confirm: async (message, detail, action) => {
 			logger.info(`Asked: ${message} ${detail}`);
@@ -259,77 +246,50 @@ export function activate(context: vscode.ExtensionContext): CockpitApi {
 		},
 		progress: (progressTitle, task) => {
 			notify.progressShown(progressTitle);
-			return vscode.window.withProgress(
-				{ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false }, task);
+			return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false }, task);
 		},
 		showInfo: (message) => { void notify.info(message); },
 		showResult: (message) => {
-			void notify.info(message, 'Show details').then((choice) => {
-				if (choice) { logger.show(true); }
-			});
+			void notify.info(message, 'Show details').then((choice) => { if (choice) { logger.show(true); } });
 		},
 		showError: (message) => { void notify.error(message); },
 	});
 
-	// ── Forget a brick ──────────────────────────────────────────
-	// The whole brick (step-3 KD1): signed out, unpaired, dropped from the cockpit's memory,
-	// and removed from the brick's own list when it is reachable. The message names what is
-	// left and where; the details are in the output channel (KTD8).
-	services.add(vscode.commands.registerCommand('ev3-cockpit.forgetBrick', async () => {
-		await forgetBrick(brickCommandUi('EVƎ Cockpit: forget a brick', 'Pick a brick to forget'));
-	}));
+	// ── Forget a brick; clear a brick's Bluetooth list ──────────
+	command('ev3-cockpit.forgetBrick', async ({ bridge }) => {
+		await forgetBrick(brickCommandUi(bridge, bridge.bricks, 'EVƎ Cockpit: forget a brick', 'Pick a brick to forget'));
+	});
+	command('ev3-cockpit.clearBrickBluetoothList', async ({ bridge }) => {
+		await clearBrickBluetoothList(brickCommandUi(bridge, bridge.bricks, 'EVƎ Cockpit: clear a brick\'s Bluetooth list', 'Pick a brick to clear'));
+	});
 
-	// ── Clear a brick's Bluetooth list ──────────────────────────
-	// Every entry on a reachable brick, whatever its name (step-3 KD7), so stale computers stop
-	// blocking new pairings. The USB session stays open; this computer's Bluetooth pairing goes
-	// only when its own entry did (KTD10).
-	services.add(vscode.commands.registerCommand('ev3-cockpit.clearBrickBluetoothList', async () => {
-		await clearBrickBluetoothList(
-			brickCommandUi('EVƎ Cockpit: clear a brick\'s Bluetooth list', 'Pick a brick to clear'));
-	}));
+	// ── Settings (R25) ──────────────────────────────────────────
+	command('ev3-cockpit.settings', async ({ client }) => {
+		await editSettings(client, {
+			pick: (items, options) => vscode.window.showQuickPick([...items], options),
+			input: (options) => vscode.window.showInputBox({ title: options.title, value: options.value, prompt: options.prompt, validateInput: options.validate }),
+			confirm: async (message, detail, action) => (await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
+			showInfo: (message) => { void notify.info(message); },
+			showError: (message) => { void notify.error(message); },
+		});
+	});
 
-	logger.info('Connect, disconnect, forget and clear-list commands registered');
+	// ── Restart the daemon (R37), on the person's confirmation ──
+	command('ev3-cockpit.restartDaemon', async ({ client }) => {
+		const restart = 'Restart';
+		const choice = await vscode.window.showWarningMessage('Restart the cockpit daemon now?', {
+			modal: true,
+			detail: 'Connected bricks stay held and are connected again by the new daemon; a transfer or program start in progress may be cut off.',
+		}, restart);
+		if (choice !== restart) { return; }
+		const result = await client.request('daemon/restart', { confirmedByPerson: true, launch });
+		if (result.accepted) { update.hide(); } else { void notify.warn('EVƎ Cockpit: the cockpit daemon did not accept the restart now.'); }
+	});
 
-	// ── Public API (step-5 plan, U6) ────────────────────────────
-	// What other extensions get: `vscode.extensions.getExtension(…).exports`. The access mode is
-	// the user's setting and the cockpit enforces it (KD2); connecting is "Connect a Brick" with
-	// its progress and messages (KD4).
-	const readAccessMode = (): AccessMode =>
-		vscode.workspace.getConfiguration('ev3-cockpit').get<AccessMode>('accessMode') === 'full' ? 'full' : 'safe';
-	const api = services.add(createCockpitApi({
-		bricks,
-		aggregator,
-		// Telemetry for consumers (step-6 U8): claims on the service, values from the read model.
-		telemetry: {
-			rows: () => runtime.telemetry.rows(),
-			claim: (brickId, request, owner) => runtime.telemetry.claim(brickId, request, owner),
-			release: (handle) => runtime.telemetry.release(handle),
-			onClaimsEnded: (listener) => runtime.telemetry.onClaimsEnded(listener),
-			snapshot: (brickId, rowIds) => runtime.telemetryView.snapshot(brickId, rowIds),
-			onChange: (listener) => runtime.telemetryView.onChange(listener),
-			// Read when a follow starts; a change follows every program again (below), no reload.
-			programStatusIntervalMs: () => readProgramPresetSettings(
-				vscode.workspace.getConfiguration('ev3-cockpit'), (m) => logger.warn(m)).programStatusIntervalMs,
-			onProgramStatusIntervalChange: (listener) => programStatusIntervalChanged.event(listener),
-		},
-		connect: async (brickId) => {
-			await connectPickedBrick(brickId, connectUi());
-			if (!bricks.isSignedIn(brickId)) {
-				throw new NotConnectedError(`Brick ${brickId} could not be connected; the cockpit said why.`);
-			}
-		},
-		accessMode: readAccessMode,
-		onAccessModeChange: (listener) => vscode.workspace.onDidChangeConfiguration((event) => {
-			if (event.affectsConfiguration('ev3-cockpit.accessMode')) { listener(readAccessMode()); }
-		}),
-		log: logger,
-	}));
-	logger.info(`Public API ${api.apiVersion} ready; access mode ${readAccessMode()}`);
-
-	// Phase 5: the panel is wired here.
-	return api;
+	logger.info('Commands registered');
 }
 
 export function deactivate(): void {
-	// context.subscriptions handles disposal — nothing extra needed here.
+	// context.subscriptions disconnects from the daemon; the daemon ends on its own once nobody needs it.
 }
+

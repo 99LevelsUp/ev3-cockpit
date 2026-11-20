@@ -12,15 +12,14 @@ import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../core/mock';
 import { createRuntime } from '../core/runtime/createRuntime';
 import { createBrickFilesystem } from '../core/fs/brickFilesystem';
 import { ActivityMode } from '../core/contracts/enums';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 /** The declared defaults, as an installed extension gets them when nobody changed a setting. */
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
-const telemetrySettings = telemetrySettingsFromPackage(manifest);
-const throttleSettings = throttleSettingsFromPackage(manifest);
-const programPreset = programPresetSettingsFromPackage(manifest);
+const telemetrySettings = defaultTelemetrySettings();
+const throttleSettings = defaultThrottleSettings();
+const programPreset = defaultProgramPresetSettings();
 
 describe('createRuntime', () => {
 	it('wires discovery to the brick layer: a discovered mock brick signs in and answers', async () => {

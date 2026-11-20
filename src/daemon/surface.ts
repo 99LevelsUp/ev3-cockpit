@@ -17,7 +17,7 @@ import type {
 } from '../contract/models';
 import { CockpitApi, CockpitConsumer, CockpitServices, ApiChain, createCockpitApi } from '../core/api/cockpitApi';
 import { assertAllowed, type AccessMode } from '../core/api/accessPolicy';
-import { BrickEntry, BrickId, BrickRef, ChannelState, operationDeadline } from '../core/contracts';
+import { BrickEntry, BrickId, BrickRef, ChannelState, Transport, operationDeadline } from '../core/contracts';
 import { setSweepConfirmation } from '../core/fs/transferLedger';
 import { deployAndRun } from '../core/programs/deployAndRun';
 import type { Runtime } from '../core/runtime/createRuntime';
@@ -178,13 +178,15 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		}),
 		runtime.bricks.onPairingStarted((event) => {
 			broadcast('bricks/pairingStarted', { brickId: event.brickId });
-			event.onEvent((e) => broadcast('bricks/pairingEvent', { brickId: event.brickId, phase: String((e as { kind?: unknown }).kind ?? 'event'), message: JSON.stringify(e) }));
+			// The phase is the event's type; the message carries the whole event as JSON.
+			event.onEvent((e) => broadcast('bricks/pairingEvent', { brickId: event.brickId, phase: String((e as { type?: unknown }).type ?? 'event'), message: JSON.stringify(e) }));
 			void event.done.then((result) => broadcast('bricks/pairingDone', {
 				brickId: event.brickId, paired: result.ok, ...(result.reason ? { message: result.reason } : {}),
 			}));
 		}),
 		runtime.bricks.onOneSidedRepair((repair) => broadcast('bricks/oneSidedRepair', {
 			brickId: repair.brickId, message: `Found paired on ${repair.found === 'windows-only' ? 'this computer only' : 'the brick only'}; repaired.`,
+			repair,
 		})),
 		settings.onChange((e) => {
 			const entry = settings.list().find((s) => s.spec.key === e.key);
@@ -294,7 +296,24 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				await loans.ensureOpenable(brickId);
 				brickId = await brickOf(params);
 			}
-			await runtime.bricks.signIn(brickId as BrickId);
+			// The person asked for this brick: a pairing they cancelled earlier may be asked again.
+			runtime.bricks.resumePairing(brickId as BrickId);
+			if (runtime.bricks.isSignedIn(brickId as BrickId)) {
+				// Connected already: try every channel that is not connected yet.
+				await runtime.bricks.connectAgain(brickId as BrickId);
+			} else {
+				// A brick only an inquiry has heard has nothing to connect over until it is paired; a
+				// channel still listed as lost (a cable pulled since) does not count.
+				const entry = runtime.aggregator.getBrick(brickId as BrickId);
+				const bt = entry?.channels.find((c) => c.transport === Transport.BT);
+				if (entry && !entry.paired && bt && entry.channels.every((c) => c === bt || c.state === ChannelState.Lost)) {
+					const paired = await runtime.bricks.pair(brickId as BrickId);
+					if (!paired.ok) {
+						throw new ContractError(WireErrorCode.NotConnected, `Could not pair ${entry.name.value}: ${paired.reason ?? 'no reason given'}.`);
+					}
+				}
+				await runtime.bricks.signIn(brickId as BrickId);
+			}
 			holders.add(brickId, params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name });
 			log.info(`Connected ${brickId}${params.hold ? ' and held' : ''}`, identity.name);
 			const entry = runtime.aggregator.getBrick(brickId as BrickId);
@@ -335,7 +354,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			return leased(brickId, signal, async () => {
 				const report = await runtime.bricks.forget(brickId as BrickId);
 				holders.forget(brickId);
-				return { forgotten: true, report: forgetLines(report) };
+				return { forgotten: true, report: forgetLines(report), details: report };
 			});
 		});
 		on('bricks/clearBluetoothList', async (params, signal) => {
@@ -347,6 +366,8 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 					kind: 'clearBluetoothList', brickId,
 					text: `Remove ${names.length} entr${names.length === 1 ? 'y' : 'ies'} from ${name}'s list of paired devices?${includesThisComputer ? ` This computer (${thisComputer ?? 'this one'}) is among them.` : ''}`,
 					details: names,
+					...(thisComputer ? { thisComputer } : {}),
+					includesThisComputer,
 				});
 				if (answer !== 'yes') { refused = answer; }
 				return answer === 'yes';
@@ -359,6 +380,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			return {
 				removed: entries.filter((e) => e.status === 'confirmed' || e.status === 'sent').map((e) => e.name),
 				kept: [...entries.filter((e) => e.status === 'failed' || e.status === 'not-removable').map((e) => e.name), ...(report?.left ?? [])],
+				...(report ? { details: report } : {}),
 			};
 		});
 		on('bricks/borrowAll', async () => {

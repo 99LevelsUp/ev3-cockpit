@@ -17,6 +17,8 @@ export interface AskOptions {
 	readonly text: string;
 	readonly brickId?: string;
 	readonly details?: readonly string[];
+	readonly thisComputer?: string;
+	readonly includesThisComputer?: boolean;
 	readonly timeoutMs?: number;
 }
 
@@ -31,6 +33,8 @@ export async function ask(endpoint: Endpoint, options: AskOptions): Promise<Ques
 		timeoutMs,
 		...(options.brickId ? { brickId: options.brickId } : {}),
 		...(options.details ? { details: options.details } : {}),
+		...(options.thisComputer ? { thisComputer: options.thisComputer } : {}),
+		...(options.includesThisComputer !== undefined ? { includesThisComputer: options.includesThisComputer } : {}),
 	};
 	const controller = new AbortController();
 	let timer: NodeJS.Timeout | undefined;

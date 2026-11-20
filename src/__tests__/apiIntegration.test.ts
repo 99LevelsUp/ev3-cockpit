@@ -22,7 +22,7 @@ import { createCockpitApi } from '../core/api/cockpitApi';
 import type { AccessMode } from '../core/api/accessPolicy';
 import { TelemetryReadModel } from '../core/telemetry/telemetryReadModel';
 import { TelemetryService } from '../core/telemetry/telemetryService';
-import { telemetrySettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultTelemetrySettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const DEMO = '/home/root/lms2012/prjs/Demo/Demo.rbf';
@@ -43,9 +43,8 @@ async function world() {
 	const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
 	const bricks = new BrickManager({ sessionManager, aggregator, providerRegistry: registry });
 	// Telemetry as the runtime wires it: a program is followed through its row (step-6 U9).
-	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 	const telemetry = new TelemetryService({ host: bricks.telemetryHost(), providerRegistry: registry });
-	const view = new TelemetryReadModel({ source: telemetry, settings: telemetrySettingsFromPackage(manifest) });
+	const view = new TelemetryReadModel({ source: telemetry, settings: defaultTelemetrySettings() });
 	let mode: AccessMode = 'safe';
 	const api = createCockpitApi({
 		bricks, aggregator,

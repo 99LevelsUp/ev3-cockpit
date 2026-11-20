@@ -20,7 +20,7 @@ import { ErrorCode, ModeConflictError } from '../core/errors/CockpitError';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../core/mock';
 import { createRuntime } from '../core/runtime/createRuntime';
 import type { ReadModelChange, ReadValue } from '../core/telemetry/telemetryReadModel';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const A = 'AAA' as BrickId;
@@ -537,11 +537,10 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	});
 
 	it('works end to end over the shipped runtime and a mock brick (4.5.5)', async () => {
-		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 		const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
 		const runtime = createRuntime({
 			extensionPath: '.', log: quiet, startPresence: false,
-			telemetrySettings: telemetrySettingsFromPackage(manifest), throttleSettings: throttleSettingsFromPackage(manifest), programPreset: programPresetSettingsFromPackage(manifest),
+			telemetrySettings: defaultTelemetrySettings(), throttleSettings: defaultThrottleSettings(), programPreset: defaultProgramPresetSettings(),
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
 		const api = createCockpitApi({

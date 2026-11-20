@@ -19,7 +19,8 @@ export interface Notifications {
 	'bricks/pairingEvent': PairingEvent;
 	'bricks/pairingDone': PairingDone;
 	/** The brick paired one-sidedly and the cockpit repaired it; the message says what happened. */
-	'bricks/oneSidedRepair': { readonly brickId: string; readonly message: string };
+	/** `repair` is the cockpit's own record, for clients built with the same cockpit. */
+	'bricks/oneSidedRepair': { readonly brickId: string; readonly message: string; readonly repair?: unknown };
 	'programs/stateChanged': { readonly subscriptionId: string; readonly state: ProgramState };
 	'telemetry/update': TelemetryUpdate;
 	'chain/changed': { readonly subscriptionId: string; readonly chain: ContractChain };

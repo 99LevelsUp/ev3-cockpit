@@ -1,19 +1,15 @@
 /**
- * The stale settings (owner decision D9): user settings whose only defaults live in package.json.
- * The code holds no value of its own; a value out of range falls back to the declared default.
+ * The stale settings (owner decision D9): settings whose only defaults live in the daemon's settings
+ * spec. A value out of range falls back to the declared default.
  */
 
 import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-	programPresetSettingsFromPackage, readProgramPresetSettings,
-	readThrottleSettings, readTelemetrySettings, telemetrySettingsFromPackage, throttleSettingsFromPackage,
+	defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings, readProgramPresetSettings,
+	readThrottleSettings, readTelemetrySettings,
 } from '../core/telemetry/telemetrySettings';
-
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 
 /** A settings section as VS Code's `getConfiguration('ev3-cockpit')` presents it. */
 function section(values: Record<string, unknown>, defaults: Record<string, unknown>) {
@@ -25,8 +21,8 @@ function section(values: Record<string, unknown>, defaults: Record<string, unkno
 const DECLARED = { 'telemetry.staleFactor': 3, 'telemetry.staleTimeoutMs': 10000 };
 
 describe('telemetry settings (D9)', () => {
-	it('declares its defaults in package.json, and nowhere else', () => {
-		assert.deepEqual(telemetrySettingsFromPackage(pkg), { staleFactor: 3, staleTimeoutMs: 10000 });
+	it('takes its defaults from the daemon\'s settings spec', () => {
+		assert.deepEqual(defaultTelemetrySettings(), { staleFactor: 3, staleTimeoutMs: 10000 });
 	});
 
 	it('reads what the user set', () => {
@@ -49,13 +45,12 @@ describe('telemetry settings (D9)', () => {
 		assert.match(warnings[1], /staleTimeoutMs/);
 	});
 
-	it('refuses to run on a package.json that declares no usable default', () => {
+	it('refuses to run on settings that declare no usable default', () => {
 		assert.throws(() => readTelemetrySettings(section({}, {}), () => undefined), /staleFactor/);
-		assert.throws(() => telemetrySettingsFromPackage({}), /staleFactor/);
 	});
 
-	it('declares the throttle\'s settings in package.json too, and nowhere else (U7)', () => {
-		assert.deepEqual(throttleSettingsFromPackage(pkg), {
+	it('takes the throttle\'s defaults from the spec too (U7)', () => {
+		assert.deepEqual(defaultThrottleSettings(), {
 			enabled: true, windowSize: 20, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 3,
 		});
 	});
@@ -74,8 +69,8 @@ describe('telemetry settings (D9)', () => {
 		assert.deepEqual(settings, { enabled: true, windowSize: 20, tailFactor: 3, step: 1.5, maxSlowdown: 4, calmWindows: 5 });
 		assert.equal(warnings.length, 3, "'yes' for a switch, a window of 7.5 frames and a step that never slows are refused");
 	});
-	it('declares the program preset in package.json, 200 ms as the measurement decided (U9, D11)', () => {
-		assert.deepEqual(programPresetSettingsFromPackage(pkg), { programRunningTickMs: 200, programStatusIntervalMs: 1000 });
+	it('takes the program preset from the spec, 200 ms as the measurement decided (U9, D11)', () => {
+		assert.deepEqual(defaultProgramPresetSettings(), { programRunningTickMs: 200, programStatusIntervalMs: 1000 });
 	});
 
 	it('reads 0 as the preset turned off, and refuses a negative tick (U9)', () => {
