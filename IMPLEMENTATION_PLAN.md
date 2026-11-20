@@ -2046,6 +2046,17 @@ the devices.
   Windows, Linux and macOS, first as an npm package (prebuilt natives); single-file binaries per
   platform (Node SEA) only when someone asks. When it comes relative to Phase 5 is decided once
   4.10.1 is done. The CLI–daemon protocol goes to the ev3-c session for review before it is built.
+  Plan: `docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`. Measured 20.11.2026
+  with `scripts/daemon-runtime-check.cjs` on Windows (VS Code 1.147, run as Node: Node 24.22,
+  Electron 43.8, N-API 10): `usb`, `node-hid`, `@serialport/bindings-cpp` and `koffi` load; a
+  detached child started from the extension host keeps running after VS Code quits; the extension
+  folder can be renamed while it runs; two processes can both receive the beacons on UDP 3015. The
+  VS Code install folder cannot (`EBUSY`): while the daemon runs on VS Code's `Code.exe`, a VS Code
+  update on Windows fails. The daemon ends with VS Code unless `ev3 connect`, the CLI or an MCP
+  server keeps it; the owner chose to keep VS Code's Node and document that those must be ended
+  before updating VS Code, over copying the runtime (~250 MB per VS Code version) or requiring a
+  system Node. USB discovery over libusb opens each device to read its serial, so a brick lent to
+  another daemon has to be skipped before opening. Linux not measured yet (no machine with VS Code).
 - [ ] 4.10.3 An MCP server, only if wanted: a thin layer over the same daemon.
 
 ## 9. Phase 5 — Cockpit Panel and UX
