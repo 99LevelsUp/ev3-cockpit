@@ -9,10 +9,11 @@ server and every add-on are its clients and talk to it over JSON-RPC on a local 
 The VS Code extension exports nothing: an add-on does not ask it for anything.
 
 The reference is the contract in `src/contract/` (`methods.ts`, `models.ts`, `events.ts`,
-`errors.ts`) and the client library in `src/client/index.ts`. Both are planned to ship as one
-package, `@ev3-cockpit/client`, built from this repository and carrying no native modules; it is
-not built yet. Until it is, load the library from a compiled checkout (`npm run compile`, then
-`out/client/index.js`), as `scripts/api-check` does.
+`errors.ts`) and the client library in `src/client/index.ts`. Both ship as one package,
+`@ev3-cockpit/client`, built from this repository and carrying no native modules
+(`npm run package:npm` stages it in `dist/npm/client/`; it is not published yet). Until it is,
+load the library from a compiled checkout (`npm run compile`, then `out/client/index.js`), as
+`scripts/api-check` does.
 
 ## Connecting
 
@@ -39,11 +40,11 @@ context.subscriptions.push(cockpit);   // dispose() closes the connection and ev
   of the user's own; the cockpit sets it in its own Development and Test modes.
 
 **Starting the daemon.** `connect` finds the user's daemon and proves both sides hold the user's
-key. When no daemon runs, it starts one only if it was given `launch`; without it, `connect` fails
-with `daemon_unavailable` and you tell the user to install (or open) EVƎ Cockpit. The cockpit
-records how to start its daemon each time VS Code starts it: `installedLaunch(clientPaths())` in
-`src/client/locate.ts` reads that record and returns `undefined` when there is none. The package
-entry does not export these two functions yet.
+key. When no daemon runs, it starts one from `launch`; an add-on (kind `addon`) given none starts the
+one the installed cockpit recorded. The cockpit records how to start its daemon each time VS Code
+starts it; `installedLaunch(clientPaths())`, both exported from the package, reads that record and
+returns `undefined` when there is none. With nothing to start, `connect` fails with
+`daemon_unavailable`, and you tell the user to install (or open) EVƎ Cockpit.
 
 An add-on never replaces the daemon and never compares package versions with it; see
 [Version notices](#version-notices).
@@ -51,7 +52,7 @@ An add-on never replaces the daemon and never compares package versions with it;
 ## Naming a brick
 
 Every request that works on a brick takes `brick`: its id or its name. The daemon matches names
-without regard to case (the cache's `brick(ref)` matches them exactly), and names need not be
+without regard to case, and so does the cache's `brick(ref)`; names need not be
 unique (a fresh brick is called "EV3"):
 
 - a name that fits several bricks is refused with `brick_ambiguous`; `error.data.candidates`
@@ -318,8 +319,8 @@ The daemon sends notifications (`src/contract/events.ts`); the library dispatche
 - **The snapshot is told before `subscribeTelemetry` resolves.** The library calls your listener
   with the snapshot while the subscribe call is still running; the same holds for the chain in
   `followChain`. `subscribePrograms` does not call the listener for the state it returns.
-- **Listeners.** A listener that throws on a change stops nothing else. One that throws on the
-  first snapshot makes `subscribeTelemetry` (or `followChain`) reject.
+- **Listeners.** A listener that throws stops nothing else, the first snapshot included: the
+  subscription stays.
 - **Program state.** One `programs/stateChanged` per change the daemon sees; see
   [Programs](#programs) for what `runSeq` does and does not prove.
 

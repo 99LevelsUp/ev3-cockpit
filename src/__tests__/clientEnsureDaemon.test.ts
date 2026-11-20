@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 import { CockpitClient, ContractError } from '../client';
 import { WireErrorCode } from '../contract/errors';
+import { recordInstall } from '../client/locate';
 import { compareVersions, versionNotice } from '../client/versions';
 import { privateHome, testDaemon } from './clientDaemonHelpers';
 
@@ -45,6 +46,14 @@ describe('reaching the daemon', () => {
 		await assert.rejects(CockpitClient.connect({ name: 'x', kind: 'addon', version: '0.0.1', paths: d.paths, readinessMs: 500 }),
 			(e: unknown) => e instanceof ContractError && e.code === WireErrorCode.DaemonUnavailable);
 		assert.equal(fs.existsSync(d.paths.handoverMarker), false);
+	});
+
+	it('starts the installed cockpit\'s daemon for an add-on given no launch', async () => {
+		const d = testDaemon(home);
+		recordInstall(d.paths, d.launch);
+		const addon = await CockpitClient.connect({ name: 'add-on', kind: 'addon', version: '0.0.1', paths: d.paths, launchArgs: d.launchArgs });
+		assert.equal(addon.daemon.state, 'serving');
+		addon.dispose();
 	});
 
 	it('compares versions and says which side is newer', () => {

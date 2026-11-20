@@ -7,9 +7,9 @@
  *
  * - Cancelling: a client cancels its own request the LSP way (`$/cancelRequest`; with the client
  *   library, an `AbortSignal`). The request ends with `cancelled`; nobody else's program is stopped.
- * - Progress: requests that move file content report `{ transferred, total? }` the LSP way
- *   (`$/progress` with a token the request carries; with the client library, an `onProgress`
- *   callback). No other notification carries progress.
+ * - Progress: the protocol carries it the LSP way (`$/progress` with a token the request carries;
+ *   with the client library, an `onProgress` callback), shaped `{ transferred, total? }`. The daemon
+ *   does not report any yet; do not rely on it.
  * - Folders: a write or a deployment to a path whose folders do not exist yet creates them; the
  *   brick does this itself when a file is downloaded to it.
  * - Subscriptions: an id the daemon hands out is valid on that connection only. After the daemon is

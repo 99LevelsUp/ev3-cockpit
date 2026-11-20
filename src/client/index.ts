@@ -24,10 +24,11 @@ import type { DaemonPaths } from '../daemon/paths';
 import { ContractError, Endpoint, RequestOptions } from './connection';
 import { connectToDaemon } from './ensureDaemon';
 import { isDevelopmentChannel } from './channel';
-import { clientPaths } from './locate';
+import { clientPaths, installedLaunch } from './locate';
 import { VersionNotice, contractNotice, isRepoClient, versionNotice } from './versions';
 
 export { ContractError } from './connection';
+export { clientPaths, installedLaunch } from './locate';
 export type { VersionNotice } from './versions';
 export * from '../contract';
 
@@ -57,6 +58,11 @@ interface Renewable {
 }
 
 type Listener<T> = (value: T) => void;
+
+/** A caller's listener that throws must not break the subscription it listens to. */
+function safely(call: () => void): void {
+	try { call(); } catch { /* the listener's own failure */ }
+}
 
 class Emitter<T> {
 	private readonly listeners = new Set<Listener<T>>();
@@ -110,13 +116,20 @@ export class CockpitClient {
 		return client;
 	}
 
+	/** How to start the daemon: the caller's launch, or for an add-on the installed cockpit's. */
+	private launch(): LaunchSpec | undefined {
+		return this.options.launch ?? (this.options.kind === 'addon' ? installedLaunch(this.paths) : undefined);
+	}
+
 	/** What the daemon said about itself when this client connected. */
 	get daemon(): HelloAccepted { return this.helloInfo; }
 
 	/** The bricks as last heard; no round trip. */
 	bricks(): readonly ContractBrick[] { return this.brickList; }
 	brick(ref: string): ContractBrick | undefined {
-		return this.brickList.find((b) => b.brickId === ref) ?? this.brickList.find((b) => b.name === ref);
+		// As the daemon names bricks: an id, or a name whatever its case.
+		const lower = ref.toLowerCase();
+		return this.brickList.find((b) => b.brickId === ref) ?? this.brickList.find((b) => b.name.toLowerCase() === lower);
 	}
 	settings(): readonly SettingValue[] { return this.settingList; }
 	accessMode(): AccessMode { return this.access; }
@@ -175,7 +188,7 @@ export class CockpitClient {
 		const renew = async (): Promise<string> => {
 			const result = await this.request('programs/subscribe', { brick });
 			state = result.state;
-			if (this.renewables.has(id)) { listener(result.state); }
+			if (this.renewables.has(id)) { safely(() => listener(result.state)); }
 			return result.subscriptionId;
 		};
 		const off = this.on('programs/stateChanged', (p) => { if (p.subscriptionId === this.renewables.get(id)?.wireId) { listener(p.state); } });
@@ -191,7 +204,7 @@ export class CockpitClient {
 		const renew = async (): Promise<string> => {
 			const result = await this.request('telemetry/subscribe', { brick, request });
 			grant = result.grant;
-			listener({ subscriptionId: id, brickId: result.brickId, kind: 'snapshot', values: result.snapshot, removed: [] });
+			safely(() => listener({ subscriptionId: id, brickId: result.brickId, kind: 'snapshot', values: result.snapshot, removed: [] }));
 			return result.subscriptionId;
 		};
 		const off = this.on('telemetry/update', (u) => {
@@ -207,7 +220,7 @@ export class CockpitClient {
 		const id = `s${++this.nextId}`;
 		const renew = async (): Promise<string> => {
 			const result = await this.request('chain/follow', { brick });
-			listener(result.chain);
+			safely(() => listener(result.chain));
 			return result.subscriptionId;
 		};
 		const off = this.on('chain/changed', (c) => { if (c.subscriptionId === this.renewables.get(id)?.wireId) { listener(c.chain); } });
@@ -235,7 +248,8 @@ export class CockpitClient {
 		const { endpoint, hello } = await connectToDaemon({
 			client: { name: this.options.name, kind: this.options.kind, version: this.options.version },
 			paths: this.paths,
-			...(this.options.launch ? { launch: this.options.launch } : {}),
+			// An add-on carries no daemon: it starts the one the installed cockpit recorded.
+			...(this.launch() ? { launch: this.launch()! } : {}),
 			...(this.options.launchArgs ? { launchArgs: this.options.launchArgs } : {}),
 			...(this.options.readinessMs ? { readinessMs: this.options.readinessMs } : {}),
 		});

@@ -68,7 +68,23 @@ describe('a client across daemons', () => {
 		const name = client.bricks()[0].name;
 		await client.request('bricks/connect', { brick: name });
 		await waitFor(() => client.brick(name)?.connected === true, 5000);
+		assert.equal(client.brick(name.toUpperCase())?.name, name, 'the cache does not match a name as the daemon does');
 		assert.equal(client.accessMode(), 'safe');
 		client.dispose();
+	});
+
+	it('keeps a subscription whose listener throws on its first snapshot, and sends that snapshot once', async (t) => {
+		const d = testDaemon(home, '0.0.1', 5000);
+		const client = await CockpitClient.connect({ name: 'thrower', kind: 'cli', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs });
+		t.after(() => client.dispose());
+		const name = (await client.request('bricks/list', { waitForDiscovery: true }))[0].name;
+		await client.request('bricks/connect', { brick: name });
+		const raw: TelemetryUpdate[] = [];
+		client.on('telemetry/update', (u) => raw.push(u));
+		let calls = 0;
+		const sub = await client.subscribeTelemetry(name, { rows: ['system.battery.level'], intervalMs: 500 }, () => { calls++; if (calls === 1) { throw new Error('listener failed'); } });
+		await waitFor(() => calls >= 2, 10_000);
+		assert.equal(raw.filter((u) => u.kind === 'snapshot').length, 0, 'the daemon sent the snapshot as a notification too');
+		sub.dispose();
 	});
 });

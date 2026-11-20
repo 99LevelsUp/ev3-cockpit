@@ -581,10 +581,13 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				throw new ContractError(WireErrorCode.InvalidRequest, 'telemetry/subscribe needs rows and intervalMs.');
 			}
 			let id = '';
+			/** The first snapshot is in the answer; the delivery's own copy of it is not sent again. */
+			let snapshotAnswered = false;
 			const sub = consumer.subscribeTelemetry(brickId, {
 				rows: request.rows.map(String), intervalMs: request.intervalMs,
 				...(request.modes ? { modes: request.modes as Record<string, number> } : {}),
 			}, (update) => {
+				if (id === '' || (update.kind === 'snapshot' && !snapshotAnswered)) { snapshotAnswered = true; return; }
 				endpoint.notify('telemetry/update', {
 					subscriptionId: id, brickId: update.brickId, kind: update.kind, removed: update.removed,
 					values: update.values.map((v) => ({ ...v, value: plainValue(v.value) })),
@@ -605,7 +608,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		on('chain/follow', async (params) => {
 			const brickId = await brickOf(params);
 			let id = '';
-			const sub = consumer.onChainChanged(brickId, (c) => endpoint.notify('chain/changed', { subscriptionId: id, chain: chain(c) }));
+			const sub = consumer.onChainChanged(brickId, (c) => { if (id !== '') { endpoint.notify('chain/changed', { subscriptionId: id, chain: chain(c) }); } });
 			id = subscribe(sub);
 			return { subscriptionId: id, chain: chain(consumer.getChain(brickId)) };
 		});

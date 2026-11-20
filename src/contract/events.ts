@@ -13,7 +13,7 @@ import type {
 export interface Notifications {
 	/** The whole brick list, whenever anything in it changes. */
 	'bricks/changed': { readonly bricks: readonly ContractBrick[] };
-	/** A brick's route came back after it was lost; subscriptions on it carry on. */
+	/** A brick has a route again: after it was lost, and also when it is first connected. Subscriptions on it carry on. */
 	'bricks/reconnected': { readonly brickId: string };
 	'bricks/pairingStarted': { readonly brickId: string };
 	'bricks/pairingEvent': PairingEvent;
@@ -26,7 +26,8 @@ export interface Notifications {
 	'chain/changed': { readonly subscriptionId: string; readonly chain: ContractChain };
 	'settings/changed': { readonly setting: SettingValue };
 	'settings/accessModeChanged': { readonly mode: AccessMode };
-	/** A newer daemon or client exists; the text is ready to show. */
+	/** A newer daemon or client exists; the text is ready to show. Reserved: today the client library
+	 * compares versions from the handshake itself, and the daemon does not send this. */
 	'daemon/versionNotice': { readonly current: string; readonly newer: string; readonly newerIs: 'client' | 'daemon'; readonly text: string };
 	/** The daemon is being replaced; reconnect and wait for its successor. */
 	'daemon/handingOver': { readonly successorVersion: string };

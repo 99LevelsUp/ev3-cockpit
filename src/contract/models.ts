@@ -102,8 +102,9 @@ export interface DeployResult {
 	readonly brickId: string;
 	readonly outcome: StartOutcome;
 	/**
-	 * This start's number on the brick: the daemon counts every program start per brick. A program
-	 * state with the same or a higher `runSeq` is about this run or a later one, never an earlier.
+	 * This start's number on the brick: the daemon counts every start it is asked for per brick, a
+	 * refused one included, so numbers may skip. A state with a lower `runSeq` is about an earlier run;
+	 * with `replace`, the old program's end may still arrive under the new number.
 	 */
 	readonly runSeq: number;
 	/** Files that were uploaded, and those skipped because the brick held the same content. */
