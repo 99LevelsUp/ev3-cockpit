@@ -28,6 +28,7 @@ import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings 
 import { setLedgerStore } from '../core/fs/transferLedger';
 import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
 import { fileLedgerStore } from './stateStore';
+import { createSurface } from './surface';
 import { ClientIdentity, acceptHello } from './hello';
 import { ensureKey } from './key';
 import { DaemonLog } from './log';
@@ -107,6 +108,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	const instanceId = randomBytes(8).toString('hex');
 	const clients = new Map<string, DaemonClient>();
 	const clientListeners: Array<(client: DaemonClient) => void> = [];
+	/** Clients that finish their handshake before the runtime is built wait for it here. */
+	let markReady: () => void = () => undefined;
+	const ready = new Promise<void>((resolve) => { markReady = resolve; });
 	/** Built once the channel is won; read by the handshake before that. */
 	const built: { runtime?: Runtime } = {};
 	let listening: Listening | undefined;
@@ -132,7 +136,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		const endpoint = createEndpoint(socket, {
 			onOversize: (bytes) => log.warn(`A client sent a message of ${bytes} bytes; connection closed`),
 		});
-		acceptHello(endpoint, { key, accepted }).then((identity) => {
+		acceptHello(endpoint, { key, accepted }).then(async (identity) => {
+			await ready;
 			if (lifecycle.state === 'exiting') { endpoint.close(); return; }
 			const client: DaemonClient = { id: randomBytes(6).toString('hex'), identity, endpoint };
 			clients.set(client.id, client);
@@ -200,6 +205,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		},
 	});
 	built.runtime = runtime;
+	// The first discovery round, or 8 s of it: a brick named before then is waited for, not refused.
+	const firstRound = Promise.race([
+		runtime.scheduler.scanOnce().then(() => undefined, () => undefined),
+		new Promise<void>((resolve) => { setTimeout(resolve, 8000).unref(); }),
+	]);
+	const surface = createSurface({ status: () => daemon.status(), settings, log, clients, lifecycle }, runtime, () => firstRound);
+	clientListeners.push((client) => surface.attach(client));
 	// Debts a previous daemon left are paid before each brick's next transfer.
 	setLedgerStore(runtime.bricks, fileLedgerStore(paths.ledgerFile));
 	settings.onChange(({ key: changed }) => {
@@ -231,6 +243,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 				lifecycle.dispose();
 				for (const client of [...clients.values()]) { client.endpoint.close(); }
 				// Devices first, so a successor never finds them still open.
+				surface.dispose();
 				runtime.dispose();
 				settings.dispose();
 				await listening?.close();
@@ -240,6 +253,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		},
 	};
 	lifecycle.serve();
+	markReady();
 	return daemon;
 }
 

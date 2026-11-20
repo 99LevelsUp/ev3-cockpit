@@ -234,7 +234,13 @@ export interface CockpitApiDeps {
 }
 
 /** Builds the API object; `dispose` ends every consumer and every program service. */
-export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription {
+/** The per-brick services behind the API, shared by everyone: one program service per brick, so every stop goes through it. */
+export interface CockpitServices {
+	programsOf(brickId: BrickId): ProgramService;
+	filesOf(brickId: BrickId): ReturnType<typeof createBrickFilesystem>;
+}
+
+export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscription & CockpitServices {
 	const programs = new Map<BrickId, ProgramService>();
 	const consumers = new Set<CockpitConsumer>();
 	/** Set before anything is disposed, so nothing registered on the way out escapes it (review 4). */
@@ -504,6 +510,8 @@ export function createCockpitApi(deps: CockpitApiDeps): CockpitApi & Subscriptio
 	return {
 		apiVersion: API_VERSION,
 		registerConsumer,
+		programsOf,
+		filesOf,
 		dispose: () => {
 			disposed = true;
 			for (const consumer of [...consumers]) { consumer.dispose(); }
