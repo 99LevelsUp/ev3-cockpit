@@ -27,6 +27,11 @@ import { isDevelopmentChannel } from './channel';
 import { clientPaths, installedLaunch } from './locate';
 import { VersionNotice, contractNotice, isRepoClient, versionNotice } from './versions';
 
+/** How often in a row a daemon may go away during the reconnect to it before the client gives up. */
+const MAX_BOUNCES = 3;
+/** The wait before the next of those reconnects, times how many came before it. */
+const BOUNCE_DELAY_MS = 500;
+
 export { ContractError } from './connection';
 export { clientPaths, installedLaunch } from './locate';
 export type { VersionNotice } from './versions';
@@ -285,10 +290,13 @@ export class CockpitClient {
 	/** Subscriptions a reconnect could not renew, because their brick was not back yet. */
 	private readonly unrenewed = new Set<string>();
 	private renewing = false;
+	/** Reconnects in a row whose daemon went away again during the reconnect. */
+	private bounces = 0;
 
 	/** Tries the subscriptions a reconnect could not renew again, one round at a time. */
 	private async renewPending(): Promise<void> {
-		if (this.renewing || this.unrenewed.size === 0 || this.endpoint.closed) { return; }
+		// A reconnect in progress renews everything itself; renewing here too would subscribe twice.
+		if (this.renewing || this.reconnecting || this.unrenewed.size === 0 || this.endpoint.closed) { return; }
 		this.renewing = true;
 		try {
 			for (const id of [...this.unrenewed]) {
@@ -362,8 +370,21 @@ export class CockpitClient {
 			}
 			// The daemon this client just reached went again while it was getting back to it: that close was
 			// absorbed by the reconnect in progress, so go round once more. Only for a new connection, so a
-			// daemon that cannot be reached at all ends in `lost`, not in a loop.
-			if (!this.disposed && this.endpoint !== before && this.endpoint.closed) { await this.connectAgain(); }
+			// daemon that cannot be reached at all ends in `lost`, not in a loop; and a few times only, so a
+			// daemon that keeps dying right after its handshake ends there too.
+			if (!this.disposed && this.endpoint !== before && this.endpoint.closed) {
+				if (++this.bounces > MAX_BOUNCES) {
+					this.bounces = 0;
+					this.lost.fire(new ContractError(WireErrorCode.DaemonUnavailable, 'The cockpit daemon kept going away right after this client reached it.'));
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, BOUNCE_DELAY_MS * this.bounces));
+				await this.connectAgain();
+				return;
+			}
+			this.bounces = 0;
+			// A brick that came back while this reconnect ran announced itself before renewals were open.
+			if (!this.disposed && !this.endpoint.closed) { void this.renewPending(); }
 		})();
 		return this.reconnecting;
 	}

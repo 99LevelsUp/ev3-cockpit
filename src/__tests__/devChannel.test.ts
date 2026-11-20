@@ -16,30 +16,30 @@ const at = { busNumber: 1, deviceAddress: 7 };
 describe('the device gate', () => {
 	it('lets an owner open everything but what it lent, and nothing once it lent everything', () => {
 		const gate = new LoanGate('owner');
-		gate.add('0016535C0C0C', [at]);
-		assert.equal(gate.mayOpen(usbKey('0016535C0C0C')), false);
-		assert.equal(gate.mayOpen(usbKey('00165300AAAA')), true);
+		gate.add('001653F00C0C', [at]);
+		assert.equal(gate.mayOpen(usbKey('001653F00C0C')), false);
+		assert.equal(gate.mayOpen(usbKey('001653F00A0A')), true);
 		assert.equal(gate.mayOpenUsb(at), false);
 		assert.equal(gate.mayOpenUsb({ busNumber: 1, deviceAddress: 8 }), true);
 		assert.equal(gate.mayUseRadio(), true);
 		gate.setAll(true);
-		assert.equal(gate.mayOpen(usbKey('00165300AAAA')), false);
+		assert.equal(gate.mayOpen(usbKey('001653F00A0A')), false);
 		assert.equal(gate.mayUseRadio(), false);
 	});
 
 	it('lets a borrower open only what it borrowed, and the radio only with everything', () => {
 		const gate = new LoanGate('borrower');
-		assert.equal(gate.mayOpen(usbKey('0016535C0C0C')), false);
+		assert.equal(gate.mayOpen(usbKey('001653F00C0C')), false);
 		assert.equal(gate.mayOpenUsb(at), false);
-		gate.add('0016535C0C0C', [at]);
-		assert.equal(gate.mayOpen(usbKey('0016535C0C0C')), true);
+		gate.add('001653F00C0C', [at]);
+		assert.equal(gate.mayOpen(usbKey('001653F00C0C')), true);
 		assert.equal(gate.mayOpenUsb(at), true);
 		assert.equal(gate.mayUseRadio(), false);
 		gate.setAll(true);
 		assert.equal(gate.mayUseRadio(), true);
 		gate.own();
 		assert.equal(gate.role, 'owner');
-		assert.equal(gate.mayOpen(usbKey('00165300AAAA')), true);
+		assert.equal(gate.mayOpen(usbKey('001653F00A0A')), true);
 	});
 });
 
@@ -67,7 +67,11 @@ describe('the hardware lock', () => {
 		assert.deepEqual({ ...JSON.parse(fs.readFileSync(file, 'utf8')), at: 0 }, { pid: process.pid, channel: 'dev-x', at: 0 });
 		assert.deepEqual(fs.readdirSync(dir), ['hardware.lock']);
 		lock.release();
+		// Unreadable and new: perhaps still being written where there are no hard links.
 		fs.writeFileSync(file, '{"pid":');
+		assert.equal(new HardwareLock(file, undefined).tryTake(), false);
+		const old = new Date(Date.now() - 60_000);
+		fs.utimesSync(file, old, old);
 		assert.equal(new HardwareLock(file, undefined).tryTake(), true);
 	});
 

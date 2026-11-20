@@ -159,6 +159,28 @@ describe('the daemon surface', () => {
 		w.done();
 	});
 
+	it('leaves no holder behind for a window that closes while its brick is being connected', async () => {
+		const w = world();
+		const observer = w.connect('observer');
+		const window = w.connect('window');
+		await w.runtime.scheduler.scanOnce();
+		const id = brickIdOf(await observer.request<ContractBrick[]>('bricks/list', {}), 'Robot') as BrickId;
+		const bricks = w.runtime.bricks as { signIn(id: BrickId): Promise<unknown> };
+		const signIn = bricks.signIn.bind(bricks);
+		bricks.signIn = async (brickId) => {
+			const result = await signIn(brickId);
+			window.close();
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			return result;
+		};
+		await assert.rejects(window.request('bricks/connect', { brick: 'Robot' }));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		assert.equal(w.runtime.bricks.isSignedIn(id), false, 'the brick stayed connected for a window that is gone');
+		const status = await observer.request<ContractBrick[]>('bricks/list', {});
+		assert.equal(status.find((b) => b.name === 'Robot')?.connected, false);
+		w.done();
+	});
+
 	it('refuses a local path that is not absolute: the daemon\'s working directory is not the client\'s', async () => {
 		const w = world();
 		const cli = w.connect('ev3', 'cli');

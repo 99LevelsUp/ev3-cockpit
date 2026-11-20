@@ -22,6 +22,28 @@ export interface LockHolder {
 /** A takeover guard older than this was left by a daemon that died while taking a lock over. */
 const TAKEOVER_GUARD_STALE_MS = 10_000;
 
+/** Errors of a file system that has no hard links (some network and FAT-like volumes). */
+const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP', 'EXDEV']);
+
+/** An unreadable lock younger than this may still be being written (see `placeLock`). */
+const LOCK_BEING_WRITTEN_MS = 2000;
+
+/**
+ * Puts the lock in place, failing with EEXIST when one is there. Linked from the file written aside
+ * where the file system allows it; elsewhere created exclusively and written, which leaves a moment
+ * in which the lock is empty: a takeover leaves an unreadable lock alone while it is that new.
+ */
+function placeLock(temp: string, file: string, me: LockHolder): void {
+	try {
+		fs.linkSync(temp, file);
+		return;
+	} catch (error) {
+		if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? '')) { throw error; }
+	}
+	const fd = fs.openSync(file, 'wx', 0o600);
+	try { fs.writeSync(fd, JSON.stringify(me)); } finally { fs.closeSync(fd); }
+}
+
 export class HardwareLock {
 	private held = false;
 
@@ -51,7 +73,7 @@ export class HardwareLock {
 		try {
 			for (let attempt = 0; attempt < 2; attempt++) {
 				try {
-					fs.linkSync(temp, this.file);
+					placeLock(temp, this.file, me);
 					this.held = true;
 					return true;
 				} catch (error) {
@@ -89,7 +111,9 @@ export class HardwareLock {
 				holder = JSON.parse(fs.readFileSync(this.file, 'utf8')) as Partial<LockHolder>;
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === 'ENOENT') { return true; }
-				// Locks are written whole, so one that does not parse is damaged, not half-written.
+				// One that does not parse is damaged, unless it is new: on a file system without hard links
+				// a lock is created first and written after.
+				if (Date.now() - fs.statSync(this.file).mtimeMs < LOCK_BEING_WRITTEN_MS) { return false; }
 			}
 			if (holder && typeof holder.pid === 'number' && processAlive(holder.pid)) { return false; }
 			fs.rmSync(this.file, { force: true });

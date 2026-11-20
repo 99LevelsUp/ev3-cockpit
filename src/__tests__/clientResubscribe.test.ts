@@ -40,6 +40,85 @@ describe('a client across daemons', () => {
 		await sleep(100);
 	});
 
+	it('renews a subscription whose brick was not back after a reconnect, once the brick is back', async (t) => {
+		const d = testDaemon(home, '0.0.1', 5000);
+		const options = { kind: 'cli' as const, version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs };
+		const watcher = await CockpitClient.connect({ ...options, name: 'watcher' });
+		t.after(() => watcher.dispose());
+		// The client that connected the brick does not come back, so nobody connects it again.
+		const holder = await CockpitClient.connect({ ...options, name: 'holder', reconnect: false });
+		t.after(() => holder.dispose());
+		const name = (await holder.request('bricks/list', { waitForDiscovery: true }))[0].name;
+		await holder.request('bricks/connect', { brick: name });
+		const updates: TelemetryUpdate[] = [];
+		await watcher.subscribeTelemetry(name, { rows: ['system.battery.level'], intervalMs: 300 }, (u) => updates.push(u));
+		// Renewals fail until the brick is back, as they do while the new daemon does not know it yet.
+		const renewables = (watcher as unknown as { renewables: Map<string, { renew: () => Promise<string> }> }).renewables;
+		const [renewable] = renewables.values();
+		const renew = renewable.renew;
+		let brickBack = false;
+		let refusals = 0;
+		renewable.renew = () => {
+			if (brickBack) { return renew(); }
+			refusals++;
+			return Promise.reject(new Error('the brick is not back yet'));
+		};
+
+		let back = false;
+		watcher.onReconnected(() => { back = true; });
+		process.kill(watcher.daemon.pid);
+		await waitFor(() => back, 20_000);
+		await sleep(300);
+		assert.ok(refusals >= 1);
+		const before = updates.length;
+
+		// The brick coming back is announced to every client: the watcher renews then.
+		const later = await CockpitClient.connect({ ...options, name: 'later' });
+		t.after(() => later.dispose());
+		await later.request('bricks/list', { waitForDiscovery: true });
+		brickBack = true;
+		await later.request('bricks/connect', { brick: name });
+		await waitFor(() => updates.slice(before).some((u) => u.kind === 'snapshot'), 10_000);
+		later.dispose();
+		holder.dispose();
+		watcher.dispose();
+		await sleep(100);
+	});
+
+	it('reaches a third daemon when the second one goes away while the client is getting back to it', async (t) => {
+		const d = testDaemon(home, '0.0.1', 5000);
+		const client = await CockpitClient.connect({ name: 'bounced', kind: 'cli', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs });
+		t.after(() => client.dispose());
+		const name = (await client.request('bricks/list', { waitForDiscovery: true }))[0].name;
+		await client.request('bricks/connect', { brick: name });
+		await client.subscribePrograms(name, () => undefined);
+		const renewables = (client as unknown as { renewables: Map<string, { renew: () => Promise<string> }> }).renewables;
+		const [renewable] = renewables.values();
+		const renew = renewable.renew;
+		const pids = [client.daemon.pid];
+		// The second daemon dies while the client renews its subscription there.
+		let killedSecond = false;
+		renewable.renew = async () => {
+			if (!killedSecond) {
+				killedSecond = true;
+				pids.push(client.daemon.pid);
+				process.kill(client.daemon.pid);
+				await sleep(300);
+			}
+			return renew();
+		};
+		let reconnects = 0;
+		client.onReconnected(() => { reconnects++; });
+		let lost: Error | undefined;
+		client.onLost((e) => { lost = e; });
+		process.kill(pids[0]);
+		await waitFor(() => (reconnects > 0 && !pids.includes(client.daemon.pid)) || lost !== undefined, 30_000);
+		assert.equal(lost, undefined, String(lost));
+		assert.equal((await client.request('daemon/status', {})).pid, client.daemon.pid);
+		client.dispose();
+		await sleep(100);
+	});
+
 	it('leaves no connection behind when it is disposed while it connects to the next daemon', async (t) => {
 		const d = testDaemon(home, '0.0.1', 5000);
 		const options = { kind: 'cli' as const, version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs };
