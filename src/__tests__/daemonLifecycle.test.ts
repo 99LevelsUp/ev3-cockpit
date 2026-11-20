@@ -15,6 +15,7 @@ import { createEndpoint } from '../client/connection';
 import { performHello } from '../client/hello';
 import type { DaemonStatus } from '../contract/models';
 import { readKey } from '../daemon/key';
+import { defaultInstallRoot } from '../daemon/main';
 import { daemonPaths } from '../daemon/paths';
 import { Lifecycle } from '../daemon/stateMachine';
 import { currentUserSid } from '../daemon/systemTools';
@@ -131,5 +132,13 @@ describe('the daemon process', () => {
 		const log = fs.readFileSync(paths.logFile, 'utf8');
 		assert.match(log, /INFO Client connected: test/);
 		assert.match(log, /exiting/);
+	});
+});
+
+describe('where the daemon is installed', () => {
+	it('finds its install root from the bundle and from tsc\'s output alike', () => {
+		const root = path.resolve('install');
+		assert.equal(defaultInstallRoot(path.join(root, 'out')), root);
+		assert.equal(defaultInstallRoot(path.join(root, 'out', 'daemon')), root);
 	});
 });

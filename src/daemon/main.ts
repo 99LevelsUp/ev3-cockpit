@@ -450,6 +450,14 @@ export function successorArgs(options: DaemonOptions): string[] {
 	];
 }
 
+/**
+ * Where this daemon is installed when nobody says: the bundle `out/daemon.js` sits one folder below
+ * the install root, tsc's `out/daemon/main.js` two.
+ */
+export function defaultInstallRoot(dir: string): string {
+	return path.basename(dir) === 'out' ? path.resolve(dir, '..') : path.resolve(dir, '..', '..');
+}
+
 /** Reads the command line. */
 export function parseDaemonArgs(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): DaemonOptions {
 	const value = (flag: string): string | undefined => {
@@ -460,7 +468,7 @@ export function parseDaemonArgs(argv: readonly string[], env: NodeJS.ProcessEnv 
 	const grace = value('--grace-ms');
 	const mockWorkspace = value('--mock-workspace');
 	return {
-		installRoot: value('--install-root') ?? path.resolve(__dirname, '..', '..'),
+		installRoot: value('--install-root') ?? defaultInstallRoot(__dirname),
 		...(channel ? { channel } : {}),
 		...(argv.includes('--simulated') ? { simulated: true } : {}),
 		...(argv.includes('--mock-bricks') ? { mockBricks: true } : {}),
