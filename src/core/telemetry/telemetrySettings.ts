@@ -1,13 +1,13 @@
 /**
  * The telemetry settings a user can change (owner decision D9, step-6 plan U6 and U7).
  *
- * The values live in one place, `package.json`'s `contributes.configuration`: VS Code shows them
- * in its settings editor and hands back the declared default for whatever the user left unset.
- * This module holds keys and the ranges that make a value usable, not values. Code that runs
- * outside VS Code — tests, the hardware harness — reads the same defaults from the manifest with
- * {@link telemetrySettingsFromPackage} and {@link throttleSettingsFromPackage}.
+ * The values live in the cockpit daemon's settings (`src/core/settings/spec.ts`), which holds
+ * their defaults; this module holds the keys and the ranges that make a value usable. Code that
+ * runs without the daemon's settings — tests, the hardware harness — takes the defaults with
+ * {@link defaultTelemetrySettings}, {@link defaultThrottleSettings} and {@link defaultProgramPresetSettings}.
  */
 
+import { defaultSettings, settingsSection } from '../settings/spec';
 /** How the read model decides a value is stale and when it drops it. */
 export interface TelemetrySettings {
 	/** A value is stale once it is this many of its own reading intervals old. 1 or more. */
@@ -108,19 +108,26 @@ export function readProgramPresetSettings(section: SettingsSection, warn: (messa
 	return readAll(PRESET, section, warn);
 }
 
-/** The declared program preset, read from a parsed `package.json`. */
-export function programPresetSettingsFromPackage(manifest: unknown): ProgramPresetSettings {
-	return fromPackage(PRESET, manifest);
+/** The settings' defaults as a section, from the daemon's settings spec. */
+function defaultsSection(): SettingsSection {
+	return settingsSection(defaultSettings()) as SettingsSection;
 }
 
-/** The declared stale defaults, read from a parsed `package.json`: for code that runs outside VS Code. */
-export function telemetrySettingsFromPackage(manifest: unknown): TelemetrySettings {
-	return fromPackage(STALE, manifest);
+const noWarning = (message: string): never => { throw new RangeError(`A default telemetry setting is not usable: ${message}`); };
+
+/** The program preset's defaults, for code that runs without the daemon's settings: tests, the harness. */
+export function defaultProgramPresetSettings(): ProgramPresetSettings {
+	return readProgramPresetSettings(defaultsSection(), noWarning);
 }
 
-/** The declared throttle defaults, read from a parsed `package.json`. */
-export function throttleSettingsFromPackage(manifest: unknown): ThrottleSettings {
-	return fromPackage(THROTTLE, manifest);
+/** The stale defaults. */
+export function defaultTelemetrySettings(): TelemetrySettings {
+	return readTelemetrySettings(defaultsSection(), noWarning);
+}
+
+/** The throttle defaults. */
+export function defaultThrottleSettings(): ThrottleSettings {
+	return readThrottleSettings(defaultsSection(), noWarning);
 }
 
 // ── Internal ────────────────────────────────────────────────────────
@@ -145,22 +152,6 @@ function readAll<T>(specs: Specs<T>, section: SettingsSection, warn: (message: s
 		}
 		warn(`Setting ev3-cockpit.${spec.key} = ${String(value)} is not ${describe(spec)}; using its default, ${String(fallback)}.`);
 		result[name] = fallback;
-	}
-	return result as T;
-}
-
-function fromPackage<T>(specs: Specs<T>, manifest: unknown): T {
-	const properties = (manifest as {
-		contributes?: { configuration?: { properties?: Record<string, { default?: unknown }> } };
-	}).contributes?.configuration?.properties ?? {};
-	const result: Record<string, unknown> = {};
-	for (const name of Object.keys(specs) as (keyof T & string)[]) {
-		const spec = specs[name];
-		const value = properties[`ev3-cockpit.${spec.key}`]?.default;
-		if (!usable(value, spec)) {
-			throw new RangeError(`Telemetry setting ${name} (ev3-cockpit.${spec.key}) has no usable default in package.json.`);
-		}
-		result[name] = value;
 	}
 	return result as T;
 }

@@ -7,7 +7,7 @@
  */
 
 import * as path from 'node:path';
-import { BrickId, BrickKey, TransportProvider } from '../contracts';
+import { BrickId, BrickKey, Transport, TransportProvider, makeBrickKey } from '../contracts';
 import { Disposable, DisposableStore } from '../events';
 import {
 	ProviderRegistry,
@@ -31,6 +31,7 @@ import { DiscoveryScheduler } from './discoveryScheduler';
 import { logOnChange, onChangePerKey } from './logOnChange';
 import { PresenceAggregator } from './presenceAggregator';
 import { SessionManager } from './sessionManager';
+import type { DeviceGate } from './deviceGate';
 
 /** Where the runtime reports what it does. The extension's log channel fits it. */
 export interface RuntimeLog {
@@ -82,10 +83,23 @@ export interface RuntimeOptions {
 	 * offer: the extension asks, runs it on a yes and offers to check again (U8 review #11).
 	 */
 	readonly onBluetoothAccessDenied?: (fix: BluetoothAccessFix) => void;
+	/**
+	 * What this process may open (KTD17): a daemon that lent bricks or the radio to another daemon
+	 * leaves them alone, and a daemon that borrowed opens only what it borrowed. Absent: everything.
+	 */
+	readonly deviceGate?: DeviceGate;
 	/** The host whose Bluetooth is built (default this one's). For tests. */
 	readonly platform?: NodeJS.Platform;
 	/** For tests on Linux's wiring: a fake system bus, the user's name, shorter windows. */
 	readonly bluezForTests?: Pick<BluezBluetoothOptions, 'openBus' | 'username' | 'inquiryWindowMs' | 'searchMs' | 'reconnectMs'>;
+}
+
+/** The radio and the paired bricks a presence monitor may page, by the gate. */
+function presenceGate(gate: DeviceGate | undefined): { mayUseRadio?: () => boolean; mayCheck?: (mac: string) => boolean } {
+	return gate ? {
+		mayUseRadio: () => gate.mayUseRadio(),
+		mayCheck: (mac) => gate.mayOpen(makeBrickKey(Transport.BT, mac)),
+	} : {};
 }
 
 /** The pieces a caller works with. Disposing it releases all of them. */
@@ -147,7 +161,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 	}));
 
 	// ── Sessions ────────────────────────────────────────────────
-	const sessionManager = services.add(new SessionManager({ providerRegistry: registry }));
+	const sessionManager = services.add(new SessionManager({
+		providerRegistry: registry, ...(options.deviceGate ? { deviceGate: options.deviceGate } : {}),
+	}));
 	services.add(sessionManager.onSessionStateChange(e => {
 		log.info(`Session: ${channelLabel(aggregator, e.brickKey)} ${e.previousState} → ${e.newState}`);
 	}));
@@ -172,6 +188,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 		sessionManager, aggregator, providerRegistry: registry, log,
 		discovery: scheduler, btPresence, radioName: btDiscovery?.radioName, pair: btDiscovery?.pair,
 		windowsPairing: scheduler, transferPacketBytes: options.transferPacketBytes,
+		...(options.deviceGate ? { mayUseRadio: () => options.deviceGate!.mayUseRadio() } : {}),
 	}));
 	services.add(bricks.onRouteChange(e => {
 		const over = (key?: BrickKey): string => (key ? transportLabel(key) : 'none');
@@ -264,6 +281,7 @@ function registerRealProviders(
 	registry.register(services.add(new UsbTransportProvider({
 		log,
 		udevRulePath: path.join(options.extensionPath, LINUX_UDEV_RULE_PATH),
+		...(options.deviceGate ? { deviceGate: options.deviceGate } : {}),
 	})));
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -357,6 +375,7 @@ function registerRealProviders(
 			timeoutSeconds: BT.PRESENCE_INQUIRY_SECONDS + 20,
 		}).done,
 		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		...presenceGate(options.deviceGate),
 		onUnavailable: (reason) => log.warn(
 			`Bluetooth presence unavailable, the list shows Windows' records only: ${reason}`),
 		onChange: refreshDiscovery,
@@ -426,6 +445,7 @@ function registerMacBluetooth(
 		check: presence.check,
 		inquire: presence.inquire,
 		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		...presenceGate(options.deviceGate),
 		onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable, the list shows macOS's paired bricks only: ${reason}`),
 		onChange: refreshDiscovery,
 	});
@@ -511,6 +531,7 @@ function registerBluezBluetooth(
 		check: bluez.presenceCheck,
 		inquire: bluez.inquire,
 		pairedWithoutSession: (): string[] => btProvider.pairedWithoutSession(),
+		...presenceGate(options.deviceGate),
 		onUnavailable: (reason) => log.warn(`Bluetooth presence unavailable, the list shows BlueZ's records only: ${reason}`),
 		onChange: refreshDiscovery,
 	});

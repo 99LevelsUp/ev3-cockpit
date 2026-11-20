@@ -35,21 +35,25 @@ The only exception is conversation with the user, which is conducted in the user
 
 ## Project Structure
 
-Source code under `src/`, split in two:
+Source code under `src/`:
 
-- `src/core/` — everything that works with bricks, and runs anywhere: in the extension, and in plain Node for the daemon and CLI to come (IMPLEMENTATION_PLAN 4.10). It never imports `vscode` or anything under `src/vscode/`; lint and `src/__tests__/coreBoundary.test.ts` enforce it.
+- `src/core/` — everything that works with bricks, and runs anywhere: in the daemon on plain Node or VS Code's Node (IMPLEMENTATION_PLAN 4.10). It never imports `vscode` or anything under `src/vscode/`; lint and `src/__tests__/coreBoundary.test.ts` enforce it.
   - `src/core/contracts/` — shared types and contracts
   - `src/core/events/` — the core's own event emitter, delivering as VS Code's does
   - `src/core/runtime/` — sessions, bricks, presence, the runtime factory
   - `src/core/transports/` — USB, BT, TCP, Mock providers; Bluetooth backends per OS: Winsock (Windows), BlueZ (Linux), the IOBluetooth helper (macOS, `macBluetooth.ts`)
   - `src/core/fs/`, `src/core/programs/`, `src/core/telemetry/`, `src/core/protocol/`, `src/core/commands/`, `src/core/errors/`
-  - `src/core/api/` — public API for dependent extensions
+  - `src/core/api/` — the per-brick services the daemon runs for each client (API v1 until 4.10.2), and the access policy
   - `src/core/mock/` — simulated bricks
-- `src/vscode/` — what needs VS Code: the entry point `src/vscode/extension.ts`, the `ui/` flows, and the extension-host tests in `integration/`
+- `src/contract/` — the daemon's contract: methods, notifications, models, error codes, the contract version, the handshake (`docs/protocol.md`)
+- `src/client/` — the client library every client uses: finds or starts the daemon, proves the key, keeps state, renews subscriptions
+- `src/daemon/` — the per-user daemon: channel, handshake, holders and write leases, questions, settings, handover, brick loans (`daemon/main.ts`)
+- `src/cli/` — the `ev3` command; `src/mcp/` — the MCP server `ev3-cockpit-mcp`
+- `src/vscode/` — what needs VS Code: the entry point `src/vscode/extension.ts` (a client of the daemon), the bridge its commands run on (`daemonBridge.ts`), the `ui/` flows, and the extension-host tests in `integration/`
 - `src/persistence/` — globalState adapter (placeholder)
 - `src/test/` — test utilities: the `vscode` stub and the shared emitter scenarios
 
-`scripts/core-smoke.js` runs the core in plain Node against a real brick (`node scripts/core-smoke.js <brick> <usb|bt|tcp>`).
+`scripts/core-smoke.js` checks a real brick through the daemon and the client library (`node scripts/core-smoke.js <brick> <usb|bt|tcp>`).
 
 Native helpers under `native/`: the Windows pairing helper (`bt-pairing-helper/`, .NET, `npm run build:helper`), the macOS Bluetooth helper (`macos/ev3-bt-helper.swift`, built on a Mac with `npm run build:helper:macos`), and the Linux udev rules (`linux/`). Builds land in `native/bin/`, which is not committed.
 

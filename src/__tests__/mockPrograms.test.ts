@@ -1,6 +1,6 @@
 /**
  * The mock brick runs programs the way the firmware does (step-5 plan, U2, KTD7), so the
- * program service and the public API can be tested, and used in the development host, without
+ * program service and the per-brick services can be tested, and used in the development host, without
  * a brick: a start into a running user slot is refused in silence, a missing file loads as
  * size 0 and does not start, and stop, status, emergency stop and the shell answer.
  */

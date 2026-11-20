@@ -27,7 +27,7 @@ const ZIP = Buffer.from('UEsDBBQAAAAAAOFybV1o8gHhAQAAAAEAAAAWAAAAZXh0ZW5zaW9uLnZ
 /** What a correct linux-arm64 VSIX holds, at the paths the checks look for. */
 const LINUX_ARM64 = [
 	'extension.vsixmanifest', '[Content_Types].xml',
-	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js',
+	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js', 'extension/out/daemon.js',
 	'extension/node_modules/usb/prebuilds/linux-arm64/node.napi.armv8.node',
 	'extension/node_modules/node-hid/prebuilds/HID-linux-arm64/node-napi-v3.node',
 	'extension/node_modules/node-hid/prebuilds/HID_hidraw-linux-arm64/node-napi-v3.node',
@@ -45,7 +45,7 @@ const LINUX_ARM64 = [
  */
 const DARWIN_ARM64 = [
 	'extension.vsixmanifest', '[Content_Types].xml',
-	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js',
+	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js', 'extension/out/daemon.js',
 	'extension/node_modules/usb/prebuilds/darwin-x64+arm64/node.napi.node',
 	'extension/node_modules/node-hid/prebuilds/HID-darwin-arm64/node-napi-v3.node',
 	'extension/node_modules/@serialport/bindings-cpp/prebuilds/darwin-x64+arm64/@serialport+bindings-cpp.node',
@@ -107,6 +107,24 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 
 	it('passes a VSIX that holds what its platform needs and nothing else', () => {
 		assert.deepEqual(packaging.checkVsix('linux-arm64', LINUX_ARM64), { missing: [], unexpected: [] });
+	});
+
+	it('carries the daemon beside the extension, and refuses a VSIX without it (KTD16)', () => {
+		// The extension starts its daemon from out/daemon.js; a VSIX without it installs, activates and
+		// then has nothing to start.
+		assert.ok(packaging.SHIPPED_FILES_FOR('win32-x64').includes('out/daemon.js'), 'staged');
+		const ignore = require('node:fs').readFileSync(path.join(__dirname, '..', '..', '.vscodeignore'), 'utf8') as string;
+		assert.ok(ignore.split(/\r?\n/).includes('!out/daemon.js'), 'a plain vsce package keeps it too');
+		for (const [target, entries] of [['linux-arm64', LINUX_ARM64], ['darwin-arm64', DARWIN_ARM64]] as const) {
+			const without = entries.filter((entry) => entry !== 'extension/out/daemon.js');
+			assert.deepEqual(packaging.checkVsix(target, without), { missing: ['extension/out/daemon.js'], unexpected: [] }, target);
+		}
+	});
+
+	it('leaves the ev3 command and the MCP server to the npm package (KTD16)', () => {
+		const withClients = [...LINUX_ARM64, 'extension/out/cli.js', 'extension/out/mcp.js'];
+		assert.deepEqual(packaging.checkVsix('linux-arm64', withClients).unexpected, ['extension/out/cli.js', 'extension/out/mcp.js']);
+		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes('out/cli.js'));
 	});
 
 	it('names what is missing: a native binary the platform needs', () => {

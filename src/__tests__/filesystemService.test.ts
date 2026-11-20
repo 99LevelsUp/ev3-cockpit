@@ -145,14 +145,16 @@ describe('FilesystemService — structure', () => {
 
 	it('renames as a copy followed by a delete, in that order', async () => {
 		// The protocol has no rename: opFILE/MOVE runs cp -r and leaves the source.
+		// The delete walks the source as a recursive remove does: listed, then deleted bottom-up.
 		const brick = fakeBrick({
 			'fs:copy': () => ({ kind: 'fs:copy' }),
-			'fs:removeTree': () => ({ kind: 'fs:removeTree' }),
+			'fs:list': () => ({ kind: 'fs:list', complete: true, entries: [] }),
+			'fs:delete': () => ({ kind: 'fs:delete', deleted: true }),
 		});
 
 		await new FilesystemService(brick.send).move('/p/a', '/p/b');
 
-		assert.deepEqual(brick.kinds(), ['fs:copy', 'fs:removeTree']);
+		assert.deepEqual(brick.kinds(), ['fs:copy', 'fs:list', 'fs:delete']);
 	});
 
 	it('says both copies exist when the delete half of a rename fails', async () => {

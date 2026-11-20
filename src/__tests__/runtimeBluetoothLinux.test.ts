@@ -12,15 +12,14 @@ import { describe, it } from 'node:test';
 import { createRuntime } from '../core/runtime/createRuntime';
 import type { BluetoothAccessFix } from '../core/transports/bluezAccess';
 import type { BluezBus } from '../core/transports/bluezBluetooth';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 const settings = {
-	telemetrySettings: telemetrySettingsFromPackage(manifest),
-	throttleSettings: throttleSettingsFromPackage(manifest),
-	programPreset: programPresetSettingsFromPackage(manifest),
+	telemetrySettings: defaultTelemetrySettings(),
+	throttleSettings: defaultThrottleSettings(),
+	programPreset: defaultProgramPresetSettings(),
 };
 
 /** A system bus whose policy refuses this user every call, as on a distribution limiting BlueZ to a group. */

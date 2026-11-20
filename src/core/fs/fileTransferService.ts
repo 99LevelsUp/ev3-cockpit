@@ -20,7 +20,7 @@ import {
 	SYSTEM_ENVELOPE_BYTES,
 	maxFirstChunkBytes,
 } from '../protocol/ev3Commands';
-import { ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
+import { ChannelChangedError, ConnectionError, ProtocolError, TimeoutError, TransportError } from '../errors/CockpitError';
 import { TransferLedger, mayHaveRun } from './transferLedger';
 
 /** How the service reaches a brick. Narrower than a provider on purpose. */
@@ -71,6 +71,11 @@ export interface TransferServiceOptions {
 	 */
 	readonly pin?: () => PinnedLink;
 	/**
+	 * Waits until the brick has a route again, until a transfer's deadline; called before each
+	 * channel is taken. Absent, a transfer takes the channel there is, or fails without one.
+	 */
+	readonly waitForRoute?: (options: { readonly deadline?: number; readonly signal?: AbortSignal }) => Promise<unknown>;
+	/**
 	 * Where a slot this service could not release is owed, and settled before the next transfer
 	 * (4.6.17). Absent, nothing is owed: a slot the link took with it waits for the brick's reboot.
 	 */
@@ -80,6 +85,17 @@ export interface TransferServiceOptions {
 /** A failure the brick answered: the command reached it. Anything else, it may not have. */
 function brickAnswered(error: unknown): boolean {
 	return error instanceof ProtocolError;
+}
+
+/**
+ * Whether an upload that failed with `error` starts again: the route or a reply was lost — a
+ * channel gone, a link fault, a reply that never came — and its deadline is not spent. Not when
+ * the brick answered, nor when the caller cancelled.
+ */
+function mayStartAgain(error: unknown, options: TransferOptions | undefined): boolean {
+	if (options?.deadline === undefined || Date.now() >= options.deadline || options.signal?.aborted) { return false; }
+	return error instanceof ChannelChangedError || error instanceof TransportError
+		|| error instanceof TimeoutError || error instanceof ConnectionError;
 }
 
 /** Chunk sizes for one link's packet size. */
@@ -131,6 +147,13 @@ export interface TransferOptions {
 	 * transfers that are working exactly as fast as they can.
 	 */
 	readonly stallTimeoutMs?: number;
+	/**
+	 * The operation's deadline (`Date.now()` ms). Until then an upload whose route is lost, or
+	 * whose reply is lost, waits for the route and starts again from its first chunk; a chunk
+	 * whose reply was lost is never sent again on its own. It bounds the waiting and the
+	 * restarts, not a transfer that is moving. Absent, a lost route or reply fails the transfer.
+	 */
+	readonly deadline?: number;
 }
 
 /** Default stall window. Generous: it should only ever fire on a real stall. */
@@ -187,10 +210,12 @@ async function withStallTimeout<T>(
 export class FileTransferService {
 	private readonly sizes?: LinkSizes;
 	private readonly pin?: () => PinnedLink;
+	private readonly waitForRoute?: TransferServiceOptions['waitForRoute'];
 	private readonly ledger?: TransferLedger;
 
 	constructor(private readonly send: SendCommand, options?: TransferServiceOptions) {
 		this.pin = options?.pin;
+		this.waitForRoute = options?.waitForRoute;
 		this.ledger = options?.ledger;
 		// Checked here when the size is fixed, so a link too small to carry a transfer fails
 		// at construction rather than at the first file.
@@ -199,8 +224,14 @@ export class FileTransferService {
 		}
 	}
 
-	/** The link this transfer runs over, taken once at its start. */
-	private openLink(): TransferLink {
+	/**
+	 * The link this transfer runs over, taken once at its start — after the route is back, when
+	 * the transfer has a deadline and the brick has none now.
+	 */
+	private async openLink(options?: TransferOptions): Promise<TransferLink> {
+		if (options?.deadline !== undefined) {
+			await this.waitForRoute?.({ deadline: options.deadline, signal: options.signal });
+		}
 		if (this.pin) {
 			const link = this.pin();
 			return { send: link.send, ...sizesFor(link.maxPacketBytes ?? FIRMWARE_BUFFER_BYTES) };
@@ -214,18 +245,30 @@ export class FileTransferService {
 	 * `BEGIN_DOWNLOAD` carries the first chunk itself, so a file that fits in one packet
 	 * completes in a single command. Everything beyond it goes through
 	 * `CONTINUE_DOWNLOAD` until the brick reports end-of-file.
+	 *
+	 * With a deadline, an upload that loses its route or a reply starts again until then: its
+	 * slot abandoned and owed, the route waited for, the debt settled, and the file written from
+	 * its first chunk on whichever channel carries traffic then. A chunk whose reply was lost is
+	 * never sent again on its own — the brick may have taken it.
 	 */
 	async writeFile(path: string, content: Uint8Array, options?: TransferOptions): Promise<void> {
 		assertPathFits(path);
-		const link = this.openLink();
-		// What an earlier transfer could not release is released first (4.6.17).
-		const end = await this.ledger?.begin(link.send);
-		try {
-			await this.write(link, path, content, options);
-			// A whole file now: nothing owed may delete it.
-			this.ledger?.written(path);
-		} finally {
-			end?.();
+		for (;;) {
+			let end: (() => void) | undefined;
+			try {
+				const link = await this.openLink(options);
+				// What an earlier transfer could not release is released first (4.6.17).
+				end = await this.ledger?.begin(link.send);
+				await this.write(link, path, content, options);
+				// A whole file now: nothing owed may delete it.
+				this.ledger?.written(path);
+				return;
+			} catch (error) {
+				if (!mayStartAgain(error, options)) { throw error; }
+			} finally {
+				// Counted out before the next attempt, so its begin can settle what this one owes.
+				end?.();
+			}
 		}
 	}
 
@@ -323,7 +366,7 @@ export class FileTransferService {
 	 */
 	async readFile(path: string, options?: TransferOptions): Promise<Uint8Array> {
 		assertPathFits(path);
-		const link = this.openLink();
+		const link = await this.openLink(options);
 		const end = await this.ledger?.begin(link.send);
 		try {
 			return await this.read(link, path, options);

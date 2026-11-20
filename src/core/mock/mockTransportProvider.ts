@@ -12,8 +12,16 @@ import { PROGRAM_STATUS } from '../protocol/ev3Packet';
 import { typeCodeOf, PeripheralType } from '../protocol/peripheralTypes';
 import { executeTelemetryFrame, MockBrickView, MockPortReading } from './mockFrameInterpreter';
 
-/** The one handle the mock hands out; it stores whole files and has no handle table. */
+/** The handle a read, or a write that fits its first step, gets: those complete at once. */
 const MOCK_FILE_HANDLE = 1;
+
+/** A write longer than its first step, filled chunk by chunk as the brick does. */
+interface MockPendingWrite {
+	readonly path: string;
+	readonly total: number;
+	readonly parts: Buffer[];
+	got: number;
+}
 
 interface MockBrickState {
 	readonly config: MockBrickConfig;
@@ -35,6 +43,9 @@ interface MockBrickState {
 	readonly shellCommands: string[];
 	/** How many times every motor was stopped (`INPUT_DEVICE STOP_ALL`). */
 	motorsStopped: number;
+	/** Writes under way, by handle; a closed handle drops its partial file, as the firmware does. */
+	readonly writes: Map<number, MockPendingWrite>;
+	nextHandle: number;
 }
 
 /** The VM's working folder, which a relative program path starts from (`../prjs/…`). */
@@ -99,6 +110,8 @@ export class MockTransportProvider implements TransportProvider {
 				bluetoothPeers: [...(brickCfg.bluetoothPeers ?? [])],
 				shellCommands: [],
 				motorsStopped: 0,
+				writes: new Map(),
+				nextHandle: MOCK_FILE_HANDLE + 1,
 			});
 		}
 	}
@@ -350,23 +363,33 @@ export class MockTransportProvider implements TransportProvider {
 			return { kind: 'fs:read', content };
 		}
 
-		// Handle-level transfer steps. The mock keeps no handle table — it stores whole
-		// files — so a transfer completes in its first step. These cases exist so a
-		// consumer sees the same command surface, and so the exhaustive switch does not
-		// silently lose a case when the union grows.
-		case 'fs:beginWrite':
-			state.filesystem.write(
-				command.path,
-				Buffer.from(command.chunk).toString('utf8'),
-			);
-			return {
-				kind: 'fs:beginWrite',
-				handle: MOCK_FILE_HANDLE,
-				endOfFile: command.chunk.length >= command.totalBytes,
-			};
+		// Handle-level transfer steps. A write that fits its first step completes at once; a
+		// longer one is filled chunk by chunk under its own handle and lands on the last, so a
+		// transfer cut off halfway leaves no file. Reads complete in their first step.
+		case 'fs:beginWrite': {
+			if (command.chunk.length >= command.totalBytes) {
+				state.filesystem.write(command.path, Buffer.from(command.chunk).toString('utf8'));
+				return { kind: 'fs:beginWrite', handle: MOCK_FILE_HANDLE, endOfFile: true };
+			}
+			const handle = state.nextHandle++;
+			state.writes.set(handle, { path: command.path, total: command.totalBytes, parts: [Buffer.from(command.chunk)], got: command.chunk.length });
+			return { kind: 'fs:beginWrite', handle, endOfFile: false };
+		}
 
-		case 'fs:continueWrite':
-			return { kind: 'fs:continueWrite', handle: command.handle, endOfFile: true };
+		case 'fs:continueWrite': {
+			const write = state.writes.get(command.handle);
+			if (!write) {
+				throw new TransportError(`No write open under handle ${command.handle}.`);
+			}
+			write.parts.push(Buffer.from(command.chunk));
+			write.got += command.chunk.length;
+			const endOfFile = write.got >= write.total;
+			if (endOfFile) {
+				state.writes.delete(command.handle);
+				state.filesystem.write(write.path, Buffer.concat(write.parts).toString('utf8'));
+			}
+			return { kind: 'fs:continueWrite', handle: command.handle, endOfFile };
+		}
 
 		case 'fs:beginRead': {
 			const whole = state.filesystem.read(command.path);
@@ -393,6 +416,7 @@ export class MockTransportProvider implements TransportProvider {
 			};
 
 		case 'fs:closeHandle':
+			state.writes.delete(command.handle);
 			return { kind: 'fs:closeHandle' };
 
 		case 'fs:write':

@@ -36,6 +36,12 @@ export interface BrickSender {
 	 * Optional: a sender addressed by channel is already pinned to it.
 	 */
 	pin?(brickKey: BrickRef): PinnedLink;
+
+	/**
+	 * Waits for the brick's route until a deadline, when the sender routes over channels that can
+	 * come back. Optional: absent, a transfer takes the channel there is or fails.
+	 */
+	waitForRoute?(brickKey: BrickRef, options?: Pick<SendCommandOptions, 'deadline' | 'signal'>): Promise<unknown>;
 }
 
 export interface BrickFilesystem {
@@ -80,6 +86,8 @@ export function createBrickFilesystem(
 
 	// A sender that routes over several channels hands each transfer one to keep.
 	const pin = sender.pin?.bind(sender);
+	const wait = sender.waitForRoute?.bind(sender);
+	const waitForRoute = wait ? { waitForRoute: (options: Pick<SendCommandOptions, 'deadline' | 'signal'>) => wait(brickKey, options) } : {};
 	// What an interrupted transfer owes this brick outlives this call (4.6.17).
 	const ledger = ledgerFor(sender, brickKey);
 	return {
@@ -87,8 +95,8 @@ export function createBrickFilesystem(
 		transfer: new FileTransferService(
 			send,
 			pin
-				? { pin: () => pin(brickKey), ledger }
-				: maxPacketBytes === undefined ? { ledger } : { maxPacketBytes, ledger },
+				? { pin: () => pin(brickKey), ledger, ...waitForRoute }
+				: maxPacketBytes === undefined ? { ledger, ...waitForRoute } : { maxPacketBytes, ledger, ...waitForRoute },
 		),
 	};
 }

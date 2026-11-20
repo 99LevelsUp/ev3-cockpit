@@ -48,7 +48,12 @@ jobs:
           file native/bin/ev3-bt-helper | grep -q arm64
 
       - name: Package the darwin-arm64 VSIX
+        # Builds the bundles too: the VSIX carries the extension and the daemon it starts.
         run: node scripts/package-vsix.cjs darwin-arm64
+
+      - name: The VSIX's daemon starts on simulated bricks and answers the ev3 command
+        # The daemon from the staged VSIX, with its own native modules; the command from out/cli.js.
+        run: node scripts/daemon-smoke.cjs --install-root .vsix-staging/darwin-arm64
 
       - name: Upload the VSIX
         uses: actions/upload-artifact@v4

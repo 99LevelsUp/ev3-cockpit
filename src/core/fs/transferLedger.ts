@@ -20,7 +20,7 @@
  */
 
 import { BrickCommand, BrickRef, BrickResponse } from '../contracts';
-import { ChannelChangedError, LinkLostError, ProtocolError } from '../errors/CockpitError';
+import { ChannelChangedError, LinkLostError, NotConnectedError, ProtocolError } from '../errors/CockpitError';
 import { FILE_HANDLE_SLOTS } from '../protocol/ev3Commands';
 
 type SendCommand = (command: BrickCommand) => Promise<BrickResponse>;
@@ -47,6 +47,14 @@ export type ReleaseScope = 'all' | 'one';
 export interface TransferLedgerOptions {
 	/** Asks the user whether to release; absent, a slot never learned or uncertain waits. */
 	readonly confirmSweep?: (scope: ReleaseScope) => Promise<boolean>;
+	/** Told the debts whenever they change, so they can outlive the process. */
+	readonly persist?: (debts: readonly TransferDebt[]) => void;
+}
+
+/** Where a brick layer's debts are kept between runs: the daemon's state file. */
+export interface LedgerStore {
+	load(brickKey: BrickRef): readonly TransferDebt[];
+	save(brickKey: BrickRef, debts: readonly TransferDebt[]): void;
 }
 
 /** A failure the brick itself answered: the command reached it. Anything else may not have. */
@@ -56,11 +64,13 @@ function brickAnswered(error: unknown): boolean {
 
 /**
  * A failure that does not prove the command stayed on this side: it may have reached the brick and
- * run, with only its reply lost. Three settle it: an answer from the brick, a session's refusal
- * before it left (2.8.14), and a pinned channel's refusal before it left (`BrickManager.pin`).
+ * run, with only its reply lost. Four settle it: an answer from the brick, a session's refusal
+ * before it left (2.8.14), a pinned channel's refusal before it left (`BrickManager.pin`), and no
+ * route to send it over (`BrickManager.send`, once its wait for one is over).
  */
 export function mayHaveRun(error: unknown): boolean {
-	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError) && !brickAnswered(error);
+	return !(error instanceof LinkLostError) && !(error instanceof ChannelChangedError)
+		&& !(error instanceof NotConnectedError) && !brickAnswered(error);
 }
 
 export class TransferLedger {
@@ -81,8 +91,23 @@ export class TransferLedger {
 		return this.debts.length;
 	}
 
+	/** What is owed now. */
+	snapshot(): readonly TransferDebt[] {
+		return [...this.debts];
+	}
+
+	/** Takes over debts a previous run left; they are settled before the next transfer. */
+	restore(debts: readonly TransferDebt[]): void {
+		this.debts = [...debts, ...this.debts];
+	}
+
 	owe(debt: TransferDebt): void {
 		this.debts.push(debt);
+		this.saved();
+	}
+
+	private saved(): void {
+		this.options.persist?.(this.snapshot());
 	}
 
 	/**
@@ -194,6 +219,7 @@ export class TransferLedger {
 		}
 
 		this.debts = [...kept, ...this.debts];
+		this.saved();
 		if (linkError !== undefined) { throw linkError; }
 	}
 
@@ -208,12 +234,14 @@ export class TransferLedger {
 			if (debt.kind === 'unknown') { return [{ kind: 'unknown' }]; }
 			return [debt.uncertain ? { kind: 'slot', handle: debt.handle, uncertain: true } : { kind: 'slot', handle: debt.handle }];
 		});
+		this.saved();
 	}
 }
 
 /** The ledgers, per brick layer and brick: they outlive the transfer services built per call. */
 const ledgers = new WeakMap<object, Map<BrickRef, TransferLedger>>();
 const confirmations = new WeakMap<object, (scope: ReleaseScope) => Promise<boolean>>();
+const stores = new WeakMap<object, LedgerStore>();
 
 /** The ledger of one brick, for a brick layer (the extension and the API share one). */
 export function ledgerFor(owner: object, brickKey: BrickRef): TransferLedger {
@@ -221,10 +249,23 @@ export function ledgerFor(owner: object, brickKey: BrickRef): TransferLedger {
 	if (!byBrick) { byBrick = new Map(); ledgers.set(owner, byBrick); }
 	let ledger = byBrick.get(brickKey);
 	if (!ledger) {
-		ledger = new TransferLedger({ confirmSweep: confirmations.get(owner) });
+		const store = stores.get(owner);
+		ledger = new TransferLedger({
+			confirmSweep: confirmations.get(owner),
+			...(store ? { persist: (debts: readonly TransferDebt[]) => store.save(brickKey, debts) } : {}),
+		});
+		if (store) { ledger.restore(store.load(brickKey)); }
 		byBrick.set(brickKey, ledger);
 	}
 	return ledger;
+}
+
+/**
+ * Keeps a brick layer's debts in a store, so a daemon that ends with debts unpaid leaves them to the
+ * next one. Set before the first transfer.
+ */
+export function setLedgerStore(owner: object, store: LedgerStore): void {
+	stores.set(owner, store);
 }
 
 /** Who to ask before a sweep, for every brick of a brick layer: the extension sets a notification. */

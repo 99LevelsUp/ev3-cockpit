@@ -13,14 +13,13 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { createRuntime } from '../core/runtime/createRuntime';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings } from '../core/telemetry/telemetrySettings';
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 const settings = {
-	telemetrySettings: telemetrySettingsFromPackage(manifest),
-	throttleSettings: throttleSettingsFromPackage(manifest),
-	programPreset: programPresetSettingsFromPackage(manifest),
+	telemetrySettings: defaultTelemetrySettings(),
+	throttleSettings: defaultThrottleSettings(),
+	programPreset: defaultProgramPresetSettings(),
 };
 
 /** The Linux-only modules: the BlueZ pieces and the D-Bus client under them. */

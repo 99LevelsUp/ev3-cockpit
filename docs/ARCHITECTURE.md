@@ -8,42 +8,37 @@ remains the source of truth for the design rationale itself.
 
 ```mermaid
 graph TD
-    subgraph Providers["Transport Providers"]
-        PM[Mock]
-        PU[USB]
-        PT[TCP]
-        PB[BT]
+    subgraph Daemon["Cockpit daemon (one per user)"]
+        subgraph Providers["Transport Providers"]
+            PM[Mock]
+            PU[USB]
+            PT[TCP]
+            PB[BT]
+        end
+        PA[Presence Aggregator]
+        SM[Session Manager]
+        CMD[Command Layer]
+        subgraph Services["Service Tier"]
+            TM[Telemetry]
+            FS[Filesystem]
+            PC[Program Control]
+        end
+        SRV[Daemon surface: holders, leases, questions, settings]
     end
-
-    PERS[Persistence / globalState]
-
-    PA[Presence Aggregator]
-    SM[Session Manager]
-    CMD[Command Layer]
-    subgraph Services["Service Tier"]
-        TM[Telemetry]
-        FS[Filesystem]
-        PC[Program Control]
-    end
-    API[Public API Layer]
     UI[Cockpit UI Layer]
 
     Providers --> PA
-    PERS --> PA
-    PERS --> SM
     PA --> SM
     SM --> CMD
     CMD --> Services
-    SM --> API
-    Services --> API
-    SM --> UI
-    Services --> UI
-    API -->|events + snapshots| EXT[External Extensions]
+    SM --> SRV
+    Services --> SRV
+    SRV -->|contract over a per-user pipe or socket| CL[VS Code, ev3, MCP server, add-ons]
+    CL --> UI
     UI -->|read model| PANEL[Webview Panel]
-    PANEL -->|actions| UI
 
     classDef dimmed fill:#eee,stroke:#bbb,color:#999,stroke-dasharray: 3 3;
-    class PERS,PC,API,UI dimmed
+    class UI,PANEL dimmed
 ```
 
 ## 1. Protocol layer
@@ -140,9 +135,9 @@ stateDiagram-v2
     class Reconnecting yellow
 ```
 
-Only Cockpit itself can create a session — the Public API is read-only for connection
-management, so another extension can observe a brick's state but can never connect or
-disconnect one behind the user's back.
+Only the daemon creates a session. A client asks for one with `bricks/connect`, which runs the
+brick layer's own sign-in and makes the client one of the brick's holders; the brick stays
+connected while it has a holder (`docs/protocol.md`).
 
 ## 5. Command layer
 
@@ -157,8 +152,7 @@ colliding counters and steal each other's replies.
 
 ## 6. Service tier
 
-**Status: ⚠ partially implemented — Telemetry and Filesystem are built; Program Control is
-not started.**
+**Status: ✅ implemented.**
 
 Three peer services sit side by side above the Command Layer, each earning its place by
 needing more than a single pass-through command:
@@ -171,35 +165,37 @@ needing more than a single pass-through command:
   handle bookkeeping a brick's filesystem needs across several commands. Reaches the
   firmware's real 1024-byte frame over the libusb USB adapter, which is what makes multi-byte
   operations like `copy`/`move` possible at all.
-- **Program control** (⬜) — not started. Will own loading a program image and polling its
-  run state, the two things that need to track state across more than one command.
+- **Program control** (✅) — starts a program in the user slot and follows its run state;
+  stop and emergency stop never wait their turn. Deploy-and-run (check, upload, start) is one
+  operation under one write lease.
 
 A capability that fits in a single command — reading `battery`, renaming a brick — never
 gets a service; the Command Layer already delivers it whole.
 
-## 7. Public API layer
+## 7. Daemon and clients
 
-**Status: ⬜ not yet implemented.**
+**Status: ✅ implemented (4.10.2).**
 
-Will be the contract other VS Code extensions actually consume: registration, a snapshot of
-connected bricks, state events, the active brick, and subscription telemetry. It composes
-the Session Manager and the Service Tier rather than containing their logic — a filesystem
-transfer can already be driven directly against the Filesystem service today, with no API
-and no registered consumer, which is deliberate: the API's job is the consumer contract, not
-being the only place real behaviour lives.
+One daemon per user runs everything above, and every client reaches it over one contract
+(`src/contract/`, `docs/protocol.md`): the VS Code extension, the `ev3` command, the MCP server
+and add-ons through the client library. The daemon adds what several clients need: holders per
+brick, a write lease per request, questions for a person, the settings, version replacement and
+brick loans to a development daemon. It composes the Session Manager and the Service Tier rather
+than containing their logic.
 
 ## 8. Cockpit UI layer
 
 **Status: ⬜ not yet implemented.**
 
 The webview panel a user actually sees — the brick list, the active brick's live state,
-configuration. Reads from the same Session Manager and Service Tier the Public API composes,
-through its own read model, and sends user actions back down.
+configuration. A client of the daemon like the others: it reads the brick list, the active
+brick and telemetry through the contract and sends user actions back.
 
 ## 9. Persistence
 
 **Status: ⬜ not yet implemented.**
 
 Backs the Presence Aggregator and Session Manager with data that survives a restart —
-favorites, remembered bricks, last-known metadata — via VS Code's `globalState`. Until this
-lands, everything the Presence Aggregator and Session Manager track is live-session-only.
+favorites, remembered bricks, last-known metadata. The daemon already keeps its settings, the
+transfer debts and a handover's state in its per-user state folder; favorites and remembered
+bricks are not built yet.

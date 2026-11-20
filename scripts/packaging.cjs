@@ -33,8 +33,12 @@ const PREBUILT_MODULES = ['usb', 'node-hid', '@serialport/bindings-cpp'];
 /** The modules the bundle leaves external and loads at run time. */
 const NATIVE_MODULES = ['usb', 'node-hid', 'serialport', 'koffi'];
 
-/** The extension's own files, relative to the repository; nothing else of the repository ships. */
-const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
+/**
+ * The extension's own files, relative to the repository; nothing else of the repository ships. The
+ * daemon's bundle lies beside the extension's: the extension starts it from there (KTD16). The `ev3`
+ * command and the MCP server ship in the npm package, not here.
+ */
+const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js', 'out/daemon.js'];
 
 /**
  * The udev rule a Linux user installs once for USB; the permission message names it at this path in
@@ -94,7 +98,7 @@ const KOFFI_PLATFORM = /^extension\/node_modules\/@koromix\/koffi-([^/]+)\//;
 function allowed(target, entry) {
 	if (!entry.startsWith('extension/')) { return true; }   // the VSIX's own manifest and content types
 	const file = entry.slice('extension/'.length);
-	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js'].includes(file.toLowerCase())) { return true; }
+	if (['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js', 'out/daemon.js'].includes(file.toLowerCase())) { return true; }
 	if (file === MAC_HELPER) { return TARGETS[target].macHelper === true; }
 	if (file.startsWith('native/bin/')) { return TARGETS[target].helper && !file.endsWith('.pdb'); }
 	if (UDEV_RULES.includes(file)) { return TARGETS[target].udevRule; }
@@ -117,6 +121,7 @@ function required(target) {
 		'extension/package.json',
 		'extension/LICENSE',
 		'extension/out/extension.js',
+		'extension/out/daemon.js',
 		'extension/node_modules/koffi/',
 		`extension/node_modules/@koromix/koffi-${target}/`,
 		...PREBUILT_MODULES.map((module) => ({ module })),
@@ -135,7 +140,10 @@ function meets(target, need, entry) {
 	return prebuild !== null && prebuild[1] === need.module && keepPrebuild(need.module, prebuild[2], target);
 }
 
-/** Checks a built VSIX's entries: what it lacks, and what it carries that it should not. */
+/**
+ * Checks a built VSIX's entries: what it lacks, and what it carries that it should not. A VSIX
+ * without `out/daemon.js` installs and activates, and then has no daemon to start.
+ */
 function checkVsix(target, entries) {
 	const missing = required(target)
 		.filter((need) => !entries.some((entry) => meets(target, need, entry)))

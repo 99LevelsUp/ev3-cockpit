@@ -193,6 +193,8 @@ export class TelemetryService implements Disposable {
 	private disposed = false;
 	private throttleSettings: ThrottleSettings | undefined;
 	private programPreset: ProgramPresetSettings | undefined;
+	/** Bricks read in the foreground when set; otherwise the active brick is. */
+	private foreground: Set<BrickRef> | undefined;
 
 	private readonly _onValues = new EventEmitter<TelemetryValuesEvent>();
 	readonly onValues = this._onValues.event;
@@ -236,10 +238,28 @@ export class TelemetryService implements Disposable {
 		this.refresh(host.getActiveBrickKey());
 	}
 
+	/**
+	 * Read these bricks in the foreground instead of the active brick: each client of the daemon has
+	 * its own active brick, and every one a client shows is read for its panel. `undefined` goes back
+	 * to following the active brick.
+	 */
+	setForegroundBricks(brickKeys: ReadonlySet<BrickRef> | undefined): void {
+		const before = this.foreground;
+		this.foreground = brickKeys ? new Set(brickKeys) : undefined;
+		const touched = new Set<BrickRef>([...(before ?? []), ...(brickKeys ?? [])]);
+		const active = this.options.host.getActiveBrickKey();
+		if (active !== undefined) { touched.add(active); }
+		for (const brickKey of touched) { this.refresh(brickKey); }
+	}
+
+	private isForeground(brickKey: BrickRef): boolean {
+		return this.foreground ? this.foreground.has(brickKey) : brickKey === this.options.host.getActiveBrickKey();
+	}
+
 	/** The mode a brick is currently being driven in. */
 	modeOf(brickKey: BrickRef): ActivityMode {
 		if (this.loops.has(brickKey)) {
-			return brickKey === this.options.host.getActiveBrickKey()
+			return this.isForeground(brickKey)
 				? ActivityMode.Foreground
 				: ActivityMode.Subscribed;
 		}
@@ -360,7 +380,7 @@ export class TelemetryService implements Disposable {
 		const { host } = this.options;
 		if (!this.hasSession(brickKey)) { this.endClaims(brickKey); }
 
-		const active = brickKey === host.getActiveBrickKey();
+		const active = this.isForeground(brickKey);
 		const transport = transportFor(host, brickKey);
 		const wanted = host.getSession(brickKey)?.connectionState === ConnectionState.Connected
 			&& transport !== undefined && this.servesFrames(transport)

@@ -1,5 +1,5 @@
 /**
- * Telemetry on the public API (step-6 plan U8; IMPLEMENTATION_PLAN 4.5.1–4.5.5; DESIGN §9.3, §9.6;
+ * Telemetry through the per-brick services (step-6 plan U8; IMPLEMENTATION_PLAN 4.5.1–4.5.5; DESIGN §9.3, §9.6;
  * KTD6; owner decisions D2, D6, D7, D10).
  *
  * A consumer subscribes to rows of a brick at an interval; it gets back what each row was granted,
@@ -15,12 +15,12 @@ import { describe, it } from 'node:test';
 
 import { BrickEntry, BrickId, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
 import { ChannelState } from '../core/contracts/enums';
-import { CockpitApiDeps, TelemetryUpdate, createCockpitApi } from '../core/api/cockpitApi';
+import { BrickServicesDeps, TelemetryUpdate, createBrickServices } from '../core/api/cockpitApi';
 import { ErrorCode, ModeConflictError } from '../core/errors/CockpitError';
 import { MockTransportProvider, DEFAULT_MOCK_CONFIG } from '../core/mock';
 import { createRuntime } from '../core/runtime/createRuntime';
 import type { ReadModelChange, ReadValue } from '../core/telemetry/telemetryReadModel';
-import { programPresetSettingsFromPackage, telemetrySettingsFromPackage, throttleSettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultProgramPresetSettings, defaultTelemetrySettings, defaultThrottleSettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const A = 'AAA' as BrickId;
@@ -63,7 +63,7 @@ function world() {
 		return { dispose: () => { const at = list.indexOf(listener); if (at >= 0) { list.splice(at, 1); } } };
 	};
 
-	const deps: CockpitApiDeps = {
+	const deps: BrickServicesDeps = {
 		bricks: {
 			send: () => Promise.reject(new Error('not used')),
 			getActiveBrickId: () => A,
@@ -93,7 +93,7 @@ function world() {
 			onChange: (listener) => listen(changeListeners, listener),
 		},
 	};
-	const api = createCockpitApi(deps);
+	const api = createBrickServices(deps);
 	return {
 		api, claims, released, values,
 		refuseWith(error: Error) { refuse = error; },
@@ -121,14 +121,14 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 	it('says a chain that has not been read is not known, rather than empty', () => {
 		const w = world();
 
-		assert.deepEqual(w.api.registerConsumer('ev3-c').getChain(A), { brickId: A, read: false, stale: false, members: [] });
+		assert.deepEqual(w.api.openSession('ev3-c').getChain(A), { brickId: A, read: false, stale: false, members: [] });
 	});
 
 	it('lists the members below a brick, each with what it can do', () => {
 		const w = world();
 		w.change(depth(A, 2));
 
-		const chain = w.api.registerConsumer('ev3-c').getChain('active');
+		const chain = w.api.openSession('ev3-c').getChain('active');
 
 		assert.equal(chain.read, true);
 		assert.deepEqual(chain.members.map((m) => m.layer), [1, 2]);
@@ -142,7 +142,7 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 		w.change(depth(A, 2));
 		const heard: number[][] = [];
 
-		const sub = w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.map((m) => m.layer)));
+		const sub = w.api.openSession('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.map((m) => m.layer)));
 		w.change(depth(A, 2));   // read again, the same
 		w.change(depth(A, 1));
 		w.change({ brickKey: B, rows: [value('chain.depth', 3)], removed: [] });   // another brick
@@ -158,7 +158,7 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 		const w = world();
 		w.change(depth(A, 2));
 		const heard: { read: boolean; stale: boolean; members: number }[] = [];
-		w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push({ read: chain.read, stale: chain.stale, members: chain.members.length }));
+		w.api.openSession('ev3-c').onChainChanged(A, (chain) => heard.push({ read: chain.read, stale: chain.stale, members: chain.members.length }));
 
 		w.change({ brickKey: A, rows: [value('chain.depth', 2, { stale: true })], removed: [] });
 		await settle();
@@ -176,14 +176,14 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 		w.onClaim(() => w.end(A, [w.claims[w.claims.length - 1].handle]));
 		const before = w.listening();
 
-		assert.throws(() => w.api.registerConsumer('ev3-c').onChainChanged(A, () => undefined), /went/);
+		assert.throws(() => w.api.openSession('ev3-c').onChainChanged(A, () => undefined), /went/);
 		assert.equal(w.listening(), before);
 	});
 
 	it('stops when its brick goes, and tells nothing after', async () => {
 		const w = world();
 		const heard: number[] = [];
-		w.api.registerConsumer('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.length));
+		w.api.openSession('ev3-c').onChainChanged(A, (chain) => heard.push(chain.members.length));
 		const listeningWhileFollowed = w.listening();
 
 		w.end(A, [w.claims[0].handle]);
@@ -198,13 +198,13 @@ describe('The daisy chain on the API (step-8 U6)', () => {
 describe('Telemetry on the API (step-6 U8)', () => {
 	it('lists the rows a consumer can subscribe to, as plain data (4.5.1)', () => {
 		const w = world();
-		const rows = w.api.registerConsumer('ev3-c').listTelemetryRows();
+		const rows = w.api.openSession('ev3-c').listTelemetryRows();
 		assert.deepEqual(rows, [{ id: TACHO, tier: 'sampled', unit: 'deg', port: 'A' }, { id: BATTERY, tier: 'event', unit: '%' }]);
 	});
 
 	it('claims for the consumer, names the brick, and hands back what each row was granted (4.5.1)', () => {
 		const w = world();
-		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry('active', { rows: [TACHO], intervalMs: 20 }, () => undefined);
+		const sub = w.api.openSession('ev3-c').subscribeTelemetry('active', { rows: [TACHO], intervalMs: 20 }, () => undefined);
 
 		assert.equal(sub.brickId, A, "'active' resolved at the call");
 		assert.deepEqual(sub.grant, { [TACHO]: 50 });
@@ -215,7 +215,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90), value(BATTERY, 80)]);
 		const updates: TelemetryUpdate[] = [];
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });   // after the claim, before the snapshot went out
 
 		await settle();
@@ -240,14 +240,14 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	it('answers a snapshot on demand, as plain data', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90), value(BATTERY, 80)]);
-		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		const sub = w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		assert.deepEqual(sub.snapshot(), [value(TACHO, 90)]);
 	});
 
 	it('releases exactly its own claim when disposed, and hears nothing more (4.5.3)', async () => {
 		const w = world();
 		const updates: TelemetryUpdate[] = [];
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		const first = consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 200 }, () => undefined);
 		await settle();
@@ -264,7 +264,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	it('ends with the brick: says so once, and releases nothing that already ended (4.5.4)', async () => {
 		const w = world();
 		const updates: TelemetryUpdate[] = [];
-		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		const sub = w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 		await settle();
 
 		w.end(A, [w.claims[0].handle]);
@@ -280,7 +280,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const updates: TelemetryUpdate[] = [];
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 		w.change({ brickKey: A, rows: [value(TACHO, 91, { stale: true })], removed: [] });
 		w.end(A, [w.claims[0].handle]);
 		w.change({ brickKey: A, rows: [value(TACHO, 92)], removed: [] });   // after the end: not this subscription's
@@ -295,7 +295,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const updates: TelemetryUpdate[] = [];
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			updates.push(u);
 			if (u.kind === 'snapshot') { w.end(A, [w.claims[0].handle]); }   // e.g. it signs the brick out
 		});
@@ -311,10 +311,10 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const heard: TelemetryUpdate[] = [];
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			if (u.kind === 'change') { w.end(A, w.claims.map((c) => c.handle)); }   // e.g. it signs the brick out
 		});
-		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
+		w.api.openSession('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
 		await settle();
 
 		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
@@ -328,7 +328,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const heard: TelemetryUpdate[] = [];
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			if (u.kind === 'change' && u.values[0].value === 91) { w.change({ brickKey: A, rows: [value(TACHO, 92)], removed: [] }); }
 		});
@@ -346,7 +346,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const late: TelemetryUpdate[] = [];
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			if (u.kind === 'change' && late.length === 0) {
@@ -367,7 +367,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		w.values.set(A, [value(TACHO, 90)]);
 		const updates: TelemetryUpdate[] = [];
 		w.onClaim(() => w.change({ brickKey: A, rows: [value(TACHO, 95)], removed: [] }));
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 
 		await settle();
 
@@ -377,7 +377,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	it('tells a disposed subscription nothing that was already on its way (review 3)', async () => {
 		const w = world();
 		const updates: TelemetryUpdate[] = [];
-		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+		const sub = w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 		await settle();
 		updates.length = 0;
 
@@ -391,7 +391,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	it('keeps the extension host responsive when every change a listener hears makes another (review 3)', async () => {
 		const w = world();
 		let heard = 0;
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			if (u.kind !== 'change' || ++heard >= 10_000) { return; }   // a ceiling, so a regression cannot hang the run
 			w.change({ brickKey: A, rows: [value(TACHO, heard)], removed: [] });
 		});
@@ -406,10 +406,10 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('listens to the telemetry source once for all subscriptions, and stops with the API (review 3)', () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		consumer.subscribeTelemetry(B, { rows: [TACHO], intervalMs: 100 }, () => undefined);
-		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		w.api.openSession('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		assert.equal(w.listening(), 2);
 
 		w.api.dispose();
@@ -419,7 +419,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	it('tells nothing inside the call that subscribes, also when a listener subscribes (4.5.2, review 4)', async () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		const early: TelemetryUpdate[] = [];
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => early.push(u));
 		assert.deepEqual(early, [], 'nothing before the call returned');
@@ -441,8 +441,8 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.values.set(A, [value(TACHO, 90)]);
 		const heard: TelemetryUpdate[] = [];
-		w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => { throw new Error('bug'); });
-		w.api.registerConsumer('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
+		w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => { throw new Error('bug'); });
+		w.api.openSession('ev3-explorer').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => heard.push(u));
 		await settle();
 
 		w.change({ brickKey: A, rows: [value(TACHO, 91)], removed: [] });
@@ -457,13 +457,13 @@ describe('Telemetry on the API (step-6 U8)', () => {
 		const w = world();
 		w.api.dispose();
 
-		assert.throws(() => w.api.registerConsumer('ev3-c'), (e) => codeOf(e) === ErrorCode.ConsumerFailed);
+		assert.throws(() => w.api.openSession('ev3-c'), (e) => codeOf(e) === ErrorCode.ConsumerFailed);
 		assert.deepEqual(w.claims, []);
 	});
 
 	it('gives back a claim whose consumer went away while it was being made (review 4)', () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		w.onClaim(() => consumer.dispose());
 
 		assert.throws(() => consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined),
@@ -473,7 +473,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('releases nothing for a subscription disposed after its brick went, before its snapshot (review 1)', async () => {
 		const w = world();
-		const sub = w.api.registerConsumer('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
+		const sub = w.api.openSession('ev3-c').subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		w.end(A, [w.claims[0].handle]);
 
 		sub.dispose();
@@ -484,7 +484,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('releases nothing twice when a listener disposes on hearing ended (review 1)', async () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		const sub = consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, (u) => {
 			if (u.kind === 'ended') { sub.dispose(); consumer.dispose(); }
 		});
@@ -498,7 +498,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('ends every subscription of a consumer that unregisters', () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100 }, () => undefined);
 		consumer.subscribeTelemetry(B, { rows: [BATTERY], intervalMs: 1000 }, () => undefined);
 
@@ -511,7 +511,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('follows a program again at a changed interval, the new claim before the old one goes (U9 review 1)', () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		consumer.onProgramStateChanged(A, () => undefined);
 		assert.deepEqual(w.claims.map((c) => [c.rowIds[0], c.intervalMs, c.owner]), [['program.user.running', 1000, 'cockpit:programs']]);
 
@@ -524,7 +524,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 
 	it('gives every refusal a stable code (KTD6)', () => {
 		const w = world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 
 		w.refuseWith(new ModeConflictError('Port 1 is read in mode 2 for ev3-explorer; release that claim first.'));
 		assert.throws(() => consumer.subscribeTelemetry(A, { rows: [TACHO], intervalMs: 100, modes: { 1: 0 } }, () => undefined),
@@ -537,14 +537,13 @@ describe('Telemetry on the API (step-6 U8)', () => {
 	});
 
 	it('works end to end over the shipped runtime and a mock brick (4.5.5)', async () => {
-		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 		const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
 		const runtime = createRuntime({
 			extensionPath: '.', log: quiet, startPresence: false,
-			telemetrySettings: telemetrySettingsFromPackage(manifest), throttleSettings: throttleSettingsFromPackage(manifest), programPreset: programPresetSettingsFromPackage(manifest),
+			telemetrySettings: defaultTelemetrySettings(), throttleSettings: defaultThrottleSettings(), programPreset: defaultProgramPresetSettings(),
 			providers: [new MockTransportProvider(DEFAULT_MOCK_CONFIG)],
 		});
-		const api = createCockpitApi({
+		const api = createBrickServices({
 			bricks: runtime.bricks, aggregator: runtime.aggregator, connect: (id) => runtime.bricks.signIn(id),
 			accessMode: () => 'safe', onAccessModeChange: () => disposable,
 			telemetry: {
@@ -564,7 +563,7 @@ describe('Telemetry on the API (step-6 U8)', () => {
 			runtime.bricks.clearActiveBrick();   // a consumer's own loop, not the panel's
 
 			const updates: TelemetryUpdate[] = [];
-			const sub = api.registerConsumer('ev3-c').subscribeTelemetry(marvin, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
+			const sub = api.openSession('ev3-c').subscribeTelemetry(marvin, { rows: [TACHO], intervalMs: 100 }, (u) => updates.push(u));
 			await waitFor(() => updates.some((u) => u.values.some((v) => v.rowId === TACHO)), 3000);
 
 			assert.equal(updates[0].kind, 'snapshot');

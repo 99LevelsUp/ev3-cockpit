@@ -16,6 +16,8 @@ import * as ts from 'typescript';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const CORE_SRC = path.join(REPO, 'src', 'core');
+/** The contract add-ons import: it may no more depend on VS Code than the core does. */
+const CONTRACT_SRC = path.join(REPO, 'src', 'contract');
 const VSCODE_SRC = path.join(REPO, 'src', 'vscode');
 const CORE_OUT = path.join(REPO, 'out', 'core');
 
@@ -74,7 +76,7 @@ describe('the core runs without VS Code', () => {
 	it('no core source names the vscode module or a module under src/vscode', () => {
 		const offences: string[] = [];
 		let scanned = 0;
-		for (const file of filesUnder(CORE_SRC, '.ts')) {
+		for (const file of [...filesUnder(CORE_SRC, '.ts'), ...filesUnder(CONTRACT_SRC, '.ts')]) {
 			for (const specifier of specifiersOf(file, fs.readFileSync(file, 'utf8'))) {
 				scanned += 1;
 				const why = crossing(file, specifier);

@@ -18,14 +18,22 @@
  * brick's session, as every telemetry claim does; a lost link that comes back keeps it.
  */
 
-import { BrickCommand, BrickId, BrickResponse } from '../contracts';
-import { ErrorCode, ProgramError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
+import { BrickCommand, BrickId, BrickResponse, SendCommandOptions } from '../contracts';
+import { CancelledError, ErrorCode, ProgramError, ProtocolError, SubscriptionError } from '../errors/CockpitError';
+import { mayHaveRun } from '../fs/transferLedger';
 import { PROGRAM_RUNNING_ROW } from '../telemetry/ev3Rows';
 import type { ClaimRequest } from '../telemetry/telemetryClaims';
 import type { ReadModelChange, ReadValue } from '../telemetry/telemetryReadModel';
 
 /** Sends one command to this service's brick, through its session. */
-export type ProgramSend = (command: BrickCommand) => Promise<BrickResponse>;
+export type ProgramSend = (command: BrickCommand, options?: SendCommandOptions) => Promise<BrickResponse>;
+
+/**
+ * How a start ended: the brick showed the program running; it never did within the confirmation
+ * window (a short program may have ended already, or the brick refused in silence); or the start's
+ * reply was lost, so whether the brick ran it is not known — and it is not sent a second time.
+ */
+export type StartOutcome = 'started' | 'not_seen_running' | 'uncertain';
 
 /** Following a brick's program: started for the first listener, ended with the last or with the brick. */
 export interface ProgramFollow {
@@ -41,11 +49,24 @@ export interface ProgramServiceOptions {
 	readonly confirmTimeoutMs?: number;
 	/** The gap between the confirmation's questions. */
 	readonly confirmStepMs?: number;
+	/**
+	 * Waits for the brick's route until a deadline. A start with a deadline waits here, before its
+	 * last check for a stop; its own send never waits. Absent, a start finds the route there is.
+	 */
+	readonly waitForRoute?: (options: { readonly deadline?: number; readonly signal?: AbortSignal }) => Promise<unknown>;
 }
 
 export interface RunOptions {
 	/** Stop a running program first, rather than refuse. */
 	readonly replace?: boolean;
+	/**
+	 * A mark from {@link ProgramService.stopMark}: the start is not sent when any stop came after
+	 * it. Absent, the mark is taken when the run is asked.
+	 */
+	readonly since?: number;
+	/** The operation's deadline: each command waits out a lost route until then (see `SendCommandOptions`). */
+	readonly deadline?: number;
+	readonly signal?: AbortSignal;
 }
 
 /** Defaults: a start that shows within a second on every transport. */
@@ -55,6 +76,7 @@ const CONFIRM_STEP_MS = 100;
 export class ProgramService {
 	private readonly confirmTimeoutMs: number;
 	private readonly confirmStepMs: number;
+	private readonly waitForRoute?: ProgramServiceOptions['waitForRoute'];
 	private readonly listeners = new Set<(running: boolean) => void>();
 	/** The last state seen, or undefined before the first answer. */
 	private known: boolean | undefined;
@@ -63,10 +85,12 @@ export class ProgramService {
 	/** The follow running for the listeners, while there are any. */
 	private following: { dispose(): void } | undefined;
 	private disposed = false;
-	/** The tail of the run/stop operations, so they take turns. */
+	/** The tail of the run operations, so they take turns. */
 	private queue: Promise<void> = Promise.resolve();
-	/** Emergency stops asked so far: a run asked before one of them must not send its start. */
-	private emergencies = 0;
+	/** Stops and emergency stops asked so far: a run asked before one of them must not send its start. */
+	private stops = 0;
+	/** Who asked the last stop, as it named itself. */
+	private lastStopper: string | undefined;
 
 	/**
 	 * @param follow How the run state is followed for listeners — the telemetry row in the product.
@@ -75,6 +99,7 @@ export class ProgramService {
 	constructor(private readonly send: ProgramSend, options: ProgramServiceOptions = {}, private readonly follow?: ProgramFollow) {
 		this.confirmTimeoutMs = options.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS;
 		this.confirmStepMs = options.confirmStepMs ?? CONFIRM_STEP_MS;
+		this.waitForRoute = options.waitForRoute;
 	}
 
 	/**
@@ -83,63 +108,124 @@ export class ProgramService {
 	 * ended already, or the brick refused the start — the slot's state cannot tell the two apart,
 	 * so this does not claim either (review 11.11.2026).
 	 *
-	 * Run and stop take turns per brick, so two callers cannot both pass the check and race their
-	 * starts, the second refused in silence (review 11.11.2026). Emergency stop does not wait its
-	 * turn; instead it cancels every run asked before it whose start is not sent yet, so no
-	 * program starts after the emergency stop was asked (review round 2, 11.11.2026).
+	 * Runs take turns per brick, so two callers cannot both pass the check and race their starts,
+	 * the second refused in silence (review 11.11.2026). A stop or an emergency stop does not wait
+	 * its turn; instead it cancels every run asked before it whose start is not sent yet, so no
+	 * program starts after the stop was asked (review round 2, 11.11.2026).
+	 *
+	 * A start whose reply is lost fails with the link's error, as before; {@link start} reports it
+	 * as uncertain instead.
 	 */
-	run(path: string, options: RunOptions = {}): Promise<boolean> {
-		const asked = this.emergencies;
-		const cancelled = (): void => {
-			if (this.emergencies !== asked) {
-				throw new ProgramError(ErrorCode.ProgramCancelled, 'An emergency stop came first: the program was not started.');
-			}
-		};
-		return this.inTurn(async () => {
-			cancelled();
-			if (await this.isRunning()) {
-				if (!options.replace) {
-					throw new ProgramError(ErrorCode.ProgramRunning,
-						'A program is running on the brick. Stop it first, or ask to replace it.');
-				}
-				await this.stopNow();
-			}
-			// Checked right before the start is sent: nothing awaits between this and the send.
-			cancelled();
-			const reply = await this.send({ kind: 'program:run', path });
-			if (reply.kind !== 'program:run') { throw new ProtocolError(`Expected program:run, got ${reply.kind}.`); }
-			if (reply.imageBytes <= 0) {
-				throw new ProgramError(ErrorCode.ProgramNotFound, `No program at ${path} on the brick.`);
-			}
-			const deadline = Date.now() + this.confirmTimeoutMs;
-			while (!(await this.isRunning())) {
-				if (Date.now() >= deadline) { return false; }
-				await delay(this.confirmStepMs);
-			}
-			return true;
-		});
+	async run(path: string, options: RunOptions = {}): Promise<boolean> {
+		const since = options.since ?? this.stops;
+		const outcome = await this.inTurn(() => this.startNow(path, options, since, () => {
+			throw new ProgramError(ErrorCode.ProgramCancelled, 'A stop came first: the program was not started.');
+		}, false));
+		return outcome === 'started';
 	}
 
-	/** Stop the program in the user slot. */
-	stop(): Promise<void> {
-		return this.inTurn(() => this.stopNow());
+	/**
+	 * Load an `.rbf` into the user slot and start it, as {@link run} does, and say how the start
+	 * ended. A start whose reply was lost is `uncertain` and is never sent again: the brick may
+	 * have run it. A stop that came after `since` fails it with a {@link CancelledError} naming
+	 * who stopped the brick, and nothing is started.
+	 */
+	start(path: string, options: RunOptions = {}): Promise<StartOutcome> {
+		const since = options.since ?? this.stops;
+		return this.inTurn(() => this.startNow(path, options, since, () => {
+			throw new CancelledError(this.stoppedMessage(), this.lastStopper);
+		}, true));
+	}
+
+	private async startNow(
+		path: string, options: RunOptions, since: number, cancel: () => never, lostIsUncertain: boolean,
+	): Promise<StartOutcome> {
+		const sendOptions = { deadline: options.deadline, signal: options.signal };
+		const cancelled = (): void => { if (this.stops !== since) { cancel(); } };
+		cancelled();
+		if (await this.isRunning(sendOptions)) {
+			if (!options.replace) {
+				throw new ProgramError(ErrorCode.ProgramRunning,
+					'A program is running on the brick. Stop it first, or ask to replace it.');
+			}
+			await this.stopNow(sendOptions);
+		}
+		// A lost route is waited out before the last check, never inside the start's own send: a
+		// stop pressed while the route was down must not be followed by the start once it is back.
+		if (options.deadline !== undefined) {
+			await this.waitForRoute?.({ deadline: options.deadline, signal: options.signal });
+		}
+		// Checked right before the start is sent: nothing awaits between this and the send.
+		cancelled();
+		let reply: BrickResponse;
+		try {
+			reply = await this.send({ kind: 'program:run', path }, { signal: options.signal });
+		} catch (error) {
+			if (lostIsUncertain && mayHaveRun(error)) { return 'uncertain'; }
+			throw error;
+		}
+		if (reply.kind !== 'program:run') { throw new ProtocolError(`Expected program:run, got ${reply.kind}.`); }
+		if (reply.imageBytes <= 0) {
+			throw new ProgramError(ErrorCode.ProgramNotFound, `No program at ${path} on the brick.`);
+		}
+		const deadline = Date.now() + this.confirmTimeoutMs;
+		while (!(await this.isRunning(sendOptions))) {
+			if (Date.now() >= deadline) { return 'not_seen_running'; }
+			await delay(this.confirmStepMs);
+		}
+		return 'started';
+	}
+
+	/**
+	 * A point in this brick's stops: a run given it as `since` does not start when any stop came
+	 * after it, so work of several steps that ends in a start can take the mark at its first step.
+	 */
+	stopMark(): number {
+		return this.stops;
+	}
+
+	/** Whether a stop came after `mark`, and who asked the last one. */
+	stoppedSince(mark: number): { readonly stopped: boolean; readonly stoppedBy: string | undefined } {
+		return { stopped: this.stops !== mark, stoppedBy: this.stops !== mark ? this.lastStopper : undefined };
+	}
+
+	/**
+	 * Stop the program in the user slot, at once: not behind a run that is still confirming its
+	 * start, so a stop pressed while another client's run waits reaches the brick then. A run asked
+	 * before it and not yet sent sees the count change and does not send its start; a start already
+	 * sent is ahead of this stop on the brick's session, so this stop ends it.
+	 *
+	 * @param stoppedBy Who asks, as a cancelled start names them.
+	 */
+	stop(stoppedBy?: string, options?: SendCommandOptions): Promise<void> {
+		this.noteStop(stoppedBy);
+		return this.stopNow(options);
 	}
 
 	/** The brick's own power-off sequence: the user and debug slots, then every motor. */
-	emergencyStop(): Promise<void> {
-		// Not behind a run in progress: an emergency does not wait its turn. A run asked before it
-		// and not yet sent sees the count change and does not send its start. A start already
-		// sent is ahead of this stop on the brick's session, so this stop ends it.
-		this.emergencies += 1;
+	emergencyStop(stoppedBy?: string, options?: SendCommandOptions): Promise<void> {
+		// Not behind a run in progress, as a stop is not.
+		this.noteStop(stoppedBy);
 		return (async () => {
-			await this.send({ kind: 'program:emergencyStop' });
-			await this.isRunning();
+			await this.send({ kind: 'program:emergencyStop' }, options);
+			await this.isRunning(options);
 		})();
 	}
 
-	private async stopNow(): Promise<void> {
-		await this.send({ kind: 'program:stop' });
-		await this.isRunning();
+	private noteStop(stoppedBy: string | undefined): void {
+		this.stops += 1;
+		this.lastStopper = stoppedBy;
+	}
+
+	private stoppedMessage(): string {
+		return this.lastStopper
+			? `${this.lastStopper} stopped the brick first: the program was not started.`
+			: 'The brick was stopped first: the program was not started.';
+	}
+
+	private async stopNow(options?: SendCommandOptions): Promise<void> {
+		await this.send({ kind: 'program:stop' }, options);
+		await this.isRunning(options);
 	}
 
 	/** Runs `work` after every operation queued before it; a failure does not block the next. */
@@ -150,8 +236,8 @@ export class ProgramService {
 	}
 
 	/** Whether a program runs in the user slot; tells the listeners when that changed. */
-	async isRunning(): Promise<boolean> {
-		const reply = await this.send({ kind: 'program:status' });
+	async isRunning(options?: SendCommandOptions): Promise<boolean> {
+		const reply = await this.send({ kind: 'program:status' }, options);
 		if (reply.kind !== 'program:status') { throw new ProtocolError(`Expected program:status, got ${reply.kind}.`); }
 		this.note(reply.running, Date.now());
 		return reply.running;

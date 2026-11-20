@@ -44,3 +44,6 @@ scripts/bench/*.rbf
 # Platform VSIX builds (scripts/package-vsix.cjs): the staging folders and the packages.
 /.vsix-staging/
 /dist-vsix/
+
+# The npm packages scripts/package-npm.cjs stages (never published from here).
+/dist/

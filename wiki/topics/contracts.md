@@ -18,7 +18,7 @@ Six files, re-exported through a barrel `index.ts`:
 - **brickKey.ts** — branded `BrickKey` type and `makeBrickKey()` factory
 - **models.ts** — `DiscoveryItem`, `ConnectedSession`, `ActiveBrickViewModel`, `PortState`, `BatteryState`, `SignalInfo`, `HeartbeatState`, `ValueDisplayStyle`
 - **transport.ts** — `TransportProvider` interface, `SessionHandle`, `TransportCapabilities`, `DiscoveryScanResult`, `BrickCommand`/`BrickResponse` discriminated unions
-- **api.ts** — public API models: `ConnectedBrickSnapshot`, `BrickStateChangeEvent`, `ActiveBrickSnapshot`, `TelemetrySnapshot`, `TelemetryEvent`, `FilesystemEvent`
+- **api.ts** — earlier snapshot models (the daemon's contract models now live in `src/contract/models.ts`): `ConnectedBrickSnapshot`, `BrickStateChangeEvent`, `ActiveBrickSnapshot`, `TelemetrySnapshot`, `TelemetryEvent`, `FilesystemEvent`
 
 ## Talks To [coverage: high — 6 sources]
 
@@ -61,7 +61,7 @@ The `BrickCommand` union covers: `battery`, `ports`, `buttons`, `info`, `fs:list
 
 - **Branded types for BrickKey** — prevents accidental string usage as brick identifiers; enforced via TypeScript's structural typing.
 - **Discriminated unions for commands/responses** — narrow on `kind` field for type-safe access to typed response fields.
-- **API models separate from internal models** — `ConnectedBrickSnapshot` and `TelemetrySnapshot` are public-facing; `ConnectedSession` and `ActiveBrickViewModel` are internal. This allows the public API surface to evolve independently.
+- **API models separate from internal models** — `ConnectedBrickSnapshot` and `TelemetrySnapshot` are public-facing; `ConnectedSession` and `ActiveBrickViewModel` are internal. Since 4.10.2 the public surface is the daemon's contract in `src/contract/`.
 - **Transport capabilities are declarative** — `TransportCapabilities.supportsSignalInfo` allows runtime to query provider features without try-catch.
 
 ## Gotchas [coverage: low — 1 source]

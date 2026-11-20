@@ -23,6 +23,7 @@ import {
 } from '../errors/CockpitError';
 import { FIRMWARE_SAFETY } from '../transports/transportConstants';
 import { TransportGuard } from '../transports/transportGuard';
+import { DeviceGate, OPEN_GATE } from './deviceGate';
 
 /** A command refused because its session's link is lost: never sent, and a link fault to the brick layer. */
 const linkLost = (brickKey: BrickKey): LinkLostError =>
@@ -65,6 +66,8 @@ export interface SessionManagerOptions {
 	reconnectMaxAttempts?: number;
 	/** Firmware-protection layer shared across every transport. Defaults to a fresh guard. */
 	transportGuard?: TransportGuard;
+	/** What this process may open; a brick lent to another daemon is refused before any device is touched. */
+	deviceGate?: DeviceGate;
 }
 
 // ── Per-session resources ───────────────────────────────────────────
@@ -104,8 +107,10 @@ export class SessionManager implements Disposable {
 	private readonly reconnectMaxMs: number;
 	private readonly reconnectMaxAttempts: number;
 	private readonly transportGuard: TransportGuard;
+	private readonly deviceGate: DeviceGate;
 
 	constructor(options: SessionManagerOptions) {
+		this.deviceGate = options.deviceGate ?? OPEN_GATE;
 		this.providerRegistry = options.providerRegistry;
 		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS;
 		this.heartbeatMissThreshold = options.heartbeatMissThreshold ?? 2;
@@ -126,6 +131,9 @@ export class SessionManager implements Disposable {
 		const provider = this.providerRegistry.get(transport);
 		if (!provider) {
 			throw new NoProviderError(`No transport provider registered for "${transport}".`);
+		}
+		if (!this.deviceGate.mayOpen(brickKey)) {
+			throw new NotConnectedError(`${describeChannel(brickKey)} is lent between cockpit daemons; this one does not open it now.`);
 		}
 
 		// Clear auto-connect suppression on explicit connect

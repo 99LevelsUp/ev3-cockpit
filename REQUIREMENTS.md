@@ -10,7 +10,7 @@ EVƎ Cockpit is a Visual Studio Code extension that:
 - discovers EV3 bricks available via `mock`, `usb`, `tcp`, and `bt`,
 - connects one or more bricks into the Cockpit runtime,
 - displays the state of the active brick in the Cockpit panel,
-- provides a public API for other VS Code extensions.
+- runs as one per-user daemon that VS Code, the `ev3` command, an MCP server and add-ons share through one public contract.
 
 Cockpit is not intended for programming the brick.
 Cockpit is not intended for browsing the brick's filesystem in the user-facing GUI.
@@ -37,8 +37,8 @@ In scope for this version:
 - foreground monitoring of the active brick,
 - background heartbeat and reconnect for connected bricks,
 - subscription-based telemetry for other extensions,
-- public API for other extensions,
-- basic filesystem API for other extensions,
+- a public contract and client library for other programs,
+- filesystem operations for other programs,
 - transport support: `mock`, `usb`, `tcp`, `bt`,
 - mock runtime,
 - persistence of favorites and remembered metadata.
@@ -61,7 +61,7 @@ Primary user workflow:
 2. selects a brick and connects to it,
 3. monitors port state, sensors, motors, and system data,
 4. switches between multiple connected bricks as needed,
-5. simultaneously uses other extensions over the Cockpit public API,
+5. simultaneously uses other programs (add-ons, the `ev3` command, an AI agent) through the cockpit daemon,
 6. temporarily loses and rediscovers a brick during work,
 7. finally disconnects the brick or powers it off.
 
@@ -243,25 +243,23 @@ do. A brick with no chain pays one extra reading every fifth tick and nothing mo
 chain is rewired the master must be restarted: the firmware can freeze a chain's last state,
 and nothing the host can read tells a frozen chain from a still one.
 
-## 9. Public API
+## 9. The Daemon and Its Contract
 
-Third-party extensions communicate with bricks exclusively through the Cockpit public API — they never connect to bricks directly.
+Other programs communicate with bricks exclusively through the cockpit daemon — they never connect
+to bricks directly. One daemon runs per user; the VS Code extension, the `ev3` command, the MCP
+server and add-ons are its clients (4.10.2, `docs/protocol.md`).
 
-The API must expose:
+The contract exposes:
 
-- consumer registration and unregistration,
-- snapshot of connected bricks,
-- state change events,
-- active brick query and change event,
-- telemetry subscriptions per category,
-- filesystem operations.
+- the brick list with each brick's channels and holders, and its changes,
+- connecting and disconnecting a brick for the calling client (the brick layer's own sign-in, with
+  pairing on the way; a brick stays connected while any client holds it),
+- files, programs (deploy and run, stop, emergency stop, state), and the shell in full mode,
+- telemetry subscriptions and the daisy chain,
+- the settings, the access mode included,
+- questions for a person, answered by the client that started the operation.
 
-The API must NOT expose:
-
-- physical `connect` or `disconnect`,
-- direct access to the discovery list of unconnected bricks.
-
-The session lifecycle stays exclusively under Cockpit's control.
+The session lifecycle stays under the daemon's control: no client opens a brick itself.
 
 ## 10. Filesystem
 
@@ -325,7 +323,7 @@ Mock must provide:
 - reconnect,
 - loss and recovery,
 - error states,
-- a surface of the public API comparable to a physical brick.
+- a surface of the contract comparable to a physical brick.
 
 Mock brick definitions are configured via a JSON file in the workspace. No GUI editor is required in this version.
 

@@ -1,5 +1,5 @@
 /**
- * The public API over the real runtime and the mock brick (step-5 plan, U7; IMPLEMENTATION_PLAN
+ * The per-brick services (API v1 until U14) over the real runtime and the mock brick (step-5 plan, U7; IMPLEMENTATION_PLAN
  * 4.8 without telemetry): a consumer registers, sees the brick, connects it, puts a file on it,
  * runs and follows a program, and a second consumer works beside the first. The session manager,
  * scheduler, aggregator and brick layer are the shipped ones; only the transport is the mock.
@@ -18,11 +18,11 @@ import { DiscoveryScheduler } from '../core/runtime/discoveryScheduler';
 import { PresenceAggregator } from '../core/runtime/presenceAggregator';
 import { SessionManager } from '../core/runtime/sessionManager';
 import { BrickManager } from '../core/runtime/brickManager';
-import { createCockpitApi } from '../core/api/cockpitApi';
+import { createBrickServices } from '../core/api/cockpitApi';
 import type { AccessMode } from '../core/api/accessPolicy';
 import { TelemetryReadModel } from '../core/telemetry/telemetryReadModel';
 import { TelemetryService } from '../core/telemetry/telemetryService';
-import { telemetrySettingsFromPackage } from '../core/telemetry/telemetrySettings';
+import { defaultTelemetrySettings } from '../core/telemetry/telemetrySettings';
 import { waitFor } from './waitFor';
 
 const DEMO = '/home/root/lms2012/prjs/Demo/Demo.rbf';
@@ -43,11 +43,10 @@ async function world() {
 	const sessionManager = new SessionManager({ providerRegistry: registry, heartbeatIntervalMs: 60_000 });
 	const bricks = new BrickManager({ sessionManager, aggregator, providerRegistry: registry });
 	// Telemetry as the runtime wires it: a program is followed through its row (step-6 U9).
-	const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as unknown;
 	const telemetry = new TelemetryService({ host: bricks.telemetryHost(), providerRegistry: registry });
-	const view = new TelemetryReadModel({ source: telemetry, settings: telemetrySettingsFromPackage(manifest) });
+	const view = new TelemetryReadModel({ source: telemetry, settings: defaultTelemetrySettings() });
 	let mode: AccessMode = 'safe';
-	const api = createCockpitApi({
+	const api = createBrickServices({
 		bricks, aggregator,
 		connect: (brickId) => bricks.signIn(brickId),
 		accessMode: () => mode,
@@ -77,10 +76,10 @@ async function world() {
 
 const codeOf = (error: unknown): unknown => (error as { code?: unknown }).code;
 
-describe('Public API over the runtime (step-5 U7)', () => {
+describe('Brick services over the runtime (step-5 U7)', () => {
 	it('lists the brick to a new consumer, connects it and makes it the active one', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		const seen: boolean[] = [];
 		consumer.onBricksChanged((bricks) => { seen.push(bricks[0].signedIn); });
 		assert.equal(consumer.listBricks()[0].name, 'Robot');
@@ -97,7 +96,7 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('puts a file in the projects folder, lists it, reads it back and removes it', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		await consumer.connect(w.brickId);
 		const path = '/home/root/lms2012/prjs/Robot/notes.txt';
 
@@ -113,7 +112,7 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('refuses a write outside the user areas in safe mode, and allows it in full mode', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-explorer');
+		const consumer = w.api.openSession('ev3-explorer');
 		await consumer.connect(w.brickId);
 		const path = '/home/root/lms2012/sys/notes.txt';
 
@@ -128,7 +127,7 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('runs a program, follows it until it ends by itself, and stops one in an emergency', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-blockly');
+		const consumer = w.api.openSession('ev3-blockly');
 		await consumer.connect(w.brickId);
 		const states: boolean[] = [];
 		consumer.onProgramStateChanged('active', (state) => { states.push(state.running); });
@@ -147,7 +146,7 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('says a program is running rather than starting a second one', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		await consumer.connect(w.brickId);
 		await consumer.runProgram('active', DEMO);
 
@@ -158,8 +157,8 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('serves two consumers at once, and one leaving ends only its own subscriptions', async () => {
 		const w = await world();
-		const first = w.api.registerConsumer('ev3-c');
-		const second = w.api.registerConsumer('ev3-explorer');
+		const first = w.api.openSession('ev3-c');
+		const second = w.api.openSession('ev3-explorer');
 		let firstCalls = 0;
 		let secondCalls = 0;
 		first.onBricksChanged(() => { firstCalls += 1; });
@@ -176,7 +175,7 @@ describe('Public API over the runtime (step-5 U7)', () => {
 
 	it('disconnects the brick', async () => {
 		const w = await world();
-		const consumer = w.api.registerConsumer('ev3-c');
+		const consumer = w.api.openSession('ev3-c');
 		await consumer.connect(w.brickId);
 
 		await consumer.disconnect('active');

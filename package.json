@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.439",
+  "version": "0.2.471",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -18,11 +18,8 @@
   ],
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": "limited",
-      "restrictedConfigurations": [
-        "ev3-cockpit.accessMode"
-      ],
-      "description": "The cockpit runs nothing from the workspace. Until you trust it, the access mode other extensions get on a brick comes from your user settings only, never from the workspace."
+      "supported": true,
+      "description": "The cockpit runs nothing from the workspace, and its settings live in the cockpit daemon, not in the workspace."
     }
   },
   "activationEvents": [
@@ -60,113 +57,27 @@
         "command": "ev3-cockpit.clearBrickBluetoothList",
         "title": "Clear a Brick's Bluetooth List",
         "category": "EV3 Cockpit"
+      },
+      {
+        "command": "ev3-cockpit.settings",
+        "title": "Settings",
+        "category": "EVƎ"
+      },
+      {
+        "command": "ev3-cockpit.restartDaemon",
+        "title": "Restart the Cockpit Daemon",
+        "category": "EVƎ"
       }
-    ],
-    "configuration": {
-      "title": "EVƎ Cockpit",
-      "properties": {
-        "ev3-cockpit.mockBricks": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Show simulated bricks, for development. Left unset, they appear only while the extension runs from source (F5) and never in an installed build. The bricks come from `.vscode/ev3-cockpit-mock.json` in the workspace when it exists, otherwise from a built-in set. Takes effect after reloading the window."
-        },
-        "ev3-cockpit.accessMode": {
-          "type": "string",
-          "enum": [
-            "safe",
-            "full"
-          ],
-          "enumDescriptions": [
-            "Extensions using the cockpit write, delete and run only in the brick's projects folder (/home/root/lms2012/prjs) and on its SD card (/media/card); they read everywhere.",
-            "Extensions using the cockpit may change any file on the brick and run shell commands on it."
-          ],
-          "default": "safe",
-          "markdownDescription": "What other extensions may do on a brick through the cockpit. **safe** keeps them to the user areas; **full** opens the whole brick, shell included."
-        },
-        "ev3-cockpit.telemetry.staleFactor": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "markdownDescription": "A telemetry value counts as **stale** when no newer reading has come for this many of its own reading intervals (a brick that stalls, a reading that keeps failing). A value also turns stale at once when its brick stops being read."
-        },
-        "ev3-cockpit.telemetry.staleTimeoutMs": {
-          "type": "number",
-          "default": 10000,
-          "minimum": 0,
-          "markdownDescription": "How long a **stale** telemetry value is still shown, marked as stale, before it is dropped, in milliseconds. A brick that disconnects drops its values at once."
-        },
-        "ev3-cockpit.telemetry.throttle.enabled": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Slow a brick's telemetry down while the brick answers slowly (a running Wi-Fi stack, its port screen open, a busy link), and speed it back up when it recovers. Each brick on its own."
-        },
-        "ev3-cockpit.telemetry.throttle.windowSize": {
-          "type": "integer",
-          "default": 20,
-          "minimum": 5,
-          "markdownDescription": "How many telemetry frames make one window. At the end of each window the slowest 5 % of its round trips (p95) decides whether the telemetry slows down."
-        },
-        "ev3-cockpit.telemetry.throttle.tailFactor": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "markdownDescription": "A window's p95 round trip may be this many times the link's usual round trip (USB 10 ms, TCP 60 ms, Bluetooth 130 ms) before the telemetry slows down."
-        },
-        "ev3-cockpit.telemetry.throttle.step": {
-          "type": "number",
-          "default": 1.5,
-          "exclusiveMinimum": 1,
-          "markdownDescription": "How much one step slows the telemetry tick down, or speeds it back up."
-        },
-        "ev3-cockpit.telemetry.throttle.maxSlowdown": {
-          "type": "number",
-          "default": 4,
-          "minimum": 1,
-          "markdownDescription": "The most the telemetry tick is slowed, as a multiple of its planned tick."
-        },
-        "ev3-cockpit.telemetry.throttle.calmWindows": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 1,
-          "markdownDescription": "How many windows in a row must stay within the limit before the telemetry speeds up a step."
-        },
-        "ev3-cockpit.telemetry.programRunningTickMs": {
-          "type": "number",
-          "default": 200,
-          "minimum": 0,
-          "markdownDescription": "While a program runs on a brick, its telemetry is read **no more often than this**, in milliseconds - for the panel and for every extension that subscribed. Each telemetry command costs a running program about 2 ms of the brick (measured). `0` turns this off."
-        },
-        "ev3-cockpit.transfer.tcpPacketBytes": {
-          "type": "integer",
-          "default": 1024,
-          "minimum": 64,
-          "maximum": 65535,
-          "markdownDescription": "Largest packet a file transfer sends to a brick over **Wi-Fi**, in bytes. The stock firmware takes **1024**: raise it only for a firmware that takes more. On the stock firmware a larger packet switches the brick into receiving a file, and a link lost then writes the next packets into that file. Applies from the next transfer. USB always uses its own packet size."
-        },
-        "ev3-cockpit.transfer.btPacketBytes": {
-          "type": "integer",
-          "default": 1024,
-          "minimum": 64,
-          "maximum": 65535,
-          "markdownDescription": "Largest packet a file transfer sends to a brick over **Bluetooth**, in bytes. The stock firmware takes **1024**: raise it only for a firmware that takes more. On the stock firmware a larger packet switches the brick into receiving a file, and a link lost then writes the next packets into that file. Applies from the next transfer. USB always uses its own packet size."
-        },
-        "ev3-cockpit.programs.statusIntervalMs": {
-          "type": "number",
-          "default": 1000,
-          "minimum": 1,
-          "markdownDescription": "How often a brick is asked whether its program still runs, in milliseconds, while an extension follows it. It rides in the brick's telemetry, so the active brick is asked at its own telemetry pace anyway."
-        }
-      }
-    }
+    ]
   },
   "scripts": {
     "compile": "tsc",
     "lint": "eslint src --ext .ts",
     "build:helper": "dotnet publish native/bt-pairing-helper -c Release -o native/bin",
     "build:helper:macos": "mkdir -p native/bin && swiftc -O -o native/bin/ev3-bt-helper native/macos/ev3-bt-helper.swift",
-    "build:dev": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap",
+    "build:dev": "node scripts/bundle.cjs --sourcemap",
     "package": "npm run build:helper && npm run bundle",
-    "bundle": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js",
+    "bundle": "node scripts/bundle.cjs",
     "test:unit": "node scripts/run-unit-tests.cjs",
     "test-smoke": "npm run test:unit",
     "test:host": "npm run bundle && node scripts/runTests.js",
@@ -174,11 +85,14 @@
     "test:ci:release": "npm run compile && npm run lint && npm run test:unit && npm run test:host && npm run package",
     "test:pw:smoke": "playwright test tests/smoke.spec.ts",
     "package:vsix": "node scripts/package-vsix.cjs",
+    "package:npm": "node scripts/package-npm.cjs",
+    "smoke:daemon": "node scripts/daemon-smoke.cjs",
     "watch": "tsc --watch",
     "watch:bundle": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap --watch",
     "prepare": "node scripts/install-hooks.cjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@playwright/test": "^1.49.0",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.95.0",
@@ -195,5 +109,10 @@
     "node-hid": "3.3.0",
     "serialport": "13.0.0",
     "usb": "^2.17.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "vscode-jsonrpc": "10.0.0",
+    "zod": "4.6.7"
   }
 }

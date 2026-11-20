@@ -20,6 +20,7 @@ import {
 import { USB } from './transportConstants';
 import { listLegoUsbDevices } from './usbNodeUsb';
 import { LifetimeScope } from './lifetimeScope';
+import { DeviceGate, OPEN_GATE } from '../runtime/deviceGate';
 import * as fs from 'fs';
 
 // ── node-hid discovery (duck-typed) ─────────────────────────────────
@@ -125,6 +126,8 @@ export interface UsbTransportProviderOptions {
 	 * errno, so the node itself is asked. Default: `fs.accessSync` for read and write.
 	 */
 	hidAccess?: (path: string) => 'denied' | 'ok' | 'unknown';
+	/** What this process may open: a device lent to another daemon is never opened, not even for its name. */
+	deviceGate?: DeviceGate;
 }
 
 /**
@@ -187,6 +190,9 @@ export class UsbTransportProvider implements TransportProvider {
 	/** Guard against concurrent discover() calls overlapping on the same device. */
 	private discovering = false;
 	private readonly udevRulePath: string | undefined;
+	private readonly deviceGate: DeviceGate;
+	/** Where each brick sat on the bus when discovery last read it, by lower-cased serial. */
+	private readonly locationBySerial = new Map<string, UsbDeviceLocation>();
 
 	constructor(options: UsbTransportProviderOptions = {}) {
 		this.log = options.log;
@@ -202,6 +208,7 @@ export class UsbTransportProvider implements TransportProvider {
 		this.listHidDevices = options?.listHidDevices;
 		this.platform = options.platform ?? process.platform;
 		this.hidAccess = options.hidAccess ?? defaultHidAccess;
+		this.deviceGate = options.deviceGate ?? OPEN_GATE;
 	}
 
 	async discover(): Promise<DiscoveryScanResult> {
@@ -231,7 +238,7 @@ export class UsbTransportProvider implements TransportProvider {
 		// claimed. Such a brick keeps the HID product string, which is what it had before.
 		const nodeUsbDevices = await this.onBus(() => {
 			signal.throwIfAborted();
-			return this.listUsbDevices({ skip: (location) => this.isInUse(location) });
+			return this.listUsbDevices({ skip: (location) => this.mayNotOpen(location) });
 		}).catch(() => []);
 		signal.throwIfAborted();
 
@@ -243,6 +250,7 @@ export class UsbTransportProvider implements TransportProvider {
 		// appeared as "Xfer data to and from EV3 brick" while connected and as "AAA" after.
 		for (const device of nodeUsbDevices) {
 			const serial = device.serialNumber?.trim().toLowerCase();
+			if (serial && device.location) { this.locationBySerial.set(serial, device.location); }
 			if (serial && device.product?.trim()) {
 				this.nameBySerial.set(serial, device.product.trim());
 			}
@@ -391,7 +399,7 @@ export class UsbTransportProvider implements TransportProvider {
 			const serial = this.extractSerial(brickKey);
 			const adapter = this.makeLibusbAdapter({
 				...(serial ? { serial } : {}),
-				inUse: (location) => this.isInUse(location),
+				inUse: (location) => this.mayNotOpen(location),
 			});
 			opened = await this.onBus(async () => {
 				signal.throwIfAborted();
@@ -482,7 +490,7 @@ export class UsbTransportProvider implements TransportProvider {
 	): Promise<LibusbFailure | undefined> {
 		const libusb = this.makeLibusbAdapter({
 			...(serial ? { serial } : {}),
-			inUse: (location) => this.isInUse(location),
+			inUse: (location) => this.mayNotOpen(location),
 		});
 		const failure = await this.onBus(async () => {
 			signal.throwIfAborted();
@@ -684,6 +692,17 @@ export class UsbTransportProvider implements TransportProvider {
 		const devices = this.listHidDevices?.() ?? tryLoadNodeHid()?.devices(USB.VENDOR_ID, USB.PRODUCT_ID) ?? [];
 		const path = devices.find((device) => device.serialNumber?.trim().toUpperCase() === serial.toUpperCase())?.path;
 		return path ? this.hidAccess(path) : 'unknown';
+	}
+
+	/** Where a brick sits on the bus: its session's device, or where discovery last read it. */
+	locationOf(brickKey: BrickKey): UsbDeviceLocation | undefined {
+		const serial = this.extractSerial(brickKey);
+		return this.sessions.get(brickKey)?.location ?? (serial ? this.locationBySerial.get(serial.toLowerCase()) : undefined);
+	}
+
+	/** A device this process holds, or one it may not open at all. */
+	private mayNotOpen(location: UsbDeviceLocation): boolean {
+		return this.isInUse(location) || !this.deviceGate.mayOpenUsb(location);
 	}
 
 	/** Whether a session, an open probe or a closing link holds the device at this bus address. */

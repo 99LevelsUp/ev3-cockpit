@@ -2038,15 +2038,69 @@ the devices.
   it; notarising needs a paid Apple Developer account). Seen on the
   way: CCC froze when USB was plugged in during a Bluetooth session, right after a Wi-Fi run; the same
   step on a freshly started brick did not (owner's hypothesis: Wi-Fi leaves the firmware fragile).
-- [ ] 4.10.2 **A daemon and a thin CLI.** The daemon holds the bricks: connections (a Bluetooth
-  connect takes 2–20 s, so a command must not open one each time), presence, telemetry and the
-  transfer ledger; the first CLI command starts it and it ends after a quiet spell. Only it holds a
-  brick, so two processes never pull at one. The CLI (`ev3 list`, `upload`, `run`, `stop`, …) talks
-  to it, usable from a shell, scripts, Claude Code and any other tool. One TypeScript code base for
-  Windows, Linux and macOS, first as an npm package (prebuilt natives); single-file binaries per
-  platform (Node SEA) only when someone asks. When it comes relative to Phase 5 is decided once
-  4.10.1 is done. The CLI–daemon protocol goes to the ev3-c session for review before it is built.
-- [ ] 4.10.3 An MCP server, only if wanted: a thin layer over the same daemon.
+- [~] 4.10.2 **The cockpit daemon and its clients.** **Built 20.11.2026** on `feat/cockpit-daemon`
+  (plan `docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`, U1–U17); hardware
+  rounds still open (below). One daemon per user holds the bricks: connections (a Bluetooth connect
+  takes 2–20 s, so a command must not open one each time), presence, telemetry, programs, files,
+  the transfer ledger and the settings. Only it opens a brick, so two processes never pull at one.
+  The first client starts it; it ends 10 s after its last client has gone and no brick is held
+  through `ev3 connect`. Its clients share one contract (`src/contract/`, `docs/protocol.md`) and
+  the client library (`src/client/`, `@ev3-cockpit/client`): the VS Code extension (which no longer
+  builds the runtime and exports no API), the `ev3` command with add-on dispatch (`ev3 <name>`), and
+  add-ons such as EVƎ C (`docs/api-for-consumers.md`). Holders per brick, a write lease per request
+  with `brick_busy` naming the holder, questions for a person, `full` only with a person's
+  confirmation and only until the daemon ends, the newest version replacing an idle daemon, `ev3
+  daemon restart` keeping held bricks, and a development daemon (`dev` channel) that borrows bricks
+  from the user's daemon with their holders' consent. The VSIX carries `out/daemon.js`; `npm run
+  package:npm` stages `@ev3-cockpit/client` and `ev3-cockpit` (`ev3`, `ev3-cockpit-mcp`) from the
+  root version; nothing is published. The protocol was reviewed with the EVƎ C session before it
+  was built. **Open:** the hardware rounds — F1 (VS Code on USB, Bluetooth and TCP through the
+  daemon; the daemon ends with VS Code), F2 (`ev3` from PowerShell, Git Bash and HOSTD; the MCP
+  server against CCC with VS Code open), the loan round (borrow CCC over USB, then Bluetooth, then
+  all), `core-smoke` and `api-check` on a real brick; Linux and macOS runs of the daemon on VS
+  Code's Node; whether add-ons may register settings of their own in the daemon (EVƎ C asks).
+  Measured 20.11.2026
+  with `scripts/daemon-runtime-check.cjs` on Windows (VS Code 1.147, run as Node: Node 24.22,
+  Electron 43.8, N-API 10): `usb`, `node-hid`, `@serialport/bindings-cpp` and `koffi` load; a
+  detached child started from the extension host keeps running after VS Code quits; the extension
+  folder can be renamed while it runs; two processes can both receive the beacons on UDP 3015. The
+  VS Code install folder cannot (`EBUSY`): while the daemon runs on VS Code's `Code.exe`, a VS Code
+  update on Windows fails. The daemon ends with VS Code unless `ev3 connect`, the CLI or an MCP
+  server keeps it; the owner chose to keep VS Code's Node and document that those must be ended
+  before updating VS Code, over copying the runtime (~250 MB per VS Code version) or requiring a
+  system Node. USB discovery over libusb opens each device to read its serial, so a brick lent to
+  another daemon has to be skipped before opening. Linux not measured yet (no machine with VS Code).
+  **Code review 20.11.2026** (internal reviewers plus codex): 20 findings, 6 of them P1. All were fixed except
+  the ones below, which are deferred. Each is an owner decision, a change to the contract's shape, or a
+  structural cleanup:
+  - MCP has no daemon status and no disconnect-for-everyone, though the CLI has both. Deciding this
+    widens 4.10.3's tool set, so it is the owner's call.
+  - Client `kind` and `confirmedByPerson` are self-asserted. A process holding the user's key can
+    act as a person (the plan accepts this; it is a guardrail, not a security boundary). Binding
+    the handover state to a token would not change that, so it was not done.
+  - The handover marker outlives a successor that dies at start. Clients then wait up to 30 s
+    instead of starting a daemon.
+  - The brick name match is written three times: in the daemon, in the client library and in MCP.
+    The client copy has no ambiguity check.
+  - Access checks sit in two layers: the session object, and `assertAllowed` in the surface for
+    handlers that go around the session.
+  - The `blocked` map is written from three modules, and each writer must remember to broadcast.
+  - `src/client` and `src/daemon` import each other. An add-on bundling the client pulls in
+    daemon modules.
+  - Smaller items, not yet traced:
+    - re-plugging a lent USB brick changes its bus address, so neither daemon's gate lists it;
+    - a transfer debt cut off during a loan lands in the development channel's ledger;
+    - a peer can take the hardware lock in the gap of a handover;
+    - a lease waits on work that ignores its AbortSignal;
+    - the daemon does not compare `contractVersion`;
+    - the 64 MiB `transfer/begin` cap is not in the contract.
+  - Untested wiring: the device gate in the real USB provider, Bluetooth presence and
+    `createRuntime` (only `LoanGate` and simulated bricks are tested). A contract snapshot test is
+    also missing.
+- [~] 4.10.3 **An MCP server** over the same daemon: `ev3-cockpit-mcp` (`src/mcp/`), 22 tools for
+  bricks, files, programs and settings. Built 20.11.2026 with 4.10.2. Forget and clearing a
+  Bluetooth list ask the user through MCP elicitation, and without it refuse with the `ev3` command;
+  `daemon restart` and switching to `full` stay out. Open: a real agent session against CCC (F2).
 
 ## 9. Phase 5 — Cockpit Panel and UX
 

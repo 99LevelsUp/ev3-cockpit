@@ -1,5 +1,5 @@
 /**
- * The public API object (step-5 plan, U6): what other extensions get from `activate()`.
+ * The per-brick services (step-5 plan, U6): what the daemon runs for each client's session; until U14 this was the API other extensions got from `activate()`.
  *
  * Pinned here against narrow fakes of the brick layer: `'active'` resolved at the call (KD1),
  * answers naming the brick by id, the access mode enforced on every change (KD2, KD3), plain
@@ -14,7 +14,7 @@ import { BrickCommand, BrickId, BrickResponse, ChannelState, Transport, makeBric
 import type { BrickEntry } from '../core/contracts';
 import { ErrorCode } from '../core/errors/CockpitError';
 import type { AccessMode } from '../core/api/accessPolicy';
-import { API_VERSION, CockpitApiDeps, createCockpitApi } from '../core/api/cockpitApi';
+import { BrickServicesDeps, createBrickServices } from '../core/api/cockpitApi';
 
 const A = 'A1' as BrickId;
 const B = 'B1' as BrickId;
@@ -45,7 +45,7 @@ function fakes(mode: AccessMode = 'safe') {
 		default: return { kind: command.kind } as BrickResponse;
 		}
 	};
-	const deps: CockpitApiDeps = {
+	const deps: BrickServicesDeps = {
 		bricks: {
 			send: async (brickId: BrickId, command: BrickCommand) => { sent.push({ brickId, command }); return answer(command); },
 			getActiveBrickId: () => active,
@@ -53,18 +53,18 @@ function fakes(mode: AccessMode = 'safe') {
 			signOut: async (brickId: BrickId) => { signedOut.push(brickId); },
 			isSignedIn: (brickId: BrickId) => brickId === A,
 			onActiveBrickChange: () => ({ dispose: () => { /* not under test */ } }),
-		} as unknown as CockpitApiDeps['bricks'],
+		} as unknown as BrickServicesDeps['bricks'],
 		aggregator: {
 			getDiscoveryList: () => [entry(A, 'AAA'), entry(B, 'BBB')],
 			getBrick: (brickId: BrickId) => [entry(A, 'AAA'), entry(B, 'BBB')].find((e) => e.brickId === brickId),
 			onListChanged: (listener: () => void) => { listListeners.add(listener); return { dispose: () => { listListeners.delete(listener); } }; },
-		} as unknown as CockpitApiDeps['aggregator'],
+		} as unknown as BrickServicesDeps['aggregator'],
 		connect: async (brickId) => { connected.push(brickId); },
 		accessMode: () => accessMode,
 		onAccessModeChange: (listener) => { modeListeners.add(listener); return { dispose: () => { modeListeners.delete(listener); } }; },
 		log: { info: (message) => { logged.push(message); }, warn: (message) => { logged.push(message); } },
 	};
-	const api = createCockpitApi(deps);
+	const api = createBrickServices(deps);
 	return {
 		api, sent, logged, connected, signedOut,
 		setActive: (id: BrickId | undefined) => { active = id; },
@@ -76,14 +76,10 @@ function fakes(mode: AccessMode = 'safe') {
 
 const codeOf = (error: unknown): unknown => (error as { code?: unknown }).code;
 
-describe('Public API (step-5 U6)', () => {
-	it('is versioned', () => {
-		assert.equal(fakes().api.apiVersion, API_VERSION);
-		assert.equal(API_VERSION, 1);
-	});
+describe('Brick services (step-5 U6)', () => {
 
 	it('lists every brick as plain data, with its channels and which one is active', () => {
-		const consumer = fakes().api.registerConsumer('test');
+		const consumer = fakes().api.openSession('test');
 
 		const bricks = consumer.listBricks();
 
@@ -94,7 +90,7 @@ describe('Public API (step-5 U6)', () => {
 
 	it('resolves "active" when the call is made and answers with the brick\'s id', async () => {
 		const f = fakes();
-		const consumer = f.api.registerConsumer('test');
+		const consumer = f.api.openSession('test');
 
 		const result = await consumer.isProgramRunning('active');
 		f.setActive(B);
@@ -108,12 +104,12 @@ describe('Public API (step-5 U6)', () => {
 		const f = fakes();
 		f.setActive(undefined);
 
-		await assert.rejects(f.api.registerConsumer('test').isProgramRunning('active'), (error) => codeOf(error) === ErrorCode.NotConnected);
+		await assert.rejects(f.api.openSession('test').isProgramRunning('active'), (error) => codeOf(error) === ErrorCode.NotConnected);
 	});
 
 	it('enforces safe mode on writes, removals, runs and the shell, and sends nothing then', async () => {
 		const f = fakes('safe');
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 
 		await assert.rejects(c.makeDirectory(A, '/home/root/lms2012/sys/x'), (e) => codeOf(e) === ErrorCode.AccessDenied);
 		await assert.rejects(c.remove(A, '/etc/x'), (e) => codeOf(e) === ErrorCode.AccessDenied);
@@ -127,7 +123,7 @@ describe('Public API (step-5 U6)', () => {
 	it('allows the shell in full mode, logs the command and its status', async () => {
 		const f = fakes('full');
 
-		const result = await f.api.registerConsumer('ev3-c').runShell('active', 'chmod +x /home/root/lms2012/prjs/R/prog');
+		const result = await f.api.openSession('ev3-c').runShell('active', 'chmod +x /home/root/lms2012/prjs/R/prog');
 
 		assert.deepEqual(result, { brickId: 'A1', status: 0 });
 		assert.ok(f.logged.some((line) => line.includes('chmod +x /home/root/lms2012/prjs/R/prog') && line.includes('ev3-c')));
@@ -135,7 +131,7 @@ describe('Public API (step-5 U6)', () => {
 
 	it('follows a change of the access mode', async () => {
 		const f = fakes('safe');
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 		const modes: string[] = [];
 		c.onAccessModeChanged((m) => { modes.push(m); });
 
@@ -148,7 +144,7 @@ describe('Public API (step-5 U6)', () => {
 
 	it('connects and disconnects a brick through the brick layer', async () => {
 		const f = fakes();
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 
 		await c.connect(B);
 		await c.disconnect('active');
@@ -159,7 +155,7 @@ describe('Public API (step-5 U6)', () => {
 
 	it('refuses a new subscription from a consumer that has unregistered, and leaves nothing installed', () => {
 		const f = fakes();
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 		c.dispose();
 
 		assert.throws(() => c.onBricksChanged(() => { /* never */ }), (e: unknown) => codeOf(e) === ErrorCode.ConsumerFailed);
@@ -169,20 +165,20 @@ describe('Public API (step-5 U6)', () => {
 	it('refuses a brick id the cockpit does not know, before any command', async () => {
 		const f = fakes();
 
-		await assert.rejects(f.api.registerConsumer('test').isProgramRunning('no-such-brick'), (e) => codeOf(e) === ErrorCode.NotConnected);
+		await assert.rejects(f.api.openSession('test').isProgramRunning('no-such-brick'), (e) => codeOf(e) === ErrorCode.NotConnected);
 		assert.deepEqual(f.sent, []);
 	});
 
 	it('reports an unexpected reply as a protocol error, not as a lost connection', async () => {
 		const f = fakes('full');
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 
 		await assert.rejects(c.getBrickInfo('active'), (e) => codeOf(e) === ErrorCode.ProtocolFailed);
 	});
 
 	it('ends a consumer\'s subscriptions when it unregisters', () => {
 		const f = fakes();
-		const c = f.api.registerConsumer('test');
+		const c = f.api.openSession('test');
 		let calls = 0;
 		c.onBricksChanged(() => { calls += 1; });
 		f.fireList();

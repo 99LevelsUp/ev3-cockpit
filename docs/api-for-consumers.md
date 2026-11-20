@@ -1,123 +1,373 @@
-# The cockpit's API, for the extensions that use it
+# The cockpit for add-ons: the contract and the client library
 
-For ev3-c (formerly ev3-native), ev3-explorer, and later ev3-python, ev3-blockly or an MCP server.
-It answers IMPLEMENTATION_PLAN 4.9.4: what the cockpit provides, and where the sibling designs
-assumed something else. The reference is DESIGN §10 and `src/core/api/cockpitApi.ts`.
+For add-on authors: EVƎ C (formerly ev3-native), ev3-explorer, and later ev3-python, ev3-blockly
+or an MCP server of your own. It says what the cockpit provides, how to reach it, and where the
+sibling designs assumed something else.
 
-## Getting it
+The cockpit is a per-user daemon. The VS Code extension, the `ev3` command, the cockpit's MCP
+server and every add-on are its clients and talk to it over JSON-RPC on a local pipe or socket.
+The VS Code extension exports nothing: an add-on does not ask it for anything.
+
+The reference is the contract in `src/contract/` (`methods.ts`, `models.ts`, `events.ts`,
+`errors.ts`) and the client library in `src/client/index.ts`. Both ship as one package,
+`@ev3-cockpit/client`, built from this repository and carrying no native modules
+(`npm run package:npm` stages it in `dist/npm/client/`; it is not published yet). Until it is,
+load the library from a compiled checkout (`npm run compile`, then `out/client/index.js`), as
+`scripts/api-check` does.
+
+## Connecting
 
 ```ts
-const cockpit = vscode.extensions.getExtension('99LevelsUp.ev3-cockpit');
-const api = await cockpit?.activate();          // { apiVersion: 1, registerConsumer }
-if (api?.apiVersion !== 1) { /* tell the user to update the cockpit */ }
-const ev3 = api.registerConsumer('ev3-c');
-context.subscriptions.push(ev3);                // its subscriptions end with it
+import { CockpitClient, ContractError, WireErrorCode } from '@ev3-cockpit/client';
+
+const cockpit = await CockpitClient.connect({
+  name: 'EVƎ C (VS Code)',   // say where it runs: other clients read it in brick_busy and stoppedBy
+  kind: 'addon',
+  version: '1.4.0',          // your add-on's version
+  launch,                    // how to start the daemon when none runs; see below
+});
+context.subscriptions.push(cockpit);   // dispose() closes the connection and every subscription
 ```
 
-Declare `"extensionDependencies": ["99LevelsUp.ev3-cockpit"]`.
+- `kind` is `addon` for everything an add-on runs: its VS Code extension and its `ev3 <name>`
+  command alike.
+- `name` should say where the client runs, for example "EVƎ C (VS Code)" or "ev3 c run
+  (terminal)". It appears in the daemon's log, in another client's `brick_busy` error, and as
+  `stoppedBy` when you stop a program.
+- A VS Code add-on needs no `extensionDependencies` on the cockpit to work; the cockpit must be
+  installed for its daemon to exist.
+- `EV3_COCKPIT_CHANNEL` (or the `channel` option) selects a development or test daemon instead
+  of the user's own; the cockpit sets it in its own Development and Test modes.
+
+**Starting the daemon.** `connect` finds the user's daemon and proves both sides hold the user's
+key. When no daemon runs, it starts one from `launch`; an add-on (kind `addon`) given none starts the
+one the installed cockpit recorded. The cockpit records how to start its daemon each time VS Code
+starts it; `installedLaunch(clientPaths())`, both exported from the package, reads that record and
+returns `undefined` when there is none. With nothing to start, `connect` fails with
+`daemon_unavailable`, and you tell the user to install (or open) EVƎ Cockpit.
+
+An add-on never replaces the daemon and never compares package versions with it; see
+[Version notices](#version-notices).
 
 ## Naming a brick
 
-Every call takes a brick id or `'active'`, resolved when the call is made. Answers and events
-carry the id. With no active brick, `'active'` fails with `code: 'not_connected'`.
+Every request that works on a brick takes `brick`: its id or its name. The daemon matches names
+without regard to case, and so does the cache's `brick(ref)`; names need not be
+unique (a fresh brick is called "EV3"):
+
+- a name that fits several bricks is refused with `brick_ambiguous`; `error.data.candidates`
+  lists `{ brickId, name }` of each;
+- a name or id nobody knows is refused with `brick_not_found`, but only after the daemon's first
+  discovery round, so a request sent just after the daemon started does not fail early;
+- an add-on must always name the brick. Only the `ev3` command may leave it out.
+
+Answers that concern a brick carry its id (`brickId`), so use the id from the first answer for the
+rest of the work.
+
+The active brick is your client's own (`activeBrick()`, `setActiveBrick(id)`); the daemon keeps
+none. Setting it tells the daemon to read that brick's telemetry in the foreground for you;
+requests still name the brick.
 
 ## What there is
 
-| Need | Call |
+`cockpit.request(method, params)` sends any contract method. The cache answers without a round
+trip: `bricks()`, `brick(ref)`, `settings()`, `accessMode()`.
+
+| Need | Method or call |
 |---|---|
-| bricks, including ones not connected | `listBricks()`, `onBricksChanged` |
-| the active brick | `getActiveBrickId()`, `setActiveBrick(id)`, `onActiveBrickChanged` |
-| connect / disconnect | `connect(brick)` — "Connect a Brick", pairing included; `disconnect(brick)` |
-| firmware version | `getBrickInfo(brick)` → name, firmware, OS |
-| files | `list`, `exists`, `size`, `storage`, `readFile`, `writeFile` (progress, `AbortSignal`), `makeDirectory`, `remove` (`recursive`), `move` |
-| run an `.rbf` | `runProgram(brick, path, { replace })` — the user slot, as the brick's own browser; `running: false` means it was never seen running (ended already, or refused) |
-| stop / emergency stop / state | `stopProgram`, `emergencyStop` (also stops every motor; a `runProgram` asked before it and not yet sent is cancelled), `isProgramRunning`, `onProgramStateChanged` |
-| a shell command | `runShell(brick, command)` — only in full mode |
-| the access mode | `getAccessMode()`, `onAccessModeChanged` |
-| telemetry | `listTelemetryRows()`, `subscribeTelemetry(brick, { rows, intervalMs, modes? }, listener)` — below |
+| bricks, including ones not connected | `bricks()`, `onBricksChanged`; `bricks/list` (`waitForDiscovery`) |
+| connect / disconnect | `bricks/connect` (pairs on the way if needed), `bricks/disconnect` |
+| firmware version | `bricks/info` → name, firmware, OS |
+| storage | `bricks/storage` → `totalKb`, `freeKb` |
+| files | `files/list`, `exists`, `size`, `read`, `write`, `makeDirectory`, `remove` (`recursive`), `removePaths`, `move` |
+| put files on the brick and start a program | `programs/deployAndRun` |
+| start an `.rbf` already on the brick | `programs/run` (`replace`) |
+| stop / emergency stop / state | `programs/stop`, `programs/emergencyStop` (also stops every motor), `programs/status` (`waitMs`), `subscribePrograms` |
+| a shell command | `shell/run`, only in full mode |
+| the access mode | `accessMode()`, `settings/accessMode`; `settings/accessModeChanged` |
+| settings | `settings()`, `settings/list`, `settings/set` |
+| telemetry | `telemetry/rows`, `subscribeTelemetry(brick, { rows, intervalMs, modes? }, listener)` |
+| the daisy chain | `chain/get`, `followChain(brick, listener)` |
+| pairing, forgetting, clearing a Bluetooth list | `bricks/pair`, `bricks/forget`, `bricks/clearBluetoothList` (the last two ask the person) |
 
-Errors are `CockpitError`s with a stable `code`: `not_connected`, `access_denied`,
-`program_running`, `program_not_found`, `program_cancelled` (an emergency stop came before the
-start was sent), `mode_conflict`, `subscription_failed`, `protocol_failed`, `transport_failed`,
-`timeout`, …
+`bricks/disconnect` drops your client's hold. The brick stays connected while anyone else holds
+it (VS Code, `ev3 connect`, remembered bricks); the answer's `stillHeldBy` says who. When your
+client's connection closes, its holds go with it.
 
-A brick id the cockpit does not know is refused with `not_connected`. Program, shell and
-brick-info answers name the brick by id; file answers are just the file data. A consumer that
-needs to know which brick answered takes `getActiveBrickId()` first and passes that id, not
-`'active'`: asked afterwards, the active brick may already be another one.
+## Errors
+
+A failed request rejects with a `ContractError`:
+
+- `code` is a stable string from `WireErrorCode`; decide on it.
+- `kind` names the error class the daemon raised (`LinkLostError`, `BrickUnreachableError`,
+  `TimeoutError`, …; `Unknown` for a class your copy of the contract does not know). Use it where
+  the code is too coarse: a link that dropped and a brick that never answered are both
+  `transport_failed`.
+- `data` carries extras: `holder` for `brick_busy`, `candidates` for `brick_ambiguous`, `command`
+  (what a person should run) for `needs_person`.
+
+The codes an add-on meets most: `brick_busy`, `brick_ambiguous`, `brick_not_found`,
+`not_connected`, `access_denied`, `program_running`, `program_not_found`, `mode_conflict`,
+`subscription_failed`, `needs_person`, `daemon_unavailable`, `outcome_unknown`, `cancelled`,
+`invalid_request`, `transport_failed`, `timeout`, `protocol_failed`.
+
+## Write leases and `brick_busy`
+
+A request that changes a brick takes the brick's write lease for exactly its own length:
+`files/write`, `makeDirectory`, `remove`, `removePaths`, `move`, `programs/deployAndRun`,
+`programs/run`, `shell/run`, `bricks/forget`, `bricks/clearBluetoothList`. Reads never take it.
+Stop and emergency stop never take it and never wait for it.
+
+While another request holds the lease, a second writer is refused at once with `brick_busy`;
+nothing is queued. `error.data.holder` names the client holding it, so you can tell the user who is
+writing. Try again when that client is done.
+
+No client holds a lease between requests, so work of several steps is one request:
+`programs/deployAndRun` (files, then the start) and `files/removePaths` (several removals). When
+a client's connection closes, its requests are aborted and its leases end once those requests
+have settled, so a dead client's upload never interleaves with the next writer.
+
+## `outcome_unknown`
+
+If the daemon goes away (a crash, or a newer version taking over) while a request that changes a
+brick is running, the request ends with `outcome_unknown`: it may or may not have taken effect.
+Nobody retries it, not the library and not the daemon. Read the state first (`programs/status`,
+`files/exists`, `files/list`) and decide from that. The same failure during a read is
+`daemon_unavailable`, which is safe to repeat once the client is connected again.
+
+## Questions for a person, and `needs_person`
+
+Some operations need a person's yes. The daemon sends the question to the client that started the
+operation, through `onQuestion`:
+
+```ts
+cockpit.onQuestion(async (question) => {
+  // question.kind: 'sweep' | 'forget' | 'clearBluetoothList' | 'bluetoothAccess' | 'brickLoan'
+  const answer = await vscode.window.showWarningMessage(question.text, { modal: true }, 'Yes', 'No');
+  return answer === 'Yes' ? 'yes' : answer === 'No' ? 'no' : 'keep';
+});
+```
+
+- `keep` leaves things as they are. A client without a handler answers `keep` at once; so does
+  a question nobody answers within `question.timeoutMs` (60 s), or whose client leaves. It is
+  never taken as `no`.
+- When the time runs out, the daemon sends `question/withdrawn` with the `questionId`; close your
+  dialog then.
+- What an add-on may be asked: `sweep` when a transfer of yours starts and an earlier transfer
+  left a file slot open on the brick (`yes` releases it, `no` drops the debt for good, `keep`
+  lets your transfer go ahead and keeps the debt, with a warning in the log); `forget` and `clearBluetoothList` if you call those methods; `brickLoan`
+  when a developer's cockpit wants to borrow a brick you hold.
+- On any kind but `sweep`, `keep` ends the operation with `needs_person`, and
+  `error.data.command` is the `ev3` command a person can run instead.
+
+Some changes need a person in any case. The access mode is the one dangerous setting today:
+`settings/set` with `accessMode: 'full'` from an add-on is refused with `needs_person`, whatever
+the add-on says; the user switches it in VS Code (EVƎ: Settings) or with `ev3 config` in a
+terminal. Setting it back to `safe` is allowed.
+
+## Files
+
+File content never travels as one large message:
+
+- inline base64: `files/write` with `content` up to 4 KiB, `files/read` with `inline: true` up
+  to 64 KiB;
+- a local path the daemon reads or writes itself (`fromLocalPath`, `toLocalPath`): the daemon
+  runs as the same user on the same computer, so this is the normal way for larger files. The
+  path must be absolute: the daemon's working directory is not the client's;
+- a transfer handle filled or drained in chunks (`transfer/begin`, `write`, `read`, `close`),
+  for clients that cannot share a file system path with the daemon.
+
+A write or a deployment to a path whose folders do not exist yet creates them. Rename is
+`files/move`: a copy and a removal on the brick, not atomic.
+
+## Programs
+
+`programs/deployAndRun` takes the files and the program to start:
+
+```ts
+const result = await cockpit.request('programs/deployAndRun', {
+  brick: brickId,
+  files: [{ remotePath: '/home/root/lms2012/prjs/demo/demo.rbf', localPath, skipIfSameMd5: true }],
+  runPath: '/home/root/lms2012/prjs/demo/demo.rbf',
+});
+// result.outcome: 'started' | 'not_seen_running' | 'uncertain'; result.runSeq; result.uploaded; result.skipped
+```
+
+It checks first that nothing runs (otherwise `program_running`, and nothing is put on the brick),
+then uploads each file (a file whose MD5 on the brick matches is left, with `skipIfSameMd5`), then
+starts the program; the lease ends at the start. `programs/run` starts a program already on the
+brick; `replace: true` stops the one running first.
+
+- `started`: the brick reported the program running.
+- `not_seen_running`: the start was confirmed but the program was not seen running; it may have
+  ended at once, or the brick refused it in silence.
+- `uncertain`: the reply to the start was lost. Do not start again; read the state first.
+
+A brick refusing a program is an error: `program_not_found`, `program_running`, `access_denied`.
+
+**Stopping.** `programs/stop` and `programs/emergencyStop` reach the brick at once from any client,
+even while another client holds the lease; they never wait. A stop also ends any
+`deployAndRun` or `run` on that brick that has not sent its start yet: it fails with `cancelled`,
+the message naming who stopped, and nothing is started, so a stop pressed during an upload is
+never followed by a start.
+
+**State.** `ProgramState` is `{ brickId, running, runSeq, stoppedBy? }`:
+
+- `runSeq` counts the starts the daemon sent to the brick (0 before any). `DeployResult.runSeq` is
+  your start's number. The daemon takes a number before the start is checked, so a refused or
+  cancelled start uses one too and the numbers you see have gaps.
+- A state is told with the number of the latest start at the time it is told. So a higher
+  `runSeq` than yours means someone started again after you. The same number does not prove the
+  state is about your program: when you start with `replace`, the previous program ending is told
+  with your number, as `running: false`, just before your program shows as running.
+- `stoppedBy` names the client whose stop came after the latest start, when the program is not
+  running. A program that ended by itself has none.
+- In the answers to `programs/stop`, `programs/emergencyStop`, `programs/status` and in the state
+  `subscribePrograms` returns, `running` is what the brick said when asked just then. In
+  `programs/stateChanged` it comes from the brick's telemetry, read at
+  `programs.statusIntervalMs` (1000 ms unless the user changed it) for a brick nobody shows in the
+  foreground, so it lags the brick.
+
+`programs/status` answers now, or with `waitMs` (up to 120 s) once the state changes; when the
+wait runs out, it answers with the unchanged state.
+`subscribePrograms(brick, listener)` gives the state now as `.state` and tells the listener each
+change after that. It follows the brick's telemetry row `program.user.running`, read only while
+someone follows the program, not a poll of its own. It ends, without a notification, when the
+brick is signed out; subscribe again after connecting it again.
 
 ## Telemetry
 
 ```ts
-const sub = cockpit.subscribeTelemetry('active', { rows: ['ports.motor.A.tacho'], intervalMs: 100 }, (update) => {
+const sub = await cockpit.subscribeTelemetry(brickId, { rows: ['ports.motor.A.tacho'], intervalMs: 100 }, (update) => {
   // update.kind: 'snapshot' first, then 'change'; 'ended' when the brick goes
   for (const v of update.values) { /* v.rowId, v.value, v.sampledAt, v.effectiveIntervalMs, v.stale */ }
 });
 sub.grant;      // { 'ports.motor.A.tacho': 100 } — at least this often
-sub.dispose();  // releases exactly this subscription
+sub.dispose();  // ends exactly this subscription
 ```
 
-- `listTelemetryRows()` names every row: `ports.sensor.1.value`, `ports.sensor.1.occupancy` (the type
-  code, with the device's mode), `ports.motor.A.tacho`, `ui.button.enter`, `system.battery.level`, …
-- The grant is the request clamped to the link's floor (USB 50 ms, TCP 100 ms, Bluetooth 250 ms),
-  fixed when you subscribe. What a row really runs at — slower while the brick answers slowly
-  (adaptive throttling) — is each value's `effectiveIntervalMs`.
-- A sensor's mode is part of the request: `modes: { '1': 2 }`. The first subscription on a port holds
-  its mode; asking another mode of that port is refused with `mode_conflict`, naming who holds it.
-- After the snapshot you hear only rows whose value, mode, staleness or interval changed. Nothing is
-  lost in an outage: values turn `stale`, and the first reading after it is sent even if unchanged.
-  Values stale long enough are dropped and listed in `removed`. `snapshot()` gives the current
-  values any time, so it can be ahead of the updates your listener has heard so far.
-- Updates arrive asynchronously, never inside the call that subscribed, and in one order for every
-  subscription of every consumer. The snapshot holds everything up to your subscription, and each
-  later change comes once, behind it. Anything your listener causes, such as another change, a
-  brick's end or a new subscription, arrives after the update you are handling, for you and for
-  everyone else. A listener that throws stops nothing but itself.
-- A subscription to a brick that is not the active one runs that brick's telemetry for you; each
-  telemetry command costs a program running on the brick about 2 ms, so ask for what you need.
+- `telemetry/rows` names every row: `ports.sensor.1.value`, `ports.sensor.1.occupancy` (the type
+  code, with the device's mode), `ports.motor.A.tacho`, `ui.button.enter`,
+  `system.battery.level`, …
+- The grant is the request clamped to the link's floor (USB 50 ms, TCP 100 ms, Bluetooth 250
+  ms), fixed when you subscribe. What a row really runs at — slower while the brick answers
+  slowly (adaptive throttling) — is each value's `effectiveIntervalMs`.
+- A sensor's mode is part of the request: `modes: { '1': 2 }`. The first subscription on a port
+  holds its mode; asking another mode of that port is refused with `mode_conflict`, naming who
+  holds it.
+- After the snapshot you hear only rows whose value, mode, staleness or interval changed. A row
+  not read yet is missing from the snapshot and arrives as a change. Values turn `stale` in an
+  outage, and the first reading after it is sent even if unchanged; values stale long enough are
+  dropped and listed in `removed`.
+- A subscription to a brick nobody shows in the foreground runs that brick's telemetry for you;
+  each telemetry command costs a program running on the brick about 2 ms, so ask for what you
+  need.
 - **While a program runs on a brick, its telemetry slows down** to the user's
-  `ev3-cockpit.telemetry.programRunningTickMs` (200 ms unless changed; 0 turns it off) — for
-  everyone, your subscription included. Your grant stays; `effectiveIntervalMs` shows the slower
-  reads. The program comes first.
+  `telemetry.programRunningTickMs` (200 ms unless changed; 0 turns it off), for everyone, your
+  subscription included. Your grant stays; `effectiveIntervalMs` shows the slower reads.
+- `ended` means the brick went (signed out or gone); subscribe again after connecting it.
 
-## Following a program
+## Cancellation and progress
 
-`onProgramStateChanged(brick, listener)` follows the brick's program through its telemetry
-(`program.user.running`), not a poll of its own, and only while someone listens. The listener hears
-each start and end once, asynchronously, never inside the call that subscribed. A lost link that
-comes back keeps following; it ends when the brick is disconnected or signed out, as telemetry
-subscriptions do — subscribe again after reconnecting. How often a brick you follow is asked is the
-user's `ev3-cockpit.programs.statusIntervalMs`; the active brick is asked at its own telemetry pace
-anyway. `isProgramRunning(brick)` asks the brick directly, now.
+Pass an `AbortSignal` to cancel your own request:
+`cockpit.request('files/write', params, { signal })`. The request ends with `cancelled`; nothing
+else is stopped (cancelling a `deployAndRun` does not stop a program someone else started). A
+write cancelled halfway may leave a partial file on the brick.
+
+`request` also takes `onProgress`, and the contract says requests that move file content report
+`{ transferred, total? }`. The daemon does not send progress yet, so do not rely on it.
+
+## Reconnects and subscriptions
+
+When the daemon goes — a crash, `ev3 daemon restart`, a newer version taking over — the library
+connects again by itself:
+
+- every subscription made through `subscribeTelemetry`, `subscribePrograms` and `followChain` is
+  renewed, and the ids and disposables it gave you stay valid. A telemetry listener hears a fresh
+  `snapshot` first; a chain listener hears the chain; a program listener hears the current
+  state, which may repeat the last one it heard;
+- bricks your client connected are connected again if the new daemon does not hold them already;
+- `onReconnected` fires once this is done; `onLost` fires if no daemon could be reached again.
+
+A `programs/subscribe`, `telemetry/subscribe` or `chain/follow` sent through `request` is not
+renewed: its id is valid on one connection only. Use the library's calls.
+
+## Version notices
+
+An add-on compares only the contract version (`CONTRACT_VERSION`, now 1), never the package
+versions, and never asks the daemon to step aside. If the running daemon offers an older contract
+than yours needs, `onNotice` fires with a text ready to show ("update EVƎ Cockpit"). A newer
+contract than yours is no reason to warn.
+
+## Events and ordering
+
+The daemon sends notifications (`src/contract/events.ts`); the library dispatches them to
+`on(name, handler)` and keeps its cache current from them. What holds:
+
+- **One connection, one order.** On one connection, notifications arrive in the order the daemon
+  sent them. There is no order between connections.
+- **The brick list is coalesced.** `bricks/changed` carries the whole list. Changes made in one
+  synchronous stretch of the daemon's work go out as one list, after the notifications sent
+  directly in that stretch; several lists with the same content can still arrive in a row. So
+  `bricks/reconnected` arrives before the `bricks/changed` that shows the brick connected. `bricks/reconnected` is sent whenever a brick gets a route after having none: after a
+  lost link comes back, and also when it is first connected.
+- **Answers and notifications are not ordered.** A request's answer may arrive before or after
+  the notifications its work caused. Right after `bricks/connect` returns, use its result; the
+  cache (`bricks()`) may still show the old state for a moment.
+- **Telemetry has one order for everyone.** Updates for every subscription of every client come
+  out of one queue in the daemon, so each client hears its own updates in that queue's order. The
+  snapshot holds everything up to your subscription, and each later change comes once, behind it.
+- **The snapshot is told before `subscribeTelemetry` resolves.** The library calls your listener
+  with the snapshot while the subscribe call is still running; the same holds for the chain in
+  `followChain`. `subscribePrograms` does not call the listener for the state it returns.
+- **Listeners.** A listener that throws stops nothing else, the first snapshot included: the
+  subscription stays.
+- **Program state.** One `programs/stateChanged` per change the daemon sees; see
+  [Programs](#programs) for what `runSeq` does and does not prove.
 
 ## Safe and full mode
 
-The user chooses it in the cockpit's settings (`ev3-cockpit.accessMode`); the cockpit enforces
-it. **safe** (default): writing, deleting and running only under `/home/root/lms2012/prjs` and
-`/media/card`; reading everywhere; no shell. **full**: everything, shell included. A consumer
-reads the mode to grey out what it cannot do; it does not enforce it itself. Safe mode is a
-guardrail against mistakes, not a sandbox: a program it runs can do anything on the brick, and a
-symbolic link inside a user area that points outside is not caught.
+The user chooses it, in VS Code or with `ev3 config`; the daemon enforces it for every client.
+**safe** (default): writing, deleting and running only under `/home/root/lms2012/prjs` and
+`/media/card`; reading everywhere; no shell. **full**: everything, shell included. Read the mode
+(`accessMode()`, `settings/accessModeChanged`) to grey out what cannot be done; do not enforce it
+yourself. Safe mode is a guardrail against mistakes, not a sandbox: a program it runs can do
+anything on the brick, and a symbolic link inside a user area that points outside is not caught.
+Full mode is never stored in the settings file: it lasts until the daemon ends (a newer daemon
+taking over keeps it).
 
-## Running a native program (ev3-c)
+## The daemon's log
+
+The daemon logs every client's connection, connects, deployments, stops and setting changes under
+the client's `name`:
+
+- Windows: `%LOCALAPPDATA%\ev3-cockpit\logs\daemon.log`
+- macOS: `~/Library/Logs/ev3-cockpit/daemon.log`
+- Linux: `$XDG_STATE_HOME/ev3-cockpit/logs/daemon.log` (`~/.local/state/…` by default)
+
+A development or test daemon logs to `daemon-<channel>.log` beside it. `daemon/status` returns the
+path as `logPath`, and a `daemon_unavailable` error from `connect` includes it with the log's last
+lines. The log rotates at 5 MB and keeps three files.
+
+## Running a native program (EVƎ C)
 
 The stock firmware runs `.rbf` bytecode only. The cockpit runs an `.rbf`; it does not build one.
-ev3-c puts its binary and a launcher `.rbf` (the ev3duder approach) in the project folder and
-calls `runProgram` on the launcher. Setting the binary executable, or `ldconfig` for an "install
-ev3lib" action, is a shell command: `runShell`, which needs full mode. Note that the program
-state the cockpit reports is the launcher's slot, not the native process it started.
+EVƎ C puts its binary and a launcher `.rbf` (the ev3duder approach) in the project folder and
+starts the launcher, in one `programs/deployAndRun` with both files (`skipIfSameMd5` leaves an
+unchanged binary on the brick). Setting the binary executable, or `ldconfig` for an "install
+ev3lib" action, is a shell command: `shell/run`, which needs full mode. The program state the
+cockpit reports is the launcher's slot, not the native process it started.
 
 ## Where the sibling designs differ
 
 - **ev3-native `design.md` §3.1** says the cockpit registers 45+ commands, provides `ev3://` and
-  runs programs. It provides the API above; `ev3://` is registered by ev3-explorer over this API
-  (DESIGN §4.6a); there are no deploy/run palette commands for consumers to call.
-- **ev3-native §3.2/§3.3** — three channels (commands, `ev3://`, API). Use the API.
-- **ev3-native 484** runs the ELF directly with `runProgram`; the firmware runs only `.rbf`, see
-  above.
+  runs programs. It provides the contract above; `ev3://` is registered by ev3-explorer over this
+  contract (DESIGN §4.6a); there are no deploy/run palette commands for add-ons to call.
+- **ev3-native §3.2/§3.3** — three channels (commands, `ev3://`, API). Use the contract through
+  the client library.
+- **ev3-native 484** runs the ELF directly; the firmware runs only `.rbf`, see above.
 - **ev3-explorer §8.3** names `resolveAuthority`, `getDefaultRoots`, `getFsAvailability`,
-  `resolveFsService`. Not in the API: build them in ev3-explorer over `listBricks`, the file
-  calls and the access mode.
+  `resolveFsService`. Not in the contract: build them in ev3-explorer over `bricks()`, the file
+  methods and the access mode.
 - **ev3-explorer §12** — safe/full is the cockpit's, now defined (above).
-- **Rename** is `move`: a copy and a removal on the brick, not atomic.
-- **Program output** (stdout of a native program) and log tailing: not yet, when a consumer asks.
+- **Program output** (stdout of a native program) and log tailing: not yet, when an add-on asks.

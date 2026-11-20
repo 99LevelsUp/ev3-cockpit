@@ -1,15 +1,14 @@
 {
   "name": "ev3-cockpit-api-check",
   "displayName": "EVƎ Cockpit API check",
-  "description": "A consumer of the cockpit's public API for hardware sessions (step-5 plan, U9). Not shipped.",
-  "version": "0.0.1",
+  "description": "An add-on of the cockpit daemon for hardware sessions: it uses the contract through the client library, not the cockpit extension. Not shipped.",
+  "version": "0.1.0",
   "publisher": "99LevelsUp",
   "private": true,
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/99LevelsUp/ev3-cockpit" },
   "engines": { "vscode": "^1.90.0" },
   "capabilities": { "untrustedWorkspaces": { "supported": true } },
-  "extensionDependencies": ["99LevelsUp.ev3-cockpit"],
   "activationEvents": [],
   "main": "./extension.js",
   "contributes": {

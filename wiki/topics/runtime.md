@@ -8,7 +8,7 @@ status: active
 
 ## Purpose [coverage: high — 7 sources]
 
-The `src/core/runtime/` module is the central coordination layer of EVƎ Cockpit. It manages the lifecycle of connected brick sessions (connect, disconnect, heartbeat, reconnect), unified discovery (aggregating results from all transport providers), foreground/background switching, and command dispatch. The runtime is the single source of truth for connection state — the webview and public API are strictly read-only consumers.
+The `src/core/runtime/` module is the central coordination layer of EVƎ Cockpit. It manages the lifecycle of connected brick sessions (connect, disconnect, heartbeat, reconnect), unified discovery (aggregating results from all transport providers), foreground/background switching, and command dispatch. The runtime is the single source of truth for connection state — it runs inside the cockpit daemon, whose clients reach it only through the contract.
 
 ## Architecture [coverage: high — 7 sources]
 
@@ -72,7 +72,7 @@ Default configuration values (from `FIRMWARE_SAFETY` constants): heartbeat inter
 
 ## Key Decisions [coverage: high — 5 sources]
 
-- **Session Manager is the exclusive session owner** — only Cockpit can trigger connect/disconnect. The public API is read-only for session state.
+- **Session Manager is the exclusive session owner** — only the daemon opens a session; clients ask with `bricks/connect`, and `deviceGate.ts` keeps a daemon off devices it lent or did not borrow.
 - **Per-brick command queue** — shared across all transport providers for the same brick, preventing conflicts between transport layers.
 - **Auto-connect suppression** — after explicit disconnect, the brick is added to `suppressedBricks` set to prevent auto-reconnect from favorites for the rest of the session.
 - **Reconnect vs explicit disconnect precedence** — explicit disconnect always wins. During reconnect backoff, if `explicitlyDisconnected` becomes true, reconnect is aborted.

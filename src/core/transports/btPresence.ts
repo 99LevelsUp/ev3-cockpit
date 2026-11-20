@@ -55,6 +55,12 @@ export interface BtPresenceOptions {
 	readonly onUnavailable?: (reason: string) => void;
 	/** Fired after a round that changed what is known, so discovery can be asked again. */
 	readonly onChange?: () => void;
+	/**
+	 * Whether this process may page the radio now, and check this brick: a daemon that lent the
+	 * radio or a brick to another daemon leaves them alone. Absent: always.
+	 */
+	readonly mayUseRadio?: () => boolean;
+	readonly mayCheck?: (mac: string) => boolean;
 }
 
 interface PairedState {
@@ -146,7 +152,9 @@ export class BtPresenceMonitor {
 		this.checking = true;
 		let changed = false;
 		try {
-			const targets = this.options.pairedWithoutSession();
+			if (this.options.mayUseRadio && !this.options.mayUseRadio()) { return; }
+			const mayCheck = this.options.mayCheck;
+			const targets = this.options.pairedWithoutSession().filter((mac) => !mayCheck || mayCheck(mac));
 			// A brick with a session is plainly there; whatever its last checks said is stale by
 			// the time its session ends, and must not mark it not heard on its way back.
 			const current = new Set(targets.map(normalise));
@@ -174,7 +182,7 @@ export class BtPresenceMonitor {
 
 	/** One inquiry window. Skipped while the previous one runs. */
 	async runInquiry(): Promise<void> {
-		if (this.inquiring || this.stopped) { return; }
+		if (this.inquiring || this.stopped || (this.options.mayUseRadio && !this.options.mayUseRadio())) { return; }
 		this.inquiring = true;
 		let changed = false;
 		try {

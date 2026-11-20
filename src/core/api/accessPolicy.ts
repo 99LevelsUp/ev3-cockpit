@@ -47,5 +47,6 @@ export function assertAllowed(mode: AccessMode, operation: AccessOperation, path
 	const what = operation === 'shell' ? 'running a shell command' : `${operation} of ${path ?? '(no path)'}`;
 	throw new AccessDeniedError(
 		`The cockpit is in safe mode, which does not allow ${what}: safe mode changes only `
-		+ `${USER_AREAS.join(' and ')}, and the shell needs full mode (setting ev3-cockpit.accessMode).`);
+		+ `${USER_AREAS.join(' and ')}, and the shell needs full mode, which only a person can switch on: `
+		+ 'run ev3 config set access-mode full in a terminal, or use EVƎ: Settings in VS Code.');
 }

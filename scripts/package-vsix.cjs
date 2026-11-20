@@ -3,10 +3,11 @@
  *
  *   node scripts/package-vsix.cjs                       every target in packaging.cjs
  *   node scripts/package-vsix.cjs linux-arm64           one target
- *   node scripts/package-vsix.cjs --skip-build ...      reuse out/extension.js and native/bin
+ *   node scripts/package-vsix.cjs --skip-build ...      reuse the bundles in out/ and native/bin
  *
- * It builds the bundle (`npm run bundle`) and, for a Windows VSIX only, the pairing helper, which
- * needs .NET: a Linux machine builds its own VSIX without it.
+ * It builds the bundles (`npm run bundle`: the extension and the daemon it starts, which ships beside
+ * it as out/daemon.js) and, for a Windows VSIX only, the pairing helper, which needs .NET: a Linux
+ * machine builds its own VSIX without it.
  *
  * For each target: a staging folder gets the extension's own files (an allow-list, never the
  * repository), the native modules installed for that platform with `npm --os --cpu` (their
