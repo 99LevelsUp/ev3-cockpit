@@ -4,6 +4,17 @@
  * Names follow LSP's `area/action` form. A request that changes a brick takes the brick's write
  * lease for exactly its own length; work of several steps is one request, so no client ever holds
  * a lease between requests. Stop and emergency stop never wait for a lease.
+ *
+ * - Cancelling: a client cancels its own request the LSP way (`$/cancelRequest`; with the client
+ *   library, an `AbortSignal`). The request ends with `cancelled`; nobody else's program is stopped.
+ * - Progress: requests that move file content report `{ transferred, total? }` the LSP way
+ *   (`$/progress` with a token the request carries; with the client library, an `onProgress`
+ *   callback). No other notification carries progress.
+ * - Folders: a write or a deployment to a path whose folders do not exist yet creates them; the
+ *   brick does this itself when a file is downloaded to it.
+ * - Subscriptions: an id the daemon hands out is valid on that connection only. After the daemon is
+ *   replaced, the client library subscribes again by itself and keeps the ids it gave its caller,
+ *   with a fresh snapshot first.
  */
 
 import type {
@@ -54,10 +65,11 @@ export interface Methods {
 	'files/exists': { params: OnBrick & { readonly path: string }; result: boolean };
 	'files/size': { params: OnBrick & { readonly path: string }; result: FileSize };
 	/**
-	 * Read a file: to a local path the daemon writes, or into a transfer handle the client then
-	 * drains with `transfer/read`.
+	 * Read a file: to a local path the daemon writes, inline as base64 in the answer (`inline`, at
+	 * most 64 KiB; a larger file is refused), or into a transfer handle the client then drains with
+	 * `transfer/read`.
 	 */
-	'files/read': { params: OnBrick & { readonly path: string; readonly toLocalPath?: string }; result: { readonly bytes: number; readonly handle?: string } };
+	'files/read': { params: OnBrick & { readonly path: string; readonly toLocalPath?: string; readonly inline?: boolean }; result: { readonly bytes: number; readonly handle?: string; readonly content?: string } };
 	/** Write a file: from a local path, from a filled transfer handle, or from inline base64 content of at most 4 KiB. */
 	'files/write': { params: OnBrick & { readonly path: string; readonly fromLocalPath?: string; readonly handle?: string; readonly content?: string }; result: { readonly bytes: number } };
 	'files/makeDirectory': { params: OnBrick & { readonly path: string }; result: null };

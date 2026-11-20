@@ -3,7 +3,12 @@
  * class instances, promises or functions.
  */
 
-/** Who a connection is. The daemon trusts a person's confirmation only from `vscode` and `cli`. */
+/**
+ * Who a connection is. The daemon trusts a person's confirmation only from `vscode` and `cli`, the
+ * cockpit's own. An add-on is `addon` in every environment (its VS Code extension and its `ev3 <name>`
+ * command alike), its MCP server `mcp`. The name a client gives is what other clients read in
+ * `brick_busy`, so it says where the client runs: "EVƎ C (VS Code)", "ev3 c run (terminal)".
+ */
 export type ClientKind = 'vscode' | 'cli' | 'mcp' | 'addon' | 'peer';
 
 /** A brick by its id or by its name. Names need not be unique; an ambiguous one is refused. */
@@ -96,6 +101,11 @@ export type StartOutcome = 'started' | 'not_seen_running' | 'uncertain';
 export interface DeployResult {
 	readonly brickId: string;
 	readonly outcome: StartOutcome;
+	/**
+	 * This start's number on the brick: the daemon counts every program start per brick. A program
+	 * state with the same or a higher `runSeq` is about this run or a later one, never an earlier.
+	 */
+	readonly runSeq: number;
 	/** Files that were uploaded, and those skipped because the brick held the same content. */
 	readonly uploaded: readonly string[];
 	readonly skipped: readonly string[];
@@ -104,6 +114,8 @@ export interface DeployResult {
 export interface ProgramState {
 	readonly brickId: string;
 	readonly running: boolean;
+	/** The number of the last start the daemon sent to this brick (0 before any); see `DeployResult.runSeq`. */
+	readonly runSeq: number;
 	/** The client that stopped it, when a stop ended it. */
 	readonly stoppedBy?: string;
 }

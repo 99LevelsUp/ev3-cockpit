@@ -29,6 +29,7 @@ export const WireErrorCode = {
 	SubscriptionFailed: 'subscription_failed',
 	ProgramRunning: 'program_running',
 	ProgramNotFound: 'program_not_found',
+	/** Not raised by the daemon's methods: a run or a deployment a stop cancelled ends with `cancelled`. */
 	ProgramCancelled: 'program_cancelled',
 	ModeConflict: 'mode_conflict',
 	AccessDenied: 'access_denied',

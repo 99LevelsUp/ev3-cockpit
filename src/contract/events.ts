@@ -33,8 +33,12 @@ export interface Notifications {
 	'daemon/lent': { readonly all: boolean; readonly brickIds: readonly string[]; readonly lent: boolean };
 	/** A question this client was asked is no longer open. */
 	'question/withdrawn': { readonly questionId: string };
-	/** Upload or download progress for a request that carried a progress token. */
-	'transfer/progress': { readonly transferred: number; readonly total?: number };
+}
+
+/** What a file request reports as progress. */
+export interface TransferProgress {
+	readonly transferred: number;
+	readonly total?: number;
 }
 
 export type NotificationName = keyof Notifications;
