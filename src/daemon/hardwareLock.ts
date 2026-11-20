@@ -9,22 +9,13 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { processAlive } from './systemTools';
 
 export interface LockHolder {
 	readonly pid: number;
 	/** The holder's channel; absent for the user's own daemon. */
 	readonly channel?: string;
 	readonly at: number;
-}
-
-function alive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		// EPERM: the process is there, it just is not ours to signal.
-		return (error as NodeJS.ErrnoException).code === 'EPERM';
-	}
 }
 
 export class HardwareLock {
@@ -38,7 +29,7 @@ export class HardwareLock {
 	holder(): LockHolder | undefined {
 		try {
 			const holder = JSON.parse(fs.readFileSync(this.file, 'utf8')) as LockHolder;
-			return typeof holder.pid === 'number' && alive(holder.pid) ? holder : undefined;
+			return typeof holder.pid === 'number' && processAlive(holder.pid) ? holder : undefined;
 		} catch {
 			return undefined;
 		}

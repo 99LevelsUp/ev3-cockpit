@@ -140,8 +140,14 @@ export class PeerLink implements SurfaceLoans {
 
 	private clearHeld(): void {
 		const { surface } = this.deps;
+		const before = this.heldKey();
 		for (const [brickId, block] of [...surface.blocked]) { if (block.by === HELD_THERE) { surface.blocked.delete(brickId); } }
-		surface.refreshBricks();
+		if (this.heldKey() !== before) { surface.refreshBricks(); }
+	}
+
+	/** The bricks shown as held by the user's daemon, with who holds them: to tell a real change from none. */
+	private heldKey(): string {
+		return JSON.stringify([...this.deps.surface.blocked].filter(([, block]) => block.by === HELD_THERE).sort(([a], [b]) => a.localeCompare(b)));
 	}
 
 	/** Shows what the user's daemon holds as blocked, naming who holds it. */
@@ -155,6 +161,7 @@ export class PeerLink implements SurfaceLoans {
 				if (!endpoint) { return; }
 				const held = await endpoint.request<BrickStatus[]>('peer/heldBricks', {});
 				const { surface, gate } = this.deps;
+				const before = this.heldKey();
 				const now = new Set(held.map((b) => b.brickId));
 				for (const [brickId, block] of [...surface.blocked]) {
 					if (block.by === HELD_THERE && !now.has(brickId)) { surface.blocked.delete(brickId); }
@@ -164,7 +171,8 @@ export class PeerLink implements SurfaceLoans {
 					const names = brick.holders.map((h) => h.client ?? (h.kind === 'hold' ? 'ev3 connect' : 'remembered bricks'));
 					surface.blocked.set(brick.brickId, { by: HELD_THERE, ...(names.length > 0 ? { holder: names.join(', ') } : {}) });
 				}
-				surface.refreshBricks();
+				// The user's daemon announces many changes that do not change what it holds.
+				if (this.heldKey() !== before) { surface.refreshBricks(); }
 			} while (this.refreshAgain);
 		} catch (error) {
 			this.deps.log.debug(`Reading the user's daemon's bricks failed: ${error instanceof Error ? error.message : String(error)}`);

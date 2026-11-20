@@ -46,3 +46,13 @@ export function isElevated(): boolean {
 	// The mandatory label of an elevated token is S-1-16-12288 (high) or higher.
 	return /S-1-16-(12288|16384|20480|28672)/.test(groups);
 }
+
+/** Whether a process with this pid is running; EPERM means it is, just not ours to signal. */
+export function processAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM';
+	}
+}

@@ -25,6 +25,11 @@ import {
 export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 
 /** An error that crossed the wire, or one this side raises with a contract code. */
+/** A refusal a person can lift: `command` is what they can run. */
+export function needsPerson(message: string, command: string): ContractError {
+	return new ContractError(WireErrorCode.NeedsPerson, message, { command, kind: 'NeedsPersonError' });
+}
+
 export class ContractError extends Error {
 	readonly code: WireErrorCode;
 	readonly kind: ErrorKind;

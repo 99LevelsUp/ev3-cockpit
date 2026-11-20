@@ -10,6 +10,7 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import type { DaemonPaths } from './paths';
+import { processAlive } from './systemTools';
 
 export class AlreadyRunningError extends Error {
 	constructor(message = 'A cockpit daemon already runs on this channel.') {
@@ -46,15 +47,6 @@ export function ensurePrivateDir(dir: string, host: ChannelHost): void {
 	}
 	if ((stat.mode & 0o077) !== 0) {
 		throw new Error(`${dir} can be opened by other users (mode ${(stat.mode & 0o777).toString(8)}); the cockpit will not put its socket there.`);
-	}
-}
-
-function processAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === 'EPERM';
 	}
 }
 

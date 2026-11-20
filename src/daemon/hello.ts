@@ -9,12 +9,10 @@ import {
 	HELLO_FINISH, HELLO_START, HelloAccepted, HelloChallenge, HelloStart, clientProof, daemonProof, newNonce,
 	proofsMatch,
 } from '../contract/hello';
-import type { ClientKind } from '../contract/models';
+import { CLIENT_KINDS, type ClientKind } from '../contract/models';
 
 /** How long a client has to finish the handshake. */
 export const HELLO_TIMEOUT_MS = 10_000;
-
-const CLIENT_KINDS: readonly ClientKind[] = ['vscode', 'cli', 'mcp', 'addon', 'peer'];
 
 export interface ClientIdentity {
 	readonly name: string;
@@ -34,7 +32,7 @@ function isHelloStart(value: unknown): value is HelloStart {
 	const v = value as Partial<HelloStart> | undefined;
 	return typeof v?.clientNonce === 'string' && v.clientNonce.length >= 32
 		&& typeof v.clientName === 'string' && v.clientName.length > 0 && v.clientName.length <= 200
-		&& CLIENT_KINDS.includes(v.clientKind as ClientKind)
+		&& (CLIENT_KINDS as readonly string[]).includes(v.clientKind as ClientKind)
 		&& typeof v.version === 'string' && typeof v.contractVersion === 'number';
 }
 

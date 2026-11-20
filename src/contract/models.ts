@@ -9,7 +9,13 @@
  * command alike), its MCP server `mcp`. The name a client gives is what other clients read in
  * `brick_busy`, so it says where the client runs: "EVƎ C (VS Code)", "ev3 c run (terminal)".
  */
-export type ClientKind = 'vscode' | 'cli' | 'mcp' | 'addon' | 'peer';
+export const CLIENT_KINDS = ['vscode', 'cli', 'mcp', 'addon', 'peer'] as const;
+export type ClientKind = (typeof CLIENT_KINDS)[number];
+
+/** VS Code and the `ev3` command have a person at them; the daemon honours their confirmations. */
+export function isPersonClient(kind: ClientKind): boolean {
+	return kind === 'vscode' || kind === 'cli';
+}
 
 /** A brick by its id or by its name. Names need not be unique; an ambiguous one is refused. */
 export type BrickRef = string;

@@ -11,8 +11,7 @@
 
 import * as readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import { ContractError } from '../client/connection';
-import { WireErrorCode } from '../contract/errors';
+import { needsPerson } from '../client/connection';
 import type { Question, QuestionAnswer } from '../contract/models';
 
 export interface PersonIo {
@@ -71,7 +70,7 @@ export class Confirmer {
 	 */
 	async confirm(confirmation: Confirmation): Promise<boolean> {
 		if (!this.canAsk) {
-			throw new ContractError(WireErrorCode.NeedsPerson, confirmation.refusal, { command: confirmation.command, kind: 'NeedsPersonError' });
+			throw needsPerson(confirmation.refusal, confirmation.command);
 		}
 		return this.ask(confirmation.text, confirmation.details);
 	}

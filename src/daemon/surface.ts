@@ -10,11 +10,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs/promises';
-import { ContractError } from '../client/connection';
+import { ContractError, needsPerson } from '../client/connection';
 import { WireErrorCode } from '../contract/errors';
 import type {
 	BrickStatus, ContractBrick, ContractChain, DaemonStatus, DeployResult, ProgramState, StartOutcome, TelemetryValue,
 } from '../contract/models';
+import { isPersonClient } from '../contract/models';
 import { BrickServices, ClientSession, PerBrickServices, ApiChain, createBrickServices } from '../core/api/cockpitApi';
 import { assertAllowed, type AccessMode } from '../core/api/accessPolicy';
 import { BrickEntry, BrickId, BrickRef, ChannelState, Transport, operationDeadline } from '../core/contracts';
@@ -241,7 +242,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		// A client back after a handover takes over the holds its old connection had.
 		if (restoredClients.size > 0) { holders.reclaim(identity.name, client.id, restoredClients); }
 		const subscriptions = new Map<string, { dispose(): void }>();
-		const person = identity.kind === 'vscode' || identity.kind === 'cli';
+		const person = isPersonClient(identity.kind);
 
 		const on = (method: string, handler: (params: Record<string, unknown>, signal: AbortSignal) => unknown): void => {
 			endpoint.onRequest(method, (params, context) =>
@@ -348,8 +349,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			});
 			if (answer !== 'yes') {
 				if (answer === 'no') { throw new ContractError(WireErrorCode.Cancelled, 'Not forgotten: the person said no.'); }
-				throw new ContractError(WireErrorCode.NeedsPerson, `Forgetting ${name} needs a person's yes: run ev3 forget ${name} in a terminal, or use VS Code.`,
-					{ command: `ev3 forget ${name}`, kind: 'NeedsPersonError' });
+				throw needsPerson(`Forgetting ${name} needs a person's yes: run ev3 forget ${name} in a terminal, or use VS Code.`, `ev3 forget ${name}`);
 			}
 			return leased(brickId, signal, async () => {
 				const report = await runtime.bricks.forget(brickId as BrickId);
@@ -373,8 +373,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				return answer === 'yes';
 			}));
 			if (refused === 'keep') {
-				throw new ContractError(WireErrorCode.NeedsPerson, `Clearing ${name}'s Bluetooth list needs a person's yes: run ev3 bt-clear ${name} in a terminal, or use VS Code.`,
-					{ command: `ev3 bt-clear ${name}`, kind: 'NeedsPersonError' });
+				throw needsPerson(`Clearing ${name}'s Bluetooth list needs a person's yes: run ev3 bt-clear ${name} in a terminal, or use VS Code.`, `ev3 bt-clear ${name}`);
 			}
 			const entries = report?.entries ?? [];
 			return {

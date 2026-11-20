@@ -8,12 +8,12 @@
  */
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { ContractError } from '../client/connection';
+import { ContractError, needsPerson } from '../client/connection';
 import { WireErrorCode } from '../contract/errors';
-import type { ClientKind, SettingValue } from '../contract/models';
+import { type ClientKind, type SettingValue, isPersonClient } from '../contract/models';
 import { SETTING_RULES, SettingRule, SettingValues, defaultSettings, problemWith, ruleFor } from '../core/settings/spec';
 import { EventEmitter } from '../core/events';
+import { writeJson } from './stateStore';
 
 /** Who asks for a change. */
 export interface ChangeRequest {
@@ -78,16 +78,11 @@ export class SettingsStore {
 		if (problem) { throw new ContractError(WireErrorCode.InvalidRequest, `Setting ${key} ${problem}.`); }
 		if (rule.dangerous && value !== rule.default) {
 			const command = `ev3 config set ${cliKey(key)} ${String(value)}`;
-			const personClient = request.kind === 'vscode' || request.kind === 'cli';
-			if (!personClient) {
-				throw new ContractError(WireErrorCode.NeedsPerson,
-					`${key} can be changed only by a person: run ${command} in a terminal, or use EVƎ: Settings in VS Code.`,
-					{ command, kind: 'NeedsPersonError' });
+			if (!isPersonClient(request.kind)) {
+				throw needsPerson(`${key} can be changed only by a person: run ${command} in a terminal, or use EVƎ: Settings in VS Code.`, command);
 			}
 			if (!request.confirmedByPerson) {
-				throw new ContractError(WireErrorCode.NeedsPerson,
-					`Changing ${key} needs your confirmation: run ${command} in an interactive terminal, or use EVƎ: Settings in VS Code.`,
-					{ command, kind: 'NeedsPersonError' });
+				throw needsPerson(`Changing ${key} needs your confirmation: run ${command} in an interactive terminal, or use EVƎ: Settings in VS Code.`, command);
 			}
 		}
 		this.values[key] = value as boolean | number | string;
@@ -133,9 +128,6 @@ export class SettingsStore {
 		const stored = Object.fromEntries(SETTING_RULES
 			.filter((rule) => !rule.notStored && this.values[rule.key] !== rule.default)
 			.map((rule) => [rule.key, this.values[rule.key]]));
-		fs.mkdirSync(path.dirname(this.file), { recursive: true });
-		const temp = `${this.file}.${process.pid}.tmp`;
-		fs.writeFileSync(temp, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
-		fs.renameSync(temp, this.file);
+		writeJson(this.file, stored);
 	}
 }

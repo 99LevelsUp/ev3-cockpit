@@ -74,7 +74,7 @@ export async function connectedBrick(ctx: CommandContext, ref: string | undefine
 export async function stopTarget(ctx: CommandContext, ref: string | undefined): Promise<{ client: CockpitClient; brick: string | undefined; name: string }> {
 	const client = await ctx.client();
 	if (ref === undefined) { return { client, brick: undefined, name: 'the brick' }; }
-	const known = client.brick(ref) ?? client.bricks().find((b) => b.name.trim().toLowerCase() === ref.trim().toLowerCase());
+	const known = client.brick(ref);
 	if (known?.connected) { return { client, brick: ref, name: known.name }; }
 	const { brickId, name } = await connectedBrick(ctx, ref);
 	return { client, brick: brickId, name };

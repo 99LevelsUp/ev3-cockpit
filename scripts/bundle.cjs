@@ -18,7 +18,8 @@ const path = require('path');
 const REPO = path.resolve(__dirname, '..');
 
 /** The modules no bundle inlines. */
-const EXTERNALS = ['vscode', 'node-hid', 'serialport', 'koffi', 'usb'];
+const { NATIVE_MODULES } = require('./packaging.cjs');
+const EXTERNALS = ['vscode', ...NATIVE_MODULES];
 
 /** Each bundle: its entry in the sources, its file in the output folder, and whether a shell runs it. */
 const BUNDLES = {

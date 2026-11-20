@@ -128,8 +128,8 @@ export class CockpitClient {
 	bricks(): readonly ContractBrick[] { return this.brickList; }
 	brick(ref: string): ContractBrick | undefined {
 		// As the daemon names bricks: an id, or a name whatever its case.
-		const lower = ref.toLowerCase();
-		return this.brickList.find((b) => b.brickId === ref) ?? this.brickList.find((b) => b.name.toLowerCase() === lower);
+		const wanted = ref.trim().toLowerCase();
+		return this.brickList.find((b) => b.brickId === ref) ?? this.brickList.find((b) => b.name.trim().toLowerCase() === wanted);
 	}
 	settings(): readonly SettingValue[] { return this.settingList; }
 	accessMode(): AccessMode { return this.access; }
@@ -271,9 +271,12 @@ export class CockpitClient {
 			endpoint.onNotification(name, (params) => this.dispatch(name, params));
 		}
 		endpoint.onClose(() => { void this.connectAgain(); });
-		this.brickList = [...await this.request('bricks/list', {})];
-		this.settingList = [...await this.request('settings/list', {})];
-		this.access = await this.request('settings/accessMode', {});
+		const [bricks, settings, access] = await Promise.all([
+			this.request('bricks/list', {}), this.request('settings/list', {}), this.request('settings/accessMode', {}),
+		]);
+		this.brickList = [...bricks];
+		this.settingList = [...settings];
+		this.access = access;
 		if (this.active) { await this.request('telemetry/foreground', { brick: this.active }).catch(() => undefined); }
 		this.checkVersions(hello);
 	}
