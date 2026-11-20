@@ -252,7 +252,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		?? [...clients.values()].find((c) => c.identity.kind === 'cli');
 	const gate = new LoanGate('owner');
 	if (lock) {
-		if (lock.tryTake()) {
+		if (takeLock()) {
 			role = 'owner';
 		} else if (devChannel) {
 			role = 'borrower';

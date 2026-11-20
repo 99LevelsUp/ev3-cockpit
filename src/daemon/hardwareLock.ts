@@ -37,20 +37,23 @@ export class HardwareLock {
 
 	get isHeld(): boolean { return this.held; }
 
-	/** Every claim there is; the pid is in the file name, so a claim still being written counts. */
+	/**
+	 * Every claim there is; the pid is in the file name, so a claim still being written counts. A folder
+	 * that cannot be listed throws: claims nobody can see must not read as no claims.
+	 */
 	private claims(): Claim[] {
 		const dir = path.dirname(this.file);
 		const prefix = `${path.basename(this.file)}.`;
-		let names: string[];
-		try { names = fs.readdirSync(dir); } catch { return []; }
-		return names
+		return fs.readdirSync(dir)
 			.filter((name) => name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length)))
 			.map((name) => ({ file: path.join(dir, name), pid: Number(name.slice(prefix.length)) }));
 	}
 
 	/** Who holds the lock now, if a live process does. */
 	holder(): LockHolder | undefined {
-		for (const claim of this.claims()) {
+		let claims: Claim[];
+		try { claims = this.claims(); } catch { return undefined; }
+		for (const claim of claims) {
 			if (claim.pid !== process.pid && !processAlive(claim.pid)) { continue; }
 			if (claim.pid === process.pid && !this.held) { continue; }
 			try {
@@ -68,8 +71,15 @@ export class HardwareLock {
 		fs.mkdirSync(path.dirname(this.file), { recursive: true });
 		const me: LockHolder = { pid: process.pid, ...(this.channel ? { channel: this.channel } : {}), at: Date.now() };
 		fs.writeFileSync(this.mine, JSON.stringify(me), { mode: 0o600 });
+		let claims: Claim[];
+		try {
+			claims = this.claims();
+		} catch (error) {
+			this.withdraw();
+			throw error;
+		}
 		let contested = false;
-		for (const claim of this.claims()) {
+		for (const claim of claims) {
 			if (claim.pid === process.pid) { continue; }
 			if (processAlive(claim.pid)) {
 				contested = true;

@@ -28,7 +28,7 @@ import type { ForgetReport } from '../core/runtime/forgetReport';
 import { readProgramPresetSettings } from '../core/telemetry/telemetrySettings';
 import { settingsSection } from '../core/settings/spec';
 import { resolveBrick } from './brickResolver';
-import { HolderSets, type HolderSnapshot } from './holders';
+import { type Holder, HolderSets, type HolderSnapshot } from './holders';
 import { Leases } from './leases';
 import type { Daemon, DaemonClient } from './main';
 import { ask } from './questions';
@@ -111,6 +111,8 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	const blocked = new Map<string, { readonly by: string; readonly holder?: string }>();
 	/** Connects in progress per brick: a client gone mid-connect must not sign out one another is making. */
 	const connecting = new Map<string, number>();
+	/** Bricks a gone client connected; signed out when their last connect ends and nobody holds them. */
+	const orphaned = new Set<string>();
 	/** Client ids from a predecessor whose holds a returning client of the same name takes over. */
 	const restoredClients = new Set<string>();
 	let disposed = false;
@@ -309,6 +311,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			// The person asked for this brick: a pairing they cancelled earlier may be asked again.
 			runtime.bricks.resumePairing(brickId as BrickId);
 			connecting.set(brickId, (connecting.get(brickId) ?? 0) + 1);
+			const holder: Holder = params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name };
 			try {
 				if (runtime.bricks.isSignedIn(brickId as BrickId)) {
 					// Connected already: try every channel that is not connected yet.
@@ -326,19 +329,22 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 					}
 					await runtime.bricks.signIn(brickId as BrickId);
 				}
+				// The client went away while the brick was being connected: a holder for it would never be
+				// released. Whether the brick stays connected is decided when the last connect of it ends.
+				if (!params.hold && client.endpoint.closed) {
+					orphaned.add(brickId);
+					throw new ContractError(WireErrorCode.Cancelled, 'The client went away while its brick was being connected.');
+				}
+				holders.add(brickId, holder);
 			} finally {
 				const left = (connecting.get(brickId) ?? 1) - 1;
 				if (left > 0) { connecting.set(brickId, left); } else { connecting.delete(brickId); }
-			}
-			// The client went away while the brick was being connected: a holder for it would never be
-			// released, so the brick stays connected only if someone else holds it or is connecting it.
-			if (!params.hold && client.endpoint.closed) {
-				if (holders.holdersOf(brickId).length === 0 && !connecting.has(brickId)) {
+				// The last connect of the brick has ended, failed or not: one a gone client left behind is
+				// signed out unless somebody holds it now.
+				if (left === 0 && orphaned.delete(brickId) && holders.holdersOf(brickId).length === 0) {
 					await runtime.bricks.signOut(brickId as BrickId).catch(() => undefined);
 				}
-				throw new ContractError(WireErrorCode.Cancelled, 'The client went away while its brick was being connected.');
 			}
-			holders.add(brickId, params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name });
 			log.info(`Connected ${brickId}${params.hold ? ' and held' : ''}`, identity.name);
 			const entry = runtime.aggregator.getBrick(brickId as BrickId);
 			if (!entry) { throw new ContractError(WireErrorCode.NotConnected, `Brick ${brickId} went away.`); }

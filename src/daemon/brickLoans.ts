@@ -143,20 +143,11 @@ export function createBrickLoans(deps: BrickLoansDeps): BrickLoans {
 			gate.add(brickId, usb);
 			surface.blocked.set(brickId, { by: LENT_TO, holder: peer.identity.name });
 			loans.set(brickId, { peerId: peer.id, holders: held, usb });
-			try {
-				await runtime.bricks.signOut(brickId as BrickId);
-			} catch (error) {
-				// Still open here: nothing is lent, and its holders get it back as they had it.
-				loans.delete(brickId);
-				gate.remove(brickId, usb);
-				surface.blocked.delete(brickId);
-				const kept = stillHere(held);
-				if (kept.length > 0) { surface.holders.restore({ [brickId]: kept }); }
-				surface.refreshBricks();
-				const why = error instanceof Error ? error.message : String(error);
-				log.warn(`Lending ${nameOf(brickId)} to ${peer.identity.name} failed: this daemon could not release it (${why})`);
-				return { lent: false, reason: `The user's daemon could not release ${nameOf(brickId)}: ${why}` };
-			}
+			// A release that fails part way cannot be undone cleanly (the sign-in is gone before the links
+			// close), so the loan stands either way, as for a loan of everything: this daemon uses the brick
+			// no more, and its holders get it back when the development daemon ends (giveBack).
+			await runtime.bricks.signOut(brickId as BrickId).catch((error: unknown) =>
+				log.warn(`Releasing ${nameOf(brickId)} for the loan failed: ${error instanceof Error ? error.message : String(error)}`));
 			log.info(`Lent ${nameOf(brickId)} to ${peer.identity.name}`);
 			announce([brickId], true, false);
 			return { lent: true, ...(usb.length > 0 ? { usb } : {}) };
