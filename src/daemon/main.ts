@@ -29,6 +29,7 @@ import { setLedgerStore } from '../core/fs/transferLedger';
 import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
 import { fileLedgerStore } from './stateStore';
 import { createSurface } from './surface';
+import { ask } from './questions';
 import { ClientIdentity, acceptHello } from './hello';
 import { ensureKey } from './key';
 import { DaemonLog } from './log';
@@ -196,6 +197,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		...(options.simulated ? { providers: [new MockTransportProvider(mockConfig ?? DEFAULT_MOCK_CONFIG)] } : {}),
 		...(options.mockBricks ? { mockBricks: true } : {}),
 		...(mockConfig && !options.simulated ? { mockConfig } : {}),
+		// Linux: BlueZ refused this user. Ask a person through a VS Code window or a terminal that is
+		// connected; with nobody to ask, say in the log what to run.
+		onBluetoothAccessDenied: (fix) => {
+			const person = [...clients.values()].find((c) => c.identity.kind === 'vscode')
+				?? [...clients.values()].find((c) => c.identity.kind === 'cli');
+			log.warn(`Bluetooth: BlueZ refused this user. The fix: ${fix.command}`);
+			if (!person) { return; }
+			void fix.offer(async (prompt) => (await ask(person.endpoint, {
+				kind: 'bluetoothAccess', text: prompt.message, details: [prompt.command],
+			})) === 'yes').then(() => fix.checkAgain()).catch((error: unknown) => {
+				log.warn(`Bluetooth access fix failed: ${error instanceof Error ? error.message : String(error)}`);
+			});
+		},
 		telemetrySettings: readTelemetrySettings(settingsSection(current), warn),
 		throttleSettings: readThrottleSettings(settingsSection(current), warn),
 		programPreset: readProgramPresetSettings(settingsSection(current), warn),
