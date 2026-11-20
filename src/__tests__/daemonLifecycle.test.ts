@@ -135,6 +135,42 @@ describe('the daemon process', () => {
 	});
 });
 
+describe('a client still in its handshake', () => {
+	it('keeps the daemon from exiting under it when the grace runs out first', async (t) => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-daemon-'));
+		const channel = `t-${randomBytes(3).toString('hex')}`;
+		const env: NodeJS.ProcessEnv = { ...process.env, LOCALAPPDATA: home, XDG_STATE_HOME: home, XDG_RUNTIME_DIR: home, HOME: home, USERPROFILE: home };
+		delete env.NODE_OPTIONS;
+		delete env.NODE_TEST_CONTEXT;
+		const paths = daemonPaths({
+			platform: process.platform, env, homedir: home,
+			...(typeof process.getuid === 'function' ? { uid: process.getuid() } : {}),
+			...(process.platform === 'win32' ? { userSid: currentUserSid() } : {}),
+			channel,
+		});
+		const daemon: ChildProcess = spawn(process.execPath, [
+			path.join(REPO, 'out', 'daemon', 'main.js'), '--channel', channel, '--simulated', '--grace-ms', '300', '--install-root', REPO,
+		], { env, stdio: 'ignore' });
+		t.after(() => { if (daemon.exitCode === null) { daemon.kill(); } });
+		let socket: net.Socket | undefined;
+		for (let i = 0; i < 100 && !socket; i++) {
+			socket = await new Promise<net.Socket | undefined>((resolve) => {
+				const s = net.connect(paths.channel);
+				s.once('connect', () => resolve(s));
+				s.once('error', () => resolve(undefined));
+			});
+			if (!socket) { await sleep(100); }
+		}
+		assert.ok(socket, 'the daemon never listened');
+		// Three graces long, connected but silent.
+		await sleep(900);
+		const endpoint = createEndpoint(socket);
+		const hello = await performHello(endpoint, readKey(paths.keyFile), { name: 'slow', kind: 'cli', version: '0.0.0' });
+		assert.equal(hello.state, 'serving');
+		endpoint.close();
+	});
+});
+
 describe('where the daemon is installed', () => {
 	it('finds its install root from the bundle and from tsc\'s output alike', () => {
 		const root = path.resolve('install');

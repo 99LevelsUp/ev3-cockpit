@@ -14,10 +14,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type * as net from 'node:net';
-import { ContractError, Endpoint, createEndpoint } from '../client/connection';
+import { ContractError, Endpoint, createEndpoint, needsPerson } from '../client/connection';
 import { WireErrorCode } from '../contract/errors';
 import type { HelloAccepted } from '../contract/hello';
-import type { DaemonStatus, LaunchSpec } from '../contract/models';
+import { type DaemonStatus, type LaunchSpec, isPersonClient } from '../contract/models';
 import { spawnDaemon } from '../client/ensureDaemon';
 import { CONTRACT_VERSION } from '../contract/version';
 import { BrickId, Transport } from '../core/contracts';
@@ -156,6 +156,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		const endpoint = createEndpoint(socket, {
 			onOversize: (bytes) => log.warn(`A client sent a message of ${bytes} bytes; connection closed`),
 		});
+		// A connection still in its handshake keeps the daemon from exiting under it.
+		const handshake = `handshake-${randomBytes(6).toString('hex')}`;
+		lifecycle.clientConnected(handshake);
 		acceptHello(endpoint, { key, accepted }).then(async (identity) => {
 			await ready;
 			if (lifecycle.state === 'exiting') { endpoint.close(); return; }
@@ -177,7 +180,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 			lifecycle.clientConnected(client.id);
 		}).catch((error: unknown) => {
 			log.debug(`A connection was refused: ${error instanceof Error ? error.message : String(error)}`);
-		});
+		}).finally(() => lifecycle.clientLeft(handshake));
 	};
 
 	const registerBaseHandlers = (client: DaemonClient): void => {
@@ -201,10 +204,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		});
 		endpoint.onRequest('daemon/restart', (params) => {
 			const { confirmedByPerson, launch } = (params ?? {}) as { confirmedByPerson?: unknown; launch?: unknown };
-			if (!(identity.kind === 'vscode' || identity.kind === 'cli') || confirmedByPerson !== true) {
-				throw new ContractError(WireErrorCode.NeedsPerson,
-					'Restarting the cockpit daemon needs a person to confirm it: run ev3 daemon restart in a terminal, or use VS Code.',
-					{ command: 'ev3 daemon restart', kind: 'NeedsPersonError' });
+			if (!isPersonClient(identity.kind) || confirmedByPerson !== true) {
+				throw needsPerson('Restarting the cockpit daemon needs a person to confirm it: run ev3 daemon restart in a terminal, or use VS Code.', 'ev3 daemon restart');
 			}
 			if (lifecycle.state === 'lent' || built.loans?.anyLent) {
 				throw new ContractError(WireErrorCode.InvalidRequest, 'Bricks are lent to a development daemon; restart the cockpit daemon once it has ended.');
