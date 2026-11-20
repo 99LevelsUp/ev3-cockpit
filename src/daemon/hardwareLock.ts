@@ -3,13 +3,16 @@
  * starts them; the holder owns the hardware. A daemon without it opens only what is lent to it, or
  * nothing until the holder ends.
  *
- * The lock is a file created exclusively, with the holder's pid in it. A holder that died leaves the
- * file behind; the next daemon finds its pid gone and takes the lock over.
+ * The lock is a set of claims, one file per daemon next to the lock path (`hardware.lock.<pid>`). A
+ * daemon writes its own claim, then looks at all of them: it holds the hardware when no other claim
+ * belongs to a live process, and otherwise withdraws its claim. Of two daemons claiming at once the
+ * second to look always sees the first, so two never both hold it; both may withdraw, and the one
+ * waiting tries again on its timer. Nobody takes another daemon's file over, so there is no
+ * takeover to race: a claim is removed by its owner, or by anyone once its process is gone.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { processAlive } from './systemTools';
 
 export interface LockHolder {
@@ -19,117 +22,77 @@ export interface LockHolder {
 	readonly at: number;
 }
 
-/** A takeover guard older than this was left by a daemon that died while taking a lock over. */
-const TAKEOVER_GUARD_STALE_MS = 10_000;
-
-/** Errors of a file system that has no hard links (some network and FAT-like volumes). */
-const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP', 'EXDEV']);
-
-/** An unreadable lock younger than this may still be being written (see `placeLock`). */
-const LOCK_BEING_WRITTEN_MS = 2000;
-
-/**
- * Puts the lock in place, failing with EEXIST when one is there. Linked from the file written aside
- * where the file system allows it; elsewhere created exclusively and written, which leaves a moment
- * in which the lock is empty: a takeover leaves an unreadable lock alone while it is that new.
- */
-function placeLock(temp: string, file: string, me: LockHolder): void {
-	try {
-		fs.linkSync(temp, file);
-		return;
-	} catch (error) {
-		if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? '')) { throw error; }
-	}
-	const fd = fs.openSync(file, 'wx', 0o600);
-	try { fs.writeSync(fd, JSON.stringify(me)); } finally { fs.closeSync(fd); }
+interface Claim {
+	readonly file: string;
+	readonly pid: number;
 }
 
 export class HardwareLock {
 	private held = false;
+	private readonly mine: string;
 
-	constructor(private readonly file: string, private readonly channel: string | undefined) {}
+	constructor(private readonly file: string, private readonly channel: string | undefined) {
+		this.mine = `${file}.${process.pid}`;
+	}
 
 	get isHeld(): boolean { return this.held; }
 
-	/** Who holds the lock now, if a live process does. */
-	holder(): LockHolder | undefined {
-		try {
-			const holder = JSON.parse(fs.readFileSync(this.file, 'utf8')) as LockHolder;
-			return typeof holder.pid === 'number' && processAlive(holder.pid) ? holder : undefined;
-		} catch {
-			return undefined;
-		}
+	/** Every claim there is; the pid is in the file name, so a claim still being written counts. */
+	private claims(): Claim[] {
+		const dir = path.dirname(this.file);
+		const prefix = `${path.basename(this.file)}.`;
+		let names: string[];
+		try { names = fs.readdirSync(dir); } catch { return []; }
+		return names
+			.filter((name) => name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length)))
+			.map((name) => ({ file: path.join(dir, name), pid: Number(name.slice(prefix.length)) }));
 	}
 
-	/** Takes the lock when nobody alive holds it. True when this process holds it now. */
+	/** Who holds the lock now, if a live process does. */
+	holder(): LockHolder | undefined {
+		for (const claim of this.claims()) {
+			if (claim.pid !== process.pid && !processAlive(claim.pid)) { continue; }
+			if (claim.pid === process.pid && !this.held) { continue; }
+			try {
+				return { ...(JSON.parse(fs.readFileSync(claim.file, 'utf8')) as LockHolder), pid: claim.pid };
+			} catch {
+				return { pid: claim.pid, at: 0 };
+			}
+		}
+		return undefined;
+	}
+
+	/** Takes the lock when nobody alive holds or claims it. True when this process holds it now. */
 	tryTake(): boolean {
 		if (this.held) { return true; }
 		fs.mkdirSync(path.dirname(this.file), { recursive: true });
 		const me: LockHolder = { pid: process.pid, ...(this.channel ? { channel: this.channel } : {}), at: Date.now() };
-		// The lock appears with its holder already in it: written aside, then linked into place, which
-		// fails when a lock is there. Nobody ever reads a lock that is still being written.
-		const temp = `${this.file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-		fs.writeFileSync(temp, JSON.stringify(me), { mode: 0o600 });
-		try {
-			for (let attempt = 0; attempt < 2; attempt++) {
-				try {
-					placeLock(temp, this.file, me);
-					this.held = true;
-					return true;
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== 'EEXIST') { throw error; }
-				}
-				if (!this.takeOverStale()) { return false; }
+		fs.writeFileSync(this.mine, JSON.stringify(me), { mode: 0o600 });
+		let contested = false;
+		for (const claim of this.claims()) {
+			if (claim.pid === process.pid) { continue; }
+			if (processAlive(claim.pid)) {
+				contested = true;
+			} else {
+				// Left by a daemon that died; only it could have written this file.
+				try { fs.rmSync(claim.file, { force: true }); } catch { /* removed by another daemon */ }
 			}
-			return false;
-		} finally {
-			try { fs.rmSync(temp, { force: true }); } catch { /* removed with its folder */ }
 		}
-	}
-
-	/**
-	 * Removes a lock its holder left behind when it died. One daemon at a time decides that, under a
-	 * guard file of its own, so none removes a lock another daemon has just taken. True when the lock
-	 * is gone and taking it may be tried again.
-	 */
-	private takeOverStale(): boolean {
-		const guard = `${this.file}.takeover`;
-		let fd: number;
-		try {
-			fd = fs.openSync(guard, 'wx', 0o600);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== 'EEXIST') { throw error; }
-			// A guard older than a takeover can take was left by a daemon that died holding it.
-			try {
-				if (Date.now() - fs.statSync(guard).mtimeMs > TAKEOVER_GUARD_STALE_MS) { fs.rmSync(guard, { force: true }); }
-			} catch { /* gone already */ }
+		if (contested) {
+			this.withdraw();
 			return false;
 		}
-		try {
-			let holder: Partial<LockHolder> | undefined;
-			try {
-				holder = JSON.parse(fs.readFileSync(this.file, 'utf8')) as Partial<LockHolder>;
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === 'ENOENT') { return true; }
-				// One that does not parse is damaged, unless it is new: on a file system without hard links
-				// a lock is created first and written after.
-				if (Date.now() - fs.statSync(this.file).mtimeMs < LOCK_BEING_WRITTEN_MS) { return false; }
-			}
-			if (holder && typeof holder.pid === 'number' && processAlive(holder.pid)) { return false; }
-			fs.rmSync(this.file, { force: true });
-			return true;
-		} finally {
-			fs.closeSync(fd);
-			try { fs.rmSync(guard, { force: true }); } catch { /* gone already */ }
-		}
+		this.held = true;
+		return true;
 	}
 
 	release(): void {
 		if (!this.held) { return; }
 		this.held = false;
-		try {
-			const holder = JSON.parse(fs.readFileSync(this.file, 'utf8')) as LockHolder;
-			if (holder.pid === process.pid) { fs.rmSync(this.file, { force: true }); }
-		} catch { /* gone already */ }
+		this.withdraw();
+	}
+
+	private withdraw(): void {
+		try { fs.rmSync(this.mine, { force: true }); } catch { /* gone already */ }
 	}
 }

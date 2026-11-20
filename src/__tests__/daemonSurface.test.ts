@@ -24,6 +24,9 @@ import { DaemonLog } from '../daemon/log';
 import { SettingsStore } from '../daemon/settingsStore';
 import { Lifecycle } from '../daemon/stateMachine';
 import { createSurface } from '../daemon/surface';
+import { createBrickLoans } from '../daemon/brickLoans';
+import { LoanGate } from '../core/runtime/deviceGate';
+import type { LoanResult } from '../contract/methods';
 import { duplexPair } from './duplexPair';
 import { waitFor } from './waitFor';
 
@@ -75,8 +78,19 @@ function world() {
 		surface.attach(client);
 		return Object.assign(clientSide, { asked });
 	};
+	/** A development daemon's connection to this one: it borrows bricks through `peer/*`. */
+	const connectPeer = (name: string): Endpoint => {
+		const [a, b] = duplexPair();
+		const daemonSide = createEndpoint(b);
+		const peer: DaemonClient = { id: `p${++next}`, identity: { name, kind: 'peer' as ClientKind, version: '0', contractVersion: 1 }, endpoint: daemonSide };
+		clients.set(peer.id, peer);
+		daemonSide.onClose(() => clients.delete(peer.id));
+		loans.attachPeer(peer);
+		return createEndpoint(a);
+	};
+	const loans = createBrickLoans({ surface, runtime, lifecycle, gate: new LoanGate('owner'), clients, log });
 	return {
-		runtime, surface, connect, mock,
+		runtime, surface, connect, connectPeer, mock,
 		done: () => {
 			for (const c of [...clients.values()]) { c.endpoint.close(); }
 			lifecycle.dispose();
@@ -178,6 +192,59 @@ describe('the daemon surface', () => {
 		assert.equal(w.runtime.bricks.isSignedIn(id), false, 'the brick stayed connected for a window that is gone');
 		const status = await observer.request<ContractBrick[]>('bricks/list', {});
 		assert.equal(status.find((b) => b.name === 'Robot')?.connected, false);
+		w.done();
+	});
+
+	it('lends nothing and gives the brick back to its holders when it cannot be released', async () => {
+		const w = world();
+		const window = w.connect('window', 'vscode', 'yes');
+		await w.runtime.scheduler.scanOnce();
+		await window.request('bricks/connect', { brick: 'Robot' });
+		const id = brickIdOf(await window.request<ContractBrick[]>('bricks/list', {}), 'Robot');
+		const bricks = w.runtime.bricks as { signOut(id: BrickId): Promise<unknown> };
+		bricks.signOut = () => Promise.reject(new Error('the link is stuck'));
+		const peer = w.connectPeer('development daemon');
+		const result = await peer.request<LoanResult>('peer/borrowBrick', { brickId: id });
+		assert.equal(result.lent, false);
+		assert.match(result.reason ?? '', /could not release/);
+		assert.deepEqual(window.asked, ['brickLoan']);
+		const robot = (await window.request<ContractBrick[]>('bricks/list', {})).find((b) => b.name === 'Robot');
+		assert.equal(robot?.blocked, undefined, 'the brick stayed blocked as lent');
+		assert.equal(robot?.connected, true);
+		assert.deepEqual(w.surface.holders.holdersOf(id).map((h) => h.kind), ['client']);
+		w.done();
+	});
+
+	it('keeps a brick another window is connecting when a window connecting it too closes', async () => {
+		const w = world();
+		const leaving = w.connect('leaving');
+		const staying = w.connect('staying');
+		await w.runtime.scheduler.scanOnce();
+		const id = brickIdOf(await staying.request<ContractBrick[]>('bricks/list', {}), 'Robot') as BrickId;
+		const bricks = w.runtime.bricks as { signIn(id: BrickId): Promise<unknown>; signOut(id: BrickId): Promise<unknown> };
+		const signIn = bricks.signIn.bind(bricks);
+		const signOut = bricks.signOut.bind(bricks);
+		// The leaving window's connect finishes first; the staying one's is still under way then.
+		const gate = () => { let resolve!: () => void; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; };
+		const gates = [gate(), gate()];
+		let calls = 0;
+		bricks.signIn = async (brickId) => { await gates[calls++].promise; return signIn(brickId); };
+		let signOuts = 0;
+		bricks.signOut = (brickId) => { signOuts++; return signOut(brickId); };
+		const gone = leaving.request('bricks/connect', { brick: 'Robot' }).catch(() => undefined);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const kept = staying.request<ContractBrick>('bricks/connect', { brick: 'Robot' });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(calls, 2);
+		leaving.close();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		gates[0].resolve();
+		await gone;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(signOuts, 0, 'the leaving window signed out a brick the other window was connecting');
+		gates[1].resolve();
+		assert.equal((await kept).connected, true);
+		assert.equal(w.runtime.bricks.isSignedIn(id), true);
 		w.done();
 	});
 

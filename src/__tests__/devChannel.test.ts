@@ -1,6 +1,7 @@
 /** The pieces under brick loans: the device gate, the hardware lock, and replacement inside a development channel. */
 
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -44,50 +45,54 @@ describe('the device gate', () => {
 });
 
 describe('the hardware lock', () => {
-	it('is held by one process, and taken over from one that died', () => {
-		const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-')), 'hardware.lock');
-		const first = new HardwareLock(file, undefined);
-		assert.equal(first.tryTake(), true);
-		const second = new HardwareLock(file, 'dev-x');
-		assert.equal(second.tryTake(), false);
-		assert.equal(second.holder()?.pid, process.pid);
-		first.release();
-		assert.equal(second.tryTake(), true);
-		second.release();
-		// A holder that is gone: a pid nobody has.
-		fs.writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 12345, at: Date.now() }));
-		assert.equal(new HardwareLock(file, undefined).tryTake(), true);
-	});
+	const lockFile = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-')), 'hardware.lock');
+	/** A pid nobody has. */
+	const DEAD = 2 ** 22 + 12345;
 
-	it('appears with its holder in it, and takes over a damaged lock', () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-'));
-		const file = path.join(dir, 'hardware.lock');
+	it('is not taken while another live daemon claims it, and is taken once that claim is gone', () => {
+		const file = lockFile();
 		const lock = new HardwareLock(file, 'dev-x');
+		// Another daemon's claim: the test runner that started this process is alive.
+		const other = `${file}.${process.ppid}`;
+		fs.writeFileSync(other, JSON.stringify({ pid: process.ppid, at: 1 }));
+		assert.equal(lock.tryTake(), false);
+		assert.equal(fs.existsSync(`${file}.${process.pid}`), false, 'a withdrawn claim stayed behind');
+		assert.equal(lock.holder()?.pid, process.ppid);
+		fs.rmSync(other);
 		assert.equal(lock.tryTake(), true);
-		assert.deepEqual({ ...JSON.parse(fs.readFileSync(file, 'utf8')), at: 0 }, { pid: process.pid, channel: 'dev-x', at: 0 });
-		assert.deepEqual(fs.readdirSync(dir), ['hardware.lock']);
+		assert.deepEqual({ ...JSON.parse(fs.readFileSync(`${file}.${process.pid}`, 'utf8')), at: 0 }, { pid: process.pid, channel: 'dev-x', at: 0 });
+		assert.equal(lock.holder()?.channel, 'dev-x');
 		lock.release();
-		// Unreadable and new: perhaps still being written where there are no hard links.
-		fs.writeFileSync(file, '{"pid":');
-		assert.equal(new HardwareLock(file, undefined).tryTake(), false);
-		const old = new Date(Date.now() - 60_000);
-		fs.utimesSync(file, old, old);
-		assert.equal(new HardwareLock(file, undefined).tryTake(), true);
+		assert.equal(fs.existsSync(`${file}.${process.pid}`), false);
+		assert.equal(lock.holder(), undefined);
 	});
 
-	it('leaves a dead holder\'s lock to the daemon already taking it over, and clears a guard a dead one left', () => {
-		const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-lock-')), 'hardware.lock');
-		fs.writeFileSync(file, JSON.stringify({ pid: 2 ** 22 + 12345, at: Date.now() }));
-		const guard = `${file}.takeover`;
-		fs.writeFileSync(guard, '');
-		assert.equal(new HardwareLock(file, undefined).tryTake(), false);
-		assert.ok(fs.existsSync(file), 'the lock was removed under another daemon\'s takeover');
-		const old = new Date(Date.now() - 60_000);
-		fs.utimesSync(guard, old, old);
+	it('clears the claim of a daemon that died, even an unreadable one', () => {
+		const file = lockFile();
+		fs.writeFileSync(`${file}.${DEAD}`, '{"pid":');
 		const lock = new HardwareLock(file, undefined);
-		assert.equal(lock.tryTake(), false);
-		assert.equal(fs.existsSync(guard), false);
 		assert.equal(lock.tryTake(), true);
+		assert.equal(fs.existsSync(`${file}.${DEAD}`), false);
+		lock.release();
+	});
+
+	it('is never held by two of many daemons claiming it at the same moment', async () => {
+		const file = lockFile();
+		const module = path.resolve(__dirname, '..', 'daemon', 'hardwareLock.js');
+		const start = Date.now() + 1500;
+		// Each daemon waits for the same instant, claims, holds for a while if it got the lock, then reports.
+		const script = `const { HardwareLock } = require(${JSON.stringify(module)});
+			while (Date.now() < ${start}) {}
+			const lock = new HardwareLock(${JSON.stringify(file)}, undefined);
+			const got = lock.tryTake();
+			const until = Date.now() + 700; while (Date.now() < until) {}
+			lock.release();
+			process.stdout.write(got ? 'held' : 'not');`;
+		const runs = await Promise.all(Array.from({ length: 6 }, () => new Promise<string>((resolve, reject) => {
+			execFile(process.execPath, ['-e', script], (error, stdout) => (error ? reject(error) : resolve(stdout)));
+		})));
+		assert.ok(runs.filter((r) => r === 'held').length <= 1, `held by ${runs.filter((r) => r === 'held').length}: ${runs.join(',')}`);
+		assert.deepEqual(fs.readdirSync(path.dirname(file)), [], 'a claim stayed behind');
 	});
 });
 

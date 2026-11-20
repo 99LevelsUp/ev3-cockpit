@@ -34,7 +34,7 @@ reference; this page explains them. Add-on authors should start with
 | Settings | `settings.json` in the channel's state folder | Settings that differ from their defaults. |
 | Transfer debts | `ledger.json` | Unsettled transfers per brick, settled before that brick's next transfer. |
 | Handover | `handover.json`, `handover-state.json` | Written while a daemon hands over to its successor. |
-| Hardware lock | `hardware.lock` in the per-user folder | Taken by the daemon that owns the hardware. |
+| Hardware lock | `hardware.lock.<pid>` claims in the per-user folder | Each daemon writes its own claim; it owns the hardware when no other live daemon claims it. |
 
 ## Framing and messages
 

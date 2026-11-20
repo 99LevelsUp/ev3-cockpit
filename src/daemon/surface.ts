@@ -109,6 +109,8 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	const handles = new Map<string, Handle>();
 	const reconnecting = new Set<string>();
 	const blocked = new Map<string, { readonly by: string; readonly holder?: string }>();
+	/** Connects in progress per brick: a client gone mid-connect must not sign out one another is making. */
+	const connecting = new Map<string, number>();
 	/** Client ids from a predecessor whose holds a returning client of the same name takes over. */
 	const restoredClients = new Set<string>();
 	let disposed = false;
@@ -306,26 +308,34 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			}
 			// The person asked for this brick: a pairing they cancelled earlier may be asked again.
 			runtime.bricks.resumePairing(brickId as BrickId);
-			if (runtime.bricks.isSignedIn(brickId as BrickId)) {
-				// Connected already: try every channel that is not connected yet.
-				await runtime.bricks.connectAgain(brickId as BrickId);
-			} else {
-				// A brick only an inquiry has heard has nothing to connect over until it is paired; a
-				// channel still listed as lost (a cable pulled since) does not count.
-				const entry = runtime.aggregator.getBrick(brickId as BrickId);
-				const bt = entry?.channels.find((c) => c.transport === Transport.BT);
-				if (entry && !entry.paired && bt && entry.channels.every((c) => c === bt || c.state === ChannelState.Lost)) {
-					const paired = await runtime.bricks.pair(brickId as BrickId);
-					if (!paired.ok) {
-						throw new ContractError(WireErrorCode.NotConnected, `Could not pair ${entry.name.value}: ${paired.reason ?? 'no reason given'}.`);
+			connecting.set(brickId, (connecting.get(brickId) ?? 0) + 1);
+			try {
+				if (runtime.bricks.isSignedIn(brickId as BrickId)) {
+					// Connected already: try every channel that is not connected yet.
+					await runtime.bricks.connectAgain(brickId as BrickId);
+				} else {
+					// A brick only an inquiry has heard has nothing to connect over until it is paired; a
+					// channel still listed as lost (a cable pulled since) does not count.
+					const entry = runtime.aggregator.getBrick(brickId as BrickId);
+					const bt = entry?.channels.find((c) => c.transport === Transport.BT);
+					if (entry && !entry.paired && bt && entry.channels.every((c) => c === bt || c.state === ChannelState.Lost)) {
+						const paired = await runtime.bricks.pair(brickId as BrickId);
+						if (!paired.ok) {
+							throw new ContractError(WireErrorCode.NotConnected, `Could not pair ${entry.name.value}: ${paired.reason ?? 'no reason given'}.`);
+						}
 					}
+					await runtime.bricks.signIn(brickId as BrickId);
 				}
-				await runtime.bricks.signIn(brickId as BrickId);
+			} finally {
+				const left = (connecting.get(brickId) ?? 1) - 1;
+				if (left > 0) { connecting.set(brickId, left); } else { connecting.delete(brickId); }
 			}
 			// The client went away while the brick was being connected: a holder for it would never be
-			// released, so the brick stays connected only if someone else holds it.
+			// released, so the brick stays connected only if someone else holds it or is connecting it.
 			if (!params.hold && client.endpoint.closed) {
-				if (holders.holdersOf(brickId).length === 0) { await runtime.bricks.signOut(brickId as BrickId).catch(() => undefined); }
+				if (holders.holdersOf(brickId).length === 0 && !connecting.has(brickId)) {
+					await runtime.bricks.signOut(brickId as BrickId).catch(() => undefined);
+				}
 				throw new ContractError(WireErrorCode.Cancelled, 'The client went away while its brick was being connected.');
 			}
 			holders.add(brickId, params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name });
