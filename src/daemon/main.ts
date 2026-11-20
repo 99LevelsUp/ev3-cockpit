@@ -30,6 +30,11 @@ import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings 
 import { setLedgerStore } from '../core/fs/transferLedger';
 import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
 import { fileLedgerStore } from './stateStore';
+import { BrickLoans, createBrickLoans } from './brickLoans';
+import { HardwareLock } from './hardwareLock';
+import { PeerLink } from './peer';
+import { isDevelopmentChannel, withoutChannel } from '../client/channel';
+import { LoanGate } from '../core/runtime/deviceGate';
 import {
 	Replacement, createReplacement, ownLaunch, removeHandoverMarker, takeHandoverState, writeHandoverMarker, writeHandoverState,
 } from './handover';
@@ -56,6 +61,10 @@ export interface DaemonOptions {
 	readonly mockWorkspace?: string;
 	readonly graceMs?: number;
 	readonly debug?: boolean;
+	/** The user's channel a development daemon borrows from; absent, the user's own daemon. For tests. */
+	readonly userChannel?: string;
+	/** Take the per-user hardware lock even with simulated bricks: for tests of loans. Default: only with real transports. */
+	readonly hardwareLock?: boolean;
 	/** False in tests that run the daemon in their own process: a handover then leaves it running. */
 	readonly exitAfterHandover?: boolean;
 	/** Overrides for tests: where state goes. */
@@ -120,7 +129,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	let markReady: () => void = () => undefined;
 	const ready = new Promise<void>((resolve) => { markReady = resolve; });
 	/** Built once the channel is won; read by the handshake before that. */
-	const built: { runtime?: Runtime; replacement?: Replacement; handOver?: (launch: LaunchSpec, why: string) => Promise<void> } = {};
+	const built: {
+		runtime?: Runtime; replacement?: Replacement; handOver?: (launch: LaunchSpec, why: string) => Promise<void>;
+		loans?: BrickLoans; peer?: PeerLink;
+	} = {};
 	let listening: Listening | undefined;
 
 	const settings = new SettingsStore(paths.settingsFile, (m) => log.warn(m));
@@ -155,8 +167,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 				log.info(`Client left: ${identity.name}`);
 				lifecycle.clientLeft(client.id);
 			});
-			registerBaseHandlers(client);
-			for (const listener of clientListeners) { listener(client); }
+			// A development daemon is never an ordinary client: it gets the held bricks and loans, nothing else.
+			if (identity.kind === 'peer') {
+				if (built.loans) { built.loans.attachPeer(client); } else { endpoint.close(); return; }
+			} else {
+				registerBaseHandlers(client);
+				for (const listener of clientListeners) { listener(client); }
+			}
 			lifecycle.clientConnected(client.id);
 		}).catch((error: unknown) => {
 			log.debug(`A connection was refused: ${error instanceof Error ? error.message : String(error)}`);
@@ -189,6 +206,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 					'Restarting the cockpit daemon needs a person to confirm it: run ev3 daemon restart in a terminal, or use VS Code.',
 					{ command: 'ev3 daemon restart', kind: 'NeedsPersonError' });
 			}
+			if (lifecycle.state === 'lent' || built.loans?.anyLent) {
+				throw new ContractError(WireErrorCode.InvalidRequest, 'Bricks are lent to a development daemon; restart the cockpit daemon once it has ended.');
+			}
 			if (lifecycle.state !== 'serving' || !built.replacement) { return { accepted: false }; }
 			const replacement = built.replacement;
 			log.info('Restart asked', identity.name);
@@ -210,7 +230,25 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		throw error;
 	}
 
-	// Only now, having won the channel, does the daemon touch the hardware.
+	// Only now, having won the channel, does the daemon touch the hardware — what of it is its to
+	// touch (KTD17): with the hardware lock it owns everything; a development daemon without it
+	// opens only what it borrows; the user's daemon without it waits in Lent until the lock is free.
+	const devChannel = isDevelopmentChannel(paths.channelName);
+	const lock = (options.hardwareLock ?? !options.simulated) ? new HardwareLock(paths.hardwareLock, paths.channelName) : undefined;
+	let role: 'alone' | 'owner' | 'borrower' | 'waiting' = 'alone';
+	const gate = new LoanGate('owner');
+	if (lock) {
+		if (lock.tryTake()) {
+			role = 'owner';
+		} else if (devChannel) {
+			role = 'borrower';
+			gate.borrow();
+		} else {
+			role = 'waiting';
+			gate.setAll(true);
+		}
+		log.info(`Hardware: ${role === 'owner' ? 'this daemon owns it' : role === 'borrower' ? 'the user\'s daemon owns it; bricks are borrowed one by one' : `a development daemon (pid ${lock.holder()?.pid ?? '?'}) owns it; waiting`}`);
+	}
 	const current = settings.all();
 	const warn = (m: string): void => log.warn(m);
 	let mockConfig: MockConfig | undefined;
@@ -222,6 +260,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		extensionPath: options.installRoot,
 		log,
 		startPresence: !options.simulated,
+		...(lock ? { deviceGate: gate } : {}),
 		...(options.simulated ? { providers: [new MockTransportProvider(mockConfig ?? DEFAULT_MOCK_CONFIG)] } : {}),
 		...(options.mockBricks ? { mockBricks: true } : {}),
 		...(mockConfig && !options.simulated ? { mockConfig } : {}),
@@ -252,7 +291,25 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		runtime.scheduler.scanOnce().then(() => undefined, () => undefined),
 		new Promise<void>((resolve) => { setTimeout(resolve, 8000).unref(); }),
 	]);
-	const surface = createSurface({ status: () => daemon.status(), settings, log, clients, lifecycle }, runtime, () => firstRound);
+	const surface = createSurface({ status: () => daemon.status(), settings, log, clients, lifecycle }, runtime, () => firstRound,
+		role === 'borrower' ? { ensureOpenable: (id) => built.peer!.ensureOpenable(id), borrowAll: () => built.peer!.borrowAll() } : undefined);
+	if (role !== 'borrower') {
+		built.loans = createBrickLoans({ surface, runtime, lifecycle, gate, clients, log });
+	}
+	if (role === 'borrower') {
+		built.peer = new PeerLink({
+			userPaths: daemonPaths({
+				platform, env: withoutChannel(env), homedir: options.homedir ?? os.homedir(),
+				...(typeof process.getuid === 'function' ? { uid: process.getuid() } : {}),
+				...(platform === 'win32' ? { userSid: currentUserSid() } : {}),
+				...(options.userChannel ? { channel: options.userChannel } : {}),
+			}),
+			name: `development daemon (${paths.channelName ?? 'dev'}, pid ${process.pid})`,
+			version, gate, surface, runtime, log,
+			takeHardware: () => lock?.tryTake() ?? false,
+		});
+		built.peer.start();
+	}
 	clientListeners.push((client) => surface.attach(client));
 	const btProviders = (): BtTransportProvider[] => runtime.registry.all().filter((p): p is BtTransportProvider => p instanceof BtTransportProvider);
 	// What a predecessor handed over: its holds, `full` and its Bluetooth close times.
@@ -277,6 +334,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 
 	built.replacement = createReplacement({
 		version,
+		anyDifference: devChannel,
 		// Nothing written, nothing lent, no brick connected: a replacement cuts nothing off.
 		idle: () => lifecycle.replaceable(surface.leases.busy()) && surface.holders.heldBricks().length === 0,
 		handOver: (launch, why) => { void handOver(launch, why); },
@@ -329,6 +387,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 			shuttingDown ??= (async () => {
 				lifecycle.dispose();
 				built.replacement?.dispose();
+				built.peer?.dispose();
+				if (lockTimer) { clearInterval(lockTimer); }
 				for (const client of [...clients.values()]) { client.endpoint.close(); }
 				// Devices first, so a successor never finds them still open.
 				surface.dispose();
@@ -339,6 +399,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 					new Promise((resolve) => { setTimeout(resolve, 5000).unref(); }),
 				]);
 				settings.dispose();
+				lock?.release();
 				await listening?.close();
 				log.info('Daemon stopped');
 			})();
@@ -347,6 +408,23 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	};
 	lifecycle.serve();
 	markReady();
+	let lockTimer: NodeJS.Timeout | undefined;
+	if (role === 'waiting') {
+		// A development daemon has the hardware: wait in Lent, opening nothing, until it ends.
+		lifecycle.lend();
+		lockTimer = setInterval(() => {
+			if (!lock?.tryTake()) { return; }
+			clearInterval(lockTimer);
+			lockTimer = undefined;
+			gate.own();
+			surface.blocked.clear();
+			lifecycle.reclaim();
+			surface.refreshBricks();
+			void runtime.scheduler.scanOnce().catch(() => undefined);
+			log.info('The development daemon ended: this daemon owns the hardware now');
+		}, 2000);
+		lockTimer.unref?.();
+	}
 	// Serving: any handover that brought this daemon here is over.
 	removeHandoverMarker(paths);
 	return daemon;
@@ -367,6 +445,8 @@ export function successorArgs(options: DaemonOptions): string[] {
 		...(options.mockWorkspace ? ['--mock-workspace', options.mockWorkspace] : []),
 		...(options.graceMs !== undefined ? ['--grace-ms', String(options.graceMs)] : []),
 		...(options.debug ? ['--debug'] : []),
+		...(options.userChannel ? ['--user-channel', options.userChannel] : []),
+		...(options.hardwareLock ? ['--hardware-lock'] : []),
 	];
 }
 
@@ -387,6 +467,8 @@ export function parseDaemonArgs(argv: readonly string[], env: NodeJS.ProcessEnv 
 		...(mockWorkspace ? { mockWorkspace } : {}),
 		...(grace ? { graceMs: Number(grace) } : {}),
 		...(argv.includes('--debug') ? { debug: true } : {}),
+		...(value('--user-channel') ? { userChannel: value('--user-channel')! } : {}),
+		...(argv.includes('--hardware-lock') ? { hardwareLock: true } : {}),
 	};
 }
 

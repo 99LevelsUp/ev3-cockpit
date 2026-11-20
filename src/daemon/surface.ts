@@ -21,6 +21,7 @@ import { BrickEntry, BrickId, BrickRef, ChannelState, operationDeadline } from '
 import { setSweepConfirmation } from '../core/fs/transferLedger';
 import { deployAndRun } from '../core/programs/deployAndRun';
 import type { Runtime } from '../core/runtime/createRuntime';
+import type { LoanResult } from '../contract/methods';
 import type { ForgetReport } from '../core/runtime/forgetReport';
 import { readProgramPresetSettings } from '../core/telemetry/telemetrySettings';
 import { settingsSection } from '../core/settings/spec';
@@ -64,6 +65,10 @@ export interface Surface {
 	 * again as they show up; holds of clients that do not come back within `RESTORE_MS` are dropped.
 	 */
 	resume(snapshot: HolderSnapshot): void;
+	/** Connects these held bricks again, retrying until each is back or nobody holds it. */
+	reconnectHeld(brickIds: readonly string[]): void;
+	/** Tells every client the brick list changed (a loan began or ended). */
+	refreshBricks(): void;
 	bricks(): ContractBrick[];
 	brickStatus(): BrickStatus[];
 	broadcast(method: string, params: unknown): void;
@@ -80,10 +85,18 @@ function forgetLines(report: ForgetReport): string[] {
 	return lines;
 }
 
+/** A development daemon's side of its loans (KTD17). */
+export interface SurfaceLoans {
+	/** Borrows the brick when this daemon may not open it yet; throws when the loan is refused. */
+	ensureOpenable(brickId: string): Promise<void>;
+	/** Borrows every brick; absent on a daemon that does not borrow. */
+	borrowAll?(): Promise<LoanResult>;
+}
+
 /** What the surface needs of the daemon. */
 export type SurfaceHost = Pick<Daemon, 'status' | 'settings' | 'log' | 'clients' | 'lifecycle'>;
 
-export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySettled: () => Promise<void>): Surface {
+export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySettled: () => Promise<void>, loans?: SurfaceLoans): Surface {
 	const { settings, log, clients, lifecycle } = daemon;
 	const accessMode = (): AccessMode => (settings.value('accessMode') === 'full' ? 'full' : 'safe');
 	/** The client whose request is running, for questions the core asks in the middle of it. */
@@ -232,13 +245,13 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			endpoint.onRequest(method, (params, context) =>
 				current.run(client, () => handler((params ?? {}) as Record<string, unknown>, context.signal)));
 		};
-		const brickOf = async (params: Record<string, unknown>): Promise<string> => {
+		const brickOf = async (params: Record<string, unknown>, allowBlocked = false): Promise<string> => {
 			const id = await resolveBrick({
 				bricks: () => bricks().map((b) => ({ brickId: b.brickId, name: b.name, connected: b.connected })),
 				discoverySettled,
 			}, typeof params.brick === 'string' ? params.brick : undefined, identity.kind);
 			const block = blocked.get(id);
-			if (block) {
+			if (block && !allowBlocked) {
 				throw new ContractError(WireErrorCode.NotConnected, `Brick ${id} is ${block.by}${block.holder ? ` (${block.holder})` : ''}; this daemon does not touch it now.`);
 			}
 			return id;
@@ -275,7 +288,12 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			return bricks();
 		});
 		on('bricks/connect', async (params) => {
-			const brickId = await brickOf(params);
+			let brickId = await brickOf(params, Boolean(loans));
+			// A development daemon borrows the brick first; a refusal ends the connect here.
+			if (loans) {
+				await loans.ensureOpenable(brickId);
+				brickId = await brickOf(params);
+			}
 			await runtime.bricks.signIn(brickId as BrickId);
 			holders.add(brickId, params.hold ? { kind: 'hold' } : { kind: 'client', clientId: client.id, name: identity.name });
 			log.info(`Connected ${brickId}${params.hold ? ' and held' : ''}`, identity.name);
@@ -342,6 +360,10 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 				removed: entries.filter((e) => e.status === 'confirmed' || e.status === 'sent').map((e) => e.name),
 				kept: [...entries.filter((e) => e.status === 'failed' || e.status === 'not-removable').map((e) => e.name), ...(report?.left ?? [])],
 			};
+		});
+		on('bricks/borrowAll', async () => {
+			if (!loans?.borrowAll) { throw new ContractError(WireErrorCode.InvalidRequest, 'Only a development daemon borrows bricks; this is the user\'s own.'); }
+			return loans.borrowAll();
 		});
 		on('bricks/inquiry', async () => {
 			await runtime.btPresence?.runInquiry();
@@ -609,13 +631,24 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			if (reconnecting.size > 0) { await new Promise<void>((resolve) => { setTimeout(resolve, RECONNECT_RETRY_MS).unref?.(); }); }
 		}
 	};
+	let reconnectLoop: Promise<void> | undefined;
+	const reconnectHeld = (brickIds: readonly string[]): void => {
+		for (const brickId of brickIds) { reconnecting.add(brickId); }
+		scheduleBricksChanged();
+		reconnectLoop ??= reconnectRestored()
+			.catch((error: unknown) => log.warn(`Connecting held bricks again failed: ${String(error)}`))
+			.finally(() => {
+				reconnectLoop = undefined;
+				// A brick added just as the loop ended is not left waiting.
+				if (!disposed && reconnecting.size > 0) { reconnectHeld([]); }
+			});
+	};
 	const resume = (snapshot: HolderSnapshot): void => {
 		for (const set of Object.values(snapshot)) {
 			for (const h of set) { if (h.kind === 'client') { restoredClients.add(h.clientId); } }
 		}
 		holders.restore(snapshot);
-		for (const brickId of Object.keys(snapshot)) { reconnecting.add(brickId); }
-		void reconnectRestored().catch((error: unknown) => log.warn(`Reconnecting the bricks after the handover failed: ${String(error)}`));
+		reconnectHeld(Object.keys(snapshot));
 		const timer = setTimeout(() => {
 			if (disposed) { return; }
 			restoredClients.clear();
@@ -625,7 +658,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	};
 
 	return {
-		holders, leases, api, attach, reconnecting, blocked, resume, bricks, brickStatus, broadcast,
+		holders, leases, api, attach, reconnecting, blocked, resume, reconnectHeld, refreshBricks: scheduleBricksChanged, bricks, brickStatus, broadcast,
 		dispose: () => {
 			disposed = true;
 			for (const d of shared) { d.dispose(); }

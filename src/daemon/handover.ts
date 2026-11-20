@@ -69,6 +69,8 @@ export function ownLaunch(installRoot: string, version: string): LaunchSpec {
 
 export interface ReplacementDeps {
 	readonly version: string;
+	/** A development channel: any other version replaces the daemon, older ones too (KTD17). */
+	readonly anyDifference?: boolean;
 	/** True when nothing would be cut off by a replacement now. */
 	readonly idle: () => boolean;
 	/** Hands over to the launch. Called at most once. */
@@ -104,12 +106,13 @@ export function createReplacement(deps: ReplacementDeps): Replacement {
 	return {
 		get pending() { return pending; },
 		register(launch) {
-			if (compareVersions(launch.version, deps.version) <= 0) {
-				return { accepted: false, reason: `Version ${launch.version} is not newer than this daemon's ${deps.version}.` };
+			const difference = compareVersions(launch.version, deps.version);
+			if (deps.anyDifference ? difference === 0 : difference <= 0) {
+				return { accepted: false, reason: `Version ${launch.version} is not ${deps.anyDifference ? 'different from' : 'newer than'} this daemon's ${deps.version}.` };
 			}
 			if (done) { return { accepted: false, reason: 'The daemon is already being replaced.' }; }
 			// The newest of several waiting replacements wins.
-			if (!pending || compareVersions(launch.version, pending.version) > 0) { pending = launch; }
+			if (!pending || deps.anyDifference || compareVersions(launch.version, pending.version) > 0) { pending = launch; }
 			deps.log(`Replacement by ${launch.version} registered; it happens once the daemon is idle`);
 			if (!timer) {
 				timer = setInterval(check, IDLE_CHECK_MS);

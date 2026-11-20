@@ -36,6 +36,8 @@ export interface PathInputs {
 export interface DaemonPaths {
 	/** The pipe name or the socket path clients connect to. */
 	readonly channel: string;
+	/** The channel's name: absent for the user's own daemon, `dev`/`dev-…` for development, others for tests. */
+	readonly channelName?: string;
 	/** The socket's directory on Linux and macOS, made private to the user. */
 	readonly socketDir?: string;
 	/** Where the key lives, shared by every channel. */
@@ -108,6 +110,7 @@ export function daemonPaths(inputs: PathInputs): DaemonPaths {
 
 	return {
 		channel: channelPath,
+		...(channel ? { channelName: channel } : {}),
 		...(socketDir ? { socketDir } : {}),
 		keyFile: join(root, 'key'),
 		stateDir,

@@ -33,6 +33,14 @@ interface PersonConfirmed {
 	readonly confirmedByPerson?: boolean;
 }
 
+/** The answer to a loan: lent, or who refused and why. `usb` is where a lent USB brick sits on the bus. */
+export interface LoanResult {
+	readonly lent: boolean;
+	readonly refusedBy?: string;
+	readonly reason?: string;
+	readonly usb?: readonly { readonly busNumber: number; readonly deviceAddress: number }[];
+}
+
 export interface Methods {
 	// --- daemon -----------------------------------------------------------
 	'daemon/status': { params: Record<string, never>; result: DaemonStatus };
@@ -59,6 +67,11 @@ export interface Methods {
 	'bricks/clearBluetoothList': { params: OnBrick & PersonConfirmed; result: { readonly removed: readonly string[]; readonly kept: readonly string[] } };
 	/** Look for Bluetooth bricks now. */
 	'bricks/inquiry': { params: Record<string, never>; result: null };
+	/**
+	 * A development daemon only: borrow every brick from the user's daemon, which first asks each
+	 * client holding one. Single bricks are borrowed by connecting them.
+	 */
+	'bricks/borrowAll': { params: Record<string, never>; result: LoanResult };
 
 	// --- files ------------------------------------------------------------
 	'files/list': { params: OnBrick & { readonly path: string }; result: readonly FsEntry[] };
@@ -117,11 +130,11 @@ export interface Methods {
 	/** End any subscription by its id. */
 	'subscriptions/cancel': { params: { readonly subscriptionId: string }; result: null };
 
-	// --- brick loans between daemons --------------------------------------
+	// --- brick loans between daemons (the user's daemon answers these to a development daemon) ---
 	/** A development daemon borrows one brick; its holders are asked first. */
-	'peer/borrowBrick': { params: { readonly brickId: string }; result: { readonly lent: boolean; readonly refusedBy?: string; readonly reason?: string } };
+	'peer/borrowBrick': { params: { readonly brickId: string }; result: LoanResult };
 	/** A development daemon borrows the whole hardware. */
-	'peer/borrowAll': { params: Record<string, never>; result: { readonly lent: boolean; readonly refusedBy?: string; readonly reason?: string } };
+	'peer/borrowAll': { params: Record<string, never>; result: LoanResult };
 	/** The bricks this daemon holds, for a development daemon to show as blocked. */
 	'peer/heldBricks': { params: Record<string, never>; result: readonly BrickStatus[] };
 }

@@ -106,6 +106,8 @@ export interface BrickManagerOptions {
 	 * to drop the checks from before it. Absent: nothing to drop.
 	 */
 	readonly btPresence?: { forget(mac: string): void; notePaired?(mac: string): void };
+	/** Whether this process may page the Bluetooth radio; a daemon that lent the radio does not pair. */
+	readonly mayUseRadio?: () => boolean;
 	/**
 	 * Pairs a brick over Bluetooth, by address; an aborted signal stops it. Absent without
 	 * Bluetooth, and then {@link BrickManager.pair} answers that it cannot.
@@ -200,6 +202,7 @@ export class BrickManager implements Disposable {
 	private readonly sessionManager: SessionManager;
 	private readonly aggregator: PresenceAggregator;
 	private readonly registry: ProviderRegistry;
+	private readonly mayUseRadio: (() => boolean) | undefined;
 	private readonly rejoinBaseMs: number;
 	private readonly rejoinMaxMs: number;
 	private readonly slowProbeRetryMs: number;
@@ -310,6 +313,7 @@ export class BrickManager implements Disposable {
 		this.sessionManager = options.sessionManager;
 		this.aggregator = options.aggregator;
 		this.registry = options.providerRegistry;
+		this.mayUseRadio = options.mayUseRadio;
 		this.rejoinBaseMs = options.rejoinBaseMs ?? FIRMWARE_SAFETY.RECONNECT_BASE_MS;
 		this.rejoinMaxMs = options.rejoinMaxMs ?? FIRMWARE_SAFETY.RECONNECT_MAX_MS;
 		this.slowProbeRetryMs = options.slowProbeRetryMs ?? FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS;
@@ -526,6 +530,9 @@ export class BrickManager implements Disposable {
 		// started now (KTD5).
 		if (this.disposed || this.peerListBusy(brickId)) {
 			return Promise.resolve({ ok: false, reason: PAIRING_CANCELLED });
+		}
+		if (this.mayUseRadio && !this.mayUseRadio()) {
+			return Promise.resolve({ ok: false, reason: 'The Bluetooth radio is lent between cockpit daemons; pair from the daemon that has it.' });
 		}
 		const mac = btKey ? brickKeyId(btKey) : undefined;
 		const pairDevice = this.pairDevice;

@@ -23,6 +23,7 @@ import { CONTRACT_VERSION } from '../contract/version';
 import type { DaemonPaths } from '../daemon/paths';
 import { ContractError, Endpoint, RequestOptions } from './connection';
 import { connectToDaemon } from './ensureDaemon';
+import { isDevelopmentChannel } from './channel';
 import { clientPaths } from './locate';
 import { VersionNotice, contractNotice, isRepoClient, versionNotice } from './versions';
 
@@ -279,7 +280,8 @@ export class CockpitClient {
 			const notice = versionNotice(this.options.version, hello.version);
 			if (!notice) { return; }
 			this.notices.fire(notice);
-			if (notice.newerIs === 'client' && this.options.launch) {
+			// Inside a development channel any other version replaces the daemon (KTD17).
+			if ((notice.newerIs === 'client' || isDevelopmentChannel(this.paths.channelName)) && this.options.launch) {
 				void this.request('daemon/registerReplacement', { launch: this.options.launch }).catch(() => undefined);
 			}
 			return;
