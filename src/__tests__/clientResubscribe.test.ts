@@ -40,6 +40,25 @@ describe('a client across daemons', () => {
 		await sleep(100);
 	});
 
+	it('leaves no connection behind when it is disposed while it connects to the next daemon', async (t) => {
+		const d = testDaemon(home, '0.0.1', 5000);
+		const options = { kind: 'cli' as const, version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs };
+		const leaving = await CockpitClient.connect({ ...options, name: 'leaving' });
+		t.after(() => leaving.dispose());
+		const staying = await CockpitClient.connect({ ...options, name: 'staying' });
+		t.after(() => staying.dispose());
+		let back = false;
+		staying.onReconnected(() => { back = true; });
+		process.kill(staying.daemon.pid);
+		// The next daemon is starting now; the leaving client goes in the middle of reaching it.
+		await sleep(300);
+		leaving.dispose();
+		await waitFor(() => back, 20_000);
+		await sleep(2000);
+		const status = await staying.request('daemon/status', {});
+		assert.deepEqual(status.clients.map((c) => c.name), ['staying']);
+	});
+
 	it('keeps the bricks it shows current from the daemon\'s notifications', async (t) => {
 		const d = testDaemon(home, '0.0.1', 5000);
 		const client = await CockpitClient.connect({ name: 'cache', kind: 'vscode', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs });

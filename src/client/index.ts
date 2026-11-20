@@ -239,6 +239,12 @@ export class CockpitClient {
 			...(this.options.launchArgs ? { launchArgs: this.options.launchArgs } : {}),
 			...(this.options.readinessMs ? { readinessMs: this.options.readinessMs } : {}),
 		});
+		// Disposed while this connection was being made (a window closed during a daemon restart):
+		// the new connection must not stay open, or it keeps the daemon and this process alive.
+		if (this.disposed) {
+			endpoint.close();
+			throw new ContractError(WireErrorCode.DaemonUnavailable, 'The client was disposed while it connected.');
+		}
 		this.endpoint = endpoint;
 		this.helloInfo = hello;
 		endpoint.onRequest('question/ask', async (params) => {
@@ -304,7 +310,7 @@ export class CockpitClient {
 				}
 				this.reconnected.fire(this.helloInfo);
 			} catch (error) {
-				this.lost.fire(error instanceof Error ? error : new ContractError(WireErrorCode.DaemonUnavailable, String(error)));
+				if (!this.disposed) { this.lost.fire(error instanceof Error ? error : new ContractError(WireErrorCode.DaemonUnavailable, String(error))); }
 			} finally {
 				this.reconnecting = undefined;
 			}
