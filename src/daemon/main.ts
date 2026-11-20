@@ -25,7 +25,9 @@ import type { MockConfig } from '../core/mock';
 import { Runtime, createRuntime } from '../core/runtime/createRuntime';
 import { settingsSection } from '../core/settings/spec';
 import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings } from '../core/telemetry/telemetrySettings';
+import { setLedgerStore } from '../core/fs/transferLedger';
 import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
+import { fileLedgerStore } from './stateStore';
 import { ClientIdentity, acceptHello } from './hello';
 import { ensureKey } from './key';
 import { DaemonLog } from './log';
@@ -198,6 +200,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		},
 	});
 	built.runtime = runtime;
+	// Debts a previous daemon left are paid before each brick's next transfer.
+	setLedgerStore(runtime.bricks, fileLedgerStore(paths.ledgerFile));
 	settings.onChange(({ key: changed }) => {
 		if (!changed.startsWith('telemetry.')) { return; }
 		const section = settingsSection(settings.all());
