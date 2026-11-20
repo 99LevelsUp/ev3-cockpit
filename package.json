@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.442",
+  "version": "0.2.443",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -195,5 +195,8 @@
     "node-hid": "3.3.0",
     "serialport": "13.0.0",
     "usb": "^2.17.0"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "10.0.0"
   }
 }

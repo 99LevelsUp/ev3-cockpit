@@ -9,3 +9,4 @@ export * from './errors';
 export * from './models';
 export * from './methods';
 export * from './events';
+export * from './hello';
