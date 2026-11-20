@@ -14,7 +14,7 @@
 import { WireErrorCode } from '../contract/errors';
 import type { NotificationName, Notifications } from '../contract/events';
 import type { HelloAccepted } from '../contract/hello';
-import type { MethodName, ParamsOf, ResultOf } from '../contract/methods';
+import { LEASED_METHODS, type MethodName, type ParamsOf, type ResultOf } from '../contract/methods';
 import type {
 	AccessMode, ClientKind, ContractBrick, ContractChain, LaunchSpec, ProgramState, Question, QuestionAnswer,
 	SettingValue, TelemetryRequest, TelemetryUpdate,
@@ -134,7 +134,19 @@ export class CockpitClient {
 	}
 
 	async request<M extends MethodName>(method: M, params: ParamsOf<M>, options?: RequestOptions): Promise<ResultOf<M>> {
-		const result = await this.endpoint.request<ResultOf<M>>(method, params, options);
+		const sent = !this.endpoint.closed;
+		let result: ResultOf<M>;
+		try {
+			result = await this.endpoint.request<ResultOf<M>>(method, params, options);
+		} catch (error) {
+			// A write cut off by the daemon going may or may not have happened; it is never retried.
+			if (sent && error instanceof ContractError && error.code === WireErrorCode.DaemonUnavailable && LEASED_METHODS.includes(method)) {
+				throw new ContractError(WireErrorCode.OutcomeUnknown,
+					`The cockpit daemon went while ${method} ran, so whether it finished is not known. It was not retried.`,
+					{ kind: 'OutcomeUnknownError' });
+			}
+			throw error;
+		}
 		if (method === 'bricks/connect') {
 			const p = params as ParamsOf<'bricks/connect'>;
 			if (!p.hold) { this.myBricks.add((result as ResultOf<'bricks/connect'>).brickId); }

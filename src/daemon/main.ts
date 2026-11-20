@@ -17,9 +17,11 @@ import type * as net from 'node:net';
 import { ContractError, Endpoint, createEndpoint } from '../client/connection';
 import { WireErrorCode } from '../contract/errors';
 import type { HelloAccepted } from '../contract/hello';
-import type { DaemonStatus } from '../contract/models';
+import type { DaemonStatus, LaunchSpec } from '../contract/models';
+import { spawnDaemon } from '../client/ensureDaemon';
 import { CONTRACT_VERSION } from '../contract/version';
-import { Transport } from '../core/contracts';
+import { BrickId, Transport } from '../core/contracts';
+import { BtTransportProvider } from '../core/transports';
 import { DEFAULT_MOCK_CONFIG, MockTransportProvider, loadMockConfigFile } from '../core/mock';
 import type { MockConfig } from '../core/mock';
 import { Runtime, createRuntime } from '../core/runtime/createRuntime';
@@ -28,6 +30,9 @@ import { readProgramPresetSettings, readTelemetrySettings, readThrottleSettings 
 import { setLedgerStore } from '../core/fs/transferLedger';
 import { AlreadyRunningError, Listening, listenOnChannel } from './channel';
 import { fileLedgerStore } from './stateStore';
+import {
+	Replacement, createReplacement, ownLaunch, removeHandoverMarker, takeHandoverState, writeHandoverMarker, writeHandoverState,
+} from './handover';
 import { createSurface } from './surface';
 import { ask } from './questions';
 import { ClientIdentity, acceptHello } from './hello';
@@ -51,6 +56,8 @@ export interface DaemonOptions {
 	readonly mockWorkspace?: string;
 	readonly graceMs?: number;
 	readonly debug?: boolean;
+	/** False in tests that run the daemon in their own process: a handover then leaves it running. */
+	readonly exitAfterHandover?: boolean;
 	/** Overrides for tests: where state goes. */
 	readonly env?: NodeJS.ProcessEnv;
 	readonly homedir?: string;
@@ -113,7 +120,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	let markReady: () => void = () => undefined;
 	const ready = new Promise<void>((resolve) => { markReady = resolve; });
 	/** Built once the channel is won; read by the handshake before that. */
-	const built: { runtime?: Runtime } = {};
+	const built: { runtime?: Runtime; replacement?: Replacement; handOver?: (launch: LaunchSpec, why: string) => Promise<void> } = {};
 	let listening: Listening | undefined;
 
 	const settings = new SettingsStore(paths.settingsFile, (m) => log.warn(m));
@@ -167,6 +174,27 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 			const result = settings.set(name, value, { kind: identity.kind, confirmedByPerson: confirmedByPerson === true });
 			log.info(`Setting ${name} = ${JSON.stringify(value)}`, identity.name);
 			return result;
+		});
+		endpoint.onRequest('daemon/registerReplacement', (params) => {
+			const launch = (params as { launch?: unknown } | undefined)?.launch;
+			if (!isLaunch(launch)) { throw new ContractError(WireErrorCode.InvalidRequest, 'daemon/registerReplacement needs a launch.'); }
+			const result = built.replacement?.register(launch) ?? { accepted: false, reason: 'The daemon is not serving yet.' };
+			log.info(`Replacement by ${launch.version}: ${result.accepted ? 'registered' : `refused (${result.reason ?? ''})`}`, identity.name);
+			return result;
+		});
+		endpoint.onRequest('daemon/restart', (params) => {
+			const { confirmedByPerson, launch } = (params ?? {}) as { confirmedByPerson?: unknown; launch?: unknown };
+			if (!(identity.kind === 'vscode' || identity.kind === 'cli') || confirmedByPerson !== true) {
+				throw new ContractError(WireErrorCode.NeedsPerson,
+					'Restarting the cockpit daemon needs a person to confirm it: run ev3 daemon restart in a terminal, or use VS Code.',
+					{ command: 'ev3 daemon restart', kind: 'NeedsPersonError' });
+			}
+			if (lifecycle.state !== 'serving' || !built.replacement) { return { accepted: false }; }
+			const replacement = built.replacement;
+			log.info('Restart asked', identity.name);
+			// After the answer is on its way.
+			setImmediate(() => replacement.restart(ownLaunch(options.installRoot, version), isLaunch(launch) ? launch : undefined));
+			return { accepted: true };
 		});
 		endpoint.onRequest('log/notice', (params) => {
 			const { level, text } = (params ?? {}) as { level?: string; text?: string };
@@ -226,6 +254,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	]);
 	const surface = createSurface({ status: () => daemon.status(), settings, log, clients, lifecycle }, runtime, () => firstRound);
 	clientListeners.push((client) => surface.attach(client));
+	const btProviders = (): BtTransportProvider[] => runtime.registry.all().filter((p): p is BtTransportProvider => p instanceof BtTransportProvider);
+	// What a predecessor handed over: its holds, `full` and its Bluetooth close times.
+	const inherited = takeHandoverState(paths);
+	if (inherited) {
+		settings.restoreUnstored(inherited.unstored);
+		for (const provider of btProviders()) { provider.honourCloseTimes(inherited.btCloseTimes); }
+		surface.resume(inherited.holders);
+		log.info(`Took over from ${inherited.from}: ${Object.keys(inherited.holders).length} held brick(s) to connect again`);
+	}
 	// Debts a previous daemon left are paid before each brick's next transfer.
 	setLedgerStore(runtime.bricks, fileLedgerStore(paths.ledgerFile));
 	settings.onChange(({ key: changed }) => {
@@ -237,6 +274,42 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	});
 	listening.releaseStartLock();
 	log.info(`Daemon ${version} serving on ${paths.channel} (pid ${process.pid}, Node ${process.versions.node}${process.versions.electron ? `, Electron ${process.versions.electron}` : ''})`);
+
+	built.replacement = createReplacement({
+		version,
+		// Nothing written, nothing lent, no brick connected: a replacement cuts nothing off.
+		idle: () => lifecycle.replaceable(surface.leases.busy()) && surface.holders.heldBricks().length === 0,
+		handOver: (launch, why) => { void handOver(launch, why); },
+		log: (m) => log.info(m),
+	});
+
+	/**
+	 * Hands over to a successor (KTD7): new clients wait, writes end with `outcome_unknown`, the
+	 * bricks are released and the state saved, then the marker, the listener closed, the successor
+	 * started and this daemon gone.
+	 */
+	const handOver = async (launch: LaunchSpec, why: string): Promise<void> => {
+		if (lifecycle.state !== 'serving') { return; }
+		lifecycle.handOver();
+		log.info(`Handing over to ${launch.version} (${why})`);
+		surface.broadcast('daemon/handingOver', { successorVersion: launch.version });
+		await surface.leases.abortAll(new Error('the daemon is handing over'), 5000);
+		// The aborted requests' answers leave before the connections close.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const holderSnapshot = surface.holders.snapshot();
+		const unstored = settings.unstored();
+		for (const brickId of surface.holders.heldBricks()) {
+			await runtime.bricks.signOut(brickId as BrickId).catch((error: unknown) => log.warn(`Releasing ${brickId} for the handover failed: ${String(error)}`));
+		}
+		const btCloseTimes = Object.assign({}, ...btProviders().map((p) => p.closeTimes())) as Record<string, number>;
+		writeHandoverState(paths, { at: Date.now(), from: version, holders: holderSnapshot, unstored, btCloseTimes });
+		writeHandoverMarker(paths, launch.version);
+		await daemon.shutdown();
+		spawnDaemon(launch, successorArgs(options));
+		log.info(`Successor ${launch.version} started; this daemon exits`);
+		if (process.exitCode === undefined && options.exitAfterHandover !== false) { setImmediate(() => process.exit(0)); }
+	};
+	built.handOver = handOver;
 
 	let shuttingDown: Promise<void> | undefined;
 	const startedAt = Date.now();
@@ -255,10 +328,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 		shutdown: () => {
 			shuttingDown ??= (async () => {
 				lifecycle.dispose();
+				built.replacement?.dispose();
 				for (const client of [...clients.values()]) { client.endpoint.close(); }
 				// Devices first, so a successor never finds them still open.
 				surface.dispose();
+				const bt = btProviders();
 				runtime.dispose();
+				await Promise.race([
+					Promise.all(bt.map((p) => p.disposeAsync())),
+					new Promise((resolve) => { setTimeout(resolve, 5000).unref(); }),
+				]);
 				settings.dispose();
 				await listening?.close();
 				log.info('Daemon stopped');
@@ -268,7 +347,27 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 	};
 	lifecycle.serve();
 	markReady();
+	// Serving: any handover that brought this daemon here is over.
+	removeHandoverMarker(paths);
 	return daemon;
+}
+
+function isLaunch(value: unknown): value is LaunchSpec {
+	const v = value as Partial<LaunchSpec> | undefined;
+	return typeof v === 'object' && v !== null && typeof v.runtime === 'string' && typeof v.entry === 'string'
+		&& typeof v.installRoot === 'string' && typeof v.version === 'string';
+}
+
+/** The arguments a successor gets: the same channel and the same kind of bricks. */
+export function successorArgs(options: DaemonOptions): string[] {
+	return [
+		...(options.channel ? ['--channel', options.channel] : []),
+		...(options.simulated ? ['--simulated'] : []),
+		...(options.mockBricks ? ['--mock-bricks'] : []),
+		...(options.mockWorkspace ? ['--mock-workspace', options.mockWorkspace] : []),
+		...(options.graceMs !== undefined ? ['--grace-ms', String(options.graceMs)] : []),
+		...(options.debug ? ['--debug'] : []),
+	];
 }
 
 /** Reads the command line. */

@@ -185,6 +185,18 @@ export class BtTransportProvider implements TransportProvider {
 		};
 	}
 
+	/** When each brick's last connection was closed, for a daemon handing its bricks to a successor. */
+	closeTimes(): Readonly<Record<string, number>> {
+		return Object.fromEntries(this.closedAt);
+	}
+
+	/** A predecessor's close times: its bricks get the same pause before a new connection. */
+	honourCloseTimes(times: Readonly<Record<string, number>>): void {
+		for (const [mac, at] of Object.entries(times)) {
+			if (typeof at === 'number' && at > (this.closedAt.get(mac) ?? 0)) { this.closedAt.set(mac, at); }
+		}
+	}
+
 	discover(): Promise<DiscoveryScanResult> {
 		return this.scope.run((signal) => this.discoverInScope(signal));
 	}

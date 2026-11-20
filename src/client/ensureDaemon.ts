@@ -73,7 +73,7 @@ function unavailable(message: string, paths: DaemonPaths): ContractError {
 }
 
 /** Starts a daemon detached, so it outlives this client. Returns a check for an early exit. */
-function startDaemon(launch: LaunchSpec, args: readonly string[]): () => number | null | undefined {
+export function spawnDaemon(launch: LaunchSpec, args: readonly string[]): () => number | null | undefined {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	if (launch.electronRunAsNode) { env.ELECTRON_RUN_AS_NODE = '1'; } else { delete env.ELECTRON_RUN_AS_NODE; }
 	const child = spawn(launch.runtime, [launch.entry, '--install-root', launch.installRoot, ...args], {
@@ -111,7 +111,7 @@ export async function connectToDaemon(options: ConnectOptions): Promise<Connecte
 		} else if (!handoverUnderway(paths)) {
 			if (!started) {
 				if (!options.launch) { throw unavailable('No cockpit daemon runs, and this client cannot start one.', paths); }
-				started = startDaemon(options.launch, options.launchArgs ?? []);
+				started = spawnDaemon(options.launch, options.launchArgs ?? []);
 			} else {
 				const code = started();
 				// Code 2: another daemon won the channel at the same moment, which is fine.

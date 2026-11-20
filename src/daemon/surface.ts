@@ -25,7 +25,7 @@ import type { ForgetReport } from '../core/runtime/forgetReport';
 import { readProgramPresetSettings } from '../core/telemetry/telemetrySettings';
 import { settingsSection } from '../core/settings/spec';
 import { resolveBrick } from './brickResolver';
-import { HolderSets } from './holders';
+import { HolderSets, type HolderSnapshot } from './holders';
 import { Leases } from './leases';
 import type { Daemon, DaemonClient } from './main';
 import { ask } from './questions';
@@ -36,6 +36,10 @@ export const MAX_INLINE_READ_BYTES = 64 * 1024;
 export const MAX_INLINE_WRITE_BYTES = 4 * 1024;
 /** Chunks of file content in a transfer handle: 48 KiB, 64 KiB as base64. */
 export const TRANSFER_CHUNK_BYTES = 48 * 1024;
+/** How long a predecessor's clients have to come back and take over their holds. */
+export const RESTORE_MS = 30_000;
+/** How often a held brick that has not come back since a handover is tried again. */
+export const RECONNECT_RETRY_MS = 3000;
 
 interface Handle {
 	readonly clientId: string;
@@ -55,6 +59,11 @@ export interface Surface {
 	readonly reconnecting: Set<string>;
 	/** Bricks this daemon must not touch, and why. */
 	readonly blocked: Map<string, { readonly by: string; readonly holder?: string }>;
+	/**
+	 * Takes over a predecessor's holders: the held bricks are reported as reconnecting and connected
+	 * again as they show up; holds of clients that do not come back within `RESTORE_MS` are dropped.
+	 */
+	resume(snapshot: HolderSnapshot): void;
 	bricks(): ContractBrick[];
 	brickStatus(): BrickStatus[];
 	broadcast(method: string, params: unknown): void;
@@ -85,6 +94,9 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 	const handles = new Map<string, Handle>();
 	const reconnecting = new Set<string>();
 	const blocked = new Map<string, { readonly by: string; readonly holder?: string }>();
+	/** Client ids from a predecessor whose holds a returning client of the same name takes over. */
+	const restoredClients = new Set<string>();
+	let disposed = false;
 
 	const holders = new HolderSets({
 		signOut: async (brickId) => {
@@ -191,6 +203,7 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			name: runtime.aggregator.getBrick(brickId as BrickId)?.name.value ?? brickId,
 			holders: holders.holdersOf(brickId),
 			...(leased[brickId] ? { leaseHolder: leased[brickId] } : {}),
+			...(reconnecting.has(brickId) ? { reconnecting: true } : {}),
 		}));
 	};
 
@@ -210,6 +223,8 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 		const { endpoint, identity } = client;
 		const owner = { clientId: client.id, name: identity.name };
 		const consumer: CockpitConsumer = api.registerConsumer(identity.name);
+		// A client back after a handover takes over the holds its old connection had.
+		if (restoredClients.size > 0) { holders.reclaim(identity.name, client.id, restoredClients); }
 		const subscriptions = new Map<string, { dispose(): void }>();
 		const person = identity.kind === 'vscode' || identity.kind === 'cli';
 
@@ -228,8 +243,19 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			}
 			return id;
 		};
-		const leased = <T>(brickId: string, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> =>
-			leases.run(brickId, owner, work, signal);
+		const leased = async <T>(brickId: string, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+			try {
+				return await leases.run(brickId, owner, work, signal);
+			} catch (error) {
+				// Cut off by a handover: whether the write happened is not known, and nobody retries it.
+				if (lifecycle.state === 'handingOver' && !(error instanceof ContractError && error.code === WireErrorCode.BrickBusy)) {
+					throw new ContractError(WireErrorCode.OutcomeUnknown,
+						'The daemon was replaced while this ran, so whether it finished is not known. It was not retried.',
+						{ kind: 'OutcomeUnknownError' });
+				}
+				throw error;
+			}
+		};
 		const str = (value: unknown, name: string): string => {
 			if (typeof value !== 'string' || value === '') { throw new ContractError(WireErrorCode.InvalidRequest, `${name} is missing.`); }
 			return value;
@@ -553,14 +579,55 @@ export function createSurface(daemon: SurfaceHost, runtime: Runtime, discoverySe
 			leases.clientLeft(client.id);
 			for (const [id, handle] of handles) { if (handle.clientId === client.id) { handles.delete(id); } }
 			if (foreground.delete(client.id)) { runtime.telemetry.setForegroundBricks(new Set(foreground.values()) as Set<BrickRef>); }
+			// Handing over: the holds go to the successor as they are, and no brick is signed out here.
+			if (lifecycle.state === 'handingOver') { return; }
 			void holders.clientLeft(client.id).catch((error: unknown) => log.warn(`Releasing ${identity.name}'s bricks failed: ${String(error)}`));
 		});
 		if (!person) { log.debug(`${identity.name} cannot answer questions itself`); }
 	};
 
+	/** Connects the bricks a predecessor held, again and again until each is back or nobody holds it. */
+	const reconnectRestored = async (): Promise<void> => {
+		await discoverySettled();
+		while (!disposed && reconnecting.size > 0) {
+			for (const brickId of [...reconnecting]) {
+				if (disposed) { return; }
+				if (!holders.isHeld(brickId) || runtime.bricks.isSignedIn(brickId as BrickId)) {
+					reconnecting.delete(brickId);
+					scheduleBricksChanged();
+					continue;
+				}
+				try {
+					await runtime.bricks.signIn(brickId as BrickId);
+					reconnecting.delete(brickId);
+					scheduleBricksChanged();
+					log.info(`Reconnected ${brickId} after the handover`);
+				} catch (error) {
+					log.debug(`Not back yet: ${brickId} (${error instanceof Error ? error.message : String(error)})`);
+				}
+			}
+			if (reconnecting.size > 0) { await new Promise<void>((resolve) => { setTimeout(resolve, RECONNECT_RETRY_MS).unref?.(); }); }
+		}
+	};
+	const resume = (snapshot: HolderSnapshot): void => {
+		for (const set of Object.values(snapshot)) {
+			for (const h of set) { if (h.kind === 'client') { restoredClients.add(h.clientId); } }
+		}
+		holders.restore(snapshot);
+		for (const brickId of Object.keys(snapshot)) { reconnecting.add(brickId); }
+		void reconnectRestored().catch((error: unknown) => log.warn(`Reconnecting the bricks after the handover failed: ${String(error)}`));
+		const timer = setTimeout(() => {
+			if (disposed) { return; }
+			restoredClients.clear();
+			void holders.dropClientsExcept(new Set(clients.keys())).catch((error: unknown) => log.warn(`Dropping holds of clients that did not come back failed: ${String(error)}`));
+		}, RESTORE_MS);
+		timer.unref?.();
+	};
+
 	return {
-		holders, leases, api, attach, reconnecting, blocked, bricks, brickStatus, broadcast,
+		holders, leases, api, attach, reconnecting, blocked, resume, bricks, brickStatus, broadcast,
 		dispose: () => {
+			disposed = true;
 			for (const d of shared) { d.dispose(); }
 			api.dispose();
 		},

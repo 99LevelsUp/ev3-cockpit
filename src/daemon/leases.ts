@@ -64,6 +64,18 @@ export class Leases {
 		}
 	}
 
+	/**
+	 * The daemon is handing over: every request under a lease is aborted. Resolves once they have
+	 * all settled, or after `waitMs`, whichever comes first.
+	 */
+	async abortAll(reason: Error, waitMs: number): Promise<void> {
+		for (const entry of this.held.values()) { entry.controller.abort(reason); }
+		const until = Date.now() + waitMs;
+		while (this.held.size > 0 && Date.now() < until) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+	}
+
 	/** Status for `ev3 daemon status`. */
 	snapshot(): Readonly<Record<string, string>> {
 		return Object.fromEntries([...this.held].map(([brickId, entry]) => [brickId, entry.owner.name]));

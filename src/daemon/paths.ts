@@ -48,6 +48,8 @@ export interface DaemonPaths {
 	/** Held by the daemon that owns the hardware. */
 	readonly hardwareLock: string;
 	readonly handoverMarker: string;
+	/** What a daemon handing over leaves for its successor: holders, `full`, Bluetooth close times. */
+	readonly handoverState: string;
 	readonly settingsFile: string;
 	readonly heldFile: string;
 	readonly ledgerFile: string;
@@ -113,6 +115,7 @@ export function daemonPaths(inputs: PathInputs): DaemonPaths {
 		startLock: join(stateDir, 'start.lock'),
 		hardwareLock: join(root, 'hardware.lock'),
 		handoverMarker: join(stateDir, 'handover.json'),
+		handoverState: join(stateDir, 'handover-state.json'),
 		settingsFile: join(stateDir, 'settings.json'),
 		heldFile: join(stateDir, 'held.json'),
 		ledgerFile: join(stateDir, 'ledger.json'),

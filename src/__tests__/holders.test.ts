@@ -76,4 +76,17 @@ describe('brick holders', () => {
 		assert.deepEqual(signedOut, []);
 		assert.deepEqual(successor.holdersOf('CCC'), [{ kind: 'hold' }]);
 	});
+
+	it('takes back only a predecessor\'s holds by name, and drops those whose client never came back', async () => {
+		const { holders, signedOut } = sets();
+		holders.restore({ CCC: [windowA], BBB: [windowB] });
+		// A live client that happens to share a name keeps its own hold.
+		holders.add('AAA', { kind: 'client', clientId: 'live', name: 'VS Code (window A)' });
+		holders.reclaim('VS Code (window A)', 'a2', new Set(['a', 'b']));
+		assert.deepEqual(holders.snapshot().AAA, [{ kind: 'client', clientId: 'live', name: 'VS Code (window A)' }]);
+		assert.deepEqual(holders.snapshot().CCC, [{ kind: 'client', clientId: 'a2', name: 'VS Code (window A)' }]);
+		await holders.dropClientsExcept(new Set(['a2', 'live']));
+		assert.deepEqual(signedOut, ['BBB']);
+		assert.deepEqual(holders.heldBricks().sort(), ['AAA', 'CCC']);
+	});
 });

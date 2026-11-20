@@ -206,6 +206,8 @@ export interface BrickStatus {
 	readonly holders: readonly BrickHolder[];
 	/** The client holding the write lease, if any. */
 	readonly leaseHolder?: string;
+	/** Held across a daemon restart and not connected again yet. */
+	readonly reconnecting?: boolean;
 }
 
 export interface DaemonStatus {

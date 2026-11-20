@@ -112,19 +112,31 @@ export class HolderSets {
 		this.options.onChange?.();
 	}
 
-	/** A reconnected client takes back the holds it had under its old connection, matched by name. */
-	reclaim(oldName: string, clientId: string): void {
+	/**
+	 * A reconnected client takes back the holds it had under its old connection, matched by name;
+	 * with `among`, only holds of those old connections.
+	 */
+	reclaim(oldName: string, clientId: string, among?: ReadonlySet<string>): void {
 		let changed = false;
 		for (const set of this.sets.values()) {
 			for (let i = 0; i < set.length; i++) {
 				const h = set[i];
-				if (h.kind === 'client' && h.name === oldName && h.clientId !== clientId) {
+				if (h.kind === 'client' && h.name === oldName && h.clientId !== clientId && (!among || among.has(h.clientId))) {
 					set[i] = { kind: 'client', clientId, name: h.name };
 					changed = true;
 				}
 			}
 		}
 		if (changed) { this.options.onChange?.(); }
+	}
+
+	/** Holds kept from a predecessor for clients that never came back are dropped. */
+	async dropClientsExcept(clientIds: ReadonlySet<string>): Promise<void> {
+		const gone = new Set<string>();
+		for (const set of this.sets.values()) {
+			for (const h of set) { if (h.kind === 'client' && !clientIds.has(h.clientId)) { gone.add(h.clientId); } }
+		}
+		for (const clientId of gone) { await this.clientLeft(clientId); }
 	}
 
 	private async settle(brickId: string, remaining: Holder[]): Promise<void> {
