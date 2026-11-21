@@ -212,10 +212,11 @@ flowchart TB
 - KTD3. **Channel, key and directories follow one written spec, `docs/channel.md`, with cross-language test vectors.**
   1. State root: the Rust daemon uses `<platform state dir>/ev3-cockpit/native/`, apart from the Node daemon's root, while both exist; U17 migrates (KTD15).
   2. Key: created only by the daemon, written to a temporary file in the same directory with the owner-only permissions set at creation, then linked into place without replacing; readers retry a short read. The daemon checks the key on every new connection and, when it changed, releases the hardware and exits. No message ever tells a user to delete the key.
-  3. Name: an HMAC-SHA256 of the key over a fixed label and a 16-byte value drawn at each start, truncated; the daemon writes the name to an owner-only `channel.json` and removes it on a clean exit; a client reads that file, and a missing or stale one means "no daemon". A test channel adds its name to the label and keeps its state under `channels/<name>/`.
-  4. Windows: `\\.\pipe\ev3-cockpit-<h>`, created with `first_pipe_instance`, an owner-only SDDL DACL and remote clients rejected.
-  5. Linux: the socket lives in `$XDG_RUNTIME_DIR/ev3-cockpit/`, else in the state root's `run/` (never `/tmp`), in a directory owned by the user with mode 0700, path under 108 bytes.
-  6. The vectors in `contract/vectors/` are checked by a Rust test and a TypeScript test.
+  3. Single instance: before anything else the daemon takes an exclusive OS lock (`LockFileEx` on Windows, `flock` on Linux) on an owner-only `daemon.lock` in the state root, or in `channels/<name>/` for a test channel, and holds it for its whole life; a daemon that cannot take it exits with code 2. The OS releases the lock when the daemon dies, so no stale lock survives a crash.
+  4. Name: an HMAC-SHA256 of the key over a fixed label and a 16-byte value drawn at each start, truncated. Only the lock holder writes the full pipe or socket path and its PID to an owner-only `channel.json`, and removes it on a clean exit. A client connects only to the path recorded there, after checking that the socket directory is owner-only, and never recomputes it. A client that can take `daemon.lock` knows no daemon runs: it deletes `channel.json` and starts a fresh daemon on a new name, and never contacts the old one. A daemon proof that fails while the lock is held is reported as a held channel. The daemon always keeps one listening pipe instance open, each created with the owner-only DACL. A test channel adds its name to the label.
+  5. Windows: `\\.\pipe\ev3-cockpit-<h>`, created with `first_pipe_instance`, an owner-only SDDL DACL and remote clients rejected.
+  6. Linux: the socket lives in `$XDG_RUNTIME_DIR/ev3-cockpit/`, else in the state root's `run/` (never `/tmp`), in a directory owned by the user with mode 0700, path under 108 bytes.
+  7. The vectors in `contract/vectors/` cover the hello proofs and the `channel.json` format, checked by a Rust test and a TypeScript test; the name derivation is tested in Rust only, since clients read the path.
 
   Governs R10, R13.
 - KTD4. **USB goes through libusb (`rusb` with vendored libusb), with `hidapi` as the 64-byte fallback.** On Windows only libusb's HID backend reached the brick's full 1024-byte frames; `hidapi` follows the brick's descriptor to 64 bytes, about 40× slower for files (`src/core/transports/transportConstants.ts:21-42`). The port keeps exact-size transfers, the one-byte read overrun on Windows, skipping claimed devices during enumeration, and the 3000 ms close drain (`src/core/transports/usbLibusbAdapter.ts`). U1 confirms the 1024-byte path from Rust on HOSTA before U6.
@@ -223,9 +224,9 @@ flowchart TB
 - KTD6. **Linux Bluetooth is `zbus` plus raw sockets, mirroring today's TypeScript design.** `zbus` is pure Rust; RFCOMM channel 1 and the L2CAP PSM 1 presence probe go through `libc` sockets; the pairing agent answers `RequestPinCode` with 1234 without `RequestDefaultAgent`; the radio self-heal and the group question port as they are (`src/core/transports/bluezRadioWatch.ts`, `src/daemon/bluetoothAccess.ts`). Rejected: `bluer` (links libdbus, last release 06.2025, BR/EDR gaps). Governs R4.
 - KTD7. **Record and replay sit at the provider trait.** A recording holds the provider-level events of a session: discovery and presence results, pairing and forget outcomes, and the link bytes each way with timing and failures. Two replay modes:
   - strict replays the sequence exactly and fails on any deviation (Rust failure-path tests);
-  - matched answers each request with the recorded reply for an equal request, ignoring the message counter (client tests).
+  - matched serves, for each request with its message counter masked, the recorded replies in recorded order, rewriting each reply's counter to the live request's (client tests).
 
-  An unmatched request fails with `replay_unmatched`, so a stale fixture shows up instead of hiding. Fixtures live in `daemon/fixtures/<scenario>/` with the scenario script and recorder version; a runtime change that changes exchanges is answered by re-running the script on hardware, never by editing a fixture. `--record` writes only into an owner-only directory. A test channel accepts only replay; the user's channel refuses it. Governs R21, R22, R24.
+  A request with no recorded reply left fails with `replay_unmatched`, so a stale fixture shows up instead of hiding. Each scenario script publishes the brick names, paths and file contents it uses; client tests use exactly those inputs, and a test that needs new brick-side inputs is a re-recording task. The recorder replaces identifiers as it captures, consistently and keeping lengths: brick Bluetooth addresses and serials, this computer's name and adapter address, and LAN addresses become the repository's placeholders (AAA/BBB/CCC, `00:16:53:F0:0A:0A`…, HOSTA/HOSTB, documentation address ranges), in provider events and link bytes alike. Fixtures live in `daemon/fixtures/<scenario>/` with the scenario script and recorder version; a runtime change that changes exchanges is answered by re-running the script on hardware, never by editing a fixture. `--record` writes only into an owner-only directory. A test channel accepts only replay; the user's channel refuses it. Governs R21, R22, R24.
 - KTD8. **Daemon process rules.**
   - `tokio` 1.54.1 multi-thread.
   - A log rotated by size (5 MB × 3) by our own writer, since `tracing-appender` rotates only by time.
@@ -244,15 +245,15 @@ flowchart TB
   4. A packaged binary that mismatches its package's SHA-256 is refused (R11). A swap between hash and spawn by the same user is outside the trust model; another account is shut out by the owner-only directory.
   5. Clients remove copies in `bin/` other than the current and running ones, skipping locked files.
   6. Development clients (the Extension Development Host, `ev3` run from the repository) locate `daemon/target/<profile>/ev3-cockpitd`, whose manifest a build step writes after each `cargo build`; no environment variable redirects a release client.
-  7. A spawn refused with Windows error 4551 shows the Smart App Control message (R12) and is not retried.
+  7. A Windows spawn that fails, with any error code or by exiting before the hello, is classified as Smart App Control when a `reg.exe` read of the code-integrity policy reports it on or in evaluation; error 4551 is an additional signal. That case shows the R12 message and is not retried. The verified copy starts with its working directory set to the state root.
 
   `LaunchSpec` becomes the binary path, its SHA-256, the version and the build kind. Governs R11, R12, R14.
-- KTD10. **Person questions name the requester and are never answered by a cache.** The daemon routes a question to a VS Code or terminal client and names the requesting client's name and kind. A client's remembered answers apply only to its own requests. 60 s without an answer refuses the operation. Governs R9.
+- KTD10. **Person questions name the requester; remembered answers apply only to the asker's own requests.** The daemon routes a question to a VS Code or terminal client and names the requesting client's name and kind. A client's remembered answers apply only to its own requests. 60 s without an answer refuses the operation. Governs R9.
 - KTD11. **Today's TypeScript is the behavior spec.** Each subsystem is ported against the parity checklist (planning research `repo-research.md` §1), every rule there gets a Rust test or a fixture, and firmware workarounds must work on the original and on a fixed firmware. The TypeScript core tests leave with the core in U17; their failure cases become the R21 checklist.
 - KTD12. **CI builds natively per target.** `windows-latest` builds and tests win32-x64; `ubuntu-22.04` and `ubuntu-22.04-arm` build linux-x64 and linux-arm64 (glibc 2.35, so the binaries run on Debian 12 and Raspberry Pi OS). Linux VSIXes are packaged on Linux so executable bits survive. Each job publishes the binary's SHA-256 and an `actions/attest` provenance attestation. The darwin target, `vsix-macos.yml` and the .NET helper build leave CI.
 - KTD13. **One branch, Rust beside Node until the switch.** All units land on `feat/native-daemon`; the Node daemon and the TypeScript core stay untouched and working until U17 deletes them; the branch merges into master after U17 and the hardware rounds. Nothing is published before the merge.
 - KTD14. **Consent and activity are ports the runtime owns.** The runtime crate defines two interfaces: ask a person (with the requester) and report activity (a write starts or ends). Transports and services call them; the daemon crate implements them (U12), and lower-layer tests use fakes. The per-brick FIFO and the per-brick guard live in the runtime, where brick identity across channels lives; transports take the brick key from the contract types. Governs R9, R15.
-- KTD15. **The switch migrates the user's state.** U17 copies the old root's `ledger.json` and `settings.json` into the native root when absent (the ledger's debts must survive, or the brick's firmware slots stay taken), and removes the old root's `key`, `handover*.json`, `hardware.lock`, `install.json` and `channels/dev`. The Node daemon of an older extension folder still left on disk runs on its own channel and idles out.
+- KTD15. **The switch migrates the user's state.** U17 merges the old root's `ledger.json` into the native ledger, adding every debt keyed by brick and slot that the native one lacks (the debts must survive, or the brick's firmware slots stay taken), copies `settings.json` when absent, and removes the old root's `key`, `handover*.json`, `hardware.lock`, `install.json` and `channels/dev`. The Node daemon of an older extension folder still left on disk runs on its own channel and idles out.
 - KTD16. **The daemon decides on exit requests itself.** It replaces itself only when the requesting client's hello qualifies under R15 or R16; any other exit request is an R9 restart that needs a person. The method table marks the exit method as not callable by the `mcp` client kind. Governs R9, R15, R16.
 
 ### High-Level Technical Design
@@ -332,14 +333,14 @@ docs/channel.md           channel, key and directory spec
 - **Start failures:** every client classifies start failures the same way (missing binary, SHA mismatch, Smart App Control, name held, contract mismatch) and shows them its own way: VS Code a message, `ev3` an exit code and `--json`, MCP a tool error (U14, U24, U25).
 - **State on disk:** the native root, its migration and the old root's leftovers (KTD3, KTD15).
 - **Packaging:** the udev and polkit rules `native/linux/70-lego-ev3.rules` and `71-ev3-cockpit-bluetooth-restart.rules` keep shipping; the log location is documented in `docs/channel.md` because the hardware protocol reads it.
-- **Hosts:** on HOSTA, HOSTD and the RPi5 no Node daemon may run while the Rust daemon owns the bricks, since the hardware lock is gone and both would open the same brick (U16 precondition).
+- **Hosts:** on HOSTA, HOSTD and the RPi5 no Node daemon may run while the Rust daemon owns the bricks, since the hardware lock is gone and both would open the same brick (precondition of every hardware step).
 
 ### Risks & Dependencies
 
 - **USB speed (KTD4).** If `rusb` cannot reach the 1024-byte path on Windows, USB falls to 64 bytes. U1 measures this first; the owner decides on a fallback before U6.
 - **Bluetooth threading (KTD5).** Whether tokio can drive an `AF_BTH` socket is undocumented; one thread per link is the safe default and costs little at four bricks or fewer.
-- **Pipe impersonation.** A TypeScript client may open the pipe at the default impersonation level; U1 measures it. KTD3's per-start name already keeps another account from serving the pipe at all.
-- **Two daemons on one brick.** During the work a Node daemon from master and the Rust daemon can open the same brick; the U16 precondition rules it out on the test hosts.
+- **Pipe impersonation.** A TypeScript client may open the pipe at the default impersonation level; U1 measures it. KTD3 keeps clients from ever connecting to a name another account could serve: they connect only to the path a live lock holder recorded.
+- **Two daemons on one brick.** During the work a Node daemon from master and the Rust daemon can open the same brick; every hardware step (U1, U6–U9, U18, U26, U16) first confirms that no Node daemon or probe process runs on the host.
 - **Parity gaps.** About 30k lines of TypeScript carry hard-won rules; a missed one returns as a hardware bug. The checklist (KTD11), the early recordings (U18) and the induced failures (R21) guard it; rounds run on all three bricks, never one.
 - **Scope.** The largest change the project has made. The branch stays shippable on the Node daemon until U17 (KTD13).
 - **Smart App Control.** Accepted until SignPath (Key Decisions); U14 makes the block legible.
@@ -360,7 +361,7 @@ docs/channel.md           channel, key and directory spec
 | U7 | TCP and beacon transport | `daemon/crates/transports/tcp` | U5 |
 | U8 | Bluetooth on Windows | `daemon/crates/transports/bt_windows` | U5 |
 | U9 | Bluetooth on Linux | `daemon/crates/transports/bt_linux` | U5 |
-| U18 | First recordings | `daemon/fixtures/`, `scripts/hardware-scenario.js` | U6, U7 (BT after U8, U9) |
+| U18 | Link recordings | `daemon/fixtures/link/`, `daemon/crates/transports/examples/record.rs` | U6, U7 (BT after U8, U9) |
 | U10 | Sessions | `daemon/crates/runtime/{ports,queue,guard,session}` | U18 |
 | U20 | Brick layer | `daemon/crates/runtime/bricks` | U10 |
 | U21 | Forget, clear and one-sided repair | `daemon/crates/runtime/{forget,repair}` | U20 |
@@ -369,7 +370,8 @@ docs/channel.md           channel, key and directory spec
 | U23 | Telemetry | `daemon/crates/runtime/telemetry` | U20 |
 | U12 | Daemon surface | `daemon/crates/daemon/surface` | U3, U21, U22, U23 |
 | U13 | Lifecycle and replacement | `daemon/crates/daemon/lifecycle` | U12 |
-| U14 | Client library | `src/client/` | U13 |
+| U26 | Service recordings | `daemon/fixtures/service/`, `scripts/hardware-scenario.js` | U13 |
+| U14 | Client library | `src/client/` | U26 |
 | U24 | VS Code extension | `src/vscode/` | U14 |
 | U25 | CLI and MCP | `src/cli/`, `src/mcp/` | U14 |
 | U15 | Packaging and CI | `scripts/`, `.github/workflows/` | U24, U25 |
@@ -388,7 +390,8 @@ docs/channel.md           channel, key and directory spec
   3. Bluetooth on HOSTA: non-blocking `AF_BTH` connect to channel 1 and an exchange, first under tokio, else on a thread; WinRT custom pairing of a forgotten brick from inside a tokio process.
   4. Bluetooth on HOSTD: `zbus` discovery and agent pairing, a raw RFCOMM exchange, the L2CAP presence probe; check whether runit sets `XDG_RUNTIME_DIR`.
   5. Pipe: a test pipe server records the impersonation level a Node client's connect grants.
-- **Execution note:** a measurement unit. Record each result and the decision it settles in the plan and commit that before U2, as the project rule for measured decisions requires.
+  6. Smart App Control: from Node on HOSTA, spawn an executable that a code-integrity policy blocks and record the exact error Node reports.
+- **Execution note:** a measurement unit. Before each hardware step confirm that no Node daemon or probe process runs on the host. Record each result and the decision it settles in the plan and commit that before U2, as the project rule for measured decisions requires.
 - **Test expectation:** none -- throwaway spikes; their measurements are the deliverable.
 - **Verification:** each question has a recorded answer with numbers; any KTD a result contradicts is rewritten or escalated per the stop conditions.
 
@@ -419,10 +422,11 @@ docs/channel.md           channel, key and directory spec
 - **Requirements:** R8, R10, R13; KTD3.
 - **Dependencies:** U2.
 - **Files:** `src/client/channel.ts`, `src/client/locate.ts`, `src/client/hello.ts`, `src/__tests__/clientChannel.test.ts`.
-- **Approach:** implement the `docs/channel.md` rules (state root, key read with retry, `channel.json`, test channels) in client-owned code driven by `contract/vectors/`; the old imports from `src/daemon` stay for the Node path until U17.
+- **Approach:** implement the `docs/channel.md` rules (state root, key read with retry, `channel.json` with the recorded path, the liveness check through `daemon.lock`, test channels) in client-owned code; the old imports from `src/daemon` stay for the Node path until U17.
 - **Test scenarios:**
-  - The channel vectors produce the expected names.
-  - A missing `channel.json` reads as "no daemon"; a stale one whose pipe does not answer too.
+  - The hello proof vectors match the Rust side.
+  - A missing `channel.json` reads as "no daemon"; one whose daemon no longer holds the lock is deleted and never contacted.
+  - Daemon and client that resolve `XDG_RUNTIME_DIR` differently still connect, because the client uses the recorded path.
   - A short key read is retried, then reported as unreadable without advice to delete it.
 - **Verification:** `rustDaemonWire.test.ts` (U3) connects through this code.
 
@@ -438,12 +442,13 @@ docs/channel.md           channel, key and directory spec
   3. Codec and dispatcher (KTD2); hello with mutual HMAC as `src/contract/hello.ts` defines it, extended per KTD8.
   4. Settings store from the schema's spec; `full` never stored; log rotation by size.
   5. Path confinement (R25) as one check every file method uses.
-  6. Single instance by binding the channel; idle exit.
+  6. Single instance by `daemon.lock` (KTD3); idle exit.
 - **Patterns to follow:** `src/daemon/key.ts`, `src/daemon/hello.ts`, `src/daemon/settingsStore.ts`, `src/daemon/channel.ts` (private directory checks).
 - **Test scenarios:**
   - A TypeScript client completes the hello on a test channel; a wrong key fails both proofs.
   - A message over 1 MiB closes the connection.
-  - A second daemon on the same channel exits with code 2.
+  - A second daemon started while the first holds `daemon.lock` exits with code 2; two daemons started at once leave one.
+  - After a crash, the old `channel.json` is detected as stale through the lock, a pipe squatted under the old name is never contacted, and a fresh daemon starts on a new name.
   - A pipe name already created by someone else makes the daemon refuse and say so.
   - Two clients starting the first daemon at once end with one key.
   - The key replaced while a daemon holds a brick: the daemon releases the hardware and exits before a new one opens it.
@@ -486,6 +491,8 @@ docs/channel.md           channel, key and directory spec
   - Matched replay answers an equal request with a different message counter.
   - An unmatched request fails with `replay_unmatched`.
   - A recorded link failure replays as the same failure.
+  - Matched replay serves two equal requests their two recorded replies in order, then fails with `replay_unmatched`.
+  - A session recorded with a known real address leaves no trace of it in the fixture.
   - A daemon on a test channel without `--replay` opens no transport; on the user's channel `--replay` is refused.
 - **Verification:** the replay provider passes the same exchange tests a real provider would.
 
@@ -502,6 +509,7 @@ docs/channel.md           channel, key and directory spec
   - Enumeration never opens a brick another session has claimed.
   - Close waits for in-flight transfers at most 3000 ms and releases before closing.
   - A permission error on Linux names the udev rule.
+- **Execution note:** confirm no Node daemon or probe process runs on the host before each hardware step.
 - **Verification:** on HOSTA and HOSTD a 100 kB file round-trips at today's throughput or better.
 
 ### U7. TCP and beacon transport
@@ -554,16 +562,27 @@ docs/channel.md           channel, key and directory spec
   - Pairing answers the brick's PIN request with 1234 and does not displace the desktop agent.
 - **Verification:** on HOSTD and the RPi5, pair, connect and recover a brick.
 
-### U18. First recordings
+### U18. Link recordings
 
-- **Goal:** fixtures from real bricks early enough for every later unit to test against.
+- **Goal:** provider-level fixtures from real bricks, the transports alone can produce, for the runtime units to test against.
 - **Requirements:** R21; KTD7.
 - **Dependencies:** U6, U7; the Bluetooth scenarios after U8 and U9.
-- **Files:** `daemon/fixtures/*`, `scripts/hardware-scenario.js`, `scripts/cable-pull-probe.js`.
-- **Approach:** extend the existing hardware scripts to drive the daemon with `--record`; record connect, file round trip, deploy-and-run, a telemetry minute, pairing and forget, and the induced failures (cable pulled mid-transfer, Bluetooth dropped, brick off during deploy-and-run) on AAA, BBB and CCC, noting each brick's state (Wi-Fi, Port View).
-- **Execution note:** the owner runs the rounds; the agent gives one instruction at a time and reads the daemon log itself (project hardware protocol).
-- **Test expectation:** the fixtures become the tests of U10–U23 and U14; the unit itself is verified by strict replay of each scenario.
+- **Files:** `daemon/fixtures/link/*`, `daemon/crates/transports/examples/record.rs` (a provider-level recording harness).
+- **Approach:** the harness drives the providers and protocol directly with the U5 recorder: connect, raw command exchanges, discovery, presence, pairing, forget at the provider level, cable pulled mid-exchange, Bluetooth dropped, on AAA, BBB and CCC, noting each brick's state (Wi-Fi, Port View). File, program and telemetry scenarios wait for U26, since only the runtime issues their exchanges.
+- **Execution note:** the owner runs the rounds; the agent gives one instruction at a time and reads the daemon log itself (project hardware protocol). Confirm no Node daemon or probe process runs on the host first.
+- **Test expectation:** these fixtures back the session and brick-layer tests of U10 and U20; U11, U22 and U23 test first with ported TypeScript unit tests and fake providers.
 - **Verification:** every scenario replays strictly against the build that recorded it.
+
+### U26. Service recordings
+
+- **Goal:** fixtures of the services and the surface, recorded through the Rust daemon.
+- **Requirements:** R21, R24; KTD7.
+- **Dependencies:** U13.
+- **Files:** `daemon/fixtures/service/*`, `scripts/hardware-scenario.js`, `scripts/cable-pull-probe.js`.
+- **Approach:** extend the hardware scripts to drive the Rust daemon through its surface with `--record`: reconnect after a pulled cable, a file round trip and a cut upload, deploy-and-run including the brick switched off, a telemetry minute, and the inputs the client tests use (published per KTD7).
+- **Execution note:** owner-run as U18, after confirming no Node daemon or probe process runs on the host.
+- **Test expectation:** these fixtures become the strict-replay tests of U10, U11, U22 and U23 and the matched-replay substrate of U14, U24 and U25.
+- **Verification:** every scenario replays strictly; the client test inputs replay matched.
 
 ### U10. Sessions
 
@@ -622,7 +641,7 @@ docs/channel.md           channel, key and directory spec
   - A cut upload leaves a ledger debt that survives a daemon restart and is swept after consent.
   - A declined sweep is not offered again.
   - A lost reply restarts the upload from chunk 0, never resending that chunk alone.
-- **Verification:** the file and ledger fixtures replay green.
+- **Verification:** the file and ledger fixtures from U26 replay green.
 
 ### U22. Programs and deploy-and-run
 
@@ -635,7 +654,7 @@ docs/channel.md           channel, key and directory spec
   - A lost start reply reports `uncertain` and is not resent.
   - A stop before the start cancels deploy-and-run and names who stopped.
   - A start into a running slot is refused instead of silently ignored.
-- **Verification:** the deploy-and-run fixtures replay green, including the brick-off failure.
+- **Verification:** the deploy-and-run fixtures from U26 replay green, including the brick-off failure.
 
 ### U23. Telemetry
 
@@ -648,7 +667,7 @@ docs/channel.md           channel, key and directory spec
   - A skipped tick is a later sample, never a queued one.
   - A brick that comes back on the 64-byte path rebuilds its telemetry frame limit.
   - The throttle slows the tick when p95 round trips exceed the tail factor and recovers after calm windows.
-- **Verification:** the telemetry fixture replays green.
+- **Verification:** the telemetry fixture from U26 replays green.
 
 ### U12. Daemon surface
 
@@ -666,7 +685,7 @@ docs/channel.md           channel, key and directory spec
   - Two leased writes to one brick: the second gets `brick_busy` naming the holder.
   - A hold written by `ev3 connect` is in `held.json` and gone after `ev3 disconnect`.
   - `files/read` into the state root is refused for every client kind.
-- **Verification:** the TypeScript wire tests cover every method against the matched-replay daemon.
+- **Verification:** the TypeScript wire tests cover every method that needs no brick now, and every other method against the matched-replay daemon once U26 lands.
 
 ### U13. Lifecycle and replacement
 
@@ -689,8 +708,8 @@ docs/channel.md           channel, key and directory spec
 
 - **Goal:** `@ev3-cockpit/client` launches and reconnects to the Rust daemon and speaks the generated contract.
 - **Requirements:** R5, R6, R11, R12, R14, R15, R17, R24; KTD9.
-- **Dependencies:** U13.
-- **Files:** `src/client/{index,ensureDaemon,locate}.ts`, `src/__tests__/clientDaemonHelpers.ts`, `src/__tests__/cliHelpers.ts`, client tests, `docs/api-for-consumers.md` (export diff).
+- **Dependencies:** U26.
+- **Files:** `src/client/{index,ensureDaemon}.ts`, `src/__tests__/clientDaemonHelpers.ts`, `src/__tests__/cliHelpers.ts`, client tests, `docs/api-for-consumers.md` (export diff).
 - **Approach:**
   1. Launch per KTD9, including the copy procedure, cleanup, the development locate rule and `install.json` with its SHA-256.
   2. One start-failure classification shared by all clients.
@@ -701,9 +720,9 @@ docs/channel.md           channel, key and directory spec
   - Covers AE4. A packaged binary whose SHA-256 differs from the package's is not started and the mismatch is named.
   - Three clients launching at once produce no false mismatch and one daemon.
   - A stale copy in `bin/` is replaced, not refused.
-  - Covers AE5. A spawn refused with error 4551 is classified as Smart App Control and not retried.
+  - Covers AE5. A spawn that fails with a generic error while the policy reads Smart App Control on is classified as Smart App Control and not retried; error 4551 is classified the same way.
   - A client reconnects its own bricks after a replacement.
-- **Verification:** every client test that started `--simulated` passes against the matched-replay daemon, or is replaced by a fixture-backed test where the flow needs OS events the recordings carry.
+- **Verification:** every client test that started `--simulated` is rewritten to the published scenario inputs and passes against the matched-replay daemon.
 
 ### U24. VS Code extension
 
@@ -755,8 +774,8 @@ docs/channel.md           channel, key and directory spec
 - **Dependencies:** U15.
 - **Files:** `daemon/fixtures/*` (re-recorded where the runtime changed), `scripts/hardware-matrix.js`, `scripts/core-smoke.js`, `scripts/api-check/`.
 - **Approach:**
-  1. Precondition: no Node daemon runs on HOSTA, HOSTD or the RPi5.
-  2. Run the former F1, F2, `core-smoke` and `api-check` rounds against the Rust daemon on all three hosts and transports.
+  1. Precondition: no Node daemon or probe process runs on HOSTA, HOSTD or the RPi5.
+  2. Run the IMPLEMENTATION_PLAN 4.10.2 rounds F1 and F2, `core-smoke` and `api-check` against the Rust daemon on all three hosts and transports.
   3. Re-record fixtures that the later units made stale.
   4. Tick the parity checklist; every failure case of today's tests has a fixture or a Rust test.
 - **Execution note:** the owner runs the rounds; the agent gives one instruction at a time and reads the daemon log itself.
@@ -769,9 +788,9 @@ docs/channel.md           channel, key and directory spec
 - **Requirements:** R17, R19; KTD13, KTD15.
 - **Dependencies:** U16.
 - **Files:** delete `src/core/`, `src/daemon/`, the hand-written `src/contract/*.ts` superseded by `src/contract/generated/`, `native/bt-pairing-helper/`, the native module dependencies in `package.json`, the TypeScript core tests; add the state migration to `daemon/crates/daemon/src/migrate.rs`; update `docs/protocol.md`, `DESIGN.md`, `REQUIREMENTS.md`, `AGENTS.md`, `wiki/`, `IMPLEMENTATION_PLAN.md`, `docs/api-for-consumers.md`.
-- **Approach:** migrate per KTD15; delete in one commit after U16 signs off; keep `native/macos/` sources for the deferred macOS work, out of packaging; mark the superseded rules (NF4.1, 7.8, `DESIGN.md:262-268`); send EVƎ C the export diff (R19).
+- **Approach:** migrate per KTD15; delete in one commit after U16 signs off; keep `native/macos/` sources for the deferred macOS work, out of packaging; mark the superseded rules (NF4.1, 7.8, `DESIGN.md:262-268`, `IMPLEMENTATION_PLAN.md:1043-1050`); send EVƎ C the export diff (R19).
 - **Test scenarios:**
-  - A ledger debt recorded by the Node daemon is still owed after the migration.
+  - A ledger debt recorded by the Node daemon is still owed after the migration, also when the native ledger already holds other debts.
   - Settings set under the old root are in effect after the migration; the old root's lock and handover files are gone.
 - **Verification:** a search finds no reference to the deleted paths in the documents of the current state; all suites and the smoke are green.
 
@@ -789,8 +808,8 @@ docs/channel.md           channel, key and directory spec
 | Smoke | `node scripts/daemon-smoke.cjs` against the binary with matched replay | U15 onwards |
 | Reverse check | a fix is verified by reverting it and seeing its test fail (project rule) | every behavior fix |
 | Review | `ce-code-review` with the cross-model pass before the merge | after U17 |
-| Hardware | U18 recordings and U16 rounds on HOSTA, HOSTD and the RPi5 | as scheduled |
-| Identifier scan | the scratchpad `scan_range.py` over the branch before any push | before push |
+| Hardware | U18 and U26 recordings and U16 rounds on HOSTA, HOSTD and the RPi5 | as scheduled |
+| Identifier scan | the scratchpad `scan_range.py` over the branch, including decoded fixture bytes, before any push | before push |
 
 ---
 
