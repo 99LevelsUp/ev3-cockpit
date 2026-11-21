@@ -49,7 +49,7 @@ Speed is not part of the problem. The brick sets the ceiling: 176 commands/s on 
 - **Windows and Linux first; macOS waits.** Borrowing a Mac again takes time. (session-settled: user-directed — the owner deferred macOS while keeping it in mind.)
 - **Dropped in the rewrite:** the separate development daemon on its own channel, with brick loans and the hardware lock, and the handover to a newer daemon. Development and production never run side by side. (session-settled: user-directed — chosen over carrying both over 1:1.) Governs R13, R15, R16.
 - **Every dangerous action is confirmed by a person the daemon asks.** The client-asserted `confirmedByPerson` flag goes. (session-settled: user-approved — chosen over today's mix, where the flag still authorizes `full` and restart: a flag a client sets itself can be forged.) Governs R9.
-- **A development build always wins the shared channel.** (session-settled: user-approved — chosen over deciding by version number alone: a work-in-progress build can carry a lower version than an installed release.) Governs R16.
+- **A development build takes the shared channel from a production daemon; a running development daemon stays (R16).** (session-settled: user-approved — chosen over deciding by version number alone: a work-in-progress build can carry a lower version than an installed release.) Governs R16.
 - **Simulated bricks are deferred; recorded brick exchanges guard regressions.** (session-settled: user-approved — chosen over unit tests plus hardware only, and over a minimal mock now.) Governs R21.
 - **Shipped unsigned.** No paid certificate, ever, and the owner took the research as sufficient without testing first. On Windows, SmartScreen does not apply to files that VS Code or npm extract (no Mark of the Web, measured on HOSTA). Smart App Control on Windows 11 blocks unknown unsigned code. Today that takes USB and Bluetooth (unsigned Node modules) while TCP still runs on the signed `Code.exe`; the unsigned daemon binary loses every transport on such a machine. The owner accepts that until SignPath signs the binary. Governs R11, R12.
 - **The wire transport stays as it is.** JSON-RPC 2.0 with `Content-Length` framing over the per-user pipe or socket, with the mutual HMAC hello. Message content may change. The owner left this to the agent. Governs R7, R8.
@@ -133,7 +133,7 @@ flowchart TB
   B -->|no| C[Check SHA-256, start own binary]
   B -->|yes| D{Client is a development build?}
   D -->|yes| J{Running daemon is a development build?}
-  J -->|yes| I
+  J -->|yes| M{Contracts match?}
   J -->|no| E[Ask daemon to exit when no write runs, then start own]
   D -->|no| F{Running daemon is a development build?}
   F -->|yes| K{Contracts match?}
@@ -141,7 +141,9 @@ flowchart TB
   K -->|no| L[Say a different development daemon runs, stop]
   F -->|no| H{Client newer?}
   H -->|yes| E
-  H -->|no| I[Use it]
+  H -->|no| M
+  M -->|yes| I[Use it]
+  M -->|no| N[Say the running daemon's contract differs, stop]
 ```
 
 ### Acceptance Examples
@@ -207,7 +209,7 @@ flowchart TB
 
 ### Key Technical Decisions
 
-- KTD1. **The contract is JSON Schema draft-07 under `contract/`, generated into both languages.** `typify` produces the Rust types, `json-schema-to-typescript` the TypeScript types, and a small in-repo generator reads one method table (method → params, result, leased, person-only, callable client kinds; notification → payload; error code → family) and emits the Rust dispatch trait and the TypeScript `Methods`/`Notifications` maps, as LSP generates from `metaModel.json`. The contract version is a hash of the canonical schema and method table, generated into both languages, so every contract change changes it. Schema rules: no `anyOf`; `oneOf` only with a required `const` tag; objects on the stable core (R7) accept unknown properties. TypeScript output goes to `src/contract/generated/` beside today's hand-written contract, which the Node daemon keeps using until U17. Rejected: OpenRPC (no maintained generator for both languages), TypeSpec (no JSON-RPC emitter). Governs R5, R6, R7.
+- KTD1. **The contract is JSON Schema draft-07 under `contract/`, generated into both languages.** `typify` produces the Rust types, `json-schema-to-typescript` the TypeScript types, and a small in-repo generator reads one method table (method → params, result, leased, person-only, callable client kinds; notification → payload; error code → family) and emits the Rust dispatch trait and the TypeScript `Methods`/`Notifications` maps, as LSP generates from `metaModel.json`. The contract version is an integer in `contract/methods.json`, generated into both languages, and it marks only breaking changes: a removed or renamed method, field or error code, a field that changes type or becomes required, a changed meaning. Additive changes (a new optional field, a new method, a new notification, a new error code inside an existing family) keep it, so a client meeting a newer daemon with the same contract version keeps working; this is what keeps the npm-installed `ev3` and the MCP server working after VS Code updates itself and starts a newer daemon. The generator keeps the previous release's canonical schema and method table and fails when a breaking change lands without a raised contract version. A hash of the canonical schema stays as the staleness check for generated files, not as the contract version. (session-settled: user-approved 21.11.2026 — chosen over hashing the whole schema, which broke every client from another release on any contract change.) Schema rules: no `anyOf`; `oneOf` only with a required `const` tag; objects on the stable core (R7) accept unknown properties. TypeScript output goes to `src/contract/generated/` beside today's hand-written contract, which the Node daemon keeps using until U17. Rejected: OpenRPC (no maintained generator for both languages), TypeSpec (no JSON-RPC emitter). Governs R5, R6, R7.
 - KTD2. **A hand-written JSON-RPC codec and dispatcher on `tokio-util`, in `crates/daemon`.** It frames `Content-Length` like `vscode-jsonrpc`, caps a message at 1 MiB, answers `$/cancelRequest` and `$/progress`, and lets the daemon send requests to a client (`question/ask`). No crate fits: `jsonrpsee` lacks the framing and server-to-client requests, `lsp-server` is synchronous, `async-lsp` is tied to `lsp-types`. Governs R8.
 - KTD3. **Channel, key and directories follow one written spec, `docs/channel.md`, with cross-language test vectors.**
   1. State root: the Rust daemon uses `<platform state dir>/ev3-cockpit/native/`, apart from the Node daemon's root, while both exist; U17 migrates (KTD15).
@@ -232,7 +234,7 @@ flowchart TB
   - A log rotated by size (5 MB × 3) by our own writer, since `tracing-appender` rotates only by time.
   - The daemon refuses to run as administrator on Windows and as root on Linux.
   - It exits 10 s after the last client while nothing is held.
-  - The hello carries version, contract version (KTD1), build kind, build id and mode (hardware or replay) from the daemon, and the client's build kind from the client. The build id is the SHA-256 of the daemon's own executable, computed at start; the build kind is a compile-time constant.
+  - The hello carries version, contract version (KTD1), build kind, build id and mode (hardware or replay) from the daemon, and the client's version, contract version and build kind from the client; KTD16 judges exit requests from these. The build id is the SHA-256 of the daemon's own executable, computed at start; the build kind is a compile-time constant.
   - "A write in progress" is a leased operation, a pairing, or a forget or clear-list; a replacement waits for it at most 60 s, telling the user, then gives up.
   - Holds persist in `held.json` (R23).
   - A new daemon's first Bluetooth connect to a brick treats WSA 10064 and `EBUSY` within 5 s of its start as retryable, since the previous daemon's close time is unknown.
@@ -285,7 +287,7 @@ sequenceDiagram
   participant O as Running daemon
   participant N as New daemon
   C->>F: read channel.json
-  C->>O: connect, hello (client build kind)
+  C->>O: connect, hello (client version, contract version, build kind)
   alt no daemon
     C->>F: copy own binary to bin/sha, verify
     C->>N: start the verified copy
@@ -406,13 +408,13 @@ docs/channel.md           channel, key and directory spec
   2. Errors carry `code` and family only. Questions carry the requester (KTD10). The settings spec, including CLI keys, becomes schema data. The exit method is not callable by `mcp`.
   3. `LaunchSpec` per KTD9; hello per KTD8.
   4. Mark the stable core and keep it open to unknown properties.
-  5. The generator emits Rust types, the dispatch trait, the TypeScript maps and the contract version; CI fails when generated files are stale.
+  5. The generator emits Rust types, the dispatch trait, the TypeScript maps and the contract version; CI fails when generated files are stale or when a breaking change lands without a raised contract version (KTD1), compared against the previous release's schema kept in `contract/released/`.
 - **Patterns to follow:** `src/contract/methods.ts`, `src/contract/errors.ts`; the D-Bus fixture generator for "generated, do not edit".
 - **Test scenarios:**
   - A message for each method round-trips Rust → JSON → TypeScript type check.
   - An unknown property on a stable-core message is accepted by both sides.
   - A `oneOf` without a const tag fails the generator.
-  - Changing one schema field changes the contract version on both sides.
+  - Adding an optional field or a method keeps the contract version; removing a field, renaming a method or making a field required without raising it fails the generator, and the raised version appears on both sides.
   - A stale generated file fails the check.
 - **Verification:** the Rust contract crate and `src/contract/generated/` build from the schema alone; the hand-written contract stays untouched for the Node daemon.
 
@@ -697,7 +699,9 @@ docs/channel.md           channel, key and directory spec
 - **Test scenarios:**
   - Covers AE2. An older daemon mid-deploy finishes the deploy before exiting for a newer client.
   - Covers AE1. A production client meeting a development daemon with the same contract uses it and says so; with a different contract it says so and stops.
-  - A development client meeting another development daemon uses it and does not ask it to exit.
+  - A development client meeting another development daemon uses it and does not ask it to exit; with a different contract version it says so and stops.
+  - A production daemon meeting production clients: an older and an equal client use it, a newer client gets it to exit; a client with a different contract version that is not newer says so and stops.
+  - A client with the same contract version meets a daemon whose schema gained an optional field and a method; it keeps working.
   - Covers AE6. A held brick is connected again by the new daemon after a replacement.
   - An exit request from a client that does not qualify asks a person; from an MCP client it is refused.
   - No environment variable or argument makes a release build report a development build kind.
