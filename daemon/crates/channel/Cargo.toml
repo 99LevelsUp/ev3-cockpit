@@ -1,0 +1,32 @@
+[package]
+name = "ev3-channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# What the daemon and its native clients share: where the files are, the files only the user can
+# open, the key, the channel record and the message framing. No transport, so a client never links
+# the hardware.
+
+[dependencies]
+bytes = "1.12.2"
+getrandom = "0.3.4"
+serde_json = "1.0.154"
+tokio-util = { version = "0.7.20", features = ["codec"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[lints]
+workspace = true

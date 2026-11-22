@@ -1,0 +1,248 @@
+{
+  "$comment": "One message for every entry of contract/methods.json. The Rust test (daemon/crates/contract/tests/messages.rs) decodes each into its generated type and checks that encoding it again gives the same JSON; the TypeScript test (src/__tests__/contractGenerated.test.ts) type-checks each against the generated maps. Both fail when an entry has no message or a message has no entry.",
+  "hello": {
+    "hello/start": {
+      "params": { "clientNonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "clientName": "EVƎ Cockpit (VS Code)", "clientKind": "vscode", "version": "0.3.0", "contractVersion": 2, "buildKind": "release" },
+      "result": { "daemonNonce": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100", "daemonProof": "f9723731516ada813f078699090906459a2ada501361b790bc8609ace7906e00" }
+    },
+    "hello/finish": {
+      "params": { "clientProof": "db5b116aadf861320f23c13ecd7fcced853ab21afc9d7d85b2f9866a03ea1f87" },
+      "result": { "version": "0.3.0", "contractVersion": 2, "buildKind": "development", "buildId": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "mode": "hardware", "pid": 4242, "instanceId": "4c2a9e10", "state": "serving", "transports": ["usb", "bt", "tcp"] }
+    }
+  },
+  "methods": {
+    "daemon/status": {
+      "params": {},
+      "result": {
+        "version": "0.3.0", "contractVersion": 2, "buildKind": "release", "buildId": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "mode": "hardware", "pid": 4242,
+        "channel": "\\\\.\\pipe\\ev3-cockpit-0f1e2d3c4b5a6978", "startedAt": 1764000000000,
+        "clients": [{ "name": "ev3 status (terminal)", "kind": "cli", "version": "0.3.0", "buildKind": "release" }],
+        "bricks": [{ "brickId": "001653f00a0a", "name": "AAA", "holders": [{ "kind": "client", "client": "EVƎ Cockpit (VS Code)" }], "leaseHolder": "EVƎ Cockpit (VS Code)", "reconnecting": false }],
+        "logPath": "/home/user/.local/state/ev3-cockpit/native/logs/daemon.log"
+      }
+    },
+    "daemon/exit": {
+      "params": {},
+      "result": { "accepted": false, "reason": "Nobody answered the question in time." }
+    },
+    "log/notice": {
+      "params": { "level": "warning", "text": "AAA is busy." },
+      "result": null
+    },
+    "bricks/list": {
+      "params": { "waitForDiscovery": true },
+      "result": { "bricks": [{ "brickId": "001653f00a0a", "name": "AAA", "nameConfirmed": true, "connected": true, "paired": true, "channels": [{ "transport": "usb", "state": "connected" }, { "transport": "bt", "state": "available" }], "holders": [{ "kind": "hold" }], "reconnecting": false }] }
+    },
+    "bricks/connect": {
+      "params": { "brick": "AAA", "hold": true },
+      "result": { "brickId": "001653f00a0a", "name": "AAA", "nameConfirmed": true, "connected": true, "paired": false, "channels": [{ "transport": "tcp", "state": "connected" }], "holders": [{ "kind": "client", "client": "ev3 connect (terminal)" }, { "kind": "remembered" }] }
+    },
+    "bricks/disconnect": {
+      "params": { "brick": "001653f00a0a", "forEveryone": false, "releaseHold": true },
+      "result": { "stillHeldBy": ["EVƎ Cockpit (VS Code)"] }
+    },
+    "bricks/info": {
+      "params": { "brick": "AAA" },
+      "result": { "brickId": "001653f00a0a", "name": "AAA", "firmwareVersion": "V1.10E", "osVersion": "Linux 2.6.33-rc4" }
+    },
+    "bricks/storage": {
+      "params": {},
+      "result": { "totalKb": 6000, "freeKb": 4200 }
+    },
+    "bricks/pair": {
+      "params": { "brick": "BBB" },
+      "result": { "brickId": "001653f00b0b", "outcome": "cancelled", "message": "The pairing was cancelled on the brick.", "status": "Cancelled" }
+    },
+    "bricks/forget": {
+      "params": { "brick": "BBB" },
+      "result": {
+        "forgotten": true,
+        "lines": ["BBB is forgotten."],
+        "report": {
+          "brickId": "001653f00b0b",
+          "brickSide": { "status": "confirmed", "name": "HOSTA", "over": "usb:001653f00b0b", "remaining": 1 },
+          "peers": ["HOSTA", "HOSTB"],
+          "pairing": [{ "status": "removed", "channel": "bt:001653f00b0b" }, { "status": "refused", "channel": "bt:001653f00b0b", "reason": "Access is denied." }],
+          "memory": { "status": "failed", "detail": "presence cache busy" },
+          "residue": [{ "location": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\001653f00b0b", "reason": "Windows keeps it until the next restart." }]
+        }
+      }
+    },
+    "bricks/clearBluetoothList": {
+      "params": { "brick": "CCC" },
+      "result": {
+        "removed": ["HOSTB"],
+        "kept": ["HOSTA"],
+        "report": {
+          "brickId": "001653f00c0c",
+          "over": "usb:001653f00c0c",
+          "thisComputer": "HOSTA",
+          "paired": true,
+          "skipped": { "reason": "duplicate-link-entry", "detail": "HOSTA twice" },
+          "peers": ["HOSTA", "HOSTB", " "],
+          "entries": [
+            { "status": "confirmed", "name": "HOSTB" },
+            { "status": "sent", "name": "HOSTA", "detail": "link lost" },
+            { "status": "failed", "name": "HOSTC", "detail": "still listed" },
+            { "status": "not-removable", "name": " ", "reason": "blank-name" }
+          ],
+          "left": ["HOSTA"],
+          "pairing": [{ "status": "removed", "channel": "bt:001653f00c0c" }],
+          "pairingLeft": "not-paired",
+          "memory": { "status": "cleared" },
+          "residue": []
+        }
+      }
+    },
+    "bricks/inquiry": {
+      "params": {},
+      "result": null
+    },
+    "files/list": {
+      "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/" },
+      "result": { "entries": [{ "name": "demo", "kind": "directory" }, { "name": "demo.rbf", "kind": "file", "bytes": 1234, "md5": "0123456789abcdef0123456789abcdef" }] }
+    },
+    "files/exists": {
+      "params": { "path": "/home/root/lms2012/prjs/demo/demo.rbf" },
+      "result": { "exists": true }
+    },
+    "files/size": {
+      "params": { "path": "/home/root/lms2012/prjs/demo/" },
+      "result": { "kilobytes": 12, "files": 3 }
+    },
+    "files/read": {
+      "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/demo/data.txt", "toLocalPath": "/home/user/data.txt", "inline": false },
+      "result": { "bytes": 5, "handle": "t-1", "content": "aGVsbG8=" }
+    },
+    "files/write": {
+      "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/demo/data.txt", "fromLocalPath": "/home/user/data.txt", "handle": "t-2", "content": "aGVsbG8=" },
+      "result": { "bytes": 5 }
+    },
+    "files/makeDirectory": {
+      "params": { "path": "/home/root/lms2012/prjs/new/" },
+      "result": null
+    },
+    "files/remove": {
+      "params": { "path": "/home/root/lms2012/prjs/old/", "recursive": true },
+      "result": { "leftBehind": ["/home/root/lms2012/prjs/old/locked.rbf"] }
+    },
+    "files/removePaths": {
+      "params": { "brick": "AAA", "paths": ["/home/root/lms2012/prjs/a.rbf", "/home/root/lms2012/prjs/b.rbf"], "recursive": false },
+      "result": { "leftBehind": [] }
+    },
+    "files/move": {
+      "params": { "from": "/home/root/lms2012/prjs/a.rbf", "to": "/home/root/lms2012/prjs/b.rbf" },
+      "result": null
+    },
+    "transfer/begin": {
+      "params": { "size": 70000 },
+      "result": { "handle": "t-3", "chunkBytes": 49152 }
+    },
+    "transfer/write": {
+      "params": { "handle": "t-3", "data": "AAEC" },
+      "result": null
+    },
+    "transfer/read": {
+      "params": { "handle": "t-1" },
+      "result": { "data": "aGVsbG8=", "done": true }
+    },
+    "transfer/close": {
+      "params": { "handle": "t-1" },
+      "result": null
+    },
+    "programs/deployAndRun": {
+      "params": { "brick": "AAA", "files": [{ "remotePath": "/home/root/lms2012/prjs/demo/demo.rbf", "localPath": "/home/user/demo.rbf", "skipIfSameMd5": true }, { "remotePath": "/home/root/lms2012/prjs/demo/icon.rgf", "content": "AAEC" }], "runPath": "/home/root/lms2012/prjs/demo/demo.rbf" },
+      "result": { "brickId": "001653f00a0a", "outcome": "started", "runSeq": 7, "uploaded": ["/home/root/lms2012/prjs/demo/demo.rbf"], "skipped": ["/home/root/lms2012/prjs/demo/icon.rgf"] }
+    },
+    "programs/run": {
+      "params": { "path": "/home/root/lms2012/prjs/demo/demo.rbf", "replace": true },
+      "result": { "brickId": "001653f00a0a", "outcome": "uncertain", "runSeq": 8, "uploaded": [], "skipped": [] }
+    },
+    "programs/stop": {
+      "params": { "brick": "AAA" },
+      "result": { "brickId": "001653f00a0a", "running": false, "runSeq": 8, "stoppedBy": "ev3 stop (terminal)" }
+    },
+    "programs/emergencyStop": {
+      "params": {},
+      "result": { "brickId": "001653f00a0a", "running": false, "runSeq": 8 }
+    },
+    "programs/status": {
+      "params": { "brick": "AAA", "waitMs": 5000 },
+      "result": { "brickId": "001653f00a0a", "running": true, "runSeq": 9 }
+    },
+    "programs/subscribe": {
+      "params": { "brick": "AAA" },
+      "result": { "subscriptionId": "s-1", "state": { "brickId": "001653f00a0a", "running": false, "runSeq": 0 } }
+    },
+    "shell/run": {
+      "params": { "brick": "AAA", "command": "ls /media/card" },
+      "result": { "brickId": "001653f00a0a", "status": -1 }
+    },
+    "settings/list": {
+      "params": {},
+      "result": {
+        "settings": [
+          { "spec": { "key": "transfer.tcpPacketBytes", "cliKey": "transfer.tcp-packet-bytes", "type": "integer", "default": 1024, "minimum": 64, "maximum": 65535, "description": "Largest packet a file transfer sends over Wi-Fi.", "dangerous": false, "stored": true }, "value": 2048 },
+          { "spec": { "key": "telemetry.throttle.step", "cliKey": "telemetry.throttle.step", "type": "number", "default": 1.5, "exclusiveMinimum": 1, "description": "How much one step slows the telemetry tick down.", "dangerous": false, "stored": true }, "value": 1.25 }
+        ]
+      }
+    },
+    "settings/set": {
+      "params": { "key": "access-mode", "value": "full" },
+      "result": { "spec": { "key": "accessMode", "cliKey": "access-mode", "type": "string", "default": "safe", "enum": ["safe", "full"], "description": "What clients may do on a brick.", "dangerous": true, "stored": false }, "value": "full" }
+    },
+    "settings/accessMode": {
+      "params": {},
+      "result": { "mode": "safe" }
+    },
+    "telemetry/rows": {
+      "params": {},
+      "result": { "rows": [{ "id": "battery.voltage", "tier": "basic", "unit": "V" }, { "id": "sensor.1.value", "tier": "sensor", "port": "1", "layer": 0 }] }
+    },
+    "telemetry/subscribe": {
+      "params": { "brick": "AAA", "request": { "rows": ["battery.voltage", "sensor.1.value"], "intervalMs": 500, "modes": { "1": 2 } } },
+      "result": {
+        "subscriptionId": "s-2",
+        "brickId": "001653f00a0a",
+        "grant": { "battery.voltage": { "kind": "interval", "ms": 1000 }, "brick.name": { "kind": "once" } },
+        "snapshot": [{ "rowId": "battery.voltage", "value": 7.9, "unit": "V", "sampledAt": 1764000000000, "effectiveRate": { "kind": "interval", "ms": 1000 }, "stale": false }, { "rowId": "sensor.1.value", "value": null, "mode": 2, "sampledAt": 1764000000001, "stale": true }]
+      }
+    },
+    "telemetry/foreground": {
+      "params": { "brick": "AAA" },
+      "result": null
+    },
+    "chain/get": {
+      "params": { "brick": "AAA" },
+      "result": { "brickId": "001653f00a0a", "read": true, "stale": false, "members": [{ "layer": 0, "capabilities": { "sensors": true, "motorTypes": true, "motorReadout": true, "files": true, "programs": true, "name": true } }] }
+    },
+    "chain/follow": {
+      "params": {},
+      "result": { "subscriptionId": "s-3", "chain": { "brickId": "001653f00a0a", "read": false, "stale": true, "members": [] } }
+    },
+    "subscriptions/cancel": {
+      "params": { "subscriptionId": "s-3" },
+      "result": null
+    }
+  },
+  "notifications": {
+    "bricks/changed": { "bricks": [] },
+    "bricks/reconnected": { "brickId": "001653f00a0a" },
+    "bricks/pairingStarted": { "brickId": "001653f00b0b" },
+    "bricks/pairingEvent": { "brickId": "001653f00b0b", "progress": { "phase": "found", "name": "BBB", "alreadyPaired": false } },
+    "bricks/pairingDone": { "brickId": "001653f00b0b", "outcome": "paired" },
+    "bricks/oneSidedRepair": { "brickId": "001653f00b0b", "message": "BBB had lost this computer's pairing; it is paired again.", "repair": { "brickId": "001653f00b0b", "found": "brick-only", "removal": { "status": "sent", "name": "HOSTA", "over": "usb:001653f00b0b", "detail": "link lost" }, "others": ["HOSTB"], "repeated": false } },
+    "programs/stateChanged": { "subscriptionId": "s-1", "state": { "brickId": "001653f00a0a", "running": true, "runSeq": 9 } },
+    "telemetry/update": { "subscriptionId": "s-2", "brickId": "001653f00a0a", "kind": "change", "values": [{ "rowId": "sensor.1.value", "value": "red", "sampledAt": 1764000000500, "stale": false }], "removed": ["brick.name"] },
+    "chain/changed": { "subscriptionId": "s-3", "chain": { "brickId": "001653f00a0a", "read": true, "stale": false, "members": [] } },
+    "settings/changed": { "setting": { "spec": { "key": "telemetry.throttle.enabled", "cliKey": "telemetry.throttle.enabled", "type": "boolean", "default": true, "description": "Slow a brick's telemetry while it answers slowly.", "dangerous": false, "stored": true }, "value": false } },
+    "settings/accessModeChanged": { "mode": "full" },
+    "question/withdrawn": { "questionId": "q-1" }
+  },
+  "clientRequests": {
+    "question/ask": {
+      "params": { "kind": "clearBluetoothList", "questionId": "q-1", "text": "Remove 2 entries from CCC's Bluetooth list?", "details": ["HOSTA", "HOSTB"], "timeoutMs": 60000, "requester": { "name": "an agent (MCP)", "kind": "mcp" }, "brickId": "001653f00c0c", "thisComputer": "HOSTA", "includesThisComputer": true },
+      "result": { "answer": "no" }
+    }
+  }
+}

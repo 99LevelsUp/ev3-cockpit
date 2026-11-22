@@ -1,0 +1,119 @@
+//! The key under concurrent creation, and confinement through links and junctions.
+
+mod common;
+
+use std::path::Path;
+use std::sync::{Arc, Barrier};
+
+use common::TempRoot;
+use ev3_cockpitd::confine::Confinement;
+use ev3_cockpitd::key::{KEY_BYTES, ensure_key};
+use ev3_contract::ErrorCode;
+
+#[test]
+fn many_starters_at_once_end_with_one_key_and_no_temporary_files() {
+    let root = TempRoot::new("keyrace");
+    let file = root.path().join("native").join("key");
+    let barrier = Arc::new(Barrier::new(8));
+    let keys: Vec<Vec<u8>> = (0..8)
+        .map(|_| {
+            let (file, barrier) = (file.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                barrier.wait();
+                ensure_key(&file).expect("a key")
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|t| t.join().expect("thread"))
+        .collect();
+    assert!(keys.iter().all(|k| k.len() == KEY_BYTES && *k == keys[0]));
+    assert_eq!(std::fs::read(&file).expect("file"), keys[0]);
+    let names: Vec<_> = std::fs::read_dir(file.parent().expect("dir"))
+        .expect("list")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+}
+
+#[test]
+fn an_existing_key_is_never_replaced() {
+    let root = TempRoot::new("keykeep");
+    let file = root.path().join("key");
+    std::fs::write(&file, [9u8; KEY_BYTES]).expect("key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    assert_eq!(ensure_key(&file).expect("read"), vec![9u8; KEY_BYTES]);
+    std::fs::write(&file, [9u8; 5]).expect("damage");
+    let error = ensure_key(&file).expect_err("damaged");
+    assert!(error.0.contains("5 bytes"), "{}", error.0);
+    assert!(!error.0.to_lowercase().contains("delete"), "{}", error.0);
+    assert_eq!(std::fs::read(&file).expect("kept"), vec![9u8; 5]);
+}
+
+/// A junction on Windows (no privilege needed), a symbolic link elsewhere.
+fn link_dir(target: &Path, link: &Path) {
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("mklink");
+        assert!(status.success(), "mklink /J failed");
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("symlink");
+}
+
+#[test]
+fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
+    let root = TempRoot::new("junction");
+    let state = root.path().join("state");
+    let elsewhere = root.path().join("projects");
+    std::fs::create_dir_all(&state).expect("state");
+    std::fs::create_dir_all(&elsewhere).expect("projects");
+    std::fs::write(state.join("key"), b"secret").expect("key");
+    let door = elsewhere.join("door");
+    link_dir(&state, &door);
+
+    let confinement = Confinement::new([state.clone()]);
+    for named in [door.join("key"), door.join("settings.json"), door.clone()] {
+        let error = confinement.check(&named).expect_err("refused");
+        assert_eq!(
+            error.data.code,
+            ErrorCode::AccessDenied,
+            "{}",
+            named.display()
+        );
+    }
+    assert!(confinement.check(&elsewhere.join("prog.rbf")).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_link_or_a_dangling_link_into_the_state_root_is_refused() {
+    let root = TempRoot::new("filelink");
+    let state = root.path().join("state");
+    std::fs::create_dir_all(&state).expect("state");
+    std::fs::write(state.join("key"), b"secret").expect("key");
+    let out = root.path().join("out");
+    std::fs::create_dir_all(&out).expect("out");
+    std::os::unix::fs::symlink(state.join("key"), out.join("k")).expect("link");
+    std::os::unix::fs::symlink(state.join("new"), out.join("dangling")).expect("dangling");
+    let confinement = Confinement::new([state]);
+    assert_eq!(
+        confinement
+            .check(&out.join("k"))
+            .expect_err("file link")
+            .data
+            .code,
+        ErrorCode::AccessDenied
+    );
+    assert!(confinement.check(&out.join("dangling")).is_err());
+}

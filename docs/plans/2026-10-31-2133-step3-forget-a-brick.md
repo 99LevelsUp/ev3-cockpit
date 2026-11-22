@@ -358,7 +358,7 @@ sequenceDiagram
   5. Build the message from the report with U5's pure functions (R19).
 - **Patterns to follow:** U4's `forget` and U5's command flow.
 - **Test scenarios:**
-  - Covers R17. A mock brick listing `OLD-PC`, `UCEBNA-PC` and another brick: all three are removed over USB, and the read-back is empty.
+  - Covers R17. A mock brick listing `OLD-PC`, `HOSTB` and another brick: all three are removed over USB, and the read-back is empty.
   - Covers R17. A list holding the same name twice: the name is sent twice and both entries are gone.
   - Covers R17. An entry the mock refuses to remove: the loop stops after a pass that removes nothing, and the report names the entry.
   - Covers R17. An entry with an empty name: no removal is sent for it, and the report says it cannot be removed.

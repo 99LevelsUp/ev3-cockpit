@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Daemon",
+  "description": "The daemon's status, how a client launches it, errors, and the questions it puts to a person.",
+  "definitions": {
+    "ClientKind": {
+      "description": "Who a connection is. vscode and cli have a person at them, so the daemon puts its questions to them. An add-on is addon in every environment (its VS Code extension and its own ev3 subcommand alike); an MCP server is mcp. The hello carries it as a plain string, so a kind added later never breaks an older daemon's hello.",
+      "type": "string",
+      "enum": ["vscode", "cli", "mcp", "addon"]
+    },
+    "BuildKind": {
+      "description": "release for a published build, development for one built from the repository. Fixed when the binary or package is built; nothing at run time changes it.",
+      "type": "string",
+      "enum": ["release", "development"]
+    },
+    "DaemonMode": {
+      "description": "hardware talks to real bricks; replay serves recorded exchanges on a test channel.",
+      "type": "string",
+      "enum": ["hardware", "replay"]
+    },
+    "DaemonState": {
+      "description": "serving; or exiting: the daemon is about to end, so wait, then connect again.",
+      "type": "string",
+      "enum": ["serving", "exiting"]
+    },
+    "ClientInfo": {
+      "description": "A connected client, as its hello named it.",
+      "type": "object",
+      "required": ["name", "kind", "version", "buildKind"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "$ref": "#/definitions/ClientKind" },
+        "version": { "type": "string" },
+        "buildKind": { "$ref": "#/definitions/BuildKind" }
+      }
+    },
+    "BrickStatus": {
+      "description": "Holders and the write lease of one brick, for ev3 daemon status.",
+      "type": "object",
+      "required": ["brickId", "name", "holders"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "name": { "type": "string" },
+        "holders": { "type": "array", "items": { "$ref": "#/definitions/BrickHolder" } },
+        "leaseHolder": { "type": "string", "description": "The client holding the write lease, if any." },
+        "reconnecting": { "type": "boolean", "description": "Held across a daemon restart and not connected again yet." }
+      }
+    },
+    "DaemonStatus": {
+      "type": "object",
+      "required": ["version", "contractVersion", "buildKind", "buildId", "mode", "pid", "channel", "startedAt", "clients", "bricks", "logPath"],
+      "properties": {
+        "version": { "type": "string" },
+        "contractVersion": { "type": "integer", "minimum": 1 },
+        "buildKind": { "$ref": "#/definitions/BuildKind" },
+        "buildId": { "type": "string", "description": "SHA-256 of the daemon's executable, lowercase hex." },
+        "mode": { "$ref": "#/definitions/DaemonMode" },
+        "pid": { "type": "integer", "minimum": 0 },
+        "channel": { "type": "string", "description": "The pipe or socket path the daemon listens on." },
+        "startedAt": { "type": "integer", "minimum": 0, "description": "Milliseconds since the Unix epoch." },
+        "clients": { "type": "array", "items": { "$ref": "#/definitions/ClientInfo" } },
+        "bricks": { "type": "array", "items": { "$ref": "#/definitions/BrickStatus" } },
+        "logPath": { "type": "string" }
+      }
+    },
+    "LaunchSpec": {
+      "x-file": "install.json",
+      "description": "How to start the daemon: the binary a client carries, and install.json, where the VS Code extension and the ev3 command record the installed cockpit so an add-on can start its daemon. No script interpreter is involved.",
+      "type": "object",
+      "required": ["binary", "sha256", "version", "buildKind"],
+      "properties": {
+        "binary": { "type": "string", "description": "Absolute path of the daemon executable." },
+        "sha256": { "type": "string", "description": "The executable's SHA-256 as shipped in its package, lowercase hex. A client starts only a copy whose hash matches." },
+        "version": { "type": "string" },
+        "buildKind": { "$ref": "#/definitions/BuildKind" }
+      }
+    },
+    "ErrorFamily": {
+      "description": "Which family an error belongs to; the JSON-RPC error's numeric code names the family, as the method table gives it.",
+      "type": "string",
+      "enum": ["brick", "lease", "person", "daemon", "cancelled", "request", "internal"]
+    },
+    "ErrorCode": {
+      "description": "Every code a client may see in an error's data.code. The method table says what each means and which family it belongs to.",
+      "type": "string",
+      "enum": [
+        "transport_failed", "connection_failed", "timeout", "protocol_failed", "invalid_brick_key",
+        "session_failed", "heartbeat_failed", "already_connected", "not_connected", "no_provider",
+        "invalid_transition", "channel_changed", "connection_abandoned", "queue_unavailable",
+        "consumer_failed", "subscription_failed", "program_running", "program_not_found",
+        "mode_conflict", "access_denied", "brick_ambiguous", "brick_not_found", "brick_unreachable",
+        "link_lost", "backend_unavailable", "device_permission",
+        "brick_busy", "needs_person", "daemon_unavailable", "outcome_unknown", "replay_unmatched",
+        "cancelled", "invalid_request", "internal"
+      ]
+    },
+    "BrickCandidate": {
+      "type": "object",
+      "required": ["brickId", "name"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
+    "ErrorData": {
+      "description": "What data carries on every contract error. A client decides on code; the message says the rest.",
+      "type": "object",
+      "required": ["code", "family"],
+      "properties": {
+        "code": { "$ref": "#/definitions/ErrorCode" },
+        "family": { "$ref": "#/definitions/ErrorFamily" },
+        "holder": { "type": "string", "description": "For brick_busy: who holds the lease." },
+        "candidates": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/BrickCandidate" },
+          "description": "For brick_ambiguous: the bricks the name matched."
+        },
+        "command": { "type": "string", "description": "For needs_person and refusals an agent cannot act on: the command a person should run." }
+      }
+    },
+    "Requester": {
+      "description": "The client whose request made the daemon ask, as its hello named it.",
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "$ref": "#/definitions/ClientKind" }
+      }
+    },
+    "Question": {
+      "description": "A question the daemon puts to a client with a person at it (vscode or cli). Every question carries questionId, the text ready to show, optional detail lines, and timeoutMs, after which it counts as unanswered and the operation is refused. A question about an operation a client asked for names that client.",
+      "oneOf": [
+        {
+          "description": "Forget a brick: unpair it on this computer and on the brick.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs", "requester", "brickId"],
+          "properties": {
+            "kind": { "const": "forget" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "requester": { "$ref": "#/definitions/Requester" },
+            "brickId": { "type": "string" }
+          }
+        },
+        {
+          "description": "Clear a brick's Bluetooth list. details lists the entries a clearing would remove.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs", "requester", "brickId", "includesThisComputer"],
+          "properties": {
+            "kind": { "const": "clearBluetoothList" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "requester": { "$ref": "#/definitions/Requester" },
+            "brickId": { "type": "string" },
+            "thisComputer": { "type": "string", "description": "This computer's Bluetooth name, when known." },
+            "includesThisComputer": { "type": "boolean", "description": "This computer's own entry is among those removed, so the Bluetooth pairing ends too." }
+          }
+        },
+        {
+          "description": "Release transfer slots a broken transfer left taken on a brick. details lists the slots.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs", "requester", "brickId"],
+          "properties": {
+            "kind": { "const": "sweep" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "requester": { "$ref": "#/definitions/Requester" },
+            "brickId": { "type": "string" }
+          }
+        },
+        {
+          "description": "Change a dangerous setting, such as switching access to full.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs", "requester", "key", "value"],
+          "properties": {
+            "kind": { "const": "setting" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "requester": { "$ref": "#/definitions/Requester" },
+            "key": { "type": "string" },
+            "value": { "$ref": "#/definitions/SettingScalar" }
+          }
+        },
+        {
+          "description": "Restart the daemon: an exit request that is not a replacement by a newer client.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs", "requester"],
+          "properties": {
+            "kind": { "const": "restart" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 },
+            "requester": { "$ref": "#/definitions/Requester" }
+          }
+        },
+        {
+          "description": "The daemon cannot use Bluetooth until the person grants access (on Linux, membership in the Bluetooth group); asked by the daemon itself.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs"],
+          "properties": {
+            "kind": { "const": "bluetoothAccess" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "description": "Whether to check Bluetooth access again after the person changed something; asked by the daemon itself.",
+          "type": "object",
+          "required": ["kind", "questionId", "text", "timeoutMs"],
+          "properties": {
+            "kind": { "const": "bluetoothCheckAgain" },
+            "questionId": { "type": "string" },
+            "text": { "type": "string" },
+            "details": { "type": "array", "items": { "type": "string" } },
+            "timeoutMs": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "QuestionAnswer": {
+      "description": "keep leaves things as they are: what a client without a person always answers.",
+      "type": "string",
+      "enum": ["yes", "no", "keep"]
+    },
+    "QuestionReply": {
+      "type": "object",
+      "required": ["answer"],
+      "properties": {
+        "answer": { "$ref": "#/definitions/QuestionAnswer" },
+        "remember": { "type": "boolean", "description": "Apply this yes or no to the same question about this client's own later requests, for as long as its connection lasts. Kept only when the question was about this client's own request; it never answers a question another client's request raises." }
+      }
+    }
+  }
+}

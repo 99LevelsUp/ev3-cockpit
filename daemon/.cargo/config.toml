@@ -1,0 +1,6 @@
+# The daemon must run with nothing installed beside it: link the C runtime statically on
+# Windows, so the binary imports no VCRUNTIME140.dll (with the system-directory-only load
+# flag a copy beside the binary would not be found, and the redistributable may be absent).
+# Every Windows MSVC target: x64, 32-bit x86 and arm64 alike.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

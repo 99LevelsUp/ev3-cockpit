@@ -1,32 +1,31 @@
 /**
- * The "Forget a Brick" command (step-3 plan, U5): which bricks it offers, that it asks first,
- * and what its message says the forget did and left behind (R1, R2, R10, R11).
+ * The "Forget a Brick" command: which bricks it offers, that it asks first, and what its message
+ * says the forget did and left behind.
  *
- * The brick layer is a fake that returns a prepared report; `forgetBrick.test.ts` proves the
- * reports themselves on the real brick layer.
+ * The brick layer is a fake that returns a prepared report in the daemon's contract shape.
  */
 
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, ChannelState, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
-import type { BrickKey, ForgetResidue } from '../core/contracts';
-import type { ForgetReport } from '../core/runtime/forgetReport';
+import type { ContractBrick, ForgetReport, ForgetResidue, ForgetResult } from '../contract/generated';
 import type { BrickPickRow } from '../vscode/ui/brickPickRows';
 import { forgetBrick, forgetDetails, forgetNotification, forgetPickRows } from '../vscode/ui/forgetBrick';
+import { contractBrick } from './contractBricks';
 
 const CCC_MAC = '00:16:53:F0:0C:0C';
 const ZED_MAC = '00:16:53:00:00:FF';
 const REM_MAC = '00:16:53:00:00:AA';
 const NEW_MAC = '00:16:53:00:00:B0';
-const bt = (mac: string): BrickKey => makeBrickKey(Transport.BT, mac);
-const usb = (mac: string): BrickKey => makeBrickKey(Transport.USB, mac.replace(/:/g, ''));
-const idOf = (mac: string): BrickId => brickIdOf(bt(mac));
+/** Channel keys as the daemon writes them in a report. */
+const bt = (mac: string): string => `bt:${mac}`;
+const usb = (mac: string): string => `usb:${mac.replace(/:/g, '')}`;
+const idOf = (mac: string): string => mac.replace(/:/g, '');
 const CCC = idOf(CCC_MAC);
 
 /** What the Windows provider returns for CCC, copied from `windowsResidue`. */
 const CCC_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\001653f00c0c';
-const WINDOWS_RESIDUE: readonly ForgetResidue[] = [
+const WINDOWS_RESIDUE: ForgetResidue[] = [
 	{
 		location: CCC_KEY,
 		reason: 'Windows keeps this key after unpairing; it is owned by SYSTEM and the cockpit does not change it.',
@@ -37,46 +36,27 @@ const WINDOWS_RESIDUE: readonly ForgetResidue[] = [
 	},
 ];
 
-/** Steps the message must never offer (R6, R11, KD3). */
+/** Steps the message must never offer: it names where a record is, never how to get around what protects it. */
 const FORBIDDEN = /takeown|icacls|ownership|permission|regedit|reboot|restart bthserv|elevat|\bacl\b/i;
 
-function entry(
-	mac: string, name: string,
-	channels: readonly { key: BrickKey; transport: Transport; state: ChannelState }[],
-	flags: { paired: boolean; remembered: boolean },
-): BrickEntry {
-	return {
-		brickId: idOf(mac),
-		name: { value: name, source: 'brick', confirmed: true },
-		channels: channels.map((c, i) => ({ brickKey: c.key, transport: c.transport, priority: 10 - i, state: c.state, lastSeenAt: 1 })),
-		paired: flags.paired,
-		remembered: flags.remembered,
-		favorite: false,
-		lastSeenAt: 1,
-	};
-}
-
-/** CCC on a cable and paired; Zed paired and switched off; Rem only remembered; New only heard by an inquiry. */
-function theDesk(): BrickEntry[] {
+/**
+ * CCC on a cable and paired; Zed paired and switched off; Rem no longer paired, its Bluetooth
+ * sighting lost; New only heard by an inquiry.
+ */
+function theDesk(): ContractBrick[] {
 	return [
-		entry(NEW_MAC, 'New', [{ key: bt(NEW_MAC), transport: Transport.BT, state: ChannelState.Available }],
-			{ paired: false, remembered: false }),
-		entry(ZED_MAC, 'Zed', [{ key: bt(ZED_MAC), transport: Transport.BT, state: ChannelState.Lost }],
-			{ paired: true, remembered: true }),
-		entry(REM_MAC, 'Rem', [{ key: bt(REM_MAC), transport: Transport.BT, state: ChannelState.Lost }],
-			{ paired: false, remembered: true }),
-		entry(CCC_MAC, 'CCC', [
-			{ key: usb(CCC_MAC), transport: Transport.USB, state: ChannelState.Connected },
-			{ key: bt(CCC_MAC), transport: Transport.BT, state: ChannelState.Available },
-		], { paired: true, remembered: true }),
+		contractBrick(idOf(NEW_MAC), 'New', { bt: 'available' }),
+		contractBrick(idOf(ZED_MAC), 'Zed', { bt: 'lost', paired: true }),
+		contractBrick(idOf(REM_MAC), 'Rem', { bt: 'lost' }),
+		contractBrick(CCC, 'CCC', { usb: 'connected', bt: 'available', paired: true }),
 	];
 }
 
 function report(overrides: Partial<ForgetReport> = {}): ForgetReport {
 	return {
 		brickId: CCC,
-		brickSide: { status: 'confirmed', name: 'UCEBNA-PC', over: usb(CCC_MAC) },
-		peers: ['UCEBNA-PC', 'Zed'],
+		brickSide: { status: 'confirmed', name: 'HOSTA', over: usb(CCC_MAC) },
+		peers: ['HOSTA', 'Zed'],
 		pairing: [{ status: 'removed', channel: bt(CCC_MAC) }],
 		memory: { status: 'cleared' },
 		residue: WINDOWS_RESIDUE,
@@ -87,12 +67,12 @@ function report(overrides: Partial<ForgetReport> = {}): ForgetReport {
 const details = (r: ForgetReport): string => forgetDetails(r, 'CCC [001653F00C0C]').join('\n');
 
 /** The command over a fake brick layer; records what it was asked and what it showed. */
-function command(options: { list?: BrickEntry[]; pick?: BrickId; confirm?: boolean; result?: ForgetReport } = {}) {
+function command(options: { list?: ContractBrick[]; pick?: string; confirm?: boolean; result?: ForgetResult } = {}) {
 	let list = options.list ?? theDesk();
 	const seen = {
 		rows: undefined as readonly BrickPickRow[] | undefined,
 		confirm: [] as string[],
-		forgot: [] as BrickId[],
+		forgot: [] as string[],
 		progress: [] as string[],
 		info: [] as string[],
 		results: [] as string[],
@@ -100,17 +80,16 @@ function command(options: { list?: BrickEntry[]; pick?: BrickId; confirm?: boole
 		log: [] as string[],
 	};
 	const run = () => forgetBrick({
-		aggregator: {
-			getDiscoveryList: () => list,
-			getBrick: (id) => list.find((b) => b.brickId === id),
+		list: {
+			bricks: () => list,
+			brick: (id) => list.find((b) => b.brickId === id),
 		},
 		bricks: {
-			isSignedIn: (id) => id === CCC,
 			forget: async (id) => {
 				seen.forgot.push(id);
-				// The real forget drops the brick from the list before it returns.
+				// The daemon drops the brick from the list before the forget returns.
 				list = list.filter((b) => b.brickId !== id);
-				return options.result ?? report();
+				return options.result ?? { forgotten: true, lines: [], report: report() };
 			},
 		},
 		pick: async (rows) => {
@@ -126,7 +105,6 @@ function command(options: { list?: BrickEntry[]; pick?: BrickId; confirm?: boole
 			info: (message: string) => seen.log.push(message),
 			warn: (message: string) => seen.log.push(message),
 			error: (message: string) => seen.log.push(message),
-			debug: () => {},
 		},
 		showInfo: (message) => seen.info.push(message),
 		showResult: (message) => seen.results.push(message),
@@ -135,29 +113,28 @@ function command(options: { list?: BrickEntry[]; pick?: BrickId; confirm?: boole
 	return { run, seen };
 }
 
-describe('Forget a Brick — which bricks it offers (R1, KD6)', () => {
-	it('offers paired and remembered bricks, a switched-off one too, in D5 order, and not one only an inquiry heard', async () => {
+describe('Forget a Brick — which bricks it offers', () => {
+	it('offers paired bricks, a switched-off one too, in the owner\'s order, and none that is not paired', async () => {
 		const c = command();
 		await c.run();
-		assert.deepEqual(c.seen.rows?.map((r) => r.brickId), [CCC, idOf(ZED_MAC), idOf(REM_MAC)]);
+		assert.deepEqual(c.seen.rows?.map((r) => r.brickId), [CCC, idOf(ZED_MAC)]);
 		assert.ok(c.seen.rows?.every((r) => !/\bnew\b/.test(r.description)),
 			'a brick offered for forgetting was marked new');
 		assert.match(c.seen.rows?.[0].label ?? '', /CCC$/);
 	});
 
 	it('rows show each channel the way the connect picker does', () => {
-		const rows = forgetPickRows(theDesk(), (id) => id === CCC);
+		const rows = forgetPickRows(theDesk());
 		assert.deepEqual(rows.map((r) => r.description), [
 			'USB connected · BT available',
-			'BT not heard',
 			'BT not heard',
 		]);
 		assert.equal(rows[0].label, '$(check) CCC');
 		assert.equal(rows[0].detail, CCC);
 	});
 
-	it('says there is nothing to forget, and opens no picker, when no brick is paired or remembered', async () => {
-		const c = command({ list: theDesk().filter((b) => b.name.value === 'New') });
+	it('says there is nothing to forget, and opens no picker, when no brick is paired', async () => {
+		const c = command({ list: theDesk().filter((b) => !b.paired) });
 		await c.run();
 		assert.equal(c.seen.rows, undefined, 'the picker opened');
 		assert.equal(c.seen.info.length, 1);
@@ -166,7 +143,7 @@ describe('Forget a Brick — which bricks it offers (R1, KD6)', () => {
 	});
 });
 
-describe('Forget a Brick — asking first (R2)', () => {
+describe('Forget a Brick — asking first', () => {
 	it('names the brick, says it will be disconnected and unpaired, and offers one Forget action', async () => {
 		const c = command();
 		await c.run();
@@ -202,12 +179,12 @@ describe('Forget a Brick — asking first (R2)', () => {
 	it('says what failed when the forget itself throws', async () => {
 		const c = command();
 		const failing = forgetBrick({
-			aggregator: { getDiscoveryList: () => theDesk(), getBrick: () => undefined },
-			bricks: { isSignedIn: () => false, forget: async () => { throw new Error('boom'); } },
+			list: { bricks: () => theDesk(), brick: () => undefined },
+			bricks: { forget: async () => { throw new Error('boom'); } },
 			pick: async (rows) => rows[0],
 			confirm: async () => true,
 			progress: async (_title, task) => task(),
-			log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+			log: { info: () => {}, warn: () => {}, error: () => {} },
 			showInfo: (m) => c.seen.info.push(m),
 			showResult: (m) => c.seen.results.push(m),
 			showError: (m) => c.seen.errors.push(m),
@@ -219,12 +196,21 @@ describe('Forget a Brick — asking first (R2)', () => {
 	});
 });
 
-describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
+describe('Forget a Brick — without a report, the daemon\'s own lines', () => {
+	it('writes the daemon\'s lines to the log and says the brick was forgotten', async () => {
+		const c = command({ result: { forgotten: true, lines: ['Pairing on this computer (BT): removed.'] } });
+		await c.run();
+		assert.deepEqual(c.seen.results, ['EVƎ Cockpit: forgot CCC [001653F00C0C].']);
+		assert.ok(c.seen.log.includes('Pairing on this computer (BT): removed.'));
+	});
+});
+
+describe('Forget a Brick — what the message says', () => {
 	it('confirmed over USB and unpaired: names the exact key with the brick\'s address, and the menu power-off', () => {
 		const text = details(report());
 		assert.match(text, /memory: cleared/i);
 		assert.match(text, /\(BT\): removed/);
-		assert.match(text, /"UCEBNA-PC"/);
+		assert.match(text, /"HOSTA"/);
 		assert.match(text, /over USB/);
 		assert.ok(text.includes(CCC_KEY), 'the registry path is not named exactly');
 		assert.ok(text.includes(WINDOWS_RESIDUE[0].reason), 'the key\'s reason is not given verbatim');
@@ -254,7 +240,7 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 	});
 
 	it('unreachable: says whether a channel was tried, and what opening it said', () => {
-		// U7, 01.11.2026: "none could be opened" was shown when nothing had been tried.
+		// 01.11.2026: "none could be opened" was shown when nothing had been tried.
 		const untried = details(report({ brickSide: { status: 'skipped', reason: 'not-reachable' }, peers: undefined }));
 		assert.match(untried, /no channel to it was connected or available/);
 		assert.doesNotMatch(untried, /could not be opened/);
@@ -274,11 +260,11 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 
 	it('one of two entries under this computer\'s name removed: says one remains, and that it blocks re-pairing', () => {
 		const r = report({
-			brickSide: { status: 'confirmed', name: 'UCEBNA-PC', over: usb(CCC_MAC), remaining: 1 },
-			peers: ['UCEBNA-PC', 'UCEBNA-PC'],
+			brickSide: { status: 'confirmed', name: 'HOSTA', over: usb(CCC_MAC), remaining: 1 },
+			peers: ['HOSTA', 'HOSTA'],
 		});
 		const text = details(r);
-		assert.match(text, /still holds 1 more entry named "UCEBNA-PC"/);
+		assert.match(text, /still holds 1 more entry named "HOSTA"/);
 		assert.match(text, /switched off from its own menu/);
 		assert.match(text, /On the brick: 1 more entry under this computer's name/);
 		assert.match(text, /blocks re-pairing with this computer/);
@@ -286,7 +272,7 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 	});
 
 	it('sent over the Bluetooth link it cut: not confirmed, needs the menu power-off, and may still be on the brick', () => {
-		const r = report({ brickSide: { status: 'sent', name: 'UCEBNA-PC', over: bt(CCC_MAC), detail: 'The link closed.' } });
+		const r = report({ brickSide: { status: 'sent', name: 'HOSTA', over: bt(CCC_MAC), detail: 'The link closed.' } });
 		const text = details(r);
 		assert.match(text, /not confirmed/);
 		assert.match(text, /over BT/);
@@ -322,8 +308,8 @@ describe('Forget a Brick — what the message says (R10, R11, KTD8)', () => {
 			report({ brickSide: { status: 'skipped', reason: 'radio-name-unknown' }, peers: undefined }),
 			report({ brickSide: { status: 'skipped', reason: 'list-unreadable', detail: 'timeout' }, peers: undefined }),
 			report({ brickSide: { status: 'skipped', reason: 'error', detail: 'boom' } }),
-			report({ brickSide: { status: 'sent', name: 'UCEBNA-PC', over: bt(CCC_MAC), detail: 'closed' } }),
-			report({ brickSide: { status: 'failed', name: 'UCEBNA-PC', over: usb(CCC_MAC), detail: 'still listed' } }),
+			report({ brickSide: { status: 'sent', name: 'HOSTA', over: bt(CCC_MAC), detail: 'closed' } }),
+			report({ brickSide: { status: 'failed', name: 'HOSTA', over: usb(CCC_MAC), detail: 'still listed' } }),
 			report({ pairing: [{ status: 'refused', channel: bt(CCC_MAC), reason: 'error 5' }], memory: { status: 'failed', detail: 'x' } }),
 		];
 		for (const r of reports) {

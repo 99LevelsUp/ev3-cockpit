@@ -1,46 +1,44 @@
 /**
- * The "Clear a Brick's Bluetooth List" command (step-3 plan, U8, KD7): pick a brick reachable
- * now, read its list, confirm every name it will remove, remove them all, and say entry by entry
- * what happened and what is left.
+ * The "Clear a Brick's Bluetooth List" command: pick a brick reachable now, have the daemon read
+ * its list, confirm every name it will remove, remove them all, and say entry by entry what
+ * happened and what is left.
  *
- * Free of `vscode`, like `forgetBrick.ts`, whose builders render the parts the two reports share
- * (R19). It names where a record is and why it stays, never how to get around what protects it
- * (R6, KD3).
+ * Free of `vscode`, like `forgetBrick.ts`, whose builders render the parts the two reports share.
+ * It names where a record is and why it stays, never how to get around what protects it.
  */
 
-import { BrickEntry, BrickId, ChannelState, Transport } from '../../core/contracts';
-import type { BrickManager } from '../../core/runtime/brickManager';
-import { brickLabel } from '../../core/runtime/brickLabels';
-import type { ClearListReport, ClearedEntry } from '../../core/runtime/forgetReport';
+import type { ClearListReport, ClearedEntry, ContractBrick } from '../../contract/generated';
+import { brickLabel } from './brickLabels';
 import { compareBricks } from './brickOrder';
-import type { BrickPickRow } from './brickPickRows';
+import { BrickPickRow, plainPickRow } from './brickPickRows';
+import { asError } from './commandTypes';
 import {
-	BrickCommandDeps, MENU_SAVE_NOTE, memoryLines, over, pairingLines, plainPickRow, quoteNames, residueLines, sentence,
+	BrickCommandDeps, MENU_SAVE_NOTE, memoryLines, over, pairingLines, quoteNames, residueLines, sentence,
 } from './forgetBrick';
 
-/** The one action of the confirmation (R16). */
+/** The one action of the confirmation. */
 export const CLEAR_ACTION = 'Clear';
 
 /**
  * The bricks whose list can be read now: connected or available on any channel, paired with
- * this computer or not (R15), in D5 order.
+ * this computer or not, in the owner's order.
  *
  * An available Bluetooth channel counts only for a paired brick. One nobody has paired is a
- * sighting the cockpit does not connect over, the same rule the brick layer joins by.
+ * sighting the cockpit does not connect over, the same rule the daemon joins by.
  */
-export function clearCandidates(list: readonly BrickEntry[]): BrickEntry[] {
-	return list.filter((brick) => brick.channels.some((channel) => channel.state === ChannelState.Connected
-		|| (channel.state === ChannelState.Available && (channel.transport !== Transport.BT || brick.paired))))
+export function clearCandidates(list: readonly ContractBrick[]): ContractBrick[] {
+	return list.filter((brick) => brick.channels.some((channel) => channel.state === 'connected'
+		|| (channel.state === 'available' && (channel.transport !== 'bt' || brick.paired))))
 		.sort(compareBricks);
 }
 
-export function clearPickRows(list: readonly BrickEntry[], isSignedIn: (brickId: BrickId) => boolean): BrickPickRow[] {
-	return clearCandidates(list).map((brick) => plainPickRow(brick, isSignedIn));
+export function clearPickRows(list: readonly ContractBrick[]): BrickPickRow[] {
+	return clearCandidates(list).map(plainPickRow);
 }
 
 const entries = (count: number): string => `${count} ${count === 1 ? 'entry' : 'entries'}`;
 
-/** The modal question: every name it will remove, and whether this computer is one (R16). */
+/** The modal question: every name it will remove, and whether this computer is one. */
 export function clearConfirmation(
 	label: string, names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined,
 ): { message: string; detail: string } {
@@ -108,7 +106,7 @@ function skipLine(report: ClearListReport, skip: NonNullable<ClearListReport['sk
 	}
 }
 
-/** This computer's pairing with the brick: acted on (KTD10), or why it was left alone (R18). */
+/** This computer's pairing with the brick: acted on, or why it was left alone. */
 function clearPairingLines(report: ClearListReport): string[] {
 	if (report.pairing.length > 0) {
 		return [...pairingLines(report), ...(report.memory ? memoryLines({ memory: report.memory }, 'its Bluetooth channel') : [])];
@@ -127,7 +125,7 @@ function clearPairingLines(report: ClearListReport): string[] {
 	}
 }
 
-/** Every record the clear did not remove, with where it is and why it matters (R11, R19). */
+/** Every record the clear did not remove, with where it is and why it matters. */
 function clearLeftBehindLines(report: ClearListReport): string[] {
 	const lines: string[] = [];
 	for (const entry of report.entries) {
@@ -168,7 +166,7 @@ function clearLeftBehindLines(report: ClearListReport): string[] {
 const went = (entry: ClearedEntry): boolean => entry.status === 'confirmed' || entry.status === 'sent';
 
 /**
- * The menu power-off note (R11, R19), for what this clear removed: the removed entries come back
+ * The menu power-off note, for what this clear removed: the removed entries come back
  * if the battery is pulled, and only this computer's own blocks re-pairing with this computer.
  */
 function powerOffNote(report: ClearListReport): string {
@@ -177,7 +175,7 @@ function powerOffNote(report: ClearListReport): string {
 		+ `${mine ? ', and this computer\'s then blocks re-pairing with this computer.' : '.'}`;
 }
 
-/** The output channel's account of a clear, entry by entry (KTD8, R19). */
+/** The output channel's account of a clear, entry by entry. */
 export function clearDetails(report: ClearListReport, label: string): string[] {
 	if (report.skipped) {
 		return [
@@ -233,16 +231,31 @@ export function clearNotification(report: ClearListReport, label: string): strin
 	return sentences.join(' ');
 }
 
+/**
+ * Asks the person about the names the daemon read from the brick's list; resolves true only on
+ * their yes.
+ */
+export type ClearListConfirm = (names: readonly string[], includesThisComputer: boolean, thisComputer: string | undefined) => PromiseLike<boolean>;
+
+/** The brick layer as clearing uses it. */
+export interface ClearBricks {
+	/**
+	 * Clears the brick's list once `confirm` said yes to the names the daemon read; undefined when
+	 * the person declined, so nothing happened.
+	 */
+	clearBluetoothList(brickId: string, confirm: ClearListConfirm): Promise<ClearListReport | undefined>;
+}
+
 /** What the command needs besides the brick layer. */
-export type ClearBrickBluetoothListDeps = BrickCommandDeps<Pick<BrickManager, 'clearBluetoothList' | 'isSignedIn'>>;
+export type ClearBrickBluetoothListDeps = BrickCommandDeps<ClearBricks>;
 
 /**
  * Offers the bricks reachable now, reads the picked brick's list, asks before removing the
  * names it holds, removes them, and reports. Declined, it says nothing: nothing happened.
  */
 export async function clearBrickBluetoothList(deps: ClearBrickBluetoothListDeps): Promise<void> {
-	const { aggregator, bricks, log } = deps;
-	const rows = clearPickRows(aggregator.getDiscoveryList(), (brickId) => bricks.isSignedIn(brickId));
+	const { list, bricks, log } = deps;
+	const rows = clearPickRows(list.bricks());
 	if (rows.length === 0) {
 		deps.showInfo('EVƎ Cockpit: no brick is reachable now. A brick\'s Bluetooth list can be cleared while it is connected, '
 			+ 'or available over a cable, the network or a Bluetooth pairing.');
@@ -251,7 +264,7 @@ export async function clearBrickBluetoothList(deps: ClearBrickBluetoothListDeps)
 	const picked = await deps.pick(rows);
 	if (!picked) { return; }
 
-	const label = brickLabel(aggregator, picked.brickId);
+	const label = brickLabel(list, picked.brickId);
 	let report: ClearListReport | undefined;
 	try {
 		report = await deps.progress(`EVƎ Cockpit: clearing the Bluetooth list of ${label}`, () => bricks.clearBluetoothList(
@@ -261,7 +274,7 @@ export async function clearBrickBluetoothList(deps: ClearBrickBluetoothListDeps)
 				return deps.confirm(message, detail, CLEAR_ACTION);
 			}));
 	} catch (error) {
-		const err = error instanceof Error ? error : new Error(String(error));
+		const err = asError(error);
 		log.error(`Clearing the Bluetooth list of ${label} failed:`, err);
 		deps.showError(`EVƎ Cockpit: could not clear the Bluetooth list of ${label} — ${err.message}`);
 		return;

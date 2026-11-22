@@ -13,9 +13,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { CockpitClient } from '../client';
-import { run } from '../cli/main';
+import { NativeCockpitClient } from '../client/nativeClient';
+import { RunOptions, run } from '../cli/main';
 import type { CliIo } from '../cli/output';
-import { REPO, TestDaemon, testDaemon } from './clientDaemonHelpers';
+import { NativeTestChannel, REPO, TestDaemon, nativeTestChannel, testDaemon } from './clientDaemonHelpers';
 
 export const CLI = path.join(REPO, 'out', 'cli', 'main.js');
 
@@ -59,6 +60,34 @@ export async function cliWorld(home: string): Promise<CliWorld> {
 	};
 }
 
+export interface NativeCliWorld {
+	readonly channel: NativeTestChannel;
+	/** A VS Code-kind client of the test's own that keeps the native daemon running. */
+	readonly observer: NativeCockpitClient;
+	/** The environment for `ev3` as its own process: the test channel and the home whose state root holds it. */
+	readonly env: NodeJS.ProcessEnv;
+	done(): Promise<void>;
+}
+
+/**
+ * The native daemon on a test channel in matched replay of `scenario`, started by an observer the
+ * test keeps connected, so the command under test finds it running and never starts one on real
+ * hardware. Only the inputs the scenario's script published (brick AAA and its files) work.
+ */
+export async function nativeCliWorld(home: string, scenario = 'usb-connect-commands-aaa'): Promise<NativeCliWorld> {
+	const channel = nativeTestChannel(home);
+	const observer = await NativeCockpitClient.connect(channel.client('vscode', 'development', { name: 'test observer', scenario }));
+	observer.onQuestion(() => 'keep');
+	return {
+		channel, observer,
+		env: { ...process.env, LOCALAPPDATA: home, XDG_STATE_HOME: home, EV3_COCKPIT_CHANNEL: channel.channel },
+		done: async () => {
+			observer.dispose();
+			await channel.stop();
+		},
+	};
+}
+
 export interface CliRun {
 	readonly code: number | null;
 	readonly stdout: string;
@@ -79,8 +108,8 @@ export function ev3(args: readonly string[], options: { env: NodeJS.ProcessEnv; 
 	});
 }
 
-/** Runs `ev3` in this process with a terminal that answers `typed`. */
-export async function ev3InTerminal(args: readonly string[], typed: string, env: NodeJS.ProcessEnv, isTTY = true): Promise<CliRun & { readonly prompt: string }> {
+/** Runs `ev3` in this process with a terminal that answers `typed`; `options` may give it a replay daemon of its own. */
+export async function ev3InTerminal(args: readonly string[], typed: string, env: NodeJS.ProcessEnv, isTTY = true, options: RunOptions = {}): Promise<CliRun & { readonly prompt: string }> {
 	const stdin = new PassThrough();
 	stdin.end(typed);
 	const stdout = new PassThrough();
@@ -90,6 +119,6 @@ export async function ev3InTerminal(args: readonly string[], typed: string, env:
 	stdout.on('data', (d: Buffer) => { out += d.toString(); });
 	stderr.on('data', (d: Buffer) => { err += d.toString(); });
 	const io: CliIo = { stdin, stdout, stderr, isTTY, env, cwd: os.tmpdir() };
-	const code = await run(args, io);
+	const code = await run(args, io, options);
 	return { code, stdout: out, stderr: err, prompt: err };
 }

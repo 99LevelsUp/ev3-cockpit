@@ -1,8 +1,8 @@
-# An allow-list: nothing ships unless named here (IMPLEMENTATION_PLAN 0.2.5). A deny-list let
-# review scratch, notes, logs and a junction to the firmware sources into the package.
+# An allow-list: nothing ships unless named here. A deny-list let review scratch, notes, logs and
+# a junction to the firmware sources into the package.
 #
 # Releases are built per platform by `npm run package:vsix` (scripts/package-vsix.cjs), which
-# stages these same files with the native modules and the Windows pairing helper and checks the
+# stages these same files with the platform's native daemon and its manifest and checks the
 # result. This file only keeps a plain `vsce package` from shipping the repository.
 **
 !package.json
@@ -10,4 +10,3 @@
 !CHANGELOG.md
 !LICENSE
 !out/extension.js
-!out/daemon.js

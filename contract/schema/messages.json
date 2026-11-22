@@ -1,0 +1,369 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Messages",
+  "description": "Request parameters, results and notification payloads, as contract/methods.json names them. Every one is an object, so a later optional field never breaks a reader. brick names a brick by its id or by its name; names need not be unique and an ambiguous one is refused. A CLI connection may leave brick out when exactly one brick is connected.",
+  "definitions": {
+    "EmptyParams": {
+      "type": "object",
+      "properties": {}
+    },
+    "BrickParams": {
+      "type": "object",
+      "properties": {
+        "brick": { "type": "string" }
+      }
+    },
+    "LogNoticeParams": {
+      "type": "object",
+      "required": ["level", "text"],
+      "properties": {
+        "level": { "type": "string", "enum": ["info", "warning", "error"] },
+        "text": { "type": "string" }
+      }
+    },
+    "BricksListParams": {
+      "type": "object",
+      "properties": {
+        "waitForDiscovery": { "type": "boolean" }
+      }
+    },
+    "BrickList": {
+      "type": "object",
+      "required": ["bricks"],
+      "properties": {
+        "bricks": { "type": "array", "items": { "$ref": "#/definitions/ContractBrick" } }
+      }
+    },
+    "BricksConnectParams": {
+      "type": "object",
+      "properties": {
+        "brick": { "type": "string" },
+        "hold": { "type": "boolean", "description": "Keep the brick connected past this client, as ev3 connect does." }
+      }
+    },
+    "BricksDisconnectParams": {
+      "type": "object",
+      "properties": {
+        "brick": { "type": "string" },
+        "forEveryone": { "type": "boolean", "description": "Sign the brick out whoever holds it." },
+        "releaseHold": { "type": "boolean", "description": "Drop the hold ev3 connect left." }
+      }
+    },
+    "BricksDisconnectResult": {
+      "type": "object",
+      "required": ["stillHeldBy"],
+      "properties": {
+        "stillHeldBy": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ForgetResult": {
+      "type": "object",
+      "required": ["forgotten", "lines"],
+      "properties": {
+        "forgotten": { "type": "boolean" },
+        "lines": { "type": "array", "items": { "type": "string" }, "description": "The report as lines ready to show." },
+        "report": { "$ref": "#/definitions/ForgetReport" }
+      }
+    },
+    "ClearListResult": {
+      "type": "object",
+      "required": ["removed", "kept"],
+      "properties": {
+        "removed": { "type": "array", "items": { "type": "string" } },
+        "kept": { "type": "array", "items": { "type": "string" } },
+        "report": { "$ref": "#/definitions/ClearListReport" }
+      }
+    },
+    "PathParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "FsListing": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": { "type": "array", "items": { "$ref": "#/definitions/FsEntry" } }
+      }
+    },
+    "FileExists": {
+      "type": "object",
+      "required": ["exists"],
+      "properties": {
+        "exists": { "type": "boolean" }
+      }
+    },
+    "FilesReadParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string" },
+        "toLocalPath": { "type": "string", "description": "A local path the daemon writes the file to." },
+        "inline": { "type": "boolean", "description": "Answer with the content as base64; at most 64 KiB, a larger file is refused." }
+      }
+    },
+    "FilesReadResult": {
+      "type": "object",
+      "required": ["bytes"],
+      "properties": {
+        "bytes": { "type": "integer", "minimum": 0 },
+        "handle": { "type": "string", "description": "A transfer handle the client drains with transfer/read, when neither toLocalPath nor inline was given." },
+        "content": { "type": "string", "description": "Base64, for inline." }
+      }
+    },
+    "FilesWriteParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string" },
+        "fromLocalPath": { "type": "string" },
+        "handle": { "type": "string", "description": "A filled transfer handle." },
+        "content": { "type": "string", "description": "Base64, at most 4 KiB once decoded." }
+      }
+    },
+    "FilesWriteResult": {
+      "type": "object",
+      "required": ["bytes"],
+      "properties": {
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "FilesRemoveParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string" },
+        "recursive": { "type": "boolean" }
+      }
+    },
+    "FilesRemovePathsParams": {
+      "type": "object",
+      "required": ["paths"],
+      "properties": {
+        "brick": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "recursive": { "type": "boolean" }
+      }
+    },
+    "FilesMoveParams": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "brick": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" }
+      }
+    },
+    "TransferBeginParams": {
+      "type": "object",
+      "required": ["size"],
+      "properties": {
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TransferBeginResult": {
+      "type": "object",
+      "required": ["handle", "chunkBytes"],
+      "properties": {
+        "handle": { "type": "string" },
+        "chunkBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "TransferWriteParams": {
+      "type": "object",
+      "required": ["handle", "data"],
+      "properties": {
+        "handle": { "type": "string" },
+        "data": { "type": "string", "description": "Base64." }
+      }
+    },
+    "TransferHandleParams": {
+      "type": "object",
+      "required": ["handle"],
+      "properties": {
+        "handle": { "type": "string" }
+      }
+    },
+    "TransferChunk": {
+      "type": "object",
+      "required": ["data", "done"],
+      "properties": {
+        "data": { "type": "string", "description": "Base64." },
+        "done": { "type": "boolean", "description": "Set with the last chunk." }
+      }
+    },
+    "DeployParams": {
+      "type": "object",
+      "required": ["files", "runPath"],
+      "properties": {
+        "brick": { "type": "string" },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/DeployFile" } },
+        "runPath": { "type": "string" }
+      }
+    },
+    "ProgramsRunParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string" },
+        "replace": { "type": "boolean" }
+      }
+    },
+    "ProgramsStatusParams": {
+      "type": "object",
+      "properties": {
+        "brick": { "type": "string" },
+        "waitMs": { "type": "integer", "minimum": 0, "description": "Answer once the state changes within this time, or with the state then." }
+      }
+    },
+    "ProgramSubscription": {
+      "type": "object",
+      "required": ["subscriptionId", "state"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "state": { "$ref": "#/definitions/ProgramState" }
+      }
+    },
+    "ShellRunParams": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "brick": { "type": "string" },
+        "command": { "type": "string" }
+      }
+    },
+    "SettingList": {
+      "type": "object",
+      "required": ["settings"],
+      "properties": {
+        "settings": { "type": "array", "items": { "$ref": "#/definitions/SettingValue" } }
+      }
+    },
+    "SettingsSetParams": {
+      "type": "object",
+      "required": ["key", "value"],
+      "properties": {
+        "key": { "type": "string", "description": "The setting's key, or its CLI key." },
+        "value": { "$ref": "#/definitions/SettingScalar" }
+      }
+    },
+    "AccessModeState": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "#/definitions/AccessMode" }
+      }
+    },
+    "TelemetryRowList": {
+      "type": "object",
+      "required": ["rows"],
+      "properties": {
+        "rows": { "type": "array", "items": { "$ref": "#/definitions/TelemetryRowInfo" } }
+      }
+    },
+    "TelemetrySubscribeParams": {
+      "type": "object",
+      "required": ["request"],
+      "properties": {
+        "brick": { "type": "string" },
+        "request": { "$ref": "#/definitions/TelemetryRequest" }
+      }
+    },
+    "TelemetrySubscription": {
+      "type": "object",
+      "required": ["subscriptionId", "brickId", "grant", "snapshot"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "brickId": { "type": "string" },
+        "grant": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/TelemetryRate" },
+          "description": "The rate each row got, by row id."
+        },
+        "snapshot": { "type": "array", "items": { "$ref": "#/definitions/TelemetryValue" } }
+      }
+    },
+    "TelemetryForegroundParams": {
+      "type": "object",
+      "properties": {
+        "brick": { "type": "string", "description": "The brick whose telemetry this client shows in the foreground; absent for none." }
+      }
+    },
+    "ChainSubscription": {
+      "type": "object",
+      "required": ["subscriptionId", "chain"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "chain": { "$ref": "#/definitions/ContractChain" }
+      }
+    },
+    "SubscriptionParams": {
+      "type": "object",
+      "required": ["subscriptionId"],
+      "properties": {
+        "subscriptionId": { "type": "string" }
+      }
+    },
+    "BrickIdPayload": {
+      "type": "object",
+      "required": ["brickId"],
+      "properties": {
+        "brickId": { "type": "string" }
+      }
+    },
+    "PairingEvent": {
+      "type": "object",
+      "required": ["brickId", "progress"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "progress": { "$ref": "#/definitions/PairingProgress" }
+      }
+    },
+    "OneSidedRepairNotice": {
+      "type": "object",
+      "required": ["brickId", "message", "repair"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "message": { "type": "string", "description": "What happened, ready to show." },
+        "repair": { "$ref": "#/definitions/OneSidedRepair" }
+      }
+    },
+    "ProgramStateChanged": {
+      "type": "object",
+      "required": ["subscriptionId", "state"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "state": { "$ref": "#/definitions/ProgramState" }
+      }
+    },
+    "ChainChanged": {
+      "type": "object",
+      "required": ["subscriptionId", "chain"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "chain": { "$ref": "#/definitions/ContractChain" }
+      }
+    },
+    "SettingChanged": {
+      "type": "object",
+      "required": ["setting"],
+      "properties": {
+        "setting": { "$ref": "#/definitions/SettingValue" }
+      }
+    },
+    "QuestionWithdrawn": {
+      "type": "object",
+      "required": ["questionId"],
+      "properties": {
+        "questionId": { "type": "string" }
+      }
+    }
+  }
+}

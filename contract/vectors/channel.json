@@ -1,0 +1,114 @@
+{
+  "$comment": "Cross-language test vectors, checked by Rust tests (daemon/crates/contract/tests/vectors.rs, daemon/crates/daemon/src/paths.rs, daemon/crates/daemon/src/cli.rs) and TypeScript tests (src/__tests__/contractGenerated.test.ts, src/__tests__/clientChannel.test.ts). hello: the proofs for a fixed 32-byte key (hex) and fixed nonces. channelRecord: channel.json as files; the first record is also exactly what the daemon writes. stateRoot: where client and daemon look for the daemon's files, from the platform, the environment and the home directory (a Rust test checks the cases of the platform it runs on). channelName: test channel names both sides accept or refuse.",
+  "hello": {
+    "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "cases": [
+      {
+        "clientNonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "daemonNonce": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+        "daemonProof": "f9723731516ada813f078699090906459a2ada501361b790bc8609ace7906e00",
+        "clientProof": "db5b116aadf861320f23c13ecd7fcced853ab21afc9d7d85b2f9866a03ea1f87"
+      },
+      {
+        "clientNonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "daemonNonce": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "daemonProof": "d9d11af4660e319a2795cdab069f7fecb139e88c8c42f9e464514e3a98de9a45",
+        "clientProof": "f381e7672bb9b404f36c2f5a5dc663230eeb2afd93b5c4612babc8add2c6b2a0"
+      }
+    ]
+  },
+  "channelRecord": [
+    {
+      "comment": "Windows: the full named pipe path, exactly as the daemon writes it.",
+      "file": "{\"path\":\"\\\\\\\\.\\\\pipe\\\\ev3-cockpit-0f1e2d3c4b5a6978\",\"pid\":4242}",
+      "path": "\\\\.\\pipe\\ev3-cockpit-0f1e2d3c4b5a6978",
+      "pid": 4242
+    },
+    {
+      "comment": "Linux: the full unix socket path in the runtime directory.",
+      "file": "{\"path\":\"/run/user/1000/ev3-cockpit/daemon-3c4b5a6978.sock\",\"pid\":31337}",
+      "path": "/run/user/1000/ev3-cockpit/daemon-3c4b5a6978.sock",
+      "pid": 31337
+    },
+    {
+      "comment": "A property a reader does not know is ignored: the record is on the stable core.",
+      "file": "{\n  \"pid\": 7,\n  \"path\": \"/home/user/.local/state/ev3-cockpit/native/run/daemon-0a0a0a0a0a.sock\",\n  \"startedAt\": 1764000000000\n}\n",
+      "path": "/home/user/.local/state/ev3-cockpit/native/run/daemon-0a0a0a0a0a.sock",
+      "pid": 7
+    }
+  ],
+  "stateRoot": [
+    {
+      "comment": "Windows: LOCALAPPDATA.",
+      "platform": "win32",
+      "env": {
+        "LOCALAPPDATA": "C:\\Users\\u\\AppData\\Local"
+      },
+      "home": "C:\\Users\\u",
+      "root": "C:\\Users\\u\\AppData\\Local\\ev3-cockpit\\native"
+    },
+    {
+      "comment": "Windows: no LOCALAPPDATA, so the home directory's AppData\\Local.",
+      "platform": "win32",
+      "env": {},
+      "home": "C:\\Users\\u",
+      "root": "C:\\Users\\u\\AppData\\Local\\ev3-cockpit\\native"
+    },
+    {
+      "comment": "Linux: an absolute XDG_STATE_HOME.",
+      "platform": "linux",
+      "env": {
+        "XDG_STATE_HOME": "/srv/state"
+      },
+      "home": "/home/u",
+      "root": "/srv/state/ev3-cockpit/native"
+    },
+    {
+      "comment": "Linux: a relative XDG_STATE_HOME is ignored, as the XDG specification says.",
+      "platform": "linux",
+      "env": {
+        "XDG_STATE_HOME": "state"
+      },
+      "home": "/home/u",
+      "root": "/home/u/.local/state/ev3-cockpit/native"
+    },
+    {
+      "comment": "Linux: an empty XDG_STATE_HOME is ignored.",
+      "platform": "linux",
+      "env": {
+        "XDG_STATE_HOME": ""
+      },
+      "home": "/home/u",
+      "root": "/home/u/.local/state/ev3-cockpit/native"
+    },
+    {
+      "comment": "macOS: Application Support in the home directory.",
+      "platform": "darwin",
+      "env": {
+        "XDG_STATE_HOME": "/srv/state"
+      },
+      "home": "/Users/u",
+      "root": "/Users/u/Library/Application Support/ev3-cockpit/native"
+    }
+  ],
+  "channelName": {
+    "valid": [
+      "ci",
+      "0",
+      "test-1234",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "unit-9-x"
+    ],
+    "invalid": [
+      "",
+      "-ci",
+      "CI",
+      "c_i",
+      "c.i",
+      "../up",
+      "a/b",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ci "
+    ]
+  }
+}

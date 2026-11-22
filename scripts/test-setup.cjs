@@ -32,9 +32,12 @@ if (process.env.NODE_TEST_CONTEXT) {
 	// production it goes to the console. Here it fails the running test instead, so an assertion
 	// inside a listener still guards its test. A test that expects a listener to throw installs its
 	// own handler for the duration.
-	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'core', 'events'));
+	// The extension carries its own copy of the emitter; its listeners are held to the same rule.
 	const listenerErrors = [];
-	setListenerErrorHandler((error) => listenerErrors.push(error));
+	for (const events of [['core', 'events'], ['vscode', 'events']]) {
+		const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', ...events));
+		setListenerErrorHandler((error) => listenerErrors.push(error));
+	}
 	afterEach(() => {
 		const errors = listenerErrors.splice(0);
 		if (errors.length > 0) {

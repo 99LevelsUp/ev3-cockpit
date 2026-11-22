@@ -1,26 +1,26 @@
 /**
- * The VS Code extension: a client of the cockpit daemon (U11).
+ * The VS Code extension: a client of the native cockpit daemon.
  *
- * It finds this user's daemon or starts it on VS Code's own Node (R32), and runs every command
- * through the client library; the daemon holds the bricks and the settings. In the Extension
- * Development Host it talks to a development daemon on the `dev` channel, which borrows bricks from
- * the user's daemon (KTD17); in the extension test host, to a daemon of its own on simulated bricks.
+ * It finds this user's daemon, or starts the one it carries, and runs every command through the
+ * client library; the daemon holds the bricks and the settings. Run from the repository (the
+ * Extension Development Host) it carries the development build `npm run daemon:build` made, which
+ * replaces a release daemon; installed, the daemon packaged with it. In the extension test host it
+ * runs a development daemon of its own on a test channel, replaying a recorded brick, so the tests
+ * never touch real hardware.
  *
- * The extension exports no API: add-ons use `@ev3-cockpit/client` (KTD18).
+ * The extension exports no API: add-ons use `@ev3-cockpit/client`.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { CockpitClient } from '../client';
-import { channelFromEnv } from '../client/channel';
-import { clientPaths, recordInstall, thisInstallLaunch } from '../client/locate';
-import { versionNotice } from '../client/versions';
-import type { ContractBrick, LaunchSpec } from '../contract/models';
-import { DaemonBridge } from './daemonBridge';
+import { NativeCockpitClient } from '../client/nativeClient';
+import { developmentDaemon, packagedDaemon } from '../client/nativeLaunch';
+import type { ContractBrick, LaunchSpec, Requester } from '../contract/generated';
+import { CockpitStart, DaemonBridge, startFailureMessage } from './daemonBridge';
 import { BrickPickRow } from './ui/brickPickRows';
-import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { clearBrickBluetoothList } from './ui/clearBluetoothList';
+import { asError } from './ui/commandTypes';
+import { ShowProgress, connectPickedBrick, describeRepair, followPairing, pickBrick } from './ui/connectBrick';
 import { disconnectBrick } from './ui/disconnect';
 import { BrickCommandDeps, forgetBrick } from './ui/forgetBrick';
 import { createNotifier } from './ui/notify';
@@ -30,46 +30,42 @@ import { editSettings } from './ui/settings';
 /** Where the brick keeps user projects. The one path worth a default. */
 const PROJECTS_PATH = '/home/root/lms2012/prjs';
 
+/** The recorded brick the extension test host's daemon replays. */
+const TEST_HOST_SCENARIO = 'usb-connect-commands-aaa';
+
 /**
- * Whether the development daemon shows simulated bricks: the `ev3-cockpit.mockBricks` user setting
- * when someone set it, otherwise yes while the extension runs from source (F5).
+ * The directory of an installed extension that holds the daemon binary and its manifest: its root,
+ * where the platform VSIX carries both (scripts/package-vsix.cjs).
  */
-function mockBricksWanted(context: vscode.ExtensionContext): boolean {
-	const setting = vscode.workspace.getConfiguration('ev3-cockpit').inspect<boolean>('mockBricks');
-	const chosen = setting?.workspaceFolderValue ?? setting?.workspaceValue ?? setting?.globalValue;
-	return chosen ?? context.extensionMode === vscode.ExtensionMode.Development;
+function packagedDaemonDir(context: vscode.ExtensionContext): string {
+	return context.extensionPath;
 }
 
-/** This user's daemon, a development daemon (F5), or a test host's own (KTD17). */
-function channelFor(context: vscode.ExtensionContext): string | undefined {
-	const named = channelFromEnv();
-	if (named) { return named; }
-	if (context.extensionMode === vscode.ExtensionMode.Development) { return 'dev'; }
-	if (context.extensionMode === vscode.ExtensionMode.Test) { return `test-${process.pid}`; }
-	return undefined;
+/** The daemon this extension carries, and where it runs it. */
+interface DaemonChoice {
+	readonly daemon: LaunchSpec;
+	readonly channel?: string;
+	readonly daemonArgs?: readonly string[];
 }
 
-/** The daemon in this extension, on VS Code's own Node; from source, tsc's output instead of the bundle. */
-function launchOf(context: vscode.ExtensionContext): LaunchSpec {
-	const version = (context.extension.packageJSON as { version?: string }).version ?? '0.0.0';
-	const launch = thisInstallLaunch(context.extensionPath, version);
-	const fromSource = path.join(context.extensionPath, 'out', 'daemon', 'main.js');
-	return fs.existsSync(launch.entry) || !fs.existsSync(fromSource) ? launch : { ...launch, entry: fromSource };
-}
-
-/** What the daemon is started with besides its launch: the channel, and simulated bricks where wanted. */
-function launchArgsFor(context: vscode.ExtensionContext, channel: string | undefined): string[] {
-	const args = channel ? ['--channel', channel] : [];
-	if (context.extensionMode === vscode.ExtensionMode.Test) { return [...args, '--simulated']; }
-	if (context.extensionMode === vscode.ExtensionMode.Development && mockBricksWanted(context)) {
-		const folder = (vscode.workspace.workspaceFolders ?? []).find((f) => f.uri.scheme === 'file')?.uri.fsPath;
-		return [...args, '--mock-bricks', ...(folder ? ['--mock-workspace', folder] : [])];
+/** Throws the client library's start failure when the daemon it would carry is not there. */
+function daemonFor(context: vscode.ExtensionContext): DaemonChoice {
+	switch (context.extensionMode) {
+	case vscode.ExtensionMode.Development:
+		return { daemon: developmentDaemon(context.extensionPath) };
+	case vscode.ExtensionMode.Test:
+		return {
+			daemon: developmentDaemon(context.extensionPath),
+			channel: `test-${process.pid}`,
+			daemonArgs: ['--mode', 'replay', '--fixtures', path.join(context.extensionPath, 'daemon', 'fixtures', 'link', TEST_HOST_SCENARIO)],
+		};
+	default:
+		return { daemon: packagedDaemon(packagedDaemonDir(context)) };
 	}
-	return args;
 }
 
 interface Cockpit {
-	readonly client: CockpitClient;
+	readonly client: NativeCockpitClient;
 	readonly bridge: DaemonBridge;
 }
 
@@ -78,15 +74,17 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(logger);
 	logger.info('EVƎ Cockpit activated');
 
-	const channel = channelFor(context);
-	const launch = launchOf(context);
-	const paths = clientPaths(channel ? { channel } : {});
+	const version = (context.extension.packageJSON as { version?: string }).version ?? '0.0.0';
+	const me: Requester = { name: `VS Code (${vscode.workspace.name ?? 'no folder'}, pid ${process.pid})`, kind: 'vscode' };
 	let connected: Cockpit | undefined;
-	// Every notification goes to this window's log and, once connected, to the daemon's (R30).
+	// Every notification goes to this window's log and, once connected, to the daemon's.
+	const toDaemon = (level: 'info' | 'warning' | 'error', m: string): void => {
+		void connected?.client.request('log/notice', { level, text: m.replace(/^Shown: /, '') }).catch(() => undefined);
+	};
 	const notify = createNotifier({
-		info: (m) => { logger.info(m); void connected?.client.request('log/notice', { level: 'info', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
-		warn: (m) => { logger.warn(m); void connected?.client.request('log/notice', { level: 'warning', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
-		error: (m) => { logger.error(m); void connected?.client.request('log/notice', { level: 'error', text: m.replace(/^Shown: /, '') }).catch(() => undefined); },
+		info: (m) => { logger.info(m); toDaemon('info', m); },
+		warn: (m) => { logger.warn(m); toDaemon('warning', m); },
+		error: (m) => { logger.error(m); toDaemon('error', m); },
 	}, vscode.window);
 	const progress: ShowProgress = (title, task) => {
 		notify.progressShown(title);
@@ -98,68 +96,58 @@ export function activate(context: vscode.ExtensionContext): void {
 			}));
 	};
 
-	// A newer cockpit than the running daemon: offered as a restart in the status bar.
-	const update = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
-	update.command = 'ev3-cockpit.restartDaemon';
-	context.subscriptions.push(update);
-	const showNotice = (notice: { readonly text: string; readonly newerIs?: string }): void => {
-		logger.info(`Version: ${notice.text}`);
-		if (notice.newerIs !== 'client') { void notify.warn(`EVƎ Cockpit: ${notice.text}`); return; }
-		update.text = '$(sync) EVƎ daemon update';
-		update.tooltip = notice.text;
-		update.show();
-	};
-
-	const connecting: Promise<Cockpit> = CockpitClient.connect({
-		name: `VS Code (${vscode.workspace.name ?? 'no folder'}, pid ${process.pid})`,
-		kind: 'vscode',
-		version: launch.version,
-		launch,
-		launchArgs: launchArgsFor(context, channel),
-		paths,
-	}).then((client) => {
-		// Only the user's own cockpit is the one add-ons should start.
-		if (!channel) { recordInstall(paths, launch); }
+	const start = new CockpitStart<Cockpit>(async () => {
+		const choice = daemonFor(context);
+		const client = await NativeCockpitClient.connect({
+			name: me.name, kind: 'vscode', version, daemon: choice.daemon,
+			...(choice.channel ? { channel: choice.channel } : {}),
+			...(choice.daemonArgs ? { daemonArgs: choice.daemonArgs } : {}),
+		// Handed to connect itself: "a development daemon runs" is told while it connects.
+		}, (notice) => { void notify.info(`EVƎ Cockpit: ${notice}`); });
 		const bridge = new DaemonBridge(client, {
+			me,
 			askPerson: (question) => {
 				logger.info(`Asked: ${question.text}`);
 				return answerQuestion(question, {
 					notify: (message, ...actions) => notify.info(message, ...actions),
 					modal: (message, detail, ...actions) => vscode.window.showWarningMessage(message, { modal: true, detail }, ...actions),
-				}).then((answer) => { logger.info(`Answered: ${answer}`); return answer; });
+				}, me).then((reply) => { logger.info(`Answered: ${reply.answer}${reply.remember ? ' (remembered)' : ''}`); return reply; });
 			},
 		});
 		context.subscriptions.push(bridge, { dispose: () => client.dispose() });
 		// Every pairing shows its progress, whoever started it: the person at the brick has to know
 		// when to look at its display.
 		context.subscriptions.push(bridge.bricks.onPairingStarted((event) => {
-			void followPairing(event, { aggregator: bridge.aggregator, progress, showError: (m) => { void notify.error(m); } });
+			void followPairing(event, { list: bridge.list, progress, showError: (m) => { void notify.error(m); } });
 		}));
-		// A pairing broken on one side, found over USB or TCP: what was found and done (step-4 R6).
-		context.subscriptions.push(bridge.bricks.onOneSidedRepair((repair) => {
-			const { message, warning } = describeRepair(repair, bridge.aggregator.getBrick(repair.brickId)?.name.value ?? repair.brickId);
+		// A pairing broken on one side, found over USB or TCP: what was found and done.
+		context.subscriptions.push(bridge.bricks.onOneSidedRepair(({ repair, pairingAgain }) => {
+			const { message, warning } = describeRepair(repair, bridge.list.brick(repair.brickId)?.name ?? repair.brickId, pairingAgain);
 			void (warning ? notify.warn(message) : notify.info(message));
 		}));
-		client.onNotice((notice) => showNotice(notice));
-		client.onLost((error) => { void notify.error(`EVƎ Cockpit: the cockpit daemon went and could not be reached again — ${error.message}`); });
-		client.onReconnected((hello) => { logger.info(`Connected again to the cockpit daemon ${hello.version} (pid ${hello.pid})`); });
-		const first = versionNotice(launch.version, client.daemon.version);
-		if (first) { showNotice(first); }
-		logger.info(`Connected to the cockpit daemon ${client.daemon.version} (pid ${client.daemon.pid}) on ${channel ?? 'the user\'s channel'}`);
+		context.subscriptions.push(client.onLost((error) => {
+			logger.error('The cockpit daemon went and could not be reached again:', error);
+			void notify.error((error as { failure?: unknown }).failure
+				? startFailureMessage(error)
+				: `EVƎ Cockpit: the cockpit daemon went and could not be reached again — ${error.message}`);
+		}));
+		context.subscriptions.push(client.onReconnected((daemon) => { logger.info(`Connected again to the cockpit daemon ${daemon.version} (pid ${daemon.pid})`); }));
+		logger.info(`Connected to the cockpit daemon ${client.daemon.version} (${client.daemon.buildKind}, pid ${client.daemon.pid})`
+			+ `${choice.channel ? ` on ${choice.channel}` : ''}`);
 		connected = { client, bridge };
 		return connected;
+	}, (message, error) => {
+		logger.error('The cockpit daemon could not be reached:', error);
+		void notify.error(message);
 	});
-	connecting.catch((error: unknown) => {
-		logger.error(`The cockpit daemon could not be reached: ${error instanceof Error ? error.message : String(error)}`);
-		void notify.error(`EVƎ Cockpit: the cockpit daemon could not be started — ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
-	});
+	void start.ready().catch(() => undefined);
 
 	/** Runs a command once the daemon is there; says so when it is not. */
 	const command = (id: string, body: (cockpit: Cockpit) => Promise<void> | void): void => {
 		context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
 			let cockpit: Cockpit;
 			try {
-				cockpit = await connecting;
+				cockpit = await start.ready();
 			} catch {
 				void notify.error('EVƎ Cockpit: the cockpit daemon is not running; see the EVƎ Cockpit log.');
 				return;
@@ -167,7 +155,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			try {
 				await body(cockpit);
 			} catch (error) {
-				const err = error instanceof Error ? error : new Error(String(error));
+				const err = asError(error);
 				logger.error(`${id} failed:`, err);
 				void notify.error(`EVƎ Cockpit: ${err.message}`);
 			}
@@ -175,9 +163,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	};
 
 	/** This window's active brick, or the one connected brick when it has none. */
-	const activeBrick = ({ client }: Cockpit, what: string): ContractBrick | undefined => {
+	const activeBrick = ({ client, bridge }: Cockpit, what: string): ContractBrick | undefined => {
 		const id = client.activeBrick();
-		const brick = (id ? client.brick(id) : undefined) ?? (() => {
+		const brick = (id ? bridge.list.brick(id) : undefined) ?? (() => {
 			const connectedBricks = client.bricks().filter((b) => b.connected);
 			return connectedBricks.length === 1 ? connectedBricks[0] : undefined;
 		})();
@@ -188,11 +176,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		return brick;
 	};
 
-	// ── Filesystem diagnostics (DESIGN §14) ─────────────────────
+	// ── Filesystem diagnostics ──────────────────────────────────
 	command('ev3-cockpit.listProjects', async (cockpit) => {
 		const brick = activeBrick(cockpit, 'listing projects');
 		if (!brick) { return; }
-		const entries = await cockpit.client.request('files/list', { brick: brick.brickId, path: PROJECTS_PATH });
+		const { entries } = await cockpit.client.request('files/list', { brick: brick.brickId, path: PROJECTS_PATH });
 		logger.info(`Files on ${brick.name} at ${PROJECTS_PATH} (${entries.length}):`);
 		for (const e of entries) {
 			logger.info(`  ${e.kind === 'directory' ? '[dir] ' : '      '}${e.name}${e.bytes === undefined ? '' : ` ${e.bytes} B`}`);
@@ -207,25 +195,24 @@ export function activate(context: vscode.ExtensionContext): void {
 	});
 
 	// ── Connect a brick ─────────────────────────────────────────
-	// Picking a brick by name, in the owner's order (D5); picking signs it in over every channel it
-	// is available on (KD1), pairing first a brick only an inquiry has heard.
+	// Picking a brick by name, in the owner's order; picking connects it over every channel it is
+	// available on, pairing first a brick only an inquiry has heard.
 	command('ev3-cockpit.connectBrick', async ({ client, bridge }) => {
 		const picker = vscode.window.createQuickPick<BrickPickRow>();
 		picker.title = 'EVƎ Cockpit: connect a brick';
 		picker.placeholder = 'Pick a brick';
 		picker.keepScrollPosition = true;
-		const picked = await pickBrick(picker, bridge.aggregator as never, (brickId) => bridge.bricks.isSignedIn(brickId),
-			() => client.request('bricks/inquiry', {}).then(() => undefined));
+		const picked = await pickBrick(picker, bridge.list, () => client.request('bricks/inquiry', {}).then(() => undefined));
 		if (!picked) { return; }
 		await connectPickedBrick(picked, {
-			aggregator: bridge.aggregator, bricks: bridge.bricks, log: logger, progress,
+			list: bridge.list, bricks: bridge.bricks, log: logger, progress,
 			showInfo: (message) => { void notify.info(message); },
 			showError: (message) => { void notify.error(message); },
 		});
 	});
 
 	// ── Disconnect a brick ──────────────────────────────────────
-	// This window's hold only (R36); the person hears who else holds it and may end it for all.
+	// This window's hold only; the person hears who else holds it and may end it for all.
 	command('ev3-cockpit.disconnectBrick', async ({ client }) => {
 		await disconnectBrick(client, {
 			pick: (items) => vscode.window.showQuickPick([...items], { title: 'EVƎ Cockpit: disconnect a brick', placeHolder: 'Pick a brick to disconnect' }),
@@ -236,7 +223,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// The picker, modal confirmation, progress and messages the forget and clear-list commands share.
 	const brickCommandUi = <B>(bridge: DaemonBridge, bricks: B, title: string, placeHolder: string): BrickCommandDeps<B> => ({
-		aggregator: bridge.aggregator, bricks, log: logger,
+		list: bridge.list, bricks, log: logger,
 		pick: (rows) => vscode.window.showQuickPick(rows, { title, placeHolder }),
 		confirm: async (message, detail, action) => {
 			logger.info(`Asked: ${message} ${detail}`);
@@ -263,9 +250,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		await clearBrickBluetoothList(brickCommandUi(bridge, bridge.bricks, 'EVƎ Cockpit: clear a brick\'s Bluetooth list', 'Pick a brick to clear'));
 	});
 
-	// ── Settings (R25) ──────────────────────────────────────────
-	command('ev3-cockpit.settings', async ({ client }) => {
-		await editSettings(client, {
+	// ── Settings ────────────────────────────────────────────────
+	command('ev3-cockpit.settings', async ({ bridge }) => {
+		await editSettings(bridge.settings, {
 			pick: (items, options) => vscode.window.showQuickPick([...items], options),
 			input: (options) => vscode.window.showInputBox({ title: options.title, value: options.value, prompt: options.prompt, validateInput: options.validate }),
 			confirm: async (message, detail, action) => (await vscode.window.showWarningMessage(message, { modal: true, detail }, action)) === action,
@@ -274,16 +261,18 @@ export function activate(context: vscode.ExtensionContext): void {
 		});
 	});
 
-	// ── Restart the daemon (R37), on the person's confirmation ──
-	command('ev3-cockpit.restartDaemon', async ({ client }) => {
+	// ── Restart the daemon, on the person's confirmation ────────
+	command('ev3-cockpit.restartDaemon', async ({ bridge }) => {
 		const restart = 'Restart';
 		const choice = await vscode.window.showWarningMessage('Restart the cockpit daemon now?', {
 			modal: true,
-			detail: 'Connected bricks stay held and are connected again by the new daemon; a transfer or program start in progress may be cut off.',
+			detail: 'It ends once no write is in progress, and a new one starts. Every window and terminal connects its bricks again; a program start in progress may be cut off.',
 		}, restart);
 		if (choice !== restart) { return; }
-		const result = await client.request('daemon/restart', { confirmedByPerson: true, launch });
-		if (result.accepted) { update.hide(); } else { void notify.warn('EVƎ Cockpit: the cockpit daemon did not accept the restart now.'); }
+		const result = await bridge.restart();
+		if (!result.accepted) {
+			void notify.warn(`EVƎ Cockpit: the cockpit daemon did not accept the restart — ${result.reason ?? 'no reason given.'}`);
+		}
 	});
 
 	logger.info('Commands registered');
@@ -292,4 +281,3 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
 	// context.subscriptions disconnects from the daemon; the daemon ends on its own once nobody needs it.
 }
-

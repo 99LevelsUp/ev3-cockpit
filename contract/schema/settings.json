@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Settings",
+  "description": "The daemon's settings. Settings is both the spec of every setting (its type, range, default, CLI key and whether changing it is dangerous) and the shape of the settings file. Each property carries x-cliKey, the key as ev3 config spells it; x-dangerous, set when changing it widens what clients may do on a brick, so the daemon changes it only after a person said yes; and x-stored false when it is never written to the settings file and lasts only as long as the daemon.",
+  "definitions": {
+    "Settings": {
+      "x-file": "settings.json",
+      "type": "object",
+      "properties": {
+        "accessMode": {
+          "x-cliKey": "access-mode",
+          "x-dangerous": true,
+          "x-stored": false,
+          "type": "string",
+          "enum": ["safe", "full"],
+          "default": "safe",
+          "description": "What clients may do on a brick. safe: write, delete and run only in the projects folder and on the SD card, read everywhere. full: change any file and run shell commands. full lasts until the daemon ends."
+        },
+        "rememberBricks": {
+          "x-cliKey": "remember-bricks",
+          "x-dangerous": false,
+          "type": "string",
+          "enum": ["wait", "auto"],
+          "default": "wait",
+          "description": "Bricks that were connected when the cockpit last ended: wait connects them only on Connect; auto connects them as soon as they are seen."
+        },
+        "telemetry.staleFactor": {
+          "x-cliKey": "telemetry.stale-factor",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "A value is stale once no newer reading has come for this many of its own reading intervals."
+        },
+        "telemetry.staleTimeoutMs": {
+          "x-cliKey": "telemetry.stale-timeout-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 0,
+          "default": 10000,
+          "description": "How long a stale value is still shown, marked, before it is dropped, in milliseconds."
+        },
+        "telemetry.throttle.enabled": {
+          "x-cliKey": "telemetry.throttle.enabled",
+          "x-dangerous": false,
+          "type": "boolean",
+          "default": true,
+          "description": "Slow a brick's telemetry while it answers slowly, and speed it back up when it recovers."
+        },
+        "telemetry.throttle.windowSize": {
+          "x-cliKey": "telemetry.throttle.window-size",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 5,
+          "default": 20,
+          "description": "Telemetry frames per window; the slowest 5 % of a window decides whether to slow down."
+        },
+        "telemetry.throttle.tailFactor": {
+          "x-cliKey": "telemetry.throttle.tail-factor",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "How many times the link's usual round trip a window's p95 may reach before slowing down."
+        },
+        "telemetry.throttle.step": {
+          "x-cliKey": "telemetry.throttle.step",
+          "x-dangerous": false,
+          "type": "number",
+          "exclusiveMinimum": 1,
+          "default": 1.5,
+          "description": "How much one step slows the telemetry tick down, or speeds it back up."
+        },
+        "telemetry.throttle.maxSlowdown": {
+          "x-cliKey": "telemetry.throttle.max-slowdown",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 4,
+          "description": "The most the telemetry tick is slowed, as a multiple of its planned tick."
+        },
+        "telemetry.throttle.calmWindows": {
+          "x-cliKey": "telemetry.throttle.calm-windows",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Windows in a row within the limit before the telemetry speeds up a step."
+        },
+        "telemetry.programRunningTickMs": {
+          "x-cliKey": "telemetry.program-running-tick-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 0,
+          "default": 200,
+          "description": "While a program runs, its brick's telemetry is read no more often than this, in milliseconds; 0 turns it off."
+        },
+        "transfer.tcpPacketBytes": {
+          "x-cliKey": "transfer.tcp-packet-bytes",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65535,
+          "default": 1024,
+          "description": "Largest packet a file transfer sends over Wi-Fi. The stock firmware takes 1024; a larger packet on it can corrupt a file when the link drops."
+        },
+        "transfer.btPacketBytes": {
+          "x-cliKey": "transfer.bt-packet-bytes",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65535,
+          "default": 1024,
+          "description": "Largest packet a file transfer sends over Bluetooth. The stock firmware takes 1024; a larger packet on it can corrupt a file when the link drops."
+        },
+        "programs.statusIntervalMs": {
+          "x-cliKey": "programs.status-interval-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 1000,
+          "description": "How often a followed program's state is read, in milliseconds."
+        }
+      }
+    },
+    "AccessMode": {
+      "type": "string",
+      "enum": ["safe", "full"]
+    },
+    "SettingScalar": {
+      "description": "A setting's value.",
+      "type": ["boolean", "number", "string"]
+    },
+    "SettingType": {
+      "type": "string",
+      "enum": ["boolean", "number", "integer", "string"]
+    },
+    "SettingSpec": {
+      "description": "One setting with its rules, as the Settings definition gives them.",
+      "type": "object",
+      "required": ["key", "cliKey", "type", "default", "description", "dangerous", "stored"],
+      "properties": {
+        "key": { "type": "string" },
+        "cliKey": { "type": "string", "description": "The key as ev3 config spells it." },
+        "type": { "$ref": "#/definitions/SettingType" },
+        "default": { "$ref": "#/definitions/SettingScalar" },
+        "minimum": { "type": "number" },
+        "exclusiveMinimum": { "type": "number", "description": "Values must be greater than this." },
+        "maximum": { "type": "number" },
+        "enum": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "dangerous": { "type": "boolean", "description": "Changing it runs only after a person said yes." },
+        "stored": { "type": "boolean", "description": "Written to the settings file; false when it lasts only as long as the daemon." }
+      }
+    },
+    "SettingValue": {
+      "type": "object",
+      "required": ["spec", "value"],
+      "properties": {
+        "spec": { "$ref": "#/definitions/SettingSpec" },
+        "value": { "$ref": "#/definitions/SettingScalar" }
+      }
+    }
+  }
+}

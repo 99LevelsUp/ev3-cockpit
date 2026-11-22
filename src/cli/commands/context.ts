@@ -3,8 +3,8 @@
  * only when the command needs one.
  */
 
-import type { CockpitClient } from '../../client';
-import type { LaunchSpec } from '../../contract/models';
+import type { NativeCockpitClient } from '../../client/nativeClient';
+import type { BrickHolder } from '../../contract/generated';
 import type { Confirmer } from '../confirm';
 import { CommandResult, CliIo, UsageError } from '../output';
 
@@ -13,17 +13,17 @@ export interface CommandContext {
 	readonly json: boolean;
 	/** `--brick`, when given. */
 	readonly brick: string | undefined;
-	/** `--channel`, else `EV3_COCKPIT_CHANNEL`; undefined for the user's own daemon. */
+	/** The test channel a build from the repository runs on; undefined for the user's own daemon. */
 	readonly channel: string | undefined;
 	/** The words after the command. */
 	readonly args: readonly string[];
 	/** The command's own switches that were given, by long name: `recursive`, `all`, `replace`. */
 	readonly flags: ReadonlySet<string>;
 	readonly confirmer: Confirmer;
-	/** Connects on first use. */
-	client(): Promise<CockpitClient>;
-	/** How this installation starts its daemon. */
-	launch(): LaunchSpec;
+	/** Connects on first use, starting the daemon when none runs. */
+	client(): Promise<NativeCockpitClient>;
+	/** Connects again after the daemon went, starting it when no other client did. */
+	reconnect(): Promise<NativeCockpitClient>;
 }
 
 export interface Command {
@@ -60,7 +60,7 @@ export function brickRef(ctx: CommandContext, index?: number): string | undefine
  * a held brick connects only for its own run, and the daemon lets go when the command ends. With no
  * brick named, the one connected brick is meant.
  */
-export async function connectedBrick(ctx: CommandContext, ref: string | undefined): Promise<{ client: CockpitClient; brickId: string; name: string }> {
+export async function connectedBrick(ctx: CommandContext, ref: string | undefined): Promise<{ client: NativeCockpitClient; brickId: string; name: string }> {
 	const client = await ctx.client();
 	const brick = await client.request('bricks/connect', ref === undefined ? {} : { brick: ref });
 	return { client, brickId: brick.brickId, name: brick.name };
@@ -71,14 +71,18 @@ export async function connectedBrick(ctx: CommandContext, ref: string | undefine
  * stopped as it is, without signing it in again, which a forget or a list clearing in progress
  * would refuse. Only a brick not connected at all is connected for the stop.
  */
-export async function stopTarget(ctx: CommandContext, ref: string | undefined): Promise<{ client: CockpitClient; brick: string | undefined; name: string }> {
+export async function stopTarget(ctx: CommandContext, ref: string | undefined): Promise<{ client: NativeCockpitClient; brick: string | undefined; name: string }> {
 	const client = await ctx.client();
 	if (ref === undefined) { return { client, brick: undefined, name: 'the brick' }; }
 	const known = client.brick(ref);
-	if (known?.connected) { return { client, brick: ref, name: known.name }; }
+	if (known?.connected) { return { client, brick: known.brickId, name: known.name }; }
 	const { brickId, name } = await connectedBrick(ctx, ref);
 	return { client, brick: brickId, name };
 }
 
-/** Who a holder is, as a person reads it. */
-export { holderName } from '../../contract/models';
+/** Who holds a brick, as a person reads it. */
+export function holderName(holder: BrickHolder): string {
+	if (holder.kind === 'hold') { return 'ev3 connect'; }
+	if (holder.kind === 'remembered') { return 'remembered'; }
+	return holder.client ?? 'a client';
+}

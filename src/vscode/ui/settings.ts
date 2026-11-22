@@ -1,14 +1,15 @@
 /**
- * `EVƎ: Settings` (R25): the daemon's settings, read and changed from VS Code. The cockpit's
+ * `EVƎ: Settings`: the daemon's settings, read and changed from VS Code. The cockpit's
  * settings live in the daemon now, shared by every client, not in VS Code's settings.
  *
  * Every key is listed with its value. A change to a dangerous setting away from its default —
- * access mode `full` — asks the person in a modal dialog first; declining changes nothing.
+ * access mode `full` — asks the person in a modal dialog first; declining changes nothing. The
+ * daemon asks this window about the change as well, and the bridge answers from that first yes.
  *
  * Free of `vscode`: the command hands it pickers, an input box and the dialog.
  */
 
-import type { SettingValue } from '../../contract/models';
+import type { SettingScalar, SettingValue } from '../../contract/generated';
 
 export interface SettingsUi {
 	pick<T extends { readonly label: string }>(items: readonly T[], options: { readonly title: string; readonly placeHolder: string }): PromiseLike<T | undefined>;
@@ -21,7 +22,8 @@ export interface SettingsUi {
 
 export interface SettingsClient {
 	settings(): readonly SettingValue[];
-	request(method: 'settings/set', params: { key: string; value: boolean | number | string; confirmedByPerson?: boolean }): Promise<SettingValue>;
+	/** Sets it; `confirmedHere` says the person already said yes to this change in VS Code. */
+	set(key: string, value: SettingScalar, confirmedHere: boolean): Promise<SettingValue>;
 }
 
 export const FULL_ACTION = 'Allow';
@@ -48,10 +50,12 @@ export function settingRows(settings: readonly SettingValue[]): SettingRow[] {
 /** What a typed value means for a setting, or why it cannot be one. */
 export function parseSettingValue(setting: SettingValue, text: string): { value: number | string } | { problem: string } {
 	const { spec } = setting;
-	if (spec.type === 'number') {
+	if (spec.type === 'number' || spec.type === 'integer') {
 		const value = Number(text.trim());
 		if (text.trim() === '' || !Number.isFinite(value)) { return { problem: 'Type a number.' }; }
+		if (spec.type === 'integer' && !Number.isInteger(value)) { return { problem: 'Type a whole number.' }; }
 		if (spec.minimum !== undefined && value < spec.minimum) { return { problem: `At least ${spec.minimum}.` }; }
+		if (spec.exclusiveMinimum !== undefined && value <= spec.exclusiveMinimum) { return { problem: `More than ${spec.exclusiveMinimum}.` }; }
 		if (spec.maximum !== undefined && value > spec.maximum) { return { problem: `At most ${spec.maximum}.` }; }
 		return { value };
 	}
@@ -64,7 +68,7 @@ export async function editSettings(client: SettingsClient, ui: SettingsUi): Prom
 	if (!row) { return; }
 	const { setting } = row;
 	const { spec } = setting;
-	let value: boolean | number | string;
+	let value: SettingScalar;
 	if (spec.type === 'boolean' || spec.enum) {
 		const options = spec.type === 'boolean' ? ['true', 'false'] : [...spec.enum!];
 		const picked = await ui.pick(options.map((option) => ({
@@ -84,18 +88,18 @@ export async function editSettings(client: SettingsClient, ui: SettingsUi): Prom
 	}
 	if (value === setting.value) { return; }
 
-	let confirmedByPerson = false;
+	let confirmedHere = false;
 	if (spec.dangerous && value !== spec.default) {
-		confirmedByPerson = await ui.confirm(
+		confirmedHere = await ui.confirm(
 			`Set ${spec.key} to ${String(value)}?`,
 			spec.key === 'accessMode'
 				? 'Full access lets every program connected to the cockpit — VS Code, the ev3 command, add-ons and AI agents — write and delete anywhere on the brick, its system files included. It lasts until the cockpit daemon ends.'
 				: spec.description,
 			FULL_ACTION);
-		if (!confirmedByPerson) { return; }
+		if (!confirmedHere) { return; }
 	}
 	try {
-		await client.request('settings/set', { key: spec.key, value, ...(confirmedByPerson ? { confirmedByPerson } : {}) });
+		await client.set(spec.key, value, confirmedHere);
 		ui.showInfo(`EVƎ Cockpit: ${spec.key} is ${String(value)}.`);
 	} catch (error) {
 		ui.showError(`EVƎ Cockpit: could not set ${spec.key} — ${error instanceof Error ? error.message : String(error)}`);

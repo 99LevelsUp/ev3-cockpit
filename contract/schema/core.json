@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Stable core",
+  "description": "What every client and daemon version must keep reading: the hello, the daemon's version and build kind it carries, the request to exit, and the record that names the daemon's channel. Definitions marked x-stableCore never change except by a new optional property, whatever the contract version, and every object here accepts properties it does not know. The stable core holds no enum, since a value added later could not be read by an older version: a field that names one of a set is a plain string whose x-readAs names the enum it is read as, and x-unknownReadsAs the value a reader takes for a string it does not know.",
+  "definitions": {
+    "HelloStart": {
+      "x-stableCore": true,
+      "description": "The client's first message on a connection: a fresh nonce and who it is. Nothing else may be sent before the hello finishes.",
+      "type": "object",
+      "required": ["clientNonce", "clientName", "clientKind", "version", "contractVersion", "buildKind"],
+      "properties": {
+        "clientNonce": { "type": "string", "minLength": 32, "maxLength": 256, "description": "A fresh random value: 32 to 256 hex digits, lowercase. The daemon closes the connection on any other." },
+        "clientName": { "type": "string", "minLength": 1, "maxLength": 200, "description": "1 to 200 characters; the daemon closes the connection on any other. Where the client runs, as people read it in the daemon's log, in a busy brick's message and in a question: \"EVƎ C (VS Code)\", \"ev3 c run (terminal)\"." },
+        "clientKind": {
+          "type": "string",
+          "x-readAs": "ClientKind",
+          "x-unknownReadsAs": "mcp",
+          "description": "Who the client is, one of ClientKind. A kind the daemon does not know reads as mcp, the least privileged: it is never asked a person's question and cannot ask the daemon to exit."
+        },
+        "version": { "type": "string", "description": "The client's package version." },
+        "contractVersion": { "type": "integer", "minimum": 1, "description": "The contract version the client was built with." },
+        "buildKind": {
+          "type": "string",
+          "x-readAs": "BuildKind",
+          "x-unknownReadsAs": "release",
+          "description": "One of BuildKind. A build kind the daemon does not know reads as release, so it never counts as a development build that replaces a release daemon."
+        }
+      },
+      "additionalProperties": true
+    },
+    "HelloChallenge": {
+      "x-stableCore": true,
+      "description": "The daemon's answer to hello/start: its own nonce and its proof over both nonces. A client that cannot verify the proof is talking to something else and closes the connection.",
+      "type": "object",
+      "required": ["daemonNonce", "daemonProof"],
+      "properties": {
+        "daemonNonce": { "type": "string", "description": "A fresh random value, lowercase hex." },
+        "daemonProof": { "type": "string", "description": "HMAC-SHA256 with the user's key over \"daemon\\n<clientNonce>\\n<daemonNonce>\", lowercase hex." }
+      },
+      "additionalProperties": true
+    },
+    "HelloFinish": {
+      "x-stableCore": true,
+      "description": "The client's proof. The daemon accepts the connection, or closes it.",
+      "type": "object",
+      "required": ["clientProof"],
+      "properties": {
+        "clientProof": { "type": "string", "description": "HMAC-SHA256 with the user's key over \"client\\n<clientNonce>\\n<daemonNonce>\", lowercase hex." }
+      },
+      "additionalProperties": true
+    },
+    "HelloAccepted": {
+      "x-stableCore": true,
+      "description": "Who the daemon is, once both sides have proved they hold the user's key. A client whose contract version differs says so and stops instead of misbehaving.",
+      "type": "object",
+      "required": ["version", "contractVersion", "buildKind", "buildId", "mode", "pid", "instanceId"],
+      "properties": {
+        "version": { "type": "string", "description": "The daemon's version." },
+        "contractVersion": { "type": "integer", "minimum": 1 },
+        "buildKind": {
+          "type": "string",
+          "x-readAs": "BuildKind",
+          "x-unknownReadsAs": "release",
+          "description": "One of BuildKind; a build kind the client does not know reads as release."
+        },
+        "buildId": { "type": "string", "description": "SHA-256 of the daemon's own executable, lowercase hex, computed when it started." },
+        "mode": {
+          "type": "string",
+          "x-readAs": "DaemonMode",
+          "x-unknownReadsAs": "hardware",
+          "description": "One of DaemonMode; a mode the client does not know reads as hardware, since the daemon may then touch real bricks."
+        },
+        "pid": { "type": "integer", "minimum": 0 },
+        "instanceId": { "type": "string", "description": "Unique to this daemon process." },
+        "state": {
+          "type": "string",
+          "x-readAs": "DaemonState",
+          "x-unknownReadsAs": "serving",
+          "description": "One of DaemonState. Absent, or a state the client does not know, reads as serving."
+        },
+        "transports": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Transports the daemon could load, for a client to notice a degraded one."
+        }
+      },
+      "additionalProperties": true
+    },
+    "DaemonExitParams": {
+      "x-stableCore": true,
+      "description": "Ask the daemon to end. The daemon judges the request from the asking client's hello: a newer release client, or a development client meeting a release daemon, replaces it once no write is in progress. Any other request is a restart, which runs only after a person said yes.",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true
+    },
+    "DaemonExitResult": {
+      "x-stableCore": true,
+      "type": "object",
+      "required": ["accepted"],
+      "properties": {
+        "accepted": { "type": "boolean", "description": "The daemon ends as soon as no write is in progress." },
+        "reason": { "type": "string", "description": "Why it refused, ready to show." }
+      },
+      "additionalProperties": true
+    },
+    "ChannelRecord": {
+      "x-stableCore": true,
+      "x-file": "channel.json",
+      "description": "channel.json, which only the daemon holding the single-instance lock writes and removes on a clean exit. A client connects only to the path recorded here and never computes it itself.",
+      "type": "object",
+      "required": ["path", "pid"],
+      "properties": {
+        "path": { "type": "string", "description": "The full named pipe path on Windows, the full unix socket path on Linux." },
+        "pid": { "type": "integer", "minimum": 0, "description": "The daemon's process id." }
+      },
+      "additionalProperties": true
+    }
+  }
+}

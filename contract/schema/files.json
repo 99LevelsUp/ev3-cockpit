@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Files and programs",
+  "description": "The brick's file system, file content in chunks, programs and shell commands. A write or a deployment to a path whose folders do not exist yet creates them.",
+  "definitions": {
+    "FsEntry": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["file", "directory", "unknown"] },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "md5": { "type": "string", "description": "Lowercase hex, files only." }
+      }
+    },
+    "FileSize": {
+      "type": "object",
+      "required": ["kilobytes", "files"],
+      "properties": {
+        "kilobytes": { "type": "integer", "minimum": 0, "description": "Kilobytes, rounded up, as the firmware reports them." },
+        "files": { "type": "integer", "minimum": 0, "description": "Files the total covers; zero for a plain file." }
+      }
+    },
+    "RemoveReport": {
+      "description": "What a recursive removal could not delete.",
+      "type": "object",
+      "required": ["leftBehind"],
+      "properties": {
+        "leftBehind": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "TransferProgress": {
+      "description": "What a file request reports through $/progress, with the token the request carried.",
+      "type": "object",
+      "required": ["transferred"],
+      "properties": {
+        "transferred": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "DeployFile": {
+      "description": "One file of a deployment: from a local path the daemon reads, or small inline content.",
+      "type": "object",
+      "required": ["remotePath"],
+      "properties": {
+        "remotePath": { "type": "string", "description": "Absolute path on the brick." },
+        "localPath": { "type": "string" },
+        "content": { "type": "string", "description": "Base64, at most 4 KiB once decoded." },
+        "skipIfSameMd5": { "type": "boolean", "description": "Skip the upload when the brick already holds a file with the same MD5." }
+      }
+    },
+    "StartOutcome": {
+      "description": "How a start ended. started: the brick reported the program running. not_seen_running: the start was confirmed but the program was not seen running; it may have ended at once. uncertain: the reply to the start was lost; do not start again, read the program's state first.",
+      "type": "string",
+      "enum": ["started", "not_seen_running", "uncertain"]
+    },
+    "DeployResult": {
+      "type": "object",
+      "required": ["brickId", "outcome", "runSeq", "uploaded", "skipped"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "outcome": { "$ref": "#/definitions/StartOutcome" },
+        "runSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This start's number on the brick: the daemon counts every start it is asked for per brick, a refused one included, so numbers may skip. A state with a lower runSeq is about an earlier run; with replace, the old program's end may still arrive under the new number."
+        },
+        "uploaded": { "type": "array", "items": { "type": "string" }, "description": "Files that were uploaded." },
+        "skipped": { "type": "array", "items": { "type": "string" }, "description": "Files skipped because the brick held the same content." }
+      }
+    },
+    "ProgramState": {
+      "type": "object",
+      "required": ["brickId", "running", "runSeq"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "running": { "type": "boolean" },
+        "runSeq": { "type": "integer", "minimum": 0, "description": "The number of the last start the daemon sent to this brick (0 before any)." },
+        "stoppedBy": { "type": "string", "description": "The client that stopped it, when a stop ended it." }
+      }
+    },
+    "ShellResult": {
+      "type": "object",
+      "required": ["brickId", "status"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "status": { "type": "integer" }
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@
  * run it twice, so the command says so and exits 4 rather than retrying.
  */
 
-import type { ProgramState } from '../../contract/models';
+import type { ProgramState } from '../../contract/generated';
 import { ExitCode } from '../output';
 import { Command, arg, atMost, brickRef, connectedBrick, stopTarget } from './context';
 

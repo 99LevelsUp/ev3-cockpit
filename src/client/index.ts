@@ -37,6 +37,22 @@ export { clientPaths, installedLaunch } from './locate';
 export type { VersionNotice } from './versions';
 export * from '../contract';
 
+// The native daemon, on the generated contract. Its types are under `nativeContract` while the
+// contract above still serves the Node daemon; docs/api-for-consumers.md lists what changes.
+export * as nativeContract from '../contract/generated';
+export { NativeCockpitClient, SUCCESSOR_WAIT_MS } from './nativeClient';
+export type { NativeCockpitClientOptions, QuestionContext, QuestionHandler } from './nativeClient';
+export { EXIT_ANSWER_MS, NATIVE_READINESS_MS, decideOnDaemon, ensureNativeDaemon } from './nativeDaemon';
+export type { LaunchDecision, LaunchingClient, NativeDaemonConnection, NativeDaemonOptions } from './nativeDaemon';
+export {
+	DAEMON_MANIFEST, DaemonStartError, daemonBinaryName, developmentDaemon, installedNativeLaunch, nativeInstallFile, packagedDaemon,
+	recordNativeInstall,
+} from './nativeLaunch';
+export type { CargoProfile, StartFailure } from './nativeLaunch';
+export { nativeChannelFiles, nativeStateRoot } from './locate';
+export type { NativeChannelFiles } from './locate';
+export type { DaemonIdentity } from './hello';
+
 export interface Disposable { dispose(): void }
 
 export interface CockpitClientOptions {

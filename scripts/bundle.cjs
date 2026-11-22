@@ -1,15 +1,16 @@
 /**
- * The cockpit's bundles (KTD16): the extension, the daemon, the `ev3` command and the MCP server.
+ * The cockpit's bundles: the extension, the `ev3` command and the MCP server. The daemon is the
+ * native binary `ev3-cockpitd`, built by cargo, not a bundle.
  *
- *   node scripts/bundle.cjs                     all four into out/
+ *   node scripts/bundle.cjs                     all three into out/
  *   node scripts/bundle.cjs --sourcemap         with source maps, for development (F5)
- *   node scripts/bundle.cjs daemon cli          only these
+ *   node scripts/bundle.cjs cli mcp             only these
  *
- * They lie side by side in one folder: the command and the MCP server find the daemon as the
- * `daemon.js` beside them, and the installation one folder up (`cliLaunch`, `installation`). Every
- * bundle leaves the same modules external: VS Code's API, and the native modules, which ship
- * prebuilt per platform beside the bundle (the VSIX) or as optional dependencies (npm). Everything
- * else is inlined, so the npm package of the daemon needs no other dependency.
+ * Installed, the extension finds the daemon and its manifest in its own folder; the command and
+ * the MCP server find them in the npm platform package for this computer (`installation`). Every
+ * bundle inlines everything but VS Code's API, so neither package needs a dependency at run time.
+ * The Node native modules of the old daemon stay external, so an import of one that crept back
+ * shows as a `require` the packaging checks refuse, instead of being inlined without its binary.
  */
 'use strict';
 
@@ -24,7 +25,6 @@ const EXTERNALS = ['vscode', ...NATIVE_MODULES];
 /** Each bundle: its entry in the sources, its file in the output folder, and whether a shell runs it. */
 const BUNDLES = {
 	extension: { entry: 'src/vscode/extension.ts', file: 'extension.js', executable: false },
-	daemon: { entry: 'src/daemon/main.ts', file: 'daemon.js', executable: false },
 	cli: { entry: 'src/cli/main.ts', file: 'cli.js', executable: true },
 	mcp: { entry: 'src/mcp/main.ts', file: 'mcp.js', executable: true },
 };

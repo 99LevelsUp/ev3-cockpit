@@ -29,16 +29,22 @@ ev3 connect CCC               connect CCC and keep it connected until "ev3 disco
 ev3 put robot.rbf /home/root/lms2012/prjs/Robot/robot.rbf --brick CCC
 ev3 run /home/root/lms2012/prjs/Robot/robot.rbf --brick CCC
 ev3 stop CCC                  (and ev3 estop CCC for an emergency stop)
+ev3 telemetry --brick CCC     one reading; name rows to read only those, --watch until Ctrl+C, --list
 ev3 config list               the settings; ev3 config set access-mode full asks first
 ev3 status                    the daemon, its clients, and who writes to which brick
 ev3 daemon restart | log
 ```
 
-`--json` gives machine-readable output and exit codes for scripts. An add-on's own commands run as
-`ev3 <name>` (the `ev3-<name>` program on the PATH).
+`--json` gives machine-readable output for scripts, and `ev3 help` lists the exit codes. An
+add-on's own commands run as `ev3 <name>` (the `ev3-<name>` program on the PATH).
 
 **For an AI agent**, `ev3-cockpit-mcp` is an MCP server over stdio with tools for bricks, files,
-programs and settings. Forgetting a brick and clearing its Bluetooth list ask the user first.
+programs, telemetry and settings.
+
+Connecting a brick from a terminal or an agent does not start telemetry: the daemon reads a brick
+only for VS Code's panel showing it, or while `ev3 telemetry` or the `read_telemetry` tool runs. Forgetting a brick, clearing its Bluetooth list and switching to `full` run
+only after the user says yes in VS Code or a terminal, where the question names the agent; with
+nobody there to ask, the tool answers with the `ev3` command the user can run.
 
 **Access mode.** In `safe` mode, the default, clients write, delete and run only in the brick's user
 areas. `full` opens the whole brick, the shell included. Only a person can switch it on, in VS Code

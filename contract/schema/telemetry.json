@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Telemetry",
+  "description": "Telemetry rows, values and the daisy chain.",
+  "definitions": {
+    "TelemetryRowInfo": {
+      "description": "A telemetry row a client can subscribe to.",
+      "type": "object",
+      "required": ["id", "tier"],
+      "properties": {
+        "id": { "type": "string" },
+        "tier": { "type": "string" },
+        "unit": { "type": "string" },
+        "port": { "type": "string" },
+        "layer": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TelemetryRequest": {
+      "type": "object",
+      "required": ["rows", "intervalMs"],
+      "properties": {
+        "rows": { "type": "array", "items": { "type": "string" } },
+        "intervalMs": { "type": "integer", "minimum": 0 },
+        "modes": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "description": "Sensor port modes, by port: {\"1\": 2}."
+        }
+      }
+    },
+    "TelemetryRate": {
+      "description": "How often a row is read.",
+      "oneOf": [
+        {
+          "description": "Every ms milliseconds.",
+          "type": "object",
+          "required": ["kind", "ms"],
+          "properties": {
+            "kind": { "const": "interval" },
+            "ms": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "description": "Read once; the value does not change while the brick is connected.",
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "once" } }
+        }
+      ]
+    },
+    "TelemetryValue": {
+      "type": "object",
+      "required": ["rowId", "value", "sampledAt", "stale"],
+      "properties": {
+        "rowId": { "type": "string" },
+        "value": { "type": ["number", "string", "boolean", "null"] },
+        "unit": { "type": "string" },
+        "mode": { "type": "integer", "minimum": 0 },
+        "sampledAt": { "type": "integer", "minimum": 0, "description": "Milliseconds since the Unix epoch." },
+        "effectiveRate": { "$ref": "#/definitions/TelemetryRate" },
+        "stale": { "type": "boolean" }
+      }
+    },
+    "TelemetryUpdate": {
+      "type": "object",
+      "required": ["subscriptionId", "brickId", "kind", "values", "removed"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "brickId": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["snapshot", "change", "ended"],
+          "description": "A fresh snapshot follows every subscribe and every reconnect to a new daemon."
+        },
+        "values": { "type": "array", "items": { "$ref": "#/definitions/TelemetryValue" } },
+        "removed": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ChainMember": {
+      "type": "object",
+      "required": ["layer", "capabilities"],
+      "properties": {
+        "layer": { "type": "integer", "minimum": 0 },
+        "capabilities": {
+          "type": "object",
+          "required": ["sensors", "motorTypes", "motorReadout", "files", "programs", "name"],
+          "properties": {
+            "sensors": { "type": "boolean" },
+            "motorTypes": { "type": "boolean" },
+            "motorReadout": { "type": "boolean" },
+            "files": { "type": "boolean" },
+            "programs": { "type": "boolean" },
+            "name": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "ContractChain": {
+      "type": "object",
+      "required": ["brickId", "read", "stale", "members"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "stale": { "type": "boolean" },
+        "members": { "type": "array", "items": { "$ref": "#/definitions/ChainMember" } }
+      }
+    }
+  }
+}

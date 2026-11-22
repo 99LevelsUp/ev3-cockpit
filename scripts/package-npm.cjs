@@ -1,58 +1,47 @@
 /**
- * Stages the two npm packages (KTD16); it never publishes.
+ * Stages the npm packages; it never publishes.
  *
- *   node scripts/package-npm.cjs                           compile and bundle, then stage into dist/npm/
- *   node scripts/package-npm.cjs --skip-build              stage from what out/ already holds
- *   node scripts/package-npm.cjs --allow-missing-helpers   stage without a Bluetooth helper, saying so
- *   node scripts/package-npm.cjs --out <dir>               somewhere else than dist/npm/
+ *   node scripts/package-npm.cjs                                 compile and bundle, then stage the
+ *                                                                client and cockpit packages into dist/npm/
+ *   node scripts/package-npm.cjs --skip-build                    stage from what out/ already holds
+ *   node scripts/package-npm.cjs --platform <target> [--daemon-dir <dir>]
+ *                                                                stage that platform's daemon package
+ *   node scripts/package-npm.cjs --out <dir>                     somewhere else than dist/npm/
  *
  * - `dist/npm/client/` is `@ev3-cockpit/client`: the contract and the client library, compiled from
  *   src/contract and src/client (`npm run compile`) with their types, and only the files the
  *   library's entry reaches. It is what add-ons import, so it carries no native module; the staging
  *   fails if its code requires one.
- * - `dist/npm/cockpit/` is `ev3-cockpit`: the daemon, the `ev3` command and the MCP server as the
- *   bundles `out/daemon.js`, `out/cli.js` and `out/mcp.js`, the native modules as optional
- *   dependencies, and the Bluetooth helpers and udev rules at the paths the daemon finds them from its
- *   installation folder (`createRuntime`).
+ * - `dist/npm/cockpit/` is `ev3-cockpit`: the `ev3` command and the MCP server as the bundles
+ *   `out/cli.js` and `out/mcp.js`, the udev rules the daemon's messages name, and the platform
+ *   packages as optional dependencies at exactly its version.
+ * - `dist/npm/<target>/` is `@ev3-cockpit/<target>`: the daemon built for that platform and its
+ *   manifest, with `os` and `cpu` so npm installs only the one for the computer it lands on (the
+ *   pattern esbuild ships its binaries with). The command finds it at run time and says what to
+ *   do when it is missing (`platformDaemonDir`). Its daemon comes from `--daemon-dir`, by default
+ *   where `package-vsix.cjs` takes it from, and is checked like a VSIX's: the manifest records its
+ *   SHA-256, the package's version and a release build, and on Linux it is executable. A Linux
+ *   platform package is packed (`npm pack`) on Linux, where the mode survives.
  *
- * Both take their version from the root package.json, the one the pre-commit hook bumps (R31).
+ * All take their version from the root package.json, the one the pre-commit hook bumps.
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { builtinModules } = require('module');
 const { spawnSync } = require('child_process');
 const { bundle } = require('./bundle.cjs');
-const { NATIVE_MODULES } = require('./packaging.cjs');
+const { TARGETS, DAEMON_MANIFEST, NATIVE_MODULES, UDEV_RULES, daemonBinary, daemonProblems, requiredModules } = require('./packaging.cjs');
 
 const REPO = path.resolve(__dirname, '..');
 const CLIENT_NAME = '@ev3-cockpit/client';
 const COCKPIT_NAME = 'ev3-cockpit';
 /** The bundles the cockpit package carries, all in its out/ folder. */
-const COCKPIT_BUNDLES = ['daemon', 'cli', 'mcp'];
-/**
- * The Bluetooth helpers the daemon starts from `native/bin` in its installation: the Windows pairing
- * helper (`npm run build:helper`, needs .NET) and the macOS helper (`npm run build:helper:macos`, on
- * a Mac). One package serves every platform, so it carries both.
- */
-const HELPERS = ['bt-pairing-helper.exe', 'ev3-bt-helper'];
+const COCKPIT_BUNDLES = ['cli', 'mcp'];
 
-/**
- * The packages a piece of bundled or compiled code requires, by package name, leaving out Node's own
- * modules and relative files. A `require("…")` inside a string is code another library generates
- * (ajv in the MCP bundle), not a call, and does not count.
- */
-function requiredModules(source) {
-	const found = new Set();
-	const call = /(?<![\w$.'"`])(?:__)?require\(\s*["']([^"']+)["']\s*\)/g;
-	for (let match = call.exec(source); match; match = call.exec(source)) {
-		const id = match[1];
-		if (id.startsWith('.') || id.startsWith('node:') || builtinModules.includes(id.split('/')[0])) { continue; }
-		const parts = id.split('/');
-		found.add(id.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]);
-	}
-	return [...found].sort();
+/** The npm package carrying a platform's daemon (`DAEMON_PACKAGES` of src/cli/installation.ts). */
+function platformPackageName(target) {
+	return `@ev3-cockpit/${target}`;
 }
 
 function filesUnder(dir, suffix) {
@@ -67,7 +56,7 @@ function writeManifest(dir, manifest) {
 	fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(manifest, null, '\t')}\n`);
 }
 
-/** What both packages share with the root package. */
+/** What the packages share with the root package. */
 function common(root) {
 	return {
 		version: root.version,
@@ -77,11 +66,10 @@ function common(root) {
 	};
 }
 
-/** `@ev3-cockpit/client`: the contract and the library, compiled with their types. */
 /**
  * The compiled files the client library's entry reaches, as paths relative to the compiled tree
- * without their extension (`client/index`, `contract/errors`, `daemon/paths`, …): what its code
- * requires and what its types import, followed from `client/index`.
+ * without their extension (`client/index`, `contract/errors`, …): what its code requires and what
+ * its types import, followed from `client/index`.
  */
 function clientClosure(compiled) {
 	const found = new Set();
@@ -146,11 +134,8 @@ function stageClient(out, root, compiled = path.join(REPO, 'out')) {
 	return dir;
 }
 
-/**
- * `ev3-cockpit`: the three bundles, the helpers and the udev rules. Returns the helpers it went
- * without, which only `allowMissingHelpers` permits.
- */
-function stageCockpit(out, root, { bundles, nativeBin, allowMissingHelpers = false }) {
+/** `ev3-cockpit`: the two bundles, the udev rules, and the platform packages as optional dependencies. */
+function stageCockpit(out, root, { bundles }) {
 	const dir = path.join(out, 'cockpit');
 	fs.rmSync(dir, { recursive: true, force: true });
 	fs.mkdirSync(path.join(dir, 'out'), { recursive: true });
@@ -161,26 +146,14 @@ function stageCockpit(out, root, { bundles, nativeBin, allowMissingHelpers = fal
 		const to = path.join(dir, 'out', `${name}.js`);
 		fs.copyFileSync(from, to);
 		fs.chmodSync(to, 0o755);
-		// Everything but the native modules is inlined; anything else would be missing once installed.
-		const stray = requiredModules(fs.readFileSync(to, 'utf8')).filter((module) => !NATIVE_MODULES.includes(module));
+		// Everything is inlined; anything required would be missing once installed.
+		const stray = requiredModules(fs.readFileSync(to, 'utf8'));
 		if (stray.length) { throw new Error(`out/${name}.js requires ${stray.join(', ')}, which ${COCKPIT_NAME} does not ship.`); }
 	}
 
-	fs.mkdirSync(path.join(dir, 'native', 'bin'), { recursive: true });
-	if (fs.existsSync(nativeBin)) {
-		for (const file of fs.readdirSync(nativeBin)) {
-			if (file.endsWith('.pdb') || !fs.statSync(path.join(nativeBin, file)).isFile()) { continue; }   // debug symbols do not ship
-			fs.copyFileSync(path.join(nativeBin, file), path.join(dir, 'native', 'bin', file));
-		}
-	}
-	const missingHelpers = HELPERS.filter((helper) => !fs.existsSync(path.join(dir, 'native', 'bin', helper)));
-	if (missingHelpers.length && !allowMissingHelpers) {
-		throw new Error(`native/bin lacks ${missingHelpers.join(' and ')}: build the Windows helper with npm run build:helper and the macOS one on a Mac with npm run build:helper:macos, or stage with --allow-missing-helpers.`);
-	}
-	const rules = path.join(REPO, 'native', 'linux');
-	fs.mkdirSync(path.join(dir, 'native', 'linux'), { recursive: true });
-	for (const file of fs.readdirSync(rules).filter((name) => name.endsWith('.rules'))) {
-		fs.copyFileSync(path.join(rules, file), path.join(dir, 'native', 'linux', file));
+	for (const rule of UDEV_RULES) {
+		fs.mkdirSync(path.dirname(path.join(dir, rule)), { recursive: true });
+		fs.copyFileSync(path.join(REPO, rule), path.join(dir, rule));
 	}
 
 	fs.copyFileSync(path.join(REPO, 'LICENSE'), path.join(dir, 'LICENSE'));
@@ -189,41 +162,87 @@ function stageCockpit(out, root, { bundles, nativeBin, allowMissingHelpers = fal
 		description: 'The EVƎ Cockpit daemon, the ev3 command and the cockpit MCP server, for EV3 bricks.',
 		...common(root),
 		bin: { ev3: 'out/cli.js', 'ev3-cockpit-mcp': 'out/mcp.js' },
-		// The ranges of the root package.json: npm installs each for the platform it lands on, and a
-		// platform without one still runs, without that transport.
-		optionalDependencies: Object.fromEntries(NATIVE_MODULES.map((name) => {
-			const version = root.optionalDependencies?.[name];
-			if (!version) { throw new Error(`The root package.json has no optional dependency ${name}.`); }
-			return [name, version];
-		})),
+		// npm installs the one whose os and cpu match; exactly this version, the daemon built with it.
+		optionalDependencies: Object.fromEntries(Object.keys(TARGETS).map((target) => [platformPackageName(target), root.version])),
 	});
-	return { dir, missingHelpers };
+	return dir;
 }
 
-/** Stages both packages into `out`. */
-function stageNpm({ out, bundles, nativeBin, allowMissingHelpers = false }) {
+/**
+ * `@ev3-cockpit/<target>`: the daemon from `daemonDir` and its manifest, checked before it is
+ * staged. `checkMode` says whether the file system shows Unix permissions (not on Windows).
+ */
+function stagePlatform(out, root, target, { daemonDir, checkMode = process.platform !== 'win32' }) {
+	if (!TARGETS[target]) { throw new Error(`Unknown target ${target}; known: ${Object.keys(TARGETS).join(', ')}.`); }
+	const binary = daemonBinary(target);
+	for (const file of [binary, DAEMON_MANIFEST]) {
+		if (!fs.existsSync(path.join(daemonDir, file))) {
+			throw new Error(`${path.join(daemonDir, file)} is missing; build the daemon for ${target} with EV3_COCKPIT_RELEASE_BUILD=1 and write its manifest (npm run daemon:build:release).`);
+		}
+	}
+	const dir = path.join(out, target);
+	fs.rmSync(dir, { recursive: true, force: true });
+	fs.mkdirSync(dir, { recursive: true });
+	fs.copyFileSync(path.join(daemonDir, binary), path.join(dir, binary));
+	fs.copyFileSync(path.join(daemonDir, DAEMON_MANIFEST), path.join(dir, DAEMON_MANIFEST));
+	const { os, cpu } = TARGETS[target];
+	if (os !== 'win32') { fs.chmodSync(path.join(dir, binary), 0o755); }
+	const problems = daemonProblems(target, {
+		data: fs.readFileSync(path.join(dir, binary)),
+		...(checkMode ? { mode: fs.statSync(path.join(dir, binary)).mode } : {}),
+	}, fs.readFileSync(path.join(dir, DAEMON_MANIFEST), 'utf8'), root.version);
+	if (problems.length) { throw new Error(`${platformPackageName(target)} is wrong.\n  ${problems.join('\n  ')}`); }
+
+	fs.copyFileSync(path.join(REPO, 'LICENSE'), path.join(dir, 'LICENSE'));
+	writeManifest(dir, {
+		name: platformPackageName(target),
+		description: `The EVƎ Cockpit daemon for ${target}; installed by ev3-cockpit on that platform.`,
+		...common(root),
+		os: [os],
+		cpu: [cpu],
+		files: [binary, DAEMON_MANIFEST],
+	});
+	return dir;
+}
+
+/** Stages the client and cockpit packages into `out`. */
+function stageNpm({ out, bundles }) {
 	const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
 	const client = stageClient(out, root);
-	const cockpit = stageCockpit(out, root, { bundles, nativeBin, allowMissingHelpers });
-	return { client, cockpit: cockpit.dir, missingHelpers: cockpit.missingHelpers, version: root.version };
+	const cockpit = stageCockpit(out, root, { bundles });
+	return { client, cockpit, version: root.version };
 }
 
-module.exports = { CLIENT_NAME, COCKPIT_NAME, COCKPIT_BUNDLES, HELPERS, requiredModules, stageClient, stageCockpit, stageNpm };
+module.exports = {
+	CLIENT_NAME, COCKPIT_NAME, COCKPIT_BUNDLES, platformPackageName, requiredModules,
+	stageClient, stageCockpit, stagePlatform, stageNpm,
+};
 
 if (require.main === module) {
 	try {
 		const args = process.argv.slice(2);
-		const at = args.indexOf('--out');
-		const out = at >= 0 && args[at + 1] ? path.resolve(args[at + 1]) : path.join(REPO, 'dist', 'npm');
-		const bundles = path.join(REPO, 'out');
-		if (!args.includes('--skip-build')) {
-			const tsc = spawnSync(process.execPath, [path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', REPO], { cwd: REPO, stdio: 'inherit' });
-			if (tsc.status !== 0) { throw new Error('npm run compile failed.'); }
-			bundle({ names: COCKPIT_BUNDLES, outDir: bundles });
+		const option = (name) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
+		const out = option('--out') ? path.resolve(option('--out')) : path.join(REPO, 'dist', 'npm');
+		const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+		const platform = option('--platform');
+		if (platform) {
+			if (!TARGETS[platform]) { throw new Error(`Unknown target ${platform}; known: ${Object.keys(TARGETS).join(', ')}.`); }
+			const host = `${process.platform}-${process.arch}`;
+			const targetDir = path.resolve(REPO, 'daemon', process.env.CARGO_TARGET_DIR || 'target');
+			const daemonDir = path.resolve(option('--daemon-dir')
+				?? (platform === host ? path.join(targetDir, 'release') : path.join(targetDir, TARGETS[platform].triple, 'release')));
+			const dir = stagePlatform(out, root, platform, { daemonDir });
+			console.log(`Staged ${platformPackageName(platform)} ${root.version} in ${dir}; nothing is published.`);
+		} else {
+			const bundles = path.join(REPO, 'out');
+			if (!args.includes('--skip-build')) {
+				const tsc = spawnSync(process.execPath, [path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', REPO], { cwd: REPO, stdio: 'inherit' });
+				if (tsc.status !== 0) { throw new Error('npm run compile failed.'); }
+				bundle({ names: COCKPIT_BUNDLES, outDir: bundles });
+			}
+			const staged = stageNpm({ out, bundles });
+			console.log(`Staged ${CLIENT_NAME} and ${COCKPIT_NAME} ${staged.version} in ${out}; nothing is published.`);
 		}
-		const staged = stageNpm({ out, bundles, nativeBin: path.join(REPO, 'native', 'bin'), allowMissingHelpers: args.includes('--allow-missing-helpers') });
-		for (const helper of staged.missingHelpers) { console.warn(`Staged without native/bin/${helper}: this package lacks the Bluetooth that goes through it.`); }
-		console.log(`Staged ${CLIENT_NAME} and ${COCKPIT_NAME} ${staged.version} in ${out}; nothing is published.`);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exitCode = 1;

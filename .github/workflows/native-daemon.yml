@@ -1,0 +1,206 @@
+# The native daemon `ev3-cockpitd` on each platform a release ships for, built where it runs:
+# Windows x64 on windows-latest, Linux x64 and arm64 on Ubuntu 22.04 (glibc 2.35, so the binaries
+# run on Debian 12 and Raspberry Pi OS).
+#
+# - rust: the daemon's gate on each platform: format, clippy with warnings as errors, all tests.
+# - package: the release build (EV3_COCKPIT_RELEASE_BUILD=1, the only builds marked as release),
+#   its manifest, the platform VSIX and npm platform package (each checked: exactly one daemon,
+#   the SHA-256 its manifest records, a release build at the package version, executable on
+#   Linux), the smoke against the VSIX's daemon in replay of a recorded brick, the binary's SHA-256
+#   in the job summary and, outside pull requests, a build provenance attestation of the binary and
+#   the packages. Linux packages are packed on Linux, where the executable bit survives; the
+#   packages are uploaded as artifacts and nothing is published.
+# - released-contract: on a version tag, the contract snapshot is the tagged contract.
+#
+# Releasing: before tagging vX.Y.Z, run `npm run contract:snapshot` and commit contract/released/
+# with the release. The tag's run fails when the snapshot is missing or differs from the contract;
+# from then on `npm run contract:check` compares every contract change with that snapshot and
+# refuses a breaking change without a raised contract version.
+name: Native daemon
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust gate (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+          - target: linux-x64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        # cargo reads daemon/.cargo/config.toml (the static C runtime on Windows) only from here.
+        working-directory: daemon
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace
+
+  package:
+    name: Release build, packages and smoke (${{ matrix.target }})
+    needs: rust
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+          - target: linux-x64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      # Read by the daemon's build.rs (the build kind) and by daemon-manifest.cjs; every other build
+      # in CI is a development build.
+      EV3_COCKPIT_RELEASE_BUILD: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+          key: release
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the daemon, a release build
+        working-directory: daemon
+        run: cargo build --release --locked -p ev3-cockpitd
+
+      - name: Write its manifest
+        run: node scripts/daemon-manifest.cjs --profile release
+
+      - name: Compile the client library the smoke uses
+        run: npm run compile
+
+      - name: Package the VSIX
+        run: node scripts/package-vsix.cjs ${{ matrix.target }} --daemon-dir daemon/target/release
+
+      - name: The VSIX's daemon serves a recorded brick
+        run: node scripts/daemon-smoke.cjs --daemon-dir .vsix-staging/${{ matrix.target }}
+
+      - name: Stage and pack the npm platform package
+        run: |
+          node scripts/package-npm.cjs --platform ${{ matrix.target }} --daemon-dir daemon/target/release
+          npm pack ./dist/npm/${{ matrix.target }} --pack-destination dist/npm
+
+      - name: Stage and pack the client and cockpit npm packages
+        # The same on every platform: packed once, on Linux.
+        if: matrix.target == 'linux-x64'
+        run: |
+          npm run bundle
+          node scripts/package-npm.cjs --skip-build
+          npm pack ./dist/npm/client ./dist/npm/cockpit --pack-destination dist/npm
+
+      - name: SHA-256 of the daemon
+        id: daemon
+        run: |
+          binary=daemon/target/release/$(node -p "require('./scripts/packaging.cjs').daemonBinary('${{ matrix.target }}')")
+          sum=$(sha256sum "$binary" | cut -d' ' -f1)
+          echo "$sum  ev3-cockpitd-${{ matrix.target }}" > "ev3-cockpitd-${{ matrix.target }}.sha256"
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
+          echo "- \`ev3-cockpitd\` ${{ matrix.target }}: \`$sum\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest the build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ steps.daemon.outputs.binary }}
+            dist-vsix/*.vsix
+            dist/npm/*.tgz
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ev3-cockpit-${{ matrix.target }}
+          path: |
+            dist-vsix/*.vsix
+            dist/npm/*.tgz
+            ev3-cockpitd-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  released-contract:
+    name: The contract snapshot is the tagged contract
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Record the contract as released and compare with the committed snapshot
+        run: |
+          npm run contract:snapshot
+          changed=$(git status --porcelain -- contract/released)
+          if [ -n "$changed" ]; then
+            echo "contract/released/ does not hold this release's contract. Run npm run contract:snapshot, commit contract/released/ and tag again:"
+            echo "$changed"
+            exit 1
+          fi

@@ -1,0 +1,664 @@
+[
+  {
+    "name": "list_bricks",
+    "description": "List the EV3 bricks the cockpit sees, connected or not, with how each is reachable (USB, Bluetooth, Wi-Fi) and who holds it. Waits for the first discovery round when the cockpit has just started.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "connect_brick",
+    "description": "Connect a brick for this agent; file and program tools need it connected. The brick stays connected while this agent session lasts, unless disconnect_brick drops it.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "disconnect_brick",
+    "description": "Drop this agent's hold on a brick. Other clients holding it (VS Code, a terminal) keep it connected.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "brick_info",
+    "description": "A connected brick's name and firmware.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "brick_storage",
+    "description": "How much storage a connected brick has, and how much is free, in kilobytes.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "list_files",
+    "description": "List a folder on a connected brick.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The folder on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        }
+      },
+      "required": [
+        "brick",
+        "path"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "read_file",
+    "description": "Copy a file from a connected brick to a local file. The local file is created or replaced.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The file on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "localPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where to save it on this computer. It must lie inside the folders this agent host lets you work in."
+        }
+      },
+      "required": [
+        "brick",
+        "path",
+        "localPath"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "Copy a local file to a connected brick. Folders on the brick are created as needed; an existing file is replaced.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where to put it on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "localPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The file to send on this computer. It must lie inside the folders this agent host lets you work in."
+        }
+      },
+      "required": [
+        "brick",
+        "path",
+        "localPath"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "remove_file",
+    "description": "Remove a file or folder on a connected brick; a folder with content needs recursive. Outside the projects folder and the SD card this is refused unless the user switched the cockpit to full access.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The file or folder on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "recursive": {
+          "description": "Remove a folder with everything in it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "brick",
+        "path"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "remove_paths",
+    "description": "Remove several files or folders on a connected brick in one go.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "paths": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Absolute paths on the brick."
+        },
+        "recursive": {
+          "description": "Remove folders with everything in them.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "brick",
+        "paths"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "make_directory",
+    "description": "Create a folder on a connected brick.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The folder on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        }
+      },
+      "required": [
+        "brick",
+        "path"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "move_file",
+    "description": "Move or rename a file or folder on a connected brick.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What to move on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where to on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        }
+      },
+      "required": [
+        "brick",
+        "from",
+        "to"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "deploy_and_run",
+    "description": "Upload local files to a connected brick and start a program, as one step: it checks nothing runs, uploads, starts and confirms the start. If the result says the start is uncertain, do not run it again; check program_status first.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "localPath": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The file to upload on this computer. It must lie inside the folders this agent host lets you work in."
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Where it goes on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+              },
+              "skipIfSameMd5": {
+                "description": "Skip the upload when the brick already holds the same content.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "localPath",
+              "remotePath"
+            ]
+          },
+          "description": "The files to upload first."
+        },
+        "runPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The program to start on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        }
+      },
+      "required": [
+        "brick",
+        "files",
+        "runPath"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "run_program",
+    "description": "Start a program already on a connected brick. If the result says the start is uncertain, do not run it again; check program_status first.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The program on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "replace": {
+          "description": "Stop a program that runs now first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "brick",
+        "path"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "stop_program",
+    "description": "Stop the program running on a brick, whoever started it.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "emergency_stop",
+    "description": "Stop the program on a brick at once and halt its motors.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "program_status",
+    "description": "Whether a program runs on a brick. With waitMs, waits up to that long (at most 30000 ms) for it to change, and answers at once when it does.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "waitMs": {
+          "description": "How long to wait for a change, in milliseconds.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "list_telemetry_rows",
+    "description": "The telemetry rows the cockpit can read from a brick (battery, program, motors and sensors by port), with their units. Pass their ids to read_telemetry.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "read_telemetry",
+    "description": "Read telemetry of a connected brick once: the rows named, or every row. Connecting a brick does not start telemetry; this reads only for the call, and stops when every row has a value or after waitMs (default 3000 ms, at most 30000 ms). Rows without a value in time are listed as missing.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        },
+        "rows": {
+          "description": "Row ids as list_telemetry_rows shows them; every row when left out.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "waitMs": {
+          "description": "How long to wait for values, in milliseconds.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "pair",
+    "description": "Pair a brick with this computer over Bluetooth. A brick this computer does not know yet (never paired, or forgotten) is first looked for over Bluetooth for up to 30 seconds, so it must be switched on with Bluetooth and visibility on. The user confirms the pairing on the brick itself.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "forget",
+    "description": "Unpair a brick on this computer and on the brick. The user is asked first, in VS Code or a terminal where the cockpit runs, and told this agent asked; when nobody is there to ask, the result names the command the user can run instead.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "clear_bluetooth_list",
+    "description": "Remove the entries from a brick's list of paired Bluetooth devices. The user is asked first, with the entries listed, in VS Code or a terminal where the cockpit runs, and told this agent asked; when nobody is there to ask, the result names the command the user can run instead.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The brick, by its id or its name as list_bricks shows them."
+        }
+      },
+      "required": [
+        "brick"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "get_settings",
+    "description": "The cockpit's settings with their current values, defaults and limits. A setting marked dangerous changes only after the user says yes in VS Code or a terminal.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "set_setting",
+    "description": "Change one cockpit setting. A dangerous one, such as the access mode, changes only after the user says yes in VS Code or a terminal, and is told this agent asked; when nobody is there to ask, the result names the command the user can run instead.",
+    "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The setting's key as get_settings shows it."
+        },
+        "value": {
+          "description": "The new value.",
+          "type": [
+            "boolean",
+            "number",
+            "string"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    }
+  }
+]

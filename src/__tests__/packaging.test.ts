@@ -1,172 +1,256 @@
 /**
- * Platform VSIX packaging (IMPLEMENTATION_PLAN 0.2.5): the rules of `scripts/packaging.cjs`.
+ * Platform VSIX packaging: the rules of `scripts/packaging.cjs`.
  *
- * An installed build had no USB or Bluetooth because the VSIX carried none of the native modules,
- * and the package's deny-list would have shipped review scratch, notes, logs and a junction to the
- * firmware sources. So a VSIX is built per platform from an allow-list, and checked after: every
- * native binary its platform needs is in it, and nothing else is — no other platform's binaries.
+ * Each platform's VSIX carries the native daemon built for it and the manifest recording its
+ * SHA-256, version and build kind; the client refuses a daemon whose hash does not match, so a VSIX
+ * whose manifest and binary disagree installs and then cannot start. Nothing else ships: no Node
+ * native module and no Node daemon, and nothing of the repository beyond an allow-list (a
+ * deny-list once shipped review scratch, notes and a junction to the firmware sources).
+ *
+ * The zips here are written by the test, so the checks run the same on every system; the VSIXes
+ * themselves are built and checked by `scripts/package-vsix.cjs` with the same rules.
  */
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
+import * as zlib from 'node:zlib';
 
+interface ZipEntry { name: string; unix: boolean; mode: number; data(): Buffer }
+interface Checked { missing: string[]; unexpected: string[]; problems: string[] }
 interface Packaging {
-	TARGETS: Record<string, { os: string; cpu: string; helper: boolean }>;
-	keepPrebuild(module: string, dir: string, target: string): boolean;
-	listZipEntries(zip: Uint8Array): string[];
-	checkVsix(target: string, entries: readonly string[]): { missing: string[]; unexpected: string[] };
+	TARGETS: Record<string, { os: string; cpu: string; triple: string; udevRule: boolean }>;
+	DAEMON_MANIFEST: string;
+	NATIVE_MODULES: string[];
+	UDEV_RULES: string[];
 	SHIPPED_FILES_FOR(target: string): string[];
+	daemonBinary(target: string): string;
+	readZip(zip: Uint8Array): ZipEntry[];
+	listZipEntries(zip: Uint8Array): string[];
+	checkVsix(target: string, entries: readonly ZipEntry[], version: string): Checked;
+	requiredModules(source: string): string[];
 }
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const packaging = require(path.join(__dirname, '..', '..', 'scripts', 'packaging.cjs')) as Packaging;
+const REPO = path.join(__dirname, '..', '..');
+/* eslint-disable @typescript-eslint/no-var-requires */
+const packaging = require(path.join(REPO, 'scripts', 'packaging.cjs')) as Packaging;
+const { bundle } = require(path.join(REPO, 'scripts', 'bundle.cjs')) as { bundle(options: { names: string[]; outDir: string }): void };
+/* eslint-enable @typescript-eslint/no-var-requires */
 
-/** A three-entry zip: extension.vsixmanifest, extension/out/extension.js and one usb prebuild. */
-const ZIP = Buffer.from('UEsDBBQAAAAAAOFybV1o8gHhAQAAAAEAAAAWAAAAZXh0ZW5zaW9uLnZzaXhtYW5pZmVzdG1QSwMEFAAAAAAA4XJtXYMW3IwBAAAAAQAAABoAAABleHRlbnNpb24vb3V0L2V4dGVuc2lvbi5qc3hQSwMEFAAAAAAA4XJtXdKjCHgBAAAAAQAAAD8AAABleHRlbnNpb24vbm9kZV9tb2R1bGVzL3VzYi9wcmVidWlsZHMvbGludXgtYXJtNjQvbm9kZS5uYXBpLm5vZGVuUEsBAhQAFAAAAAAA4XJtXWjyAeEBAAAAAQAAABYAAAAAAAAAAAAAAIABAAAAAGV4dGVuc2lvbi52c2l4bWFuaWZlc3RQSwECFAAUAAAAAADhcm1dgxbcjAEAAAABAAAAGgAAAAAAAAAAAAAAgAE1AAAAZXh0ZW5zaW9uL291dC9leHRlbnNpb24uanNQSwECFAAUAAAAAADhcm1d0qMIeAEAAAABAAAAPwAAAAAAAAAAAAAAgAFuAAAAZXh0ZW5zaW9uL25vZGVfbW9kdWxlcy91c2IvcHJlYnVpbGRzL2xpbnV4LWFybTY0L25vZGUubmFwaS5ub2RlUEsFBgAAAAADAAMA+QAAAMwAAAAAAA==', 'base64');
+const VERSION = '1.2.3';
+const sha256 = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 
-/** What a correct linux-arm64 VSIX holds, at the paths the checks look for. */
-const LINUX_ARM64 = [
-	'extension.vsixmanifest', '[Content_Types].xml',
-	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js', 'extension/out/daemon.js',
-	'extension/node_modules/usb/prebuilds/linux-arm64/node.napi.armv8.node',
-	'extension/node_modules/node-hid/prebuilds/HID-linux-arm64/node-napi-v3.node',
-	'extension/node_modules/node-hid/prebuilds/HID_hidraw-linux-arm64/node-napi-v3.node',
-	'extension/node_modules/@serialport/bindings-cpp/prebuilds/linux-arm64/@serialport+bindings-cpp.armv8.node',
-	'extension/node_modules/@koromix/koffi-linux-arm64/koffi.node',
-	'extension/node_modules/koffi/index.js',
-	'extension/node_modules/serialport/dist/index.js',
-	'extension/native/linux/70-lego-ev3.rules',
-	'extension/native/linux/71-ev3-cockpit-bluetooth-restart.rules',
-];
+interface FileSpec { name: string; data: Buffer | string; mode?: number; unix?: boolean; deflate?: boolean }
 
-/**
- * What a correct darwin-arm64 VSIX holds: `usb` and `@serialport/bindings-cpp` ship one folder for
- * both Mac architectures, `node-hid` one per architecture (as installed on the Mac, 18.11.2026).
- */
-const DARWIN_ARM64 = [
-	'extension.vsixmanifest', '[Content_Types].xml',
-	'extension/package.json', 'extension/readme.md', 'extension/LICENSE.txt', 'extension/out/extension.js', 'extension/out/daemon.js',
-	'extension/node_modules/usb/prebuilds/darwin-x64+arm64/node.napi.node',
-	'extension/node_modules/node-hid/prebuilds/HID-darwin-arm64/node-napi-v3.node',
-	'extension/node_modules/@serialport/bindings-cpp/prebuilds/darwin-x64+arm64/@serialport+bindings-cpp.node',
-	'extension/node_modules/@koromix/koffi-darwin-arm64/koffi.node',
-	'extension/node_modules/koffi/index.js',
-	'extension/node_modules/serialport/dist/index.js',
-	'extension/native/bin/ev3-bt-helper',
-];
+/** A zip of these files, as vsce writes one: made on Unix with each file's mode unless told otherwise. */
+function writeZip(files: readonly FileSpec[]): Buffer {
+	const locals: Buffer[] = [];
+	const centrals: Buffer[] = [];
+	let offset = 0;
+	for (const file of files) {
+		const raw = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data);
+		const body = file.deflate ? zlib.deflateRawSync(raw) : raw;
+		const name = Buffer.from(file.name);
+		const local = Buffer.alloc(30);
+		local.writeUInt32LE(0x04034b50, 0);
+		local.writeUInt16LE(20, 4);
+		local.writeUInt16LE(file.deflate ? 8 : 0, 8);
+		local.writeUInt32LE(body.length, 18);
+		local.writeUInt32LE(raw.length, 22);
+		local.writeUInt16LE(name.length, 26);
+		const unix = file.unix ?? true;
+		const central = Buffer.alloc(46);
+		central.writeUInt32LE(0x02014b50, 0);
+		central.writeUInt16LE(unix ? 0x0314 : 0x0014, 4);
+		central.writeUInt16LE(20, 6);
+		central.writeUInt16LE(file.deflate ? 8 : 0, 10);
+		central.writeUInt32LE(body.length, 20);
+		central.writeUInt32LE(raw.length, 24);
+		central.writeUInt16LE(name.length, 28);
+		central.writeUInt32LE(unix ? ((0o100000 | (file.mode ?? 0o644)) << 16) >>> 0 : 0, 38);
+		central.writeUInt32LE(offset, 42);
+		locals.push(local, name, body);
+		centrals.push(central, name);
+		offset += local.length + name.length + body.length;
+	}
+	const directory = Buffer.concat(centrals);
+	const end = Buffer.alloc(22);
+	end.writeUInt32LE(0x06054b50, 0);
+	end.writeUInt16LE(files.length, 8);
+	end.writeUInt16LE(files.length, 10);
+	end.writeUInt32LE(directory.length, 12);
+	end.writeUInt32LE(offset, 16);
+	return Buffer.concat([...locals, directory, end]);
+}
 
-describe('Platform VSIX packaging (0.2.5)', () => {
-	it('builds Windows x64 with the pairing helper, and Linux x64 and arm64 and macOS arm64 without it', () => {
-		assert.deepEqual(Object.keys(packaging.TARGETS).sort(), ['darwin-arm64', 'linux-arm64', 'linux-x64', 'win32-x64']);
-		assert.equal(packaging.TARGETS['darwin-arm64'].helper, false);
-		assert.equal(packaging.TARGETS['win32-x64'].helper, true);
-		assert.equal(packaging.TARGETS['linux-arm64'].helper, false);
-		assert.deepEqual([packaging.TARGETS['linux-arm64'].os, packaging.TARGETS['linux-arm64'].cpu], ['linux', 'arm64']);
+const BINARY = Buffer.from('\x7fELF a stand-in daemon');
+
+function manifest(target: string, overrides: Record<string, unknown> = {}): string {
+	return JSON.stringify({ binary: packaging.daemonBinary(target), sha256: sha256(BINARY), version: VERSION, buildKind: 'release', ...overrides });
+}
+
+/** What a correct VSIX for `target` holds, as vsce writes it on its own platform. */
+function vsixFiles(target: string): FileSpec[] {
+	const linux = packaging.TARGETS[target].os === 'linux';
+	return [
+		{ name: 'extension.vsixmanifest', data: '<PackageManifest/>' },
+		{ name: '[Content_Types].xml', data: '<Types/>' },
+		{ name: 'extension/package.json', data: '{}' },
+		{ name: 'extension/readme.md', data: '#' },
+		{ name: 'extension/LICENSE.txt', data: 'MIT' },
+		{ name: 'extension/out/extension.js', data: 'const vscode = require("vscode"); const fs = require("fs");', deflate: true },
+		{ name: `extension/${packaging.daemonBinary(target)}`, data: BINARY, mode: linux ? 0o755 : 0o644, unix: linux, deflate: true },
+		{ name: `extension/${packaging.DAEMON_MANIFEST}`, data: manifest(target), unix: linux },
+		...(linux ? packaging.UDEV_RULES.map((rule) => ({ name: `extension/${rule}`, data: '# rule' })) : []),
+	];
+}
+
+function check(target: string, files: readonly FileSpec[], version = VERSION): Checked {
+	return packaging.checkVsix(target, packaging.readZip(writeZip(files)), version);
+}
+
+const OK: Checked = { missing: [], unexpected: [], problems: [] };
+const replace = (files: FileSpec[], name: string, change: Partial<FileSpec>): FileSpec[] =>
+	files.map((file) => (file.name === name ? { ...file, ...change } : file));
+
+/** A constant of the Rust transports: the path the daemon's advice names. */
+function rustConstant(file: string, name: string): string {
+	const source = fs.readFileSync(path.join(REPO, 'daemon', 'crates', 'transports', 'src', file), 'utf8');
+	const value = new RegExp(`pub const ${name}: &str = "([^"]+)";`).exec(source)?.[1];
+	assert.ok(value, `${file} declares ${name}`);
+	return value;
+}
+
+describe('Platform VSIX packaging', () => {
+	it('ships Windows x64, Linux x64 and Linux arm64, each with the daemon built for its Rust target', () => {
+		assert.deepEqual(Object.keys(packaging.TARGETS).sort(), ['linux-arm64', 'linux-x64', 'win32-x64']);
+		assert.deepEqual(Object.values(packaging.TARGETS).map((t) => t.triple).sort(),
+			['aarch64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+		assert.equal(packaging.daemonBinary('win32-x64'), 'ev3-cockpitd.exe');
+		assert.equal(packaging.daemonBinary('linux-arm64'), 'ev3-cockpitd');
 	});
 
-	it('keeps only its own platform\'s prebuilt binaries, in each module\'s own naming', () => {
-		const keep = (module: string, dir: string, target: string) => packaging.keepPrebuild(module, dir, target);
-		assert.equal(keep('usb', 'linux-arm64', 'linux-arm64'), true);
-		assert.equal(keep('usb', 'linux-arm', 'linux-arm64'), false, 'arm is not arm64');
-		assert.equal(keep('usb', 'linux-x64', 'linux-arm64'), false);
-		assert.equal(keep('usb', 'win32-x64', 'win32-x64'), true);
-		assert.equal(keep('usb', 'darwin-x64+arm64', 'linux-arm64'), false);
-		assert.equal(keep('node-hid', 'HID-linux-arm64', 'linux-arm64'), true);
-		assert.equal(keep('node-hid', 'HID_hidraw-linux-arm64', 'linux-arm64'), true);
-		assert.equal(keep('node-hid', 'HID-linux-x64-musl', 'linux-x64'), true, 'musl Linux is Linux x64 too');
-		assert.equal(keep('node-hid', 'HID-win32-ia32', 'win32-x64'), false);
-		assert.equal(keep('@serialport/bindings-cpp', 'android-arm64', 'linux-arm64'), false, 'Android is not Linux');
-		assert.equal(keep('usb', 'darwin-x64+arm64', 'darwin-arm64'), true, 'one folder for both Mac architectures');
-		assert.equal(keep('node-hid', 'HID-darwin-arm64', 'darwin-arm64'), true);
-		assert.equal(keep('node-hid', 'HID-darwin-x64', 'darwin-arm64'), false);
+	it('reads a zip\'s names, Unix modes and contents, stored or deflated', () => {
+		const zip = writeZip([
+			{ name: 'a.txt', data: 'stored' },
+			{ name: 'bin/tool', data: 'deflated '.repeat(20), mode: 0o755, deflate: true },
+			{ name: 'win.txt', data: 'from Windows', unix: false },
+		]);
+		const entries = packaging.readZip(zip);
+		assert.deepEqual(packaging.listZipEntries(zip), ['a.txt', 'bin/tool', 'win.txt']);
+		assert.equal(entries[0].data().toString(), 'stored');
+		assert.equal(entries[1].data().toString(), 'deflated '.repeat(20));
+		assert.equal(entries[1].mode & 0o777, 0o755);
+		assert.equal(entries[1].unix, true);
+		assert.equal(entries[2].unix, false);
 	});
 
-	it('passes a macOS VSIX whose binaries sit in a folder shared by both Mac architectures (Mac visit, 18.11.2026)', () => {
-		assert.deepEqual(packaging.checkVsix('darwin-arm64', DARWIN_ARM64), { missing: [], unexpected: [] });
-		const withoutUsb = DARWIN_ARM64.filter((entry) => !entry.includes('/usb/prebuilds/'));
-		assert.deepEqual(packaging.checkVsix('darwin-arm64', withoutUsb).missing, ['extension/node_modules/usb/prebuilds/<darwin-arm64>/']);
-		const intelOnly = DARWIN_ARM64.map((entry) => entry.replace('HID-darwin-arm64', 'HID-darwin-x64'));
-		const { missing, unexpected } = packaging.checkVsix('darwin-arm64', intelOnly);
-		assert.deepEqual(missing, ['extension/node_modules/node-hid/prebuilds/<darwin-arm64>/']);
-		assert.deepEqual(unexpected, ['extension/node_modules/node-hid/prebuilds/HID-darwin-x64/node-napi-v3.node']);
-	});
-
-	it('ships the macOS Bluetooth helper on macOS only, and asks for it there (Mac visit, 18.11.2026)', () => {
-		const withoutHelper = DARWIN_ARM64.filter((entry) => !entry.endsWith('ev3-bt-helper'));
-		assert.deepEqual(packaging.checkVsix('darwin-arm64', withoutHelper).missing, ['extension/native/bin/ev3-bt-helper']);
-		assert.deepEqual(packaging.checkVsix('linux-arm64', [...LINUX_ARM64, 'extension/native/bin/ev3-bt-helper']).unexpected,
-			['extension/native/bin/ev3-bt-helper']);
-		assert.deepEqual(packaging.checkVsix('darwin-arm64', [...DARWIN_ARM64, 'extension/native/bin/bt-pairing-helper.exe']).unexpected,
-			['extension/native/bin/bt-pairing-helper.exe']);
-	});
-
-	it('reads the names in a zip', () => {
-		assert.deepEqual(packaging.listZipEntries(ZIP),
-			['extension.vsixmanifest', 'extension/out/extension.js', 'extension/node_modules/usb/prebuilds/linux-arm64/node.napi.node']);
-	});
-
-	it('passes a VSIX that holds what its platform needs and nothing else', () => {
-		assert.deepEqual(packaging.checkVsix('linux-arm64', LINUX_ARM64), { missing: [], unexpected: [] });
-	});
-
-	it('carries the daemon beside the extension, and refuses a VSIX without it (KTD16)', () => {
-		// The extension starts its daemon from out/daemon.js; a VSIX without it installs, activates and
-		// then has nothing to start.
-		assert.ok(packaging.SHIPPED_FILES_FOR('win32-x64').includes('out/daemon.js'), 'staged');
-		const ignore = require('node:fs').readFileSync(path.join(__dirname, '..', '..', '.vscodeignore'), 'utf8') as string;
-		assert.ok(ignore.split(/\r?\n/).includes('!out/daemon.js'), 'a plain vsce package keeps it too');
-		for (const [target, entries] of [['linux-arm64', LINUX_ARM64], ['darwin-arm64', DARWIN_ARM64]] as const) {
-			const without = entries.filter((entry) => entry !== 'extension/out/daemon.js');
-			assert.deepEqual(packaging.checkVsix(target, without), { missing: ['extension/out/daemon.js'], unexpected: [] }, target);
+	it('passes a VSIX that holds the extension, its daemon and manifest, and nothing else', () => {
+		for (const target of Object.keys(packaging.TARGETS)) {
+			assert.deepEqual(check(target, vsixFiles(target)), OK, target);
 		}
 	});
 
-	it('leaves the ev3 command and the MCP server to the npm package (KTD16)', () => {
-		const withClients = [...LINUX_ARM64, 'extension/out/cli.js', 'extension/out/mcp.js'];
-		assert.deepEqual(packaging.checkVsix('linux-arm64', withClients).unexpected, ['extension/out/cli.js', 'extension/out/mcp.js']);
-		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes('out/cli.js'));
+	it('carries exactly one daemon binary, at the extension\'s root where the installed extension reads it', () => {
+		// The installed extension hands its own folder to packagedDaemon.
+		const extension = fs.readFileSync(path.join(REPO, 'src', 'vscode', 'extension.ts'), 'utf8');
+		assert.match(extension, /function packagedDaemonDir\(context: vscode\.ExtensionContext\): string \{\s*return context\.extensionPath;\s*\}/);
+
+		const files = vsixFiles('linux-x64');
+		const twice = [...files, { name: 'extension/native/bin/ev3-cockpitd', data: BINARY, mode: 0o755 }];
+		const twiceChecked = check('linux-x64', twice);
+		assert.deepEqual(twiceChecked.unexpected, ['extension/native/bin/ev3-cockpitd']);
+		assert.ok(twiceChecked.problems.some((p) => /2 daemon binaries/.test(p)), twiceChecked.problems.join('\n'));
+		const windowsToo = check('linux-x64', [...files, { name: 'extension/ev3-cockpitd.exe', data: BINARY }]);
+		assert.ok(windowsToo.problems.some((p) => /2 daemon binaries/.test(p)));
+
+		const none = check('linux-x64', files.filter((f) => f.name !== 'extension/ev3-cockpitd'));
+		assert.deepEqual(none.missing, ['extension/ev3-cockpitd']);
+		assert.ok(none.problems.some((p) => /0 daemon binaries/.test(p)));
+		assert.deepEqual(check('win32-x64', vsixFiles('win32-x64').filter((f) => !f.name.endsWith('.manifest.json'))).missing,
+			[`extension/${packaging.DAEMON_MANIFEST}`]);
 	});
 
-	it('names what is missing: a native binary the platform needs', () => {
-		const without = LINUX_ARM64.filter((entry) => !entry.includes('koffi-linux-arm64'));
-		assert.ok(packaging.checkVsix('linux-arm64', without).missing.some((m) => m.includes('koffi-linux-arm64')));
-		assert.ok(packaging.checkVsix('win32-x64', LINUX_ARM64).missing.some((m) => m.includes('bt-pairing-helper.exe')));
+	it('refuses a daemon whose SHA-256 is not the one its manifest records', () => {
+		for (const target of Object.keys(packaging.TARGETS)) {
+			const name = `extension/${packaging.daemonBinary(target)}`;
+			const { problems } = check(target, replace(vsixFiles(target), name, { data: Buffer.from('another build') }));
+			assert.equal(problems.length, 1, problems.join('\n'));
+			assert.match(problems[0], /SHA-256 .* records/);
+		}
 	});
 
-	it('names what should not be there: other platforms, the repo\'s scratch, debug files', () => {
-		const leaky = [...LINUX_ARM64,
-			'extension/node_modules/usb/prebuilds/win32-x64/node.napi.node',
-			'extension/.review-out/packet.md', 'extension/ev3-resources/lms2012/c_com.c', 'extension/wiki/INDEX.md',
-			'extension/out/extension.js.map', 'extension/native/bin/bt-pairing-helper.exe',
-			'extension/node_modules/@koromix/koffi-win32-x64/koffi.node'];
-		const { unexpected } = packaging.checkVsix('linux-arm64', leaky);
-		assert.deepEqual(unexpected.sort(), leaky.slice(LINUX_ARM64.length).sort());
-		assert.ok(packaging.checkVsix('win32-x64', ['extension/native/bin/bt-pairing-helper.pdb']).unexpected.length === 1,
-			'debug symbols do not ship');
+	it('refuses a Linux daemon that would land without its executable bit', () => {
+		const name = 'extension/ev3-cockpitd';
+		const plain = check('linux-arm64', replace(vsixFiles('linux-arm64'), name, { mode: 0o644 }));
+		assert.ok(plain.problems.some((p) => /not executable \(mode 644\)/.test(p)), plain.problems.join('\n'));
+		// Packed on Windows: the zip carries no Unix mode at all.
+		const windows = check('linux-x64', replace(vsixFiles('linux-x64'), name, { unix: false }));
+		assert.ok(windows.problems.some((p) => /not packed on a Unix system/.test(p)), windows.problems.join('\n'));
+		assert.deepEqual(check('win32-x64', vsixFiles('win32-x64')).problems, [], 'Windows has no executable bit');
 	});
 
-	it('ships the udev rule the Linux permission message points at, on Linux only (merge review, 13.11.2026)', () => {
-		// The message told a Linux user to copy a file that no VSIX carried.
-		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_UDEV_RULE_PATH } = require('../core/transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
-		const entry = `extension/${LINUX_UDEV_RULE_PATH}`;
-		const repoRoot = path.join(__dirname, '..', '..');
-		assert.ok(require('node:fs').existsSync(path.join(repoRoot, LINUX_UDEV_RULE_PATH)), 'the rule is in the repository');
-		assert.ok(packaging.SHIPPED_FILES_FOR('linux-arm64').includes(LINUX_UDEV_RULE_PATH), 'staged for Linux');
-		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(LINUX_UDEV_RULE_PATH), 'not staged for Windows');
+	it('refuses a manifest of another version, a development build, or another binary', () => {
+		const target = 'win32-x64';
+		const name = `extension/${packaging.DAEMON_MANIFEST}`;
+		assert.ok(check(target, vsixFiles(target), '9.9.9').problems.some((p) => /version 1\.2\.3; the package is 9\.9\.9/.test(p)));
+		assert.ok(check(target, replace(vsixFiles(target), name, { data: manifest(target, { buildKind: 'development' }) }))
+			.problems.some((p) => /development build/.test(p)));
+		assert.ok(check(target, replace(vsixFiles(target), name, { data: manifest(target, { binary: 'ev3-cockpitd' }) }))
+			.problems.some((p) => /names ev3-cockpitd, not ev3-cockpitd\.exe/.test(p)));
+		assert.ok(check(target, replace(vsixFiles(target), name, { data: 'not json' })).problems.some((p) => /not JSON/.test(p)));
+	});
+
+	it('carries no Node native module and no Node daemon', () => {
+		const leaky = [...vsixFiles('linux-x64'),
+			{ name: 'extension/out/daemon.js', data: '' },
+			{ name: 'extension/node_modules/usb/prebuilds/linux-x64/node.napi.node', data: '' },
+			{ name: 'extension/node_modules/node-hid/prebuilds/HID-linux-x64/node-napi-v3.node', data: '' },
+			{ name: 'extension/node_modules/@serialport/bindings-cpp/package.json', data: '' },
+			{ name: 'extension/node_modules/koffi/index.js', data: '' },
+			{ name: 'extension/native/bin/bt-pairing-helper.exe', data: '' },
+			{ name: 'extension/out/cli.js', data: '' }, { name: 'extension/wiki/INDEX.md', data: '' }];
+		assert.deepEqual(check('linux-x64', leaky).unexpected.sort(), leaky.slice(vsixFiles('linux-x64').length).map((f) => f.name).sort());
+		for (const module of packaging.NATIVE_MODULES) {
+			const requiring = replace(vsixFiles('win32-x64'), 'extension/out/extension.js', { data: `require("vscode"); require("${module}");` });
+			assert.deepEqual(check('win32-x64', requiring).problems, [`out/extension.js requires ${module}, which the VSIX does not carry.`]);
+		}
+		for (const target of Object.keys(packaging.TARGETS)) {
+			assert.ok(!packaging.SHIPPED_FILES_FOR(target).includes('out/daemon.js'), target);
+		}
+		const ignore = fs.readFileSync(path.join(REPO, '.vscodeignore'), 'utf8').split(/\r?\n/);
+		assert.ok(!ignore.some((line) => line.startsWith('!') && /daemon\.js|node_modules/.test(line)), 'a plain vsce package does not keep them either');
+	});
+
+	describe('the extension bundle', () => {
+		const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-cockpit-vsix-'));
+		after(() => fs.rmSync(work, { recursive: true, force: true }));
+
+		it('requires nothing but VS Code: the VSIX carries no node_modules', () => {
+			// esbuild takes every core by default, while other test files time their daemons.
+			process.env.GOMAXPROCS = '1';
+			bundle({ names: ['extension'], outDir: work });
+			assert.deepEqual(packaging.requiredModules(fs.readFileSync(path.join(work, 'extension.js'), 'utf8')), ['vscode']);
+		});
+	});
+
+	it('ships the udev rule the daemon\'s USB permission message names, on Linux only', () => {
+		const rule = rustConstant('usb/mod.rs', 'LINUX_UDEV_RULE_PATH');
+		assert.ok(fs.existsSync(path.join(REPO, rule)), 'the rule is in the repository');
+		assert.ok(packaging.SHIPPED_FILES_FOR('linux-arm64').includes(rule), 'staged for Linux');
+		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(rule), 'not staged for Windows');
 		for (const target of ['linux-x64', 'linux-arm64']) {
-			const without = LINUX_ARM64.filter((e) => e !== entry);
-			assert.ok(packaging.checkVsix(target, without).missing.includes(entry), `${target} must carry ${entry}`);
+			assert.ok(check(target, vsixFiles(target).filter((f) => f.name !== `extension/${rule}`)).missing.includes(`extension/${rule}`), target);
 		}
-		assert.ok(packaging.checkVsix('win32-x64', [entry]).unexpected.includes(entry), 'Windows does not carry it');
+		assert.ok(check('win32-x64', [...vsixFiles('win32-x64'), { name: `extension/${rule}`, data: '' }]).unexpected.includes(`extension/${rule}`));
 	});
 
-	it('the udev rule opens the brick without logind too: group plugdev beside uaccess (HOSTD, 14.11.2026)', () => {
+	it('the udev rule opens the brick without logind too: group plugdev beside uaccess', () => {
 		// `uaccess` is granted by systemd-logind or elogind. On a runit system with neither the nodes
 		// stayed root:root 0660 and the user got LIBUSB_ERROR_ACCESS with the rule installed.
-		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_UDEV_RULE_PATH } = require('../core/transports/usbLibusbAdapter') as { LINUX_UDEV_RULE_PATH: string };
-		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_UDEV_RULE_PATH), 'utf8') as string;
+		const text = fs.readFileSync(path.join(REPO, rustConstant('usb/mod.rs', 'LINUX_UDEV_RULE_PATH')), 'utf8');
 		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');
 		const rules = text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
 		assert.equal(rules.length, 2, 'one rule for the USB device, one for its hidraw node');
@@ -178,26 +262,22 @@ describe('Platform VSIX packaging (0.2.5)', () => {
 		}
 	});
 
-	it('ships, on Linux only, the rule that lets the cockpit restart a Bluetooth adapter that stopped answering (HOSTD, 15.11.2026)', () => {
-		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const { LINUX_BT_RESTART_RULE_PATH } = require('../core/transports/bluezRadioWatch') as { LINUX_BT_RESTART_RULE_PATH: string };
-		const entry = `extension/${LINUX_BT_RESTART_RULE_PATH}`;
-		const text = require('node:fs').readFileSync(path.join(__dirname, '..', '..', LINUX_BT_RESTART_RULE_PATH), 'utf8') as string;
+	it('ships, on Linux only, the rule that lets the daemon restart a Bluetooth adapter that stopped answering', () => {
+		const rulePath = rustConstant('bt_linux/radio_watch.rs', 'LINUX_BT_RESTART_RULE_PATH');
+		const text = fs.readFileSync(path.join(REPO, rulePath), 'utf8');
 		assert.ok(!text.includes('\r'), 'LF only: udev reads the file as it is shipped');
 		const rules = text.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
 		assert.equal(rules.length, 1);
-		// A USB Bluetooth interface (class e0/01/01, as on HOSTD); its device's authorized file, group plugdev.
+		// A USB Bluetooth interface (class e0/01/01); its device's authorized file, group plugdev.
 		assert.match(rules[0], /ENV\{DEVTYPE\}=="usb_interface", ATTR\{bInterfaceClass\}=="e0", ATTR\{bInterfaceSubClass\}=="01", ATTR\{bInterfaceProtocol\}=="01"/);
-		// The whole device goes off: only one that declares itself a wireless controller (codex review).
+		// The whole device goes off: only one that declares itself a wireless controller.
 		assert.match(rules[0], /ATTRS\{bDeviceClass\}=="e0"/);
 		assert.match(text, /Every function of that device goes\s*\n# off with it/);
 		assert.match(rules[0], /RUN\+="\/bin\/chgrp plugdev \/sys%p\/\.\.\/authorized", RUN\+="\/bin\/chmod g\+w \/sys%p\/\.\.\/authorized"/);
-		assert.ok(packaging.SHIPPED_FILES_FOR('linux-x64').includes(LINUX_BT_RESTART_RULE_PATH), 'staged for Linux');
-		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(LINUX_BT_RESTART_RULE_PATH), 'not staged for Windows');
+		assert.ok(packaging.SHIPPED_FILES_FOR('linux-x64').includes(rulePath), 'staged for Linux');
+		assert.ok(!packaging.SHIPPED_FILES_FOR('win32-x64').includes(rulePath), 'not staged for Windows');
 		for (const target of ['linux-x64', 'linux-arm64']) {
-			const without = LINUX_ARM64.filter((e) => e !== entry);
-			assert.ok(packaging.checkVsix(target, without).missing.includes(entry), `${target} must carry ${entry}`);
+			assert.ok(check(target, vsixFiles(target).filter((f) => f.name !== `extension/${rulePath}`)).missing.includes(`extension/${rulePath}`), target);
 		}
-		assert.ok(packaging.checkVsix('win32-x64', [entry]).unexpected.includes(entry), 'Windows does not carry it');
 	});
 });

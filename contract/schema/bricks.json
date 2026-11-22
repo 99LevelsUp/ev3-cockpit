@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bricks",
+  "description": "Bricks as every client sees them, and pairing.",
+  "definitions": {
+    "Transport": {
+      "type": "string",
+      "enum": ["usb", "bt", "tcp"]
+    },
+    "ContractChannel": {
+      "description": "One way a brick is reachable, and how it is doing.",
+      "type": "object",
+      "required": ["transport", "state"],
+      "properties": {
+        "transport": { "$ref": "#/definitions/Transport" },
+        "state": { "type": "string", "enum": ["available", "connected", "lost"] }
+      }
+    },
+    "BrickHolder": {
+      "description": "Why a brick stays connected: who holds it.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["client", "hold", "remembered"],
+          "description": "A connected client, the hold ev3 connect leaves, or the long-lived clients together for remembered bricks."
+        },
+        "client": { "type": "string", "description": "The client's name for client; absent otherwise." }
+      }
+    },
+    "ContractBrick": {
+      "description": "One brick as every client sees it.",
+      "type": "object",
+      "required": ["brickId", "name", "nameConfirmed", "connected", "paired", "channels", "holders"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "name": { "type": "string" },
+        "nameConfirmed": { "type": "boolean", "description": "The brick itself reported the name, rather than a cache or a fallback." },
+        "connected": { "type": "boolean" },
+        "paired": { "type": "boolean", "description": "Paired with this computer over Bluetooth." },
+        "channels": { "type": "array", "items": { "$ref": "#/definitions/ContractChannel" } },
+        "holders": { "type": "array", "items": { "$ref": "#/definitions/BrickHolder" } },
+        "reconnecting": { "type": "boolean", "description": "Reconnecting after a daemon restart; operations wait for it." }
+      }
+    },
+    "BrickInfo": {
+      "type": "object",
+      "required": ["brickId", "name"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "name": { "type": "string" },
+        "firmwareVersion": { "type": "string" },
+        "osVersion": { "type": "string" }
+      }
+    },
+    "StorageUsage": {
+      "type": "object",
+      "required": ["totalKb", "freeKb"],
+      "properties": {
+        "totalKb": { "type": "integer", "minimum": 0 },
+        "freeKb": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "PairingOutcome": {
+      "description": "How a pairing ended. cancelled: the person or the client cancelled it, on the brick or here; a client shows no error for it.",
+      "type": "string",
+      "enum": ["paired", "cancelled", "failed"]
+    },
+    "PairingResult": {
+      "description": "The end of a pairing, whoever started it.",
+      "type": "object",
+      "required": ["brickId", "outcome"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "outcome": { "$ref": "#/definitions/PairingOutcome" },
+        "message": { "type": "string", "description": "Why it failed, ready to show; absent when it paired." },
+        "status": { "type": "string", "description": "The operating system's own pairing status, for the log." }
+      }
+    },
+    "PairingProgress": {
+      "description": "One step of a running pairing.",
+      "oneOf": [
+        {
+          "description": "Looking for the brick.",
+          "type": "object",
+          "required": ["phase"],
+          "properties": { "phase": { "const": "searching" } }
+        },
+        {
+          "description": "The first inquiry window missed the brick and another one is starting.",
+          "type": "object",
+          "required": ["phase", "window"],
+          "properties": {
+            "phase": { "const": "inquiryRetry" },
+            "window": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "description": "The brick was found. When it is not paired yet, the person confirms on the brick's display and accepts PIN 1234: the moment to tell them.",
+          "type": "object",
+          "required": ["phase", "name", "alreadyPaired"],
+          "properties": {
+            "phase": { "const": "found" },
+            "name": { "type": "string" },
+            "alreadyPaired": { "type": "boolean" }
+          }
+        },
+        {
+          "description": "The brick is asking for the PIN now.",
+          "type": "object",
+          "required": ["phase"],
+          "properties": { "phase": { "const": "pairingRequested" } }
+        }
+      ]
+    }
+  }
+}

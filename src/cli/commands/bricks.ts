@@ -3,18 +3,17 @@
  * Bluetooth list.
  *
  * `ev3 connect` holds a brick past the command, until `ev3 disconnect`; other commands connect a
- * brick only for their own run. Forgetting and clearing the Bluetooth list are confirmed when the
- * daemon asks; pairing is confirmed by the person at the brick, so it asks nothing here.
+ * brick only for their own run. Forgetting and clearing the Bluetooth list run only on a person's
+ * yes, which the daemon asks this terminal for; pairing is confirmed by the person at the brick, so
+ * it asks nothing here.
  */
 
-import type { ContractBrick } from '../../contract/models';
+import type { ContractBrick } from '../../contract/generated';
 import { ExitCode, table } from '../output';
-import { Command, CommandContext, arg, atMost, brickRef, connectedBrick, holderName } from './context';
+import { Command, arg, atMost, brickRef, connectedBrick, holderName } from './context';
 
 function brickLine(brick: ContractBrick): string[] {
-	const state = brick.blocked ? `blocked (${brick.blocked.by})`
-		: brick.reconnecting ? 'reconnecting'
-			: brick.connected ? 'connected' : 'available';
+	const state = brick.reconnecting ? 'reconnecting' : brick.connected ? 'connected' : 'available';
 	const holders = brick.holders.map(holderName).join(', ');
 	return [brick.name, brick.brickId, state, brick.channels.map((c) => c.transport).join(','), holders ? `held by ${holders}` : ''];
 }
@@ -25,7 +24,7 @@ const list: Command = {
 	async run(ctx) {
 		atMost(ctx, 0, this.usage);
 		const client = await ctx.client();
-		const bricks = await client.request('bricks/list', { waitForDiscovery: true });
+		const { bricks } = await client.request('bricks/list', { waitForDiscovery: true });
 		return {
 			value: bricks,
 			human: bricks.length === 0 ? 'No bricks found.' : table([['NAME', 'ID', 'STATE', 'LINKS', 'HOLDERS'], ...bricks.map(brickLine)]),
@@ -46,7 +45,7 @@ const connect: Command = {
 };
 
 const disconnect: Command = {
-	usage: 'ev3 disconnect <brick> [--all]',
+	usage: 'ev3 disconnect [brick] [--all]',
 	summary: 'Let go of a brick held by ev3 connect; --all disconnects it for every client.',
 	flags: ['all'],
 	async run(ctx) {
@@ -106,20 +105,13 @@ const pair: Command = {
 		const client = await ctx.client();
 		if (!ctx.json) { ctx.io.stderr.write(`Pairing ${ref}: confirm the pairing on the brick when it asks.\n`); }
 		const result = await client.request('bricks/pair', { brick: ref });
-		return {
-			value: result,
-			human: result.paired ? `Paired ${ref}.` : `Not paired: ${result.message ?? 'the brick did not confirm the pairing.'}`,
-			exitCode: result.paired ? ExitCode.Ok : ExitCode.Failure,
-		};
+		// A pairing cancelled on the brick or here is no error.
+		const human = result.outcome === 'paired' ? `Paired ${ref}.`
+			: result.outcome === 'cancelled' ? `Pairing ${ref} was cancelled.`
+				: `Not paired: ${result.message ?? 'the brick did not confirm the pairing.'}`;
+		return { value: result, human, exitCode: result.outcome === 'failed' ? ExitCode.Failure : ExitCode.Ok };
 	},
 };
-
-/** Forgetting and clearing a list run only on a person's yes, which the daemon asks for. */
-function noteNoPerson(ctx: CommandContext): void {
-	if (!ctx.confirmer.canAsk && !ctx.json) {
-		ctx.io.stderr.write('No terminal to confirm in: nothing will change unless a person runs this in a terminal.\n');
-	}
-}
 
 const forget: Command = {
 	usage: 'ev3 forget <brick>',
@@ -128,9 +120,8 @@ const forget: Command = {
 		atMost(ctx, 1, this.usage);
 		const ref = brickRef(ctx, 0) ?? arg(ctx, 0, 'the brick to forget');
 		const client = await ctx.client();
-		noteNoPerson(ctx);
 		const result = await client.request('bricks/forget', { brick: ref });
-		return { value: result, human: [`Forgot ${ref}.`, ...result.report.map((l) => `  ${l}`)] };
+		return { value: result, human: [`Forgot ${ref}.`, ...result.lines.map((l) => `  ${l}`)] };
 	},
 };
 
@@ -141,10 +132,10 @@ const btClear: Command = {
 		atMost(ctx, 1, this.usage);
 		const ref = brickRef(ctx, 0) ?? arg(ctx, 0, 'the brick whose Bluetooth list to clear');
 		const client = await ctx.client();
-		noteNoPerson(ctx);
 		const result = await client.request('bricks/clearBluetoothList', { brick: ref });
+		const skipped = result.report?.skipped;
 		const human = result.removed.length === 0 && result.kept.length === 0
-			? [`Nothing was removed from ${ref}'s Bluetooth list.`]
+			? [`Nothing was removed from ${ref}'s Bluetooth list${skipped ? `: ${skipped.reason}${skipped.detail ? ` (${skipped.detail})` : ''}` : ''}.`]
 			: [
 				...(result.removed.length > 0 ? [`Removed from ${ref}'s Bluetooth list:`, ...result.removed.map((n) => `  ${n}`)] : []),
 				...(result.kept.length > 0 ? ['Still on the list:', ...result.kept.map((n) => `  ${n}`)] : []),

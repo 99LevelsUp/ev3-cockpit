@@ -1,78 +1,68 @@
 /**
  * `ev3 config list | get <key> | set <key> <value>`: the cockpit's settings, which the daemon holds.
  *
- * Keys are spelled with dashes (`access-mode`); the camel-case spelling works too. A dangerous
- * setting — access mode `full` — changes only after the person at the terminal types yes; without a
- * terminal, or with `--json`, it is refused and the person is pointed to a terminal or to
- * `EVƎ: Settings` in VS Code.
+ * The keys are exactly the ones the contract's settings definition lists, spelled as `ev3 config`
+ * spells them (`access-mode`, `telemetry.stale-factor`); the contract's own spelling (`accessMode`)
+ * works too. Any other key is a wrong command line and reaches no daemon. A dangerous setting —
+ * access mode `full` — changes only after a person said yes to the daemon's question, which comes
+ * to this terminal when it can answer; without a terminal, or with `--json`, the daemon refuses it
+ * and names the command a person can run.
  */
 
-import type { SettingValue } from '../../contract/models';
-import { cliKey, keyFromCli } from '../../daemon/settingsStore';
-import { ContractError } from '../../client/connection';
-import { WireErrorCode } from '../../contract/errors';
-import { ExitCode, UsageError, table } from '../output';
-import { settingRefusal } from '../confirm';
+import { SETTING_SPECS } from '../../contract/generated';
+import type { SettingScalar, SettingSpec } from '../../contract/generated';
+import { UsageError, table } from '../output';
 import { Command, CommandContext, arg, atMost } from './context';
 
-function find(settings: readonly SettingValue[], spelled: string): SettingValue {
-	const key = keyFromCli(spelled);
-	const setting = settings.find((s) => s.spec.key === key);
-	if (!setting) { throw new ContractError(WireErrorCode.InvalidRequest, `There is no setting ${spelled}. ev3 config list shows them.`); }
-	return setting;
+/** The setting a key names, by its CLI spelling or its contract key; a usage error for any other. */
+export function settingSpec(spelled: string): SettingSpec {
+	const spec = SETTING_SPECS.find((s) => s.cliKey === spelled || s.key === spelled);
+	if (!spec) {
+		throw new UsageError(`There is no setting ${spelled}. The settings are: ${SETTING_SPECS.map((s) => s.cliKey).join(', ')}.`);
+	}
+	return spec;
 }
 
-function parse(setting: SettingValue, text: string): boolean | number | string {
-	const { spec } = setting;
+/** A value as the setting's type reads it; the daemon checks the limits. */
+export function parseSettingValue(spec: SettingSpec, text: string): SettingScalar {
 	if (spec.type === 'boolean') {
 		if (text === 'true' || text === 'false') { return text === 'true'; }
-		throw new UsageError(`${cliKey(spec.key)} is true or false.`);
+		throw new UsageError(`${spec.cliKey} is true or false.`);
 	}
-	if (spec.type === 'number') {
+	if (spec.type === 'number' || spec.type === 'integer') {
 		const value = Number(text);
-		if (text.trim() === '' || !Number.isFinite(value)) { throw new UsageError(`${cliKey(spec.key)} is a number.`); }
+		if (text.trim() === '' || !Number.isFinite(value)) { throw new UsageError(`${spec.cliKey} is a number.`); }
+		if (spec.type === 'integer' && !Number.isInteger(value)) { throw new UsageError(`${spec.cliKey} is a whole number.`); }
 		return value;
 	}
+	if (spec.enum && !spec.enum.includes(text)) { throw new UsageError(`${spec.cliKey} is one of ${spec.enum.join(', ')}.`); }
 	return text;
 }
 
 async function list(ctx: CommandContext): Promise<{ value: unknown; human: string[] }> {
 	atMost(ctx, 1, 'ev3 config list');
-	const settings = await (await ctx.client()).request('settings/list', {});
+	const { settings } = await (await ctx.client()).request('settings/list', {});
 	return {
 		value: settings,
-		human: table(settings.map((s) => [cliKey(s.spec.key), String(s.value), s.value === s.spec.default ? '' : `(default ${String(s.spec.default)})`])),
+		human: table(settings.map((s) => [s.spec.cliKey, String(s.value), s.value === s.spec.default ? '' : `(default ${String(s.spec.default)})`])),
 	};
 }
 
 async function get(ctx: CommandContext): Promise<{ value: unknown; human: string }> {
 	atMost(ctx, 2, 'ev3 config get <key>');
-	const settings = await (await ctx.client()).request('settings/list', {});
-	const setting = find(settings, arg(ctx, 1, 'the setting'));
+	const spec = settingSpec(arg(ctx, 1, 'the setting'));
+	const { settings } = await (await ctx.client()).request('settings/list', {});
+	const setting = settings.find((s) => s.spec.key === spec.key);
+	if (!setting) { throw new Error(`The cockpit daemon does not have the setting ${spec.cliKey}; update the older of the two.`); }
 	return { value: setting, human: String(setting.value) };
 }
 
-async function set(ctx: CommandContext): Promise<{ value: unknown; human: string; exitCode?: number }> {
+async function set(ctx: CommandContext): Promise<{ value: unknown; human: string }> {
 	atMost(ctx, 3, 'ev3 config set <key> <value>');
-	const spelled = arg(ctx, 1, 'the setting');
-	const text = arg(ctx, 2, 'the value');
-	const client = await ctx.client();
-	const setting = find(await client.request('settings/list', {}), spelled);
-	const value = parse(setting, text);
-	const key = setting.spec.key;
-	let confirmedByPerson = false;
-	if (setting.spec.dangerous && value !== setting.spec.default) {
-		const command = `ev3 config set ${cliKey(key)} ${String(value)}`;
-		const warning = key === 'accessMode' && value === 'full'
-			? 'Switch access mode to full? Extensions using the cockpit may then change any file on the brick and run shell commands on it, until the cockpit daemon ends.'
-			: `Change ${cliKey(key)} to ${String(value)}? It widens what extensions may do on a brick.`;
-		if (!await ctx.confirmer.confirm({ text: warning, refusal: settingRefusal(command), command })) {
-			return { value: { changed: false, setting }, human: `Not changed: ${cliKey(key)} stays ${String(setting.value)}.`, exitCode: ExitCode.Failure };
-		}
-		confirmedByPerson = true;
-	}
-	const result = await client.request('settings/set', { key, value, ...(confirmedByPerson ? { confirmedByPerson } : {}) });
-	return { value: result, human: `${cliKey(key)} = ${String(result.value)}` };
+	const spec = settingSpec(arg(ctx, 1, 'the setting'));
+	const value = parseSettingValue(spec, arg(ctx, 2, 'the value'));
+	const result = await (await ctx.client()).request('settings/set', { key: spec.key, value });
+	return { value: result, human: `${spec.cliKey} = ${String(result.value)}` };
 }
 
 const config: Command = {

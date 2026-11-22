@@ -1,250 +1,125 @@
 /**
- * The arena scenario with a real cable: USB carries the traffic, Bluetooth stands by, the
- * cable is pulled, traffic moves to Bluetooth, the cable goes back in, traffic returns to USB.
+ * Reconnect after a pulled USB cable, through the native daemon's surface, recorded. Needs a
+ * person at the brick; every step is one instruction, announced with a beep.
  *
- *   node scripts/cable-pull-probe.js <brickName>
+ *   node scripts/cable-pull-probe.js --daemon <ev3-cockpitd> --brick <NAME> --out <dir>
+ *        [--state-root <dir>]
  *
- * Needs a person at the brick. Signals, all from the PC speaker:
- *   three short high beeps -> pull the USB cable out of the brick
- *   one long low beep      -> plug it back in
+ * Starts the daemon on a private test channel in record mode over USB alone (`--mode record
+ * --record-dir <out>/usb-cable-pull-<brick> --transports usb`; see scripts/hardware-scenario.js,
+ * whose client and daemon handling it uses, and which must lie beside it). Then:
  *
- * `dual-channel-probe.js` showed a brick tolerates USB and Bluetooth open together, but closed
- * USB in software. A pulled cable is a different event: the device leaves the bus under an
- * open handle. What this measures:
- *   - how long until the USB link reports the loss, and as what error,
- *   - whether the standby Bluetooth link misses anything while that happens,
- *   - how long until the brick is back on the bus after plugging in, and the reopen time.
+ *   1. the brick is found and connected, and its battery voltage subscribed every 500 ms, so
+ *      there is traffic on the link when the cable goes;
+ *   2. three beeps: PULL the USB cable out of the brick. The probe waits up to 60 s for the
+ *      daemon to report the brick's USB channel gone;
+ *   3. one long beep: PLUG the cable back in. The probe waits up to 60 s for `bricks/reconnected`:
+ *      the client never let go of the brick, so the daemon connects it again by itself;
+ *   4. `bricks/info` answers again and telemetry carries on; the subscription is cancelled, the
+ *      brick disconnected and the daemon ended with `daemon/exit`.
  *
- * Read-only on the brick (`info` only), through the shipped providers. The traffic model is
- * the one plan D2 proposes: one channel carries the traffic, the other gets a heartbeat.
+ * It prints how long the daemon took to notice the loss and to bring the brick back. The recording
+ * is a fixture candidate only after the identifier search every recording goes through.
  */
 
 'use strict';
 
-const path = require('path');
-const { spawn } = require('child_process');
-const REPO = path.resolve(__dirname, '..');
-
-const Module = require('module');
-const originalResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, ...rest) {
-	if (request === 'vscode') { return path.join(REPO, 'src/test/vscodeStub.cjs'); }
-	return originalResolve.call(this, request, ...rest);
-};
-
-const out = (dir) => path.join(REPO, 'out', 'core', dir);
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const {
-	UsbTransportProvider, BtTransportProvider, BtWinsockAdapter, BtConnectionQueue,
-} = require(out('transports'));
-const { encodeEv3Packet, decodeEv3Packet } = require(out('protocol/ev3Packet'));
-const { buildCommand } = require(out('protocol/ev3Commands'));
-const { parseResponse } = require(out('protocol/ev3Responses'));
-const { makeBrickKey } = require(out('contracts/brickKey'));
-const { Transport } = require(out('contracts/enums'));
+	connectClient, startDaemon, endDaemon, findBrick, say, brief, wait, beep,
+} = require('./hardware-scenario.js');
 
-const target = (process.argv[2] ?? '').toLowerCase();
-const TRAFFIC_MS = 250;
-const HEARTBEAT_MS = 1000;
-const COMMAND_TIMEOUT_MS = 2000;
-const BEFORE_PULL_MS = 8000;
-const PULL_WAIT_MS = 30000;
-const BT_ONLY_MS = 8000;
-const REPLUG_WAIT_MS = 40000;
-const AFTER_REPLUG_MS = 8000;
+/** How often the battery is read while the cable goes and comes back. */
+const TRAFFIC_MS = 500;
+/** How long each instruction waits for what it asks for. */
+const STEP_MS = 60_000;
 
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const t0 = Date.now();
-const now = () => Date.now() - t0;
-const log = (line) => console.log(`${String(now()).padStart(6)} ms  ${line}`);
-
-/** Beeps without blocking the event loop, so the traffic keeps its pace. */
-function beep(pattern) {
-	const script = pattern.map(([hz, ms]) => `[console]::beep(${hz},${ms})`).join(';');
-	spawn('powershell', ['-NoProfile', '-Command', script], { stdio: 'ignore', windowsHide: true });
+function parse(argv) {
+	const args = {};
+	for (let i = 0; i < argv.length; i++) {
+		if (['--daemon', '--brick', '--out', '--state-root'].includes(argv[i])) { args[argv[i].slice(2)] = argv[++i]; } else { throw new Error(`unexpected argument ${argv[i]}`); }
+	}
+	return args;
 }
 
-function link(name, provider, key, counterBase) {
-	let counter = 0;
-	return {
-		name,
-		async info(expectedName) {
-			counter = (counter + 1) % 0x1000;
-			const id = counterBase + counter;
-			const { type, payload } = buildCommand({ kind: 'info' });
-			const sentAt = Date.now();
-			try {
-				const reply = await provider.sendPacket(key, encodeEv3Packet(id, type, payload), {
-					expectedMessageCounter: id,
-					timeoutMs: COMMAND_TIMEOUT_MS,
-				});
-				const info = parseResponse({ kind: 'info' }, decodeEv3Packet(reply));
-				const ok = info.displayName === expectedName;
-				return { at: now(), link: name, ok, rttMs: Date.now() - sentAt, error: ok ? undefined : `answered as "${info.displayName}"` };
-			} catch (error) {
-				return { at: now(), link: name, ok: false, rttMs: Date.now() - sentAt, error: String((error && error.message) || error) };
-			}
-		},
-	};
-}
-
-function summary(label, samples) {
-	const ok = samples.filter((s) => s.ok);
-	const rtts = ok.map((s) => s.rttMs).sort((a, b) => a - b);
-	const p = (q) => (rtts.length ? rtts[Math.min(rtts.length - 1, Math.floor(q * rtts.length))] : '-');
-	const failures = samples.filter((s) => !s.ok);
-	console.log(`  ${label.padEnd(34)} ${ok.length}/${samples.length} ok  p50 ${p(0.5)} ms  p95 ${p(0.95)} ms  max ${rtts.length ? rtts[rtts.length - 1] : '-'} ms`
-		+ (failures.length ? `   failures: ${[...new Set(failures.map((f) => f.error))].join(' | ')}` : ''));
+/** CCC's USB channel state in a brick list, or undefined when it is not listed on USB. */
+function usbState(bricks, name) {
+	const brick = (bricks ?? []).find((b) => b.name.toLowerCase() === name.toLowerCase());
+	return brick?.channels?.find((ch) => ch.transport === 'usb')?.state;
 }
 
 async function main() {
-	const usb = new UsbTransportProvider({ log: { info: () => {}, warn: () => {} } });
-	const queue = new BtConnectionQueue();
-	const bt = new BtTransportProvider({
-		backends: new Map([['winsock', (mac) => new BtWinsockAdapter({ mac })]]),
-		connectionQueue: queue,
-	});
-
-	const scan = await usb.discover();
-	const found = scan.items.find((item) => item.displayName.toLowerCase() === target);
-	if (!target || !found) {
-		console.error(`Name a brick on USB. Seen: ${scan.items.map((i) => i.displayName).join(', ') || '(nothing)'}`);
-		process.exitCode = 1;
-		return;
+	const args = parse(process.argv.slice(2));
+	if (!args.daemon || !args.brick || !args.out) {
+		process.stderr.write('usage: node scripts/cable-pull-probe.js --daemon <ev3-cockpitd> --brick <NAME> --out <dir> [--state-root <dir>]\n');
+		return 64;
 	}
-	const hex = found.brickKey.split(':').pop();
-	const mac = (hex.match(/../g) ?? []).join(':').toUpperCase();
-	const usbKey = found.brickKey;
-	const btKey = makeBrickKey(Transport.BT, mac);
-	const U = link('usb', usb, usbKey, 0x1000);
-	const B = link('bt', bt, btKey, 0x2000);
-	const name = found.displayName;
+	const name = `usb-cable-pull-${args.brick.toLowerCase()}`;
+	const stateParent = args['state-root'] ?? path.join(os.homedir(), 'ev3rec', 'state');
+	fs.mkdirSync(stateParent, { recursive: true, mode: 0o700 });
+	const stateRoot = fs.mkdtempSync(path.join(stateParent, 'run-'));
+	const daemon = await startDaemon(path.resolve(args.daemon), stateRoot,
+		['--mode', 'record', '--record-dir', path.resolve(args.out, name), '--transports', 'usb']);
+	const { client } = await connectClient(daemon);
+	const c = {
+		daemon, client, brick: args.brick, transport: 'usb', results: {},
+		async call(method, params) {
+			const result = await client.call(method, params);
+			say(`${method} ${brief(params)} -> ${brief(result)}`);
+			return result;
+		},
+	};
+	let failure;
+	try {
+		await findBrick(c);
+		await c.call('bricks/connect', { brick: c.brick });
+		const updates = [];
+		client.on((m) => { if (m.method === 'telemetry/update') { updates.push(Date.now()); } });
+		const subscription = await c.call('telemetry/subscribe', {
+			brick: c.brick, request: { rows: ['system.battery.voltage'], intervalMs: TRAFFIC_MS },
+		});
+		await wait(5000);
 
-	await usb.connect(usbKey);
-	log(`USB open to ${name}`);
-	for (let attempt = 1; ; attempt += 1) {
-		try {
-			await bt.connect(btKey);
-			log(`Bluetooth open (attempt ${attempt})`);
-			break;
-		} catch (error) {
-			log(`Bluetooth open attempt ${attempt} failed: ${(error && error.message) || error}`);
-			await bt.disconnect(btKey).catch(() => {});
-			if (attempt >= 3) { throw new Error('Bluetooth would not open; nothing to measure.'); }
-		}
+		beep(); beep(); beep();
+		say('>>> PULL the USB cable out of the brick now.');
+		const pulledAt = Date.now();
+		const gone = await client.until((m) => m.method === 'bricks/changed'
+			&& usbState(m.params?.bricks, c.brick) !== 'connected', STEP_MS);
+		if (!gone) { throw new Error('the daemon did not report the USB channel gone within 60 s; was the cable pulled?'); }
+		c.results.lossReportedMs = Date.now() - pulledAt;
+		say(`USB channel ${usbState(gone.params.bricks, c.brick) ?? 'no longer listed'} after ${c.results.lossReportedMs} ms`);
+		await wait(5000);
+
+		beep();
+		say('>>> PLUG the USB cable back into the brick now.');
+		const pluggedAt = Date.now();
+		const back = await client.until((m) => m.method === 'bricks/reconnected', STEP_MS);
+		if (!back) { throw new Error('the brick was not connected again within 60 s of the instruction'); }
+		c.results.backMs = Date.now() - pluggedAt;
+		say(`connected again ${c.results.backMs} ms after the instruction`);
+
+		const before = updates.length;
+		await c.call('bricks/info', { brick: c.brick });
+		await wait(3000);
+		c.results.telemetryAfter = updates.length - before;
+		say(`telemetry updates in the 3 s after the reconnect: ${c.results.telemetryAfter}`);
+		await c.call('subscriptions/cancel', { subscriptionId: subscription.subscriptionId });
+		await c.call('bricks/disconnect', { brick: c.brick });
+	} catch (error) {
+		failure = error;
 	}
-
-	const samples = { before: [], pull: [], btOnly: [], replug: [], after: [] };
-	let phase = 'before';
-	let traffic = U;
-	let standby = B;
-	let lastHeartbeat = 0;
-	let running = true;
-
-	// One loop: the traffic channel every TRAFFIC_MS, the standby channel every HEARTBEAT_MS.
-	const loop = (async () => {
-		while (running) {
-			const tickStart = Date.now();
-			const jobs = [traffic.info(name)];
-			if (standby && Date.now() - lastHeartbeat >= HEARTBEAT_MS) {
-				lastHeartbeat = Date.now();
-				jobs.push(standby.info(name));
-			}
-			for (const s of await Promise.all(jobs)) {
-				samples[phase].push(s);
-				if (!s.ok) { log(`${s.link} FAIL after ${s.rttMs} ms: ${s.error}`); }
-			}
-			await wait(Math.max(0, TRAFFIC_MS - (Date.now() - tickStart)));
-		}
-	})();
-
-	await wait(BEFORE_PULL_MS);
-
-	// ── pull ─────────────────────────────────────────────────────
-	phase = 'pull';
-	log('>>> PULL the USB cable now (three high beeps)');
-	beep([[1500, 150], [1500, 150], [1500, 150]]);
-	const pullSignalAt = now();
-	const deadline = Date.now() + PULL_WAIT_MS;
-	let usbLostAt;
-	while (Date.now() < deadline) {
-		const usbFail = samples.pull.find((s) => s.link === 'usb' && !s.ok);
-		if (usbFail) { usbLostAt = usbFail.at; break; }
-		await wait(50);
-	}
-	if (usbLostAt === undefined) {
-		log('USB never failed within the window -- the cable was not pulled. Stopping.');
-		running = false;
-		await loop;
-		return;
-	}
-	const firstFail = samples.pull.find((s) => s.link === 'usb' && !s.ok);
-	const lastOk = [...samples.before, ...samples.pull]
-		.filter((s) => s.link === 'usb' && s.ok && s.at < firstFail.at).pop();
-	// The signal-to-failure time includes the walk to the brick; this gap does not.
-	const detectionGapMs = lastOk ? firstFail.at - lastOk.at : undefined;
-	log(`USB loss reported ${usbLostAt - pullSignalAt} ms after the signal (${detectionGapMs} ms after `
-		+ `the last good USB reply, failing call took ${firstFail.rttMs} ms): ${firstFail.error}`);
-
-	// Fail over: Bluetooth carries the traffic, nothing stands by.
-	traffic = B;
-	standby = undefined;
-	phase = 'btOnly';
-	await usb.disconnect(usbKey).catch((e) => log(`USB close after loss: ${(e && e.message) || e}`));
-	log('traffic on Bluetooth');
-	await wait(BT_ONLY_MS);
-
-	// ── replug ───────────────────────────────────────────────────
-	phase = 'replug';
-	log('>>> PLUG the USB cable back in (one long low beep)');
-	beep([[600, 900]]);
-	const plugSignalAt = now();
-	let backOnBusAt;
-	const replugDeadline = Date.now() + REPLUG_WAIT_MS;
-	while (Date.now() < replugDeadline) {
-		const again = await usb.discover().catch(() => ({ items: [] }));
-		if (again.items.some((i) => i.brickKey === usbKey)) { backOnBusAt = now(); break; }
-		await wait(250);
-	}
-	if (backOnBusAt === undefined) {
-		log('The brick did not come back on USB within the window.');
-	} else {
-		log(`brick back on the USB bus ${backOnBusAt - plugSignalAt} ms after the signal`);
-		const openAt = Date.now();
-		try {
-			await usb.connect(usbKey);
-			log(`USB reopened in ${Date.now() - openAt} ms; traffic back on USB, Bluetooth stands by`);
-			standby = B;
-			traffic = U;
-		} catch (error) {
-			log(`USB reopen failed: ${(error && error.message) || error}`);
-		}
-	}
-	phase = 'after';
-	await wait(AFTER_REPLUG_MS);
-	running = false;
-	await loop;
-
-	console.log(`\n${name}: summary`);
-	const pick = (list, l) => list.filter((s) => s.link === l);
-	summary('USB traffic before the pull', pick(samples.before, 'usb'));
-	summary('BT standby before the pull', pick(samples.before, 'bt'));
-	summary('USB while being pulled', pick(samples.pull, 'usb'));
-	summary('BT while USB was being pulled', pick(samples.pull, 'bt'));
-	summary('BT carrying traffic, no cable', [...pick(samples.btOnly, 'bt'), ...pick(samples.replug, 'bt')]);
-	summary('USB traffic after replug', pick(samples.after, 'usb'));
-	summary('BT standby after replug', pick(samples.after, 'bt'));
-	console.log(`  USB loss detected:  ${usbLostAt - pullSignalAt} ms after the pull signal`);
-	console.log(`  back on USB bus:    ${backOnBusAt === undefined ? 'no' : `${backOnBusAt - plugSignalAt} ms after the plug signal`}`);
-
-	await bt.disconnect(btKey).catch(() => {});
-	await usb.disconnect(usbKey).catch(() => {});
-	queue.dispose?.();
-	bt.dispose?.();
-	usb.dispose?.();
+	const outcome = await endDaemon(daemon, client).catch((error) => ({ error }));
+	client.close();
+	say(`results: ${brief(c.results)}`);
+	if (failure) { say(`FAILED: ${failure.message}`); }
+	if (outcome.error) { say(`FAILED to end the daemon: ${outcome.error.message}`); return 1; }
+	say(`daemon exited with ${outcome.code ?? outcome.signal}${daemon.stderr().trim() ? `: ${daemon.stderr().trim()}` : ''}`);
+	return failure || outcome.code !== 0 ? 1 : 0;
 }
 
-const keepAlive = setInterval(() => { /* BtConnectionQueue unrefs its timer */ }, 1000);
-main().then(
-	() => { clearInterval(keepAlive); process.exit(process.exitCode ?? 0); },
-	(error) => { clearInterval(keepAlive); console.error(error); process.exit(1); }
-);
+main().then((code) => process.exit(code), (error) => {
+	process.stderr.write(`${error?.stack ?? error}\n`);
+	process.exit(1);
+});

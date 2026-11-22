@@ -10,9 +10,9 @@
 
 import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
-import { EventEmitter, setListenerErrorHandler } from '../../core/events';
+import { NativeCockpitClient } from '../../client/nativeClient';
 import { observeEmitter } from '../../test/emitterScenarios';
-import { CockpitClient } from '../../client';
+import { EventEmitter, setListenerErrorHandler } from '../events';
 
 const EXTENSION_ID = '99LevelsUp.ev3-cockpit';
 
@@ -24,16 +24,16 @@ interface IntegrationTest {
 
 const tests: IntegrationTest[] = [
 	{
-		name: 'the core\'s EventEmitter delivers as VS Code\'s does',
+		name: 'the extension\'s EventEmitter delivers as VS Code\'s does',
 		fn: () => {
 			// Both emitters run the same scenarios here, where the real one exists. Listener errors
-			// are collected on the core side; VS Code's go to its own error path.
+			// are collected on the extension's side; VS Code's go to its own error path.
 			const errors: unknown[] = [];
 			const previous = setListenerErrorHandler((error) => errors.push(error));
 			try {
 				const vscodeSeen = observeEmitter(() => new vscode.EventEmitter());
-				const coreSeen = observeEmitter(() => new EventEmitter());
-				assert.deepEqual(coreSeen, vscodeSeen);
+				const ownSeen = observeEmitter(() => new EventEmitter());
+				assert.deepEqual(ownSeen, vscodeSeen);
 			} finally {
 				setListenerErrorHandler(previous);
 			}
@@ -69,7 +69,7 @@ const tests: IntegrationTest[] = [
 		},
 	},
 	{
-		name: 'activation exports nothing: add-ons use the client library (KTD18)',
+		name: 'activation exports nothing: add-ons use the client library',
 		fn: async () => {
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);
 			assert.ok(ext);
@@ -77,28 +77,29 @@ const tests: IntegrationTest[] = [
 		},
 	},
 	{
-		name: 'the extension starts its own daemon on simulated bricks, which lists and connects a brick (U11)',
+		name: 'the extension starts its own native daemon replaying a recorded brick, which lists and connects it',
 		fn: async () => {
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);
 			assert.ok(ext);
 			await ext.activate();
 			// The test host's channel, as the extension names it; this suite runs in the same process.
-			// The extension starts it as it activates; this client cannot start one, so it waits for it.
-			let client: CockpitClient | undefined;
+			// The extension starts the daemon as it activates; an add-on carries none, so it waits for it.
+			let client: NativeCockpitClient | undefined;
 			for (const until = Date.now() + 30_000; !client;) {
 				try {
-					client = await CockpitClient.connect({ name: 'integration test', kind: 'addon', version: '0.0.0', channel: `test-${process.pid}` });
+					client = await NativeCockpitClient.connect({ name: 'integration test', kind: 'addon', version: '0.0.0', channel: `test-${process.pid}`, reconnect: false });
 				} catch (error) {
 					if (Date.now() > until) { throw error; }
 					await new Promise((resolve) => setTimeout(resolve, 250));
 				}
 			}
 			try {
-				const bricks = await client.request('bricks/list', { waitForDiscovery: true });
-				assert.ok(bricks.length > 0, 'the simulated bricks are not listed');
+				assert.equal(client.daemon.mode, 'replay', 'the test host must never run a daemon on real hardware');
+				const { bricks } = await client.request('bricks/list', { waitForDiscovery: true });
+				assert.deepEqual(bricks.map((b) => b.name), ['AAA'], 'the recorded brick is not listed');
 				const connected = await client.request('bricks/connect', { brick: bricks[0].brickId });
 				assert.equal(connected.connected, true);
-				assert.equal(await client.request('settings/accessMode', {}), 'safe');
+				assert.equal((await client.request('settings/accessMode', {})).mode, 'safe');
 			} finally {
 				client.dispose();
 			}

@@ -1,0 +1,290 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Reports",
+  "description": "What forgetting a brick, clearing its Bluetooth list and repairing a one-sided pairing did, part by part. Outcomes carry codes and the raw error text, not sentences: the wording belongs to the client that shows them. Brick keys (over, channel) are strings of the form <transport>:<brickId>.",
+  "definitions": {
+    "PairingRemoval": {
+      "description": "One channel's operating-system pairing. Only channels whose provider can forget get one, so a brick known over USB alone has none.",
+      "oneOf": [
+        {
+          "description": "Removed, or already gone, which counts as removed.",
+          "type": "object",
+          "required": ["status", "channel"],
+          "properties": {
+            "status": { "const": "removed" },
+            "channel": { "type": "string" }
+          }
+        },
+        {
+          "description": "The provider refused; reason carries the operating system's own words.",
+          "type": "object",
+          "required": ["status", "channel", "reason"],
+          "properties": {
+            "status": { "const": "refused" },
+            "channel": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "BrickSideSkip": {
+      "description": "Why nothing was removed from the brick's list. radio-name-unknown: this computer's Bluetooth name is unknown, and it is the only key to its entry. not-reachable: no channel to the brick was connected, and none could be opened. list-unreadable: the brick's list could not be read. no-match: the list holds no entry named exactly as this computer; the report's peers has the names. error: something else failed; detail has the error, and the other parts still ran.",
+      "type": "string",
+      "enum": ["radio-name-unknown", "not-reachable", "list-unreadable", "no-match", "error"]
+    },
+    "BrickSideOutcome": {
+      "description": "This computer's entry on the brick's own Bluetooth list. Only a list read back afterwards proves anything: the firmware's removal handler sets no status, so its reply says only that the brick answered.",
+      "oneOf": [
+        {
+          "description": "The list read back afterwards holds one entry of that name fewer. The firmware removes only the first entry whose name matches, so a brick that held the name twice still holds it once: remaining counts those left, and is absent when none is.",
+          "type": "object",
+          "required": ["status", "name", "over"],
+          "properties": {
+            "status": { "const": "confirmed" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "remaining": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "description": "Sent, and nothing shows whether it took: the removal cut the Bluetooth link it went over before any reply, the reply timed out, or the list could not be read back. detail is the error that ended it.",
+          "type": "object",
+          "required": ["status", "name", "over", "detail"],
+          "properties": {
+            "status": { "const": "sent" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "description": "The list read back holds as many entries of that name as before (the firmware runs a removal only while its Bluetooth is on and idle), or the brick rejected the command.",
+          "type": "object",
+          "required": ["status", "name", "over", "detail"],
+          "properties": {
+            "status": { "const": "failed" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "description": "Nothing was removed from the brick's list.",
+          "type": "object",
+          "required": ["status", "reason"],
+          "properties": {
+            "status": { "const": "skipped" },
+            "reason": { "$ref": "#/definitions/BrickSideSkip" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "MemoryOutcome": {
+      "description": "The cockpit's own memory of the brick: the list, discovery, Bluetooth presence.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status"],
+          "properties": { "status": { "const": "cleared" } }
+        },
+        {
+          "description": "A layer failed to forget; the others still did.",
+          "type": "object",
+          "required": ["status", "detail"],
+          "properties": {
+            "status": { "const": "failed" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "ForgetResidue": {
+      "description": "A record of a forgotten brick that outlives the forget. Each provider names its own (a registry key, a BlueZ path), so a client never needs to know which operating system it came from.",
+      "type": "object",
+      "required": ["location", "reason"],
+      "properties": {
+        "location": { "type": "string", "description": "Where the record is, exactly enough for a user to find it." },
+        "reason": { "type": "string", "description": "One line on why it stays: who owns it, or what ends it." }
+      }
+    },
+    "ForgetReport": {
+      "description": "What forgetting a brick did. A forget runs every part even when one fails, and each part reports its own outcome.",
+      "type": "object",
+      "required": ["brickId", "brickSide", "pairing", "memory", "residue"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "brickSide": { "$ref": "#/definitions/BrickSideOutcome" },
+        "peers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The names on the brick's Bluetooth list as read before any removal, untrimmed; absent when the list was not read."
+        },
+        "pairing": { "type": "array", "items": { "$ref": "#/definitions/PairingRemoval" } },
+        "memory": { "$ref": "#/definitions/MemoryOutcome" },
+        "residue": { "type": "array", "items": { "$ref": "#/definitions/ForgetResidue" } }
+      }
+    },
+    "ClearedEntry": {
+      "description": "How one entry of the brick's list ended when the list was cleared, one per entry read, in the list's order. Entries are told apart only by name.",
+      "oneOf": [
+        {
+          "description": "The list read back after its removal held one entry of that name fewer.",
+          "type": "object",
+          "required": ["status", "name"],
+          "properties": {
+            "status": { "const": "confirmed" },
+            "name": { "type": "string" }
+          }
+        },
+        {
+          "description": "Sent, and nothing shows whether it took: the link it went over was lost, or the list could not be read back. detail is the error that ended it.",
+          "type": "object",
+          "required": ["status", "name", "detail"],
+          "properties": {
+            "status": { "const": "sent" },
+            "name": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "description": "Still on the brick: the list read back still holds it, the brick rejected it, or it was never sent.",
+          "type": "object",
+          "required": ["status", "name", "detail"],
+          "properties": {
+            "status": { "const": "failed" },
+            "name": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "description": "Its name is empty or blank, and a removal is addressed only by name; the firmware reads an empty one as the first entry with a name, so none is sent.",
+          "type": "object",
+          "required": ["status", "name", "reason"],
+          "properties": {
+            "status": { "const": "not-removable" },
+            "name": { "type": "string" },
+            "reason": { "type": "string", "enum": ["blank-name"] }
+          }
+        }
+      ]
+    },
+    "ClearSkip": {
+      "description": "Why nothing was removed from the brick's list. not-reachable: no channel to the brick was connected, and none could be opened. list-unreadable: the list could not be read. nothing-to-remove: the list was empty, or held only entries without a name. radio-name-unknown: only Bluetooth reaches the brick, this computer's Bluetooth name is unknown, and the list does not mark exactly one entry connected, so nothing tells which entry holds the link. link-entry-unknown: only Bluetooth reaches the brick, no entry carries this computer's Bluetooth name, and the list does not mark exactly one entry connected. duplicate-link-entry: only Bluetooth reaches the brick, and the name of this computer's entry is held more than once, so removing it could cut the link before the other copy is sent.",
+      "type": "string",
+      "enum": ["not-reachable", "list-unreadable", "nothing-to-remove", "radio-name-unknown", "link-entry-unknown", "duplicate-link-entry"]
+    },
+    "ClearPairingSkip": {
+      "description": "Why this computer's pairing with the brick was left alone. radio-name-unknown: this computer's Bluetooth name is unknown and no entry marked connected stood in for it. not-on-brick: no entry on the brick carried this computer's exact Bluetooth name. not-removed: this computer's entry was on the brick and was not removed. not-paired: this computer's entry went, and the operating system did not list the brick as paired.",
+      "type": "string",
+      "enum": ["radio-name-unknown", "not-on-brick", "not-removed", "not-paired"]
+    },
+    "ClearListReport": {
+      "description": "What clearing a brick's Bluetooth list did: the same family as ForgetReport.",
+      "type": "object",
+      "required": ["brickId", "paired", "entries", "pairing", "residue"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "over": { "type": "string", "description": "The channel the list was read and changed over; absent when none was reached." },
+        "thisComputer": { "type": "string", "description": "This computer's Bluetooth name, the key to its own entry; absent when unknown." },
+        "paired": { "type": "boolean", "description": "Whether this computer was paired with the brick over Bluetooth when the clear began." },
+        "skipped": {
+          "description": "Set when nothing was removed, with why.",
+          "type": "object",
+          "required": ["reason"],
+          "properties": {
+            "reason": { "$ref": "#/definitions/ClearSkip" },
+            "detail": { "type": "string" }
+          }
+        },
+        "peers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The names on the brick's list as read before any removal, untrimmed; absent when not read."
+        },
+        "entries": { "type": "array", "items": { "$ref": "#/definitions/ClearedEntry" } },
+        "left": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The names on the brick's list as last read back after the removals, less the one whose removal counts as sent; absent when the clear stopped before removing anything."
+        },
+        "pairing": { "type": "array", "items": { "$ref": "#/definitions/PairingRemoval" } },
+        "pairingLeft": { "$ref": "#/definitions/ClearPairingSkip" },
+        "memory": { "$ref": "#/definitions/MemoryOutcome" },
+        "residue": { "type": "array", "items": { "$ref": "#/definitions/ForgetResidue" } }
+      }
+    },
+    "RepairRemoval": {
+      "description": "The half of a one-sided pairing the cockpit removed: the operating system's pairing (removed, refused), or this computer's entry on the brick (confirmed, sent, failed).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "channel"],
+          "properties": {
+            "status": { "const": "removed" },
+            "channel": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "channel", "reason"],
+          "properties": {
+            "status": { "const": "refused" },
+            "channel": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "name", "over"],
+          "properties": {
+            "status": { "const": "confirmed" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "remaining": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "name", "over", "detail"],
+          "properties": {
+            "status": { "const": "sent" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "name", "over", "detail"],
+          "properties": {
+            "status": { "const": "failed" },
+            "name": { "type": "string" },
+            "over": { "type": "string" },
+            "detail": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "OneSidedRepair": {
+      "description": "A pairing found broken on one side over USB or TCP, and what the cockpit did about it. When the half was removed, the pairing that follows reports through bricks/pairingStarted and bricks/pairingDone.",
+      "type": "object",
+      "required": ["brickId", "found", "others"],
+      "properties": {
+        "brickId": { "type": "string" },
+        "found": {
+          "type": "string",
+          "enum": ["computer-only", "brick-only"],
+          "description": "computer-only: this computer has the brick paired, and the brick's list lacks this computer's name. brick-only: the brick lists this computer, and this computer does not have it paired."
+        },
+        "removal": { "$ref": "#/definitions/RepairRemoval" },
+        "others": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The brick's other named entries, which clearing the brick's Bluetooth list removes with the rest."
+        },
+        "repeated": { "type": "boolean", "description": "Found again after a repair since the last connect: reported, and nothing done. removal is then absent." }
+      }
+    }
+  }
+}

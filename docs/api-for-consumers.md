@@ -170,7 +170,8 @@ terminal. Setting it back to `safe` is allowed.
 File content never travels as one large message:
 
 - inline base64: `files/write` with `content` up to 4 KiB, `files/read` with `inline: true` up
-  to 64 KiB;
+  to 64 KiB (a larger file is refused with `invalid_request` as soon as the brick says its size,
+  before the rest of it is read, so trying inline first costs one exchange);
 - a local path the daemon reads or writes itself (`fromLocalPath`, `toLocalPath`): the daemon
   runs as the same user on the same computer, so this is the normal way for larger files. The
   path must be absolute: the daemon's working directory is not the client's;
@@ -357,6 +358,93 @@ starts the launcher, in one `programs/deployAndRun` with both files (`skipIfSame
 unchanged binary on the brick). Setting the binary executable, or `ldconfig` for an "install
 ev3lib" action, is a shell command: `shell/run`, which needs full mode. The program state the
 cockpit reports is the launcher's slot, not the native process it started.
+
+## Moving to the native daemon: what changes in the package
+
+The per-user daemon is being rewritten as one native binary, `ev3-cockpitd`, on a contract
+generated from the JSON Schema in `contract/` (`src/contract/generated/`). Until the switch the
+package carries both: everything above still talks to the current daemon, and the native side is
+exported beside it. At the switch the current daemon and its contract leave, and the native side
+becomes the package's only one. No compatibility shim is kept; an add-on moves in one step. The
+names in the "After the switch" column are settled (22.11.2026); the exports in the middle column
+are what the package carries today.
+
+### Exports
+
+| Now (current daemon) | Native daemon, exported now | After the switch |
+|---|---|---|
+| `CockpitClient` | `NativeCockpitClient` | `CockpitClient` is the native client |
+| `export * from '../contract'` (`WireErrorCode`, `models`, `events`, …) | `nativeContract` namespace (`Methods`, `Notifications`, `ParamsOf`, `ResultOf`, `METHODS`, `ERROR_FAMILY`, `CONTRACT_VERSION`, `readClientKind`, `readBuildKind`, every type) | the generated contract is exported at the top level |
+| `clientPaths(options)` → `DaemonPaths` | `nativeChannelFiles(nativeStateRoot(), channel?)` → `{ dir, keyFile, lockFile, channelFile }` | `clientPaths` is gone |
+| `installedLaunch(paths)` → `{ runtime, entry, installRoot, version, electronRunAsNode? }` | `installedNativeLaunch(files)` → `LaunchSpec` `{ binary, sha256, version, buildKind }` | `installedLaunch` is gone |
+| connect option `launch`, `launchArgs` | option `daemon` (a `LaunchSpec`, for the cockpit's own clients only); an add-on passes none | add-ons pass no launch |
+| — | option `buildKind` (`release` by default for an add-on) | |
+| version notices (`VersionNotice`) | `onNotice` gives a string ready to show | |
+| — | `DaemonStartError` with `failure` (see below), `ensureNativeDaemon`, `decideOnDaemon`, `packagedDaemon`, `developmentDaemon`, `DAEMON_MANIFEST`, `nativeInstallFile` | |
+
+`NativeCockpitClient.connect({ name, kind: 'addon', version })` finds the user's daemon and, when
+none runs, starts the one the installed cockpit recorded. It never asks a daemon to exit.
+
+### What reads differently
+
+- **Contract version.** `CONTRACT_VERSION` is an integer that rises only on a breaking change (now
+  2). The hello carries both sides' versions; a daemon on another contract version answers only
+  `daemon/exit`. Where the current client fires a notice ("update EVƎ Cockpit"), the native client
+  refuses to connect with a `DaemonStartError` whose `failure` is `contract_mismatch` and whose
+  message says which side to update.
+- **Results are objects.** `bricks/list` answers `{ bricks }`, `settings/list` `{ settings }`,
+  `settings/accessMode` `{ mode }`, `files/list` `{ entries }`, `files/exists` `{ exists }`;
+  `telemetry/foreground` takes `{ brick? }` (absent for none).
+- **Telemetry runs only on demand.** Connecting a brick starts no telemetry: the daemon reads a
+  brick for a client that shows it (`telemetry/foreground`) or while a subscription asks for
+  rows (`subscribeTelemetry`).
+- **Hold the brick you work with.** A request on a brick nobody connected fails with
+  `not_connected`, and a brick another client holds can go when that client lets it go. Connect it
+  (`bricks/connect`, no `hold`) for as long as you work with it; the library connects it again
+  after a daemon replacement.
+  The library's cached `bricks()`, `settings()` and `accessMode()` read as before.
+- **Errors.** Decide on `error.code` (the generated `ErrorCode`). `data` carries `family`, and
+  `holder`, `candidates` and `command` as before; the class name (`kind`) is gone with the switch.
+- **Questions.** The handler is `onQuestion((question, { signal }) => answer)`. `question.requester`
+  names who asked, `{ name, kind }`, for the kinds a request raises (`forget`,
+  `clearBluetoothList`, `sweep`, `setting`, `restart`); `bluetoothAccess` and `bluetoothCheckAgain`
+  come from the daemon itself. `brickLoan` is gone. Answer `'yes' | 'no' | 'keep'`, or
+  `{ answer, remember: true }` to apply a yes or no to the same question about your client's own
+  later requests, for as long as its connection lasts. `signal` aborts when the daemon withdraws the question.
+  Without a handler every answer is `keep`, which the daemon reads as unanswered.
+- **Reconnects.** As above, with one difference: nothing is handed over between daemons. When the
+  daemon goes, the library waits a moment for a successor (another client replacing the daemon
+  starts one), connects your own bricks again and renews your subscriptions. Bricks held with
+  `ev3 connect` the new daemon connects itself.
+
+### Start failures
+
+`connect` rejects with a `DaemonStartError`. Its `code` is `daemon_unavailable`, so code-based
+handling keeps working; its `failure` says which case it is, and every client tells them apart the
+same way:
+
+| `failure` | What happened |
+|---|---|
+| `missing_binary` | no daemon to start: the cockpit is not installed, or has not recorded its daemon yet |
+| `sha_mismatch` | the binary does not match the SHA-256 its package recorded; nothing was started |
+| `not_private` | the folder of the verified copies can be reached by another account |
+| `smart_app_control` | Windows Smart App Control blocked the unsigned binary; the cockpit cannot run while it is on |
+| `name_held` | the daemon refused to run (its pipe or socket name is held, or it was started elevated) |
+| `lock_held` | another daemon was starting or ending on the channel and none became reachable |
+| `contract_mismatch` | the running daemon speaks another contract version and could not be replaced |
+| `failed` | anything else; the message carries the exit code and the end of the daemon's log |
+
+### `install.json`
+
+| | Now | Native |
+|---|---|---|
+| Where | the current daemon's state root | the native state root, `<state root>/install.json` (`%LOCALAPPDATA%\ev3-cockpit\native` on Windows, `$XDG_STATE_HOME/ev3-cockpit/native` on Linux); a test channel's in `channels/<name>/` |
+| Shape | `{ runtime, entry, installRoot, version, electronRunAsNode? }` | `LaunchSpec`: `{ binary, sha256, version, buildKind }`, schema-typed |
+| Written by | the VS Code extension each time it starts the daemon | the VS Code extension and the `ev3` command of a release build, whenever they connect; whole or not at all, in the user's own state root (mode `0600` on Linux and macOS) |
+| Used | run `entry` with `runtime` | `binary` is never started itself: the client copies it to `bin/<sha256>/` under the state root, checks the copy against `sha256`, and starts that copy |
+
+An add-on reads it through `installedNativeLaunch`; `undefined` means the cockpit is not installed
+(or has not run yet), and `connect` then fails with `missing_binary`.
 
 ## Where the sibling designs differ
 

@@ -1,199 +1,227 @@
 /**
- * The extension's commands run on the daemon through the client library, with the same shapes the
- * commands used when the cockpit ran inside VS Code: a list of bricks that changes while a picker is
- * open, and a brick layer that connects, pairs, forgets and clears (U11). The commands and their
- * tests stay as they were; only what they talk to changed.
+ * The extension's commands run on the native daemon through the client library. The bridge gives
+ * them the daemon's brick list, which changes while a picker is open, and a brick layer whose every
+ * call is a request to the daemon; failures keep their contract code, which the commands decide on.
  *
  * Free of `vscode`, so it can be tested over a real daemon.
  *
- * A forget or a clearing the person confirmed in VS Code is not asked about again: the daemon's
- * question for that brick, from this window's own call, is answered from the confirmation already
- * given. Every other question goes to `askPerson`.
+ * The daemon asks a person before every dangerous action, and it asks the window whose request it
+ * is. A forget, a clearing, a dangerous setting or a restart the person already confirmed in VS Code
+ * is not asked about twice: the daemon's question about that same request, raised by this window,
+ * is answered from the confirmation already given. A question another client's request raised is
+ * never answered that way; it goes to `askPerson`, like every other question.
  */
 
-import type { CockpitClient } from '../client';
-import { ContractError } from '../client/connection';
-import type { ContractBrick, Question, QuestionAnswer } from '../contract/models';
-import {
-	BrickEntry, BrickId, BrickKey, BrickChannelSnapshot, ChannelState, Transport, makeBrickKey,
-} from '../core/contracts';
-import { BrickUnreachableError, ConnectionAbandonedError, NotConnectedError, TimeoutError } from '../core/errors/CockpitError';
-import type { ClearListConfirm, PairingStartedEvent } from '../core/runtime/brickManager';
-import type { ClearListReport, ForgetReport, OneSidedRepair } from '../core/runtime/forgetReport';
-import type { PairingResult } from '../core/transports/btClassicDiscovery';
-import type { BtPairingEvent } from '../core/transports/btPairingHelper';
+import type { NativeCockpitClient, QuestionContext } from '../client/nativeClient';
+import type {
+	ClearListReport, ContractBrick, ForgetResult, OneSidedRepair, PairingProgress, PairingResult, Question, QuestionAnswer,
+	QuestionReply, Requester, SettingScalar, SettingValue,
+} from '../contract/generated';
+import { Disposable, EventEmitter } from './events';
+import type { ClearListConfirm } from './ui/clearBluetoothList';
+import { errorCode } from './ui/commandTypes';
+import type { PairingStartedEvent } from './ui/connectBrick';
 
-interface Disposable { dispose(): void }
+/** The part of the client the bridge uses. */
+export type BridgeClient = Pick<NativeCockpitClient,
+	'bricks' | 'settings' | 'request' | 'on' | 'onBricksChanged' | 'onReconnected' | 'onQuestion' | 'setActiveBrick'>;
 
-const STATE: Record<string, ChannelState> = {
-	available: ChannelState.Available,
-	connected: ChannelState.Connected,
-	lost: ChannelState.Lost,
-};
-
-/** A brick of the daemon's list as the commands' list rows read it. */
-export function toEntry(brick: ContractBrick): BrickEntry {
-	const channels: BrickChannelSnapshot[] = brick.channels.map((c, index) => ({
-		brickKey: makeBrickKey(c.transport as Transport, brick.brickId),
-		transport: c.transport as Transport,
-		priority: brick.channels.length - index,
-		state: STATE[c.state] ?? ChannelState.Lost,
-		lastSeenAt: 0,
-	}));
-	return {
-		brickId: brick.brickId as BrickId,
-		name: { value: brick.name, source: brick.nameConfirmed ? 'brick' : 'fallback', confirmed: brick.nameConfirmed },
-		channels,
-		paired: brick.paired,
-		remembered: false,
-		favorite: false,
-		lastSeenAt: 0,
-	};
+/** A pairing found broken on one side, and whether the daemon is pairing the brick again. */
+export interface OneSidedRepairEvent {
+	readonly repair: OneSidedRepair;
+	readonly pairingAgain: boolean;
 }
 
-/** A daemon failure as the core error the commands tell apart. */
-function asCoreError(error: unknown): unknown {
-	if (!(error instanceof ContractError)) { return error; }
-	switch (error.kind) {
-	case 'BrickUnreachableError': return new BrickUnreachableError(error.message);
-	case 'TimeoutError': return new TimeoutError(error.message);
-	case 'ConnectionAbandonedError': return new ConnectionAbandonedError(error.message);
-	case 'NotConnectedError': return new NotConnectedError(error.message);
-	default: return error;
-	}
-}
-
-async function mapped<T>(work: () => Promise<T>): Promise<T> {
-	try {
-		return await work();
-	} catch (error) {
-		throw asCoreError(error);
-	}
-}
+export type AskPerson = (question: Question, context: QuestionContext) =>
+	QuestionReply | QuestionAnswer | Promise<QuestionReply | QuestionAnswer>;
 
 export interface DaemonBridgeOptions {
+	/** This window as its hello named it: the requester of the questions its own requests raise. */
+	readonly me: Requester;
 	/** Every question the bridge does not answer itself; without it, `keep`. */
-	readonly askPerson?: (question: Question) => Promise<QuestionAnswer> | QuestionAnswer;
+	readonly askPerson?: AskPerson;
+}
+
+/** A question this window's own request is about to raise, and how to answer it. */
+interface Expected {
+	matches(question: Question): boolean;
+	answer(question: Question): boolean | PromiseLike<boolean>;
+}
+
+const sameClient = (a: Requester, b: Requester): boolean => a.name === b.name && a.kind === b.kind;
+
+/** A start failure or a lost daemon as the person reads it, by the failure the client library names. */
+export function startFailureMessage(error: unknown): string {
+	const message = (error instanceof Error ? error.message : String(error)).split('\n')[0];
+	const failure = (error as { failure?: unknown } | null)?.failure;
+	switch (failure) {
+	// These say what happened and what to do in their own words: Smart App Control blocking the
+	// unsigned daemon, a daemon that speaks another contract, a daemon that is not there.
+	case 'smart_app_control':
+	case 'contract_mismatch':
+	case 'missing_binary':
+	case 'sha_mismatch':
+		return `EVƎ Cockpit: ${message}`;
+	default:
+		return `EVƎ Cockpit: the cockpit daemon could not be started — ${message}`;
+	}
+}
+
+/**
+ * The connection to the daemon, made once. A start failure is shown once, and nothing tries again:
+ * a daemon Smart App Control blocks stays blocked, and starting it over and over only repeats the
+ * message.
+ */
+export class CockpitStart<T> {
+	private attempt: Promise<T> | undefined;
+
+	constructor(private readonly connect: () => Promise<T>, private readonly showFailure: (message: string, error: unknown) => void) {}
+
+	/** The connection, made on the first call; every later call has the same outcome. */
+	ready(): Promise<T> {
+		this.attempt ??= Promise.resolve().then(() => this.connect()).catch((error: unknown) => {
+			this.showFailure(startFailureMessage(error), error);
+			throw error;
+		});
+		return this.attempt;
+	}
 }
 
 export class DaemonBridge implements Disposable {
-	private readonly listeners = new Set<() => void>();
-	private readonly pairingListeners = new Set<(event: PairingStartedEvent) => void>();
-	private readonly repairListeners = new Set<(repair: OneSidedRepair) => void>();
-	/** Forgets this window confirmed and is running, by brick. */
-	private readonly confirmedForgets = new Set<string>();
-	/** Clearings running from this window, with the confirmation the command asks. */
-	private readonly clearings = new Map<string, ClearListConfirm>();
+	private readonly listChanged = new EventEmitter<void>();
+	private readonly pairingStarted = new EventEmitter<PairingStartedEvent>();
+	private readonly repaired = new EventEmitter<OneSidedRepairEvent>();
+	/** Questions this window's own confirmed requests are about to raise. */
+	private readonly expected = new Set<Expected>();
+	/** Pairings the daemon runs now, by brick. */
+	private readonly pairings = new Map<string, { progress: EventEmitter<PairingProgress>; settle: (result: PairingResult) => void }>();
 	private readonly subscriptions: Disposable[] = [];
 
-	constructor(private readonly client: CockpitClient, private readonly options: DaemonBridgeOptions = {}) {
-		client.onQuestion((question) => this.answer(question));
-		this.subscriptions.push(client.onBricksChanged(() => { for (const l of [...this.listeners]) { l(); } }));
-		this.subscriptions.push(client.onReconnected(() => { for (const l of [...this.listeners]) { l(); } }));
+	constructor(private readonly client: BridgeClient, private readonly options: DaemonBridgeOptions) {
+		client.onQuestion((question, context) => this.answer(question, context));
+		this.subscriptions.push(client.onBricksChanged(() => this.listChanged.fire()));
+		this.subscriptions.push(client.onReconnected(() => {
+			// A pairing the previous daemon ran ended with it; its progress must not stay up.
+			for (const brickId of [...this.pairings.keys()]) {
+				this.endPairing({ brickId, outcome: 'failed', message: 'The cockpit daemon went while it ran.' });
+			}
+			this.listChanged.fire();
+		}));
 		this.followPairings();
-		this.subscriptions.push(client.on('bricks/oneSidedRepair', (n) => {
-			if (!n.repair) { return; }
-			for (const l of [...this.repairListeners]) { l(n.repair as OneSidedRepair); }
+		this.subscriptions.push(client.on('bricks/oneSidedRepair', ({ brickId, repair }) => {
+			// The daemon announces a pairing it starts after a repair just before the repair itself.
+			this.repaired.fire({ repair, pairingAgain: this.pairings.has(brickId) });
 		}));
 	}
 
 	dispose(): void {
 		for (const s of this.subscriptions.splice(0)) { s.dispose(); }
-		this.listeners.clear();
+		this.client.onQuestion(undefined);
+		this.listChanged.dispose();
+		this.pairingStarted.dispose();
+		this.repaired.dispose();
 	}
 
-	/** The list as the pickers read it. */
-	readonly aggregator = {
-		getDiscoveryList: (): BrickEntry[] => this.client.bricks().map(toEntry),
-		getBrick: (brickId: BrickId): BrickEntry | undefined => {
-			const brick = this.client.bricks().find((b) => b.brickId === brickId);
-			return brick ? toEntry(brick) : undefined;
-		},
-		onListChanged: (listener: () => void): Disposable => {
-			this.listeners.add(listener);
-			return { dispose: () => { this.listeners.delete(listener); } };
-		},
+	/** The brick list as the pickers read it. */
+	readonly list = {
+		bricks: (): readonly ContractBrick[] => this.client.bricks(),
+		brick: (brickId: string): ContractBrick | undefined => this.client.bricks().find((b) => b.brickId === brickId),
+		onListChanged: (listener: () => void): Disposable => this.listChanged.event(listener),
 	};
 
 	/** The brick layer as the commands use it, each call a request to the daemon. */
 	readonly bricks = {
-		isSignedIn: (brickId: BrickId): boolean => this.client.brick(brickId)?.connected === true,
-		signedInBricks: (): BrickId[] => this.client.bricks().filter((b) => b.connected).map((b) => b.brickId as BrickId),
-		signIn: (brickId: BrickId): Promise<void> => mapped(async () => {
-			await this.client.request('bricks/connect', { brick: brickId });
-			await this.client.setActiveBrick(brickId);
-		}),
-		/** Connected already: the daemon tries every channel that is not connected yet. */
-		connectAgain: (brickId: BrickId): Promise<void> => this.bricks.signIn(brickId),
-		/** The daemon resumes a cancelled pairing itself on every connect. */
-		resumePairing: (_brickId: BrickId): void => undefined,
-		routeOf: (brickId: BrickId): BrickKey | undefined => {
-			const brick = this.client.brick(brickId);
-			const channel = brick?.channels.find((c) => c.state === 'connected');
-			return brick && channel ? makeBrickKey(channel.transport as Transport, brick.brickId) : undefined;
+		/** Connects the brick for this window and makes it the active brick. */
+		connect: async (brickId: string): Promise<ContractBrick> => {
+			const brick = await this.client.request('bricks/connect', { brick: brickId });
+			await this.client.setActiveBrick(brick.brickId);
+			return brick;
 		},
-		pair: (brickId: BrickId): Promise<PairingResult> => mapped(async () => {
-			const result = await this.client.request('bricks/pair', { brick: brickId });
-			return { ok: result.paired, ...(result.message ? { reason: result.message } : {}) };
-		}),
-		forget: (brickId: BrickId): Promise<ForgetReport> => mapped(async () => {
-			this.confirmedForgets.add(brickId);
+		pair: (brickId: string): Promise<PairingResult> => this.client.request('bricks/pair', { brick: brickId }),
+		/** Forgets a brick the person confirmed forgetting in VS Code. */
+		forget: (brickId: string): Promise<ForgetResult> => this.expecting({
+			matches: (q) => q.kind === 'forget' && q.brickId === brickId,
+			answer: () => true,
+		}, () => this.client.request('bricks/forget', { brick: brickId })),
+		/** Clears the brick's list once `confirm` says yes to the names the daemon read; undefined when declined. */
+		clearBluetoothList: async (brickId: string, confirm: ClearListConfirm): Promise<ClearListReport | undefined> => {
+			let declined = false;
 			try {
-				const result = await this.client.request('bricks/forget', { brick: brickId });
-				return result.details as ForgetReport;
-			} finally {
-				this.confirmedForgets.delete(brickId);
+				const result = await this.expecting({
+					matches: (q) => q.kind === 'clearBluetoothList' && q.brickId === brickId,
+					answer: async (q) => {
+						if (q.kind !== 'clearBluetoothList') { return false; }
+						const yes = await confirm(q.details ?? [], q.includesThisComputer, q.thisComputer);
+						declined = !yes;
+						return yes;
+					},
+				}, () => this.client.request('bricks/clearBluetoothList', { brick: brickId }));
+				return result.report;
+			} catch (error) {
+				// The person said no: the daemon refuses with `cancelled`, and nothing happened.
+				if (declined && errorCode(error) === 'cancelled') { return undefined; }
+				throw error;
 			}
-		}),
-		clearBluetoothList: (brickId: BrickId, confirm: ClearListConfirm): Promise<ClearListReport | undefined> => mapped(async () => {
-			this.clearings.set(brickId, confirm);
-			try {
-				const result = await this.client.request('bricks/clearBluetoothList', { brick: brickId });
-				return result.details as ClearListReport | undefined;
-			} finally {
-				this.clearings.delete(brickId);
-			}
-		}),
-		onPairingStarted: (listener: (event: PairingStartedEvent) => void): Disposable => {
-			this.pairingListeners.add(listener);
-			return { dispose: () => { this.pairingListeners.delete(listener); } };
 		},
-		onOneSidedRepair: (listener: (repair: OneSidedRepair) => void): Disposable => {
-			this.repairListeners.add(listener);
-			return { dispose: () => { this.repairListeners.delete(listener); } };
+		onPairingStarted: (listener: (event: PairingStartedEvent) => void): Disposable => this.pairingStarted.event(listener),
+		onOneSidedRepair: (listener: (event: OneSidedRepairEvent) => void): Disposable => this.repaired.event(listener),
+	};
+
+	/** The daemon's settings as `EVƎ: Settings` changes them. */
+	readonly settings = {
+		settings: (): readonly SettingValue[] => this.client.settings(),
+		set: (key: string, value: SettingScalar, confirmedHere: boolean): Promise<SettingValue> => {
+			const set = (): Promise<SettingValue> => this.client.request('settings/set', { key, value });
+			return confirmedHere
+				? this.expecting({ matches: (q) => q.kind === 'setting' && q.key === key && q.value === value, answer: () => true }, set)
+				: set();
 		},
 	};
 
-	private async answer(question: Question): Promise<QuestionAnswer> {
-		const brickId = question.brickId;
-		if (question.kind === 'forget' && brickId && this.confirmedForgets.has(brickId)) { return 'yes'; }
-		if (question.kind === 'clearBluetoothList' && brickId) {
-			const confirm = this.clearings.get(brickId);
-			if (confirm) {
-				return (await confirm(question.details ?? [], question.includesThisComputer === true, question.thisComputer)) ? 'yes' : 'no';
-			}
+	/** Asks the daemon to end and be started again, which the person confirmed in VS Code. */
+	restart(): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
+		return this.expecting({ matches: (q) => q.kind === 'restart', answer: () => true },
+			() => this.client.request('daemon/exit', {}));
+	}
+
+	private async expecting<T>(expected: Expected, work: () => Promise<T>): Promise<T> {
+		this.expected.add(expected);
+		try {
+			return await work();
+		} finally {
+			this.expected.delete(expected);
 		}
-		return this.options.askPerson ? this.options.askPerson(question) : 'keep';
+	}
+
+	private async answer(question: Question, context: QuestionContext): Promise<QuestionReply | QuestionAnswer> {
+		const own = 'requester' in question && sameClient(question.requester, this.options.me);
+		const expected = own ? [...this.expected].find((e) => e.matches(question)) : undefined;
+		if (expected) { return (await expected.answer(question)) ? 'yes' : 'no'; }
+		return this.options.askPerson ? this.options.askPerson(question, context) : 'keep';
+	}
+
+	private endPairing(result: PairingResult): void {
+		const running = this.pairings.get(result.brickId);
+		if (!running) { return; }
+		this.pairings.delete(result.brickId);
+		running.settle(result);
+		running.progress.dispose();
 	}
 
 	/** Every pairing the daemon runs, whoever started it, as the event the progress follows. */
 	private followPairings(): void {
-		const running = new Map<string, { emit: (e: BtPairingEvent) => void; settle: (r: PairingResult) => void }>();
 		this.subscriptions.push(this.client.on('bricks/pairingStarted', ({ brickId }) => {
-			const listeners: ((e: BtPairingEvent) => void)[] = [];
-			let settle: (r: PairingResult) => void = () => undefined;
+			// A start for a brick whose last pairing never reported its end: that one is over.
+			this.endPairing({ brickId, outcome: 'cancelled' });
+			const progress = new EventEmitter<PairingProgress>();
+			let settle: (result: PairingResult) => void = () => undefined;
 			const done = new Promise<PairingResult>((resolve) => { settle = resolve; });
-			running.set(brickId, { emit: (e) => { for (const l of listeners) { l(e); } }, settle });
-			const event: PairingStartedEvent = { brickId: brickId as BrickId, done, onEvent: (l) => { listeners.push(l); } };
-			for (const l of [...this.pairingListeners]) { l(event); }
+			this.pairings.set(brickId, { progress, settle });
+			this.pairingStarted.fire({ brickId, done, onProgress: (listener) => { progress.event(listener); } });
 		}));
-		this.subscriptions.push(this.client.on('bricks/pairingEvent', ({ brickId, message }) => {
-			if (!message) { return; }
-			try { running.get(brickId)?.emit(JSON.parse(message) as BtPairingEvent); } catch { /* not an event */ }
+		this.subscriptions.push(this.client.on('bricks/pairingEvent', ({ brickId, progress }) => {
+			this.pairings.get(brickId)?.progress.fire(progress);
 		}));
-		this.subscriptions.push(this.client.on('bricks/pairingDone', ({ brickId, paired, message }) => {
-			running.get(brickId)?.settle({ ok: paired, ...(message ? { reason: message } : {}) });
-			running.delete(brickId);
-		}));
+		this.subscriptions.push(this.client.on('bricks/pairingDone', (result) => this.endPairing(result)));
 	}
 }

@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/channel", "crates/cli", "crates/contract", "crates/daemon", "crates/protocol", "crates/transports", "crates/runtime"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Debug builds keep line tables only, and none for dependencies: full debug info for every
+# test binary and target filled the build disk.
+# What ships: one code unit with whole-program LTO, no symbols. Measured 23.11.2026 on Windows x64:
+# ev3 3055 -> 1936 KB, ev3-cockpitd 7922 -> 6765 KB; a clean build takes about 2.5 min. opt-level
+# stays 3: the cockpit should be fast as well as small. panic stays unwind.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# The SHA-256 of the daemon's 50 MB debug binary is taken three times on every cold start (ev3's
+# copy, its check, the daemon's own build id). Unoptimised, that took about 30 s on an old
+# Linux laptop, past the 15 s a client waits for a daemon; optimised it takes about a second.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3

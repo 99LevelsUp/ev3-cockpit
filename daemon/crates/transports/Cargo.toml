@@ -1,0 +1,43 @@
+[package]
+name = "ev3-transports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+ev3-protocol = { path = "../protocol" }
+rusb = { version = "0.9.4", features = ["vendored"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+socket2 = { version = "0.6.5", features = ["all"] }
+tokio = { version = "1.54.1", features = ["time", "net", "sync", "rt", "macros", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+windows = { version = "0.62.2", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Devices_Bluetooth",
+  "Devices_Enumeration",
+  "Win32_System_Com",
+] }
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinSock",
+  "Win32_Devices_Bluetooth",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-native-basic-udev"] }
+zbus = { version = "6.5.0", default-features = false, features = ["tokio-multithread", "service", "proxy"] }
+futures-core = "0.3.34"
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true

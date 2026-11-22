@@ -1,0 +1,56 @@
+[package]
+name = "ev3-cockpitd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+name = "ev3_cockpitd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ev3-cockpitd"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1.92"
+bytes = "1.12.2"
+ev3-channel = { path = "../channel" }
+ev3-contract = { path = "../contract" }
+ev3-protocol = { path = "../protocol" }
+ev3-runtime = { path = "../runtime" }
+ev3-transports = { path = "../transports" }
+futures-util = { version = "0.3.34", default-features = false, features = ["std", "sink"] }
+getrandom = "0.3.4"
+hmac = "0.12.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }
+tokio-util = { version = "0.7.20", features = ["codec", "rt"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_Debug",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process", "test-util"] }
+
+[build-dependencies]
+serde_json = "1.0.154"
+
+[lints]
+workspace = true

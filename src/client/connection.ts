@@ -3,8 +3,9 @@
  * stream — a named pipe, a unix socket, or a pair of streams in a test.
  *
  * Built on `vscode-jsonrpc`, with three things it does not do on its own:
- * - when the stream closes, every pending request fails at once with `daemon_unavailable`
- *   instead of waiting forever;
+ * - when the stream closes, every pending request fails with `daemon_unavailable` instead of
+ *   waiting forever: at once when this side closes, and when the other side ends the stream, right
+ *   after the answers and notifications it sent before the end have been handled;
  * - a message larger than the cap closes the connection, so a broken or hostile peer cannot make
  *   this process buffer without limit;
  * - a cancelled request is answered with the contract's own `cancelled` error.
@@ -78,6 +79,11 @@ export interface EndpointOptions {
 	readonly onOversize?: (bytes: number) => void;
 }
 
+/** This side's own marker, queued behind the last message the other side sent before it ended. */
+const DRAINED = '$/ev3-cockpit/drained';
+const DRAINED_BODY = JSON.stringify({ jsonrpc: '2.0', method: DRAINED });
+const DRAINED_FRAME = Buffer.from(`Content-Length: ${Buffer.byteLength(DRAINED_BODY)}\r\n\r\n${DRAINED_BODY}`, 'utf8');
+
 /** The parameter a progress-reporting request carries its token in. */
 const PROGRESS_TOKEN = '__progressToken';
 const PROGRESS = new ProgressType<unknown>();
@@ -126,6 +132,19 @@ class FrameGuard extends Transform {
 		}
 		done();
 	}
+
+	/**
+	 * The stream ended: the drain marker goes last, so the reader decodes it after every message
+	 * before it. A stream that ended inside a message has nothing more to drain; it says so instead.
+	 */
+	override _flush(done: TransformCallback): void {
+		if (this.bodyLeft > 0 || this.header.length > 0) {
+			this.emit('truncated');
+		} else {
+			this.push(DRAINED_FRAME);
+		}
+		done();
+	}
 }
 
 /** The error a handler's failure becomes on the wire. */
@@ -165,17 +184,17 @@ export function createEndpoint(stream: Duplex, options: EndpointOptions = {}): E
 	const max = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
 	const guard = new FrameGuard(max, (bytes) => options.onOversize?.(bytes));
 	stream.pipe(guard);
-	const connection: MessageConnection = createMessageConnection(
-		new StreamMessageReader(guard),
-		new StreamMessageWriter(stream),
-	);
+	const connection: MessageConnection = createMessageConnection(new StreamMessageReader(guard), new StreamMessageWriter(stream));
 	let closed = false;
+	/** The other side ended its stream; what it sent before that is still being handled. */
+	let ending = false;
 	const closeListeners: Array<() => void> = [];
 	const inFlight = new Set<AbortController>();
 
 	const shutdown = (): void => {
 		if (closed) { return; }
 		closed = true;
+		ending = true;
 		for (const controller of inFlight) { controller.abort(); }
 		inFlight.clear();
 		// Disposing rejects every pending request at once.
@@ -185,18 +204,28 @@ export function createEndpoint(stream: Duplex, options: EndpointOptions = {}): E
 			try { listener(); } catch { /* a listener's own failure */ }
 		}
 	};
+	// The other side ended its stream. Its last messages may still be decoding or queued: the guard
+	// ends with a marker of this side's own behind them, and the requests still pending fail only
+	// once the marker is handled, after every answer and notification that arrived before the end.
+	const peerGone = (): void => {
+		if (closed || ending) { return; }
+		ending = true;
+		if (!guard.writableEnded) { guard.end(); }
+	};
+	connection.onNotification(DRAINED, shutdown);
+	guard.on('truncated', shutdown);
 	guard.on('error', shutdown);
 	stream.on('error', shutdown);
-	stream.on('close', shutdown);
-	stream.on('end', shutdown);
-	connection.onClose(shutdown);
+	stream.on('close', peerGone);
+	stream.on('end', peerGone);
+	connection.onClose(peerGone);
 	connection.onError(() => { /* the stream's close follows */ });
 	connection.listen();
 
 	return {
-		get closed() { return closed; },
+		get closed() { return closed || ending; },
 		async request<T>(method: string, params?: unknown, requestOptions: RequestOptions = {}): Promise<T> {
-			if (closed) { throw new ContractError(WireErrorCode.DaemonUnavailable, 'The connection is closed.'); }
+			if (closed || ending) { throw new ContractError(WireErrorCode.DaemonUnavailable, 'The connection is closed.'); }
 			const source = new CancellationTokenSource();
 			const abort = (): void => source.cancel();
 			if (requestOptions.signal?.aborted) {

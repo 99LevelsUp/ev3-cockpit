@@ -1,3 +1,7 @@
+# The TypeScript gate: the extension, the ev3 command, the MCP server and the client library.
+# The unit and VS Code host tests start the development build of the native daemon in replay of
+# recorded bricks, so the job builds it first. The daemon's own gate, its release builds and the
+# packages are in native-daemon.yml.
 name: CI
 
 on:
@@ -6,11 +10,14 @@ on:
       - master
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  test_ci:
-    name: Compile + Lint + Unit + Host + Release Gates
+  typescript:
+    name: Compile + Lint + Contract + Unit + Host
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,26 +28,23 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the daemon's build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+
       - name: Install dependencies
         run: npm ci
 
       - name: Audit dependencies
         run: npm audit --audit-level=high --omit=dev
 
-      - name: Run CI release gate suite
-        # Its `npm run package` builds all four bundles: extension, daemon, ev3 command, MCP server.
-        run: npm run test:ci:release
+      - name: Build the development daemon the tests start
+        # A development build: only the release job of native-daemon.yml marks a build as release.
+        run: npm run daemon:build
 
-      - name: The bundled daemon answers the ev3 command on simulated bricks
-        run: node scripts/daemon-smoke.cjs
-
-      - name: Stage the npm packages (nothing is published)
-        # The macOS Bluetooth helper only builds on a Mac; this Windows job stages without it.
-        run: node scripts/package-npm.cjs --skip-build --allow-missing-helpers
-
-      - name: Upload release-gate artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-release-gates
-          path: artifacts/vsix
+      - name: Compile, lint, contract freshness, unit and host tests
+        run: npm run test:ci

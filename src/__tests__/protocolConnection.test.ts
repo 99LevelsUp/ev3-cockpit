@@ -70,6 +70,46 @@ describe('a contract connection', () => {
 		assert.equal(client.closed, true);
 	});
 
+	it('keeps the answers that arrived just before the other side ended the stream', async () => {
+		const [a, b] = duplexPair();
+		const client = createEndpoint(a);
+		// A raw peer that answers every request and ends its side in the same moment, as a daemon
+		// does after it answered daemon/exit.
+		let buffered = '';
+		b.on('data', (chunk: Buffer) => {
+			buffered += chunk.toString('utf8');
+			const match = /Content-Length: (\d+)\r\n\r\n/.exec(buffered);
+			if (!match) { return; }
+			const start = match.index + match[0].length;
+			if (Buffer.byteLength(buffered.slice(start)) < Number(match[1])) { return; }
+			const request = JSON.parse(buffered.slice(start, start + Number(match[1]))) as { id: number };
+			const notice = JSON.stringify({ jsonrpc: '2.0', method: 'news/told', params: { last: true } });
+			const answer = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { accepted: true } });
+			b.write(`Content-Length: ${Buffer.byteLength(notice)}\r\n\r\n${notice}Content-Length: ${Buffer.byteLength(answer)}\r\n\r\n${answer}`);
+			b.end();
+		});
+		const heard: unknown[] = [];
+		client.onNotification('news/told', (params) => heard.push(params));
+		let closedAt = -1;
+		client.onClose(() => { closedAt = heard.length; });
+		assert.deepEqual(await client.request('daemon/exit', {}), { accepted: true });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.deepEqual(heard, [{ last: true }], 'the notification sent before the end is delivered too');
+		assert.equal(client.closed, true);
+		assert.equal(closedAt, 1, 'the connection reports its close after what it had received');
+	});
+
+	it('still fails a request at once when the stream ends without its answer', async () => {
+		const [a, b] = duplexPair();
+		const client = createEndpoint(a);
+		b.once('data', () => { b.end(); });
+		const started = Date.now();
+		await assert.rejects(client.request('never/answered', {}),
+			(error: unknown) => error instanceof ContractError && error.code === WireErrorCode.DaemonUnavailable);
+		assert.ok(Date.now() - started < 1000);
+		assert.equal(client.closed, true);
+	});
+
 	it('closes the connection on a message over the size limit and reports it', async () => {
 		const [a, b] = duplexPair();
 		let oversize = 0;

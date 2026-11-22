@@ -1,12 +1,12 @@
 /**
- * "Disconnect a Brick" with holders (R36): a disconnect drops only this window's hold. When others
+ * "Disconnect a Brick" with holders: a disconnect drops only this window's hold. When others
  * still hold the brick it stays connected, the person is told who holds it, and is offered to
  * disconnect it for everyone.
  *
  * Free of `vscode`: the command hands it a picker and a notification.
  */
 
-import type { ContractBrick } from '../../contract/models';
+import type { ContractBrick } from '../../contract/generated';
 
 export const FOR_EVERYONE_ACTION = 'Disconnect for everyone';
 

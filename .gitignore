@@ -47,3 +47,5 @@ scripts/bench/*.rbf
 
 # The npm packages scripts/package-npm.cjs stages (never published from here).
 /dist/
+
+/daemon/target/

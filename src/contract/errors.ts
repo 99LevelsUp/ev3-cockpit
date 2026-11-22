@@ -8,9 +8,15 @@
  * answered stay distinguishable although both are transport failures.
  */
 
-/** Every code a client may see in `data.code`. */
+import { ERROR_FAMILY, ERROR_FAMILY_NUMBER } from './generated';
+import type { ErrorCode } from './generated';
+
+/**
+ * Every code a client may see in `data.code`: one name for each code of the contract's generated
+ * `ErrorCode`, which the compiler holds this table to, plus `program_cancelled`, which only the
+ * Node daemon raises and which goes with it (U17).
+ */
 export const WireErrorCode = {
-	// Carried over from the cockpit's own errors.
 	TransportFailed: 'transport_failed',
 	ConnectionFailed: 'connection_failed',
 	Timeout: 'timeout',
@@ -29,32 +35,46 @@ export const WireErrorCode = {
 	SubscriptionFailed: 'subscription_failed',
 	ProgramRunning: 'program_running',
 	ProgramNotFound: 'program_not_found',
-	/** Not raised by the daemon's methods: a run or a deployment a stop cancelled ends with `cancelled`. */
-	ProgramCancelled: 'program_cancelled',
 	ModeConflict: 'mode_conflict',
 	AccessDenied: 'access_denied',
-	// New with the daemon.
-	/** Another client holds the brick's write lease; the message names it. */
-	BrickBusy: 'brick_busy',
 	/** A brick name matched several bricks; `data.candidates` lists them. */
 	BrickAmbiguous: 'brick_ambiguous',
 	/** No brick matches the name or id. */
 	BrickNotFound: 'brick_not_found',
+	/** The brick did not answer where it was expected. */
+	BrickUnreachable: 'brick_unreachable',
+	/** The link to the brick dropped during the operation. */
+	LinkLost: 'link_lost',
+	/** The operating system's USB or Bluetooth stack is not there or not working. */
+	BackendUnavailable: 'backend_unavailable',
+	/** The operating system refused the daemon the device. */
+	DevicePermission: 'device_permission',
+	/** Another client holds the brick's write lease; the message names it. */
+	BrickBusy: 'brick_busy',
 	/** The operation needs a person's answer, and the client could not ask one. */
 	NeedsPerson: 'needs_person',
 	/** The daemon is not reachable, could not start, or went away during the call. */
 	DaemonUnavailable: 'daemon_unavailable',
 	/** The daemon went away during a call that changes a brick; whether it took effect is unknown. Do not retry blindly. */
 	OutcomeUnknown: 'outcome_unknown',
+	/** A replay daemon has no recorded reply left for the request: the recording is stale. */
+	ReplayUnmatched: 'replay_unmatched',
 	/** The caller, a stop or the daemon cancelled the operation. */
 	Cancelled: 'cancelled',
 	/** The request was malformed or named something the daemon does not have. */
 	InvalidRequest: 'invalid_request',
 	/** Anything else; the message says what. */
 	Internal: 'internal',
-} as const;
+	/** Raised only by the Node daemon, which goes in U17; the native daemon ends a stopped run with `cancelled`. */
+	ProgramCancelled: 'program_cancelled',
+} as const satisfies Record<string, ErrorCode | 'program_cancelled'>;
 
 export type WireErrorCode = (typeof WireErrorCode)[keyof typeof WireErrorCode];
+
+/** Fails to compile when the contract gains an error code this table has no name for. */
+type UnnamedErrorCode = Exclude<ErrorCode, WireErrorCode>;
+const everyCodeNamed: [UnnamedErrorCode] extends [never] ? true : UnnamedErrorCode = true;
+void everyCodeNamed;
 
 /**
  * The error classes a daemon may name in `data.kind`, one per class the cockpit raises. A class
@@ -102,31 +122,16 @@ export function errorKindOf(className: string | undefined): ErrorKind {
 }
 
 /**
- * The numeric JSON-RPC code for each family. JSON-RPC reserves -32768..-32000 for itself and for
- * the library underneath, so the contract's own codes are positive.
+ * The numeric JSON-RPC code for each family, as the contract defines it. JSON-RPC reserves
+ * -32768..-32000 for itself and for the library underneath, so the contract's own codes are
+ * positive.
  */
-export const WIRE_ERROR_NUMBER = {
-	brick: 1000,
-	lease: 1100,
-	person: 1200,
-	daemon: 1300,
-	cancelled: 1400,
-	request: 1500,
-	internal: 1900,
-} as const;
+export const WIRE_ERROR_NUMBER = ERROR_FAMILY_NUMBER;
 
-/** The numeric family a string code belongs to. */
+/** The numeric family a string code belongs to, from the contract's family table. */
 export function wireErrorNumber(code: WireErrorCode): number {
-	switch (code) {
-	case WireErrorCode.BrickBusy: return WIRE_ERROR_NUMBER.lease;
-	case WireErrorCode.NeedsPerson: return WIRE_ERROR_NUMBER.person;
-	case WireErrorCode.DaemonUnavailable:
-	case WireErrorCode.OutcomeUnknown: return WIRE_ERROR_NUMBER.daemon;
-	case WireErrorCode.Cancelled: return WIRE_ERROR_NUMBER.cancelled;
-	case WireErrorCode.InvalidRequest: return WIRE_ERROR_NUMBER.request;
-	case WireErrorCode.Internal: return WIRE_ERROR_NUMBER.internal;
-	default: return WIRE_ERROR_NUMBER.brick;
-	}
+	const family = code === WireErrorCode.ProgramCancelled ? 'brick' : ERROR_FAMILY[code];
+	return ERROR_FAMILY_NUMBER[family];
 }
 
 /** What `data` carries on every contract error. */

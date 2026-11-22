@@ -1,0 +1,9 @@
+{"format":1,"recorder":1,"scenario":"usb-stale-reply-aaa"}
+{"at_ms":0,"capabilities":{"rejoin_on_evidence_only":false,"supports_forget":false,"supports_pairing":false,"supports_presence":false,"supports_probe":true,"supports_recover":false,"supports_signal_info":false,"supports_telemetry_frames":true},"event":"provider","priority":30,"transport":"usb"}
+{"at_ms":0,"elapsed_ms":53,"event":"discover","outcome":{"ok":{"items":[{"brick_key":"usb:001653F00A0A","connected":false,"display_name":"AAA","favorite":false,"last_seen_at":54,"name_source":"usb-descriptor","presence_state":"available","remembered":false,"transport":"usb"}],"transport":"usb"}},"transport":"usb"}
+{"at_ms":55,"brick_key":"usb:001653F00A0A","elapsed_ms":16,"event":"connect","max_packet_bytes":1024,"outcome":{"ok":{"brick_key":"usb:001653F00A0A","transport":"usb"}},"transport":"usb"}
+{"at_ms":72,"brick_key":"usb:001653F00A0A","elapsed_ms":211,"error":{"code":"timeout","message":"USB send timed out after 200 ms with no matching reply."},"event":"exchange","request_hex":"0c00010000040085822003608660","transport":"usb","via":"session"}
+{"at_ms":284,"brick_key":"usb:001653F00A0A","elapsed_ms":600,"event":"exchange","reply_hex":"0300020002","request_hex":"0600020000000001","transport":"usb","via":"session"}
+{"at_ms":885,"brick_key":"usb:001653F00A0A","elapsed_ms":204,"event":"exchange","request_hex":"0c00030000040085822003608660","transport":"usb","via":"session"}
+{"at_ms":1090,"brick_key":"usb:001653F00A0A","elapsed_ms":606,"event":"exchange","reply_hex":"0300040002","request_hex":"0600040000000001","transport":"usb","via":"session"}
+{"at_ms":1697,"brick_key":"usb:001653F00A0A","elapsed_ms":0,"event":"disconnect","outcome":{"ok":null},"transport":"usb"}

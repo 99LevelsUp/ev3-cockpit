@@ -1,35 +1,35 @@
 /**
- * The "Clear a Brick's Bluetooth List" command (step-3 plan, U8): which bricks it offers, what
- * it asks before removing anything, and what its message says (R15, R16, R19).
+ * The "Clear a Brick's Bluetooth List" command: which bricks it offers, what it asks before
+ * removing anything, and what its message says.
  *
- * The brick layer is a fake that asks the command's confirmation and returns a prepared report;
- * `forgetBrick.test.ts` proves the reports themselves on the real brick layer.
+ * The brick layer is a fake that asks the command's confirmation and returns a prepared report in
+ * the daemon's contract shape.
  */
 
 import assert from 'assert/strict';
 import { describe, it } from 'node:test';
 
-import { BrickEntry, BrickId, ChannelState, Transport, brickIdOf, makeBrickKey } from '../core/contracts';
-import type { BrickKey, ForgetResidue } from '../core/contracts';
-import type { ClearListReport } from '../core/runtime/forgetReport';
+import type { ClearListReport, ContractBrick, ForgetResidue } from '../contract/generated';
 import type { BrickPickRow } from '../vscode/ui/brickPickRows';
 import {
 	clearBrickBluetoothList, clearConfirmation, clearDetails, clearNotification, clearPickRows,
 } from '../vscode/ui/clearBluetoothList';
+import { contractBrick } from './contractBricks';
 
 const CCC_MAC = '00:16:53:F0:0C:0C';
 const ZED_MAC = '00:16:53:00:00:FF';
 const UNP_MAC = '00:16:53:00:00:AA';
 const NEW_MAC = '00:16:53:00:00:B0';
-const bt = (mac: string): BrickKey => makeBrickKey(Transport.BT, mac);
-const usb = (mac: string): BrickKey => makeBrickKey(Transport.USB, mac.replace(/:/g, ''));
-const idOf = (mac: string): BrickId => brickIdOf(bt(mac));
+/** Channel keys as the daemon writes them in a report. */
+const bt = (mac: string): string => `bt:${mac}`;
+const usb = (mac: string): string => `usb:${mac.replace(/:/g, '')}`;
+const idOf = (mac: string): string => mac.replace(/:/g, '');
 const CCC = idOf(CCC_MAC);
-const THIS_PC = 'UCEBNA-PC';
+const THIS_PC = 'HOSTA';
 const LABEL = 'CCC [001653F00C0C]';
 
 const CCC_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\001653f00c0c';
-const WINDOWS_RESIDUE: readonly ForgetResidue[] = [
+const WINDOWS_RESIDUE: ForgetResidue[] = [
 	{
 		location: CCC_KEY,
 		reason: 'Windows keeps this key after unpairing; it is owned by SYSTEM and the cockpit does not change it.',
@@ -40,38 +40,16 @@ const WINDOWS_RESIDUE: readonly ForgetResidue[] = [
 	},
 ];
 
-/** Steps the message must never offer (R6, R11, KD3). */
+/** Steps the message must never offer: it names where a record is, never how to get around what protects it. */
 const FORBIDDEN = /takeown|icacls|ownership|permission|regedit|reboot|restart bthserv|elevat|\bacl\b/i;
 
-function entry(
-	mac: string, name: string,
-	channels: readonly { key: BrickKey; transport: Transport; state: ChannelState }[],
-	flags: { paired: boolean; remembered: boolean },
-): BrickEntry {
-	return {
-		brickId: idOf(mac),
-		name: { value: name, source: 'brick', confirmed: true },
-		channels: channels.map((c, i) => ({ brickKey: c.key, transport: c.transport, priority: 10 - i, state: c.state, lastSeenAt: 1 })),
-		paired: flags.paired,
-		remembered: flags.remembered,
-		favorite: false,
-		lastSeenAt: 1,
-	};
-}
-
 /** CCC on a cable and paired; Zed paired and switched off; Unp on a cable, never paired; New only heard by an inquiry. */
-function theDesk(): BrickEntry[] {
+function theDesk(): ContractBrick[] {
 	return [
-		entry(NEW_MAC, 'New', [{ key: bt(NEW_MAC), transport: Transport.BT, state: ChannelState.Available }],
-			{ paired: false, remembered: false }),
-		entry(ZED_MAC, 'Zed', [{ key: bt(ZED_MAC), transport: Transport.BT, state: ChannelState.Lost }],
-			{ paired: true, remembered: true }),
-		entry(UNP_MAC, 'Unp', [{ key: usb(UNP_MAC), transport: Transport.USB, state: ChannelState.Available }],
-			{ paired: false, remembered: false }),
-		entry(CCC_MAC, 'CCC', [
-			{ key: usb(CCC_MAC), transport: Transport.USB, state: ChannelState.Connected },
-			{ key: bt(CCC_MAC), transport: Transport.BT, state: ChannelState.Available },
-		], { paired: true, remembered: true }),
+		contractBrick(idOf(NEW_MAC), 'New', { bt: 'available' }),
+		contractBrick(idOf(ZED_MAC), 'Zed', { bt: 'lost', paired: true }),
+		contractBrick(idOf(UNP_MAC), 'Unp', { usb: 'available' }),
+		contractBrick(CCC, 'CCC', { usb: 'connected', bt: 'available', paired: true }),
 	];
 }
 
@@ -102,19 +80,18 @@ function command(options: { names?: string[]; confirm?: boolean; result?: ClearL
 	const seen = {
 		rows: undefined as readonly BrickPickRow[] | undefined,
 		confirm: [] as string[],
-		cleared: [] as BrickId[],
+		cleared: [] as string[],
 		info: [] as string[],
 		results: [] as string[],
 		errors: [] as string[],
 		log: [] as string[],
 	};
 	const run = () => clearBrickBluetoothList({
-		aggregator: {
-			getDiscoveryList: () => theDesk(),
-			getBrick: (id) => theDesk().find((b) => b.brickId === id),
+		list: {
+			bricks: () => theDesk(),
+			brick: (id) => theDesk().find((b) => b.brickId === id),
 		},
 		bricks: {
-			isSignedIn: (id) => id === CCC,
 			clearBluetoothList: async (id, confirm) => {
 				seen.cleared.push(id);
 				const names = options.names ?? ['OLD-PC', THIS_PC, 'Zed'];
@@ -132,7 +109,6 @@ function command(options: { names?: string[]; confirm?: boolean; result?: ClearL
 			info: (message: string) => seen.log.push(message),
 			warn: (message: string) => seen.log.push(message),
 			error: (message: string) => seen.log.push(message),
-			debug: () => {},
 		},
 		showInfo: (message) => seen.info.push(message),
 		showResult: (message) => seen.results.push(message),
@@ -141,9 +117,9 @@ function command(options: { names?: string[]; confirm?: boolean; result?: ClearL
 	return { run, seen };
 }
 
-describe('Clear a Brick\'s Bluetooth List — which bricks it offers (R15)', () => {
+describe('Clear a Brick\'s Bluetooth List — which bricks it offers', () => {
 	it('offers bricks reachable now, an unpaired one on a cable too, and not a paired one switched off', () => {
-		const rows = clearPickRows(theDesk(), (id) => id === CCC);
+		const rows = clearPickRows(theDesk());
 		assert.deepEqual(rows.map((r) => r.brickId), [CCC, idOf(UNP_MAC)]);
 		assert.ok(!rows.some((r) => r.brickId === idOf(ZED_MAC)), 'a switched-off brick was offered');
 		assert.ok(!rows.some((r) => r.brickId === idOf(NEW_MAC)),
@@ -155,12 +131,12 @@ describe('Clear a Brick\'s Bluetooth List — which bricks it offers (R15)', () 
 	it('says there is nothing to clear, and opens no picker, when no brick is reachable', async () => {
 		const seen: string[] = [];
 		await clearBrickBluetoothList({
-			aggregator: { getDiscoveryList: () => theDesk().filter((b) => b.name.value === 'Zed'), getBrick: () => undefined },
-			bricks: { isSignedIn: () => false, clearBluetoothList: async () => { throw new Error('called'); } },
+			list: { bricks: () => theDesk().filter((b) => b.name === 'Zed'), brick: () => undefined },
+			bricks: { clearBluetoothList: async () => { throw new Error('called'); } },
 			pick: async () => { throw new Error('the picker opened'); },
 			confirm: async () => true,
 			progress: async (_title, task) => task(),
-			log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+			log: { info: () => {}, warn: () => {}, error: () => {} },
 			showInfo: (m) => seen.push(m),
 			showResult: () => {},
 			showError: (m) => seen.push(m),
@@ -170,19 +146,19 @@ describe('Clear a Brick\'s Bluetooth List — which bricks it offers (R15)', () 
 	});
 });
 
-describe('Clear a Brick\'s Bluetooth List — asking first (R16)', () => {
+describe('Clear a Brick\'s Bluetooth List — asking first', () => {
 	it('shows every name it will remove, says this computer is among them, and offers one Clear action', async () => {
 		const c = command();
 		await c.run();
 		const [message, detail, action] = c.seen.confirm;
 		assert.match(message, /CCC \[001653F00C0C\]/);
-		assert.match(detail, /"OLD-PC", "UCEBNA-PC", "Zed"/);
-		assert.match(detail, /This computer, "UCEBNA-PC", is among them/);
+		assert.match(detail, /"OLD-PC", "HOSTA", "Zed"/);
+		assert.match(detail, /This computer, "HOSTA", is among them/);
 		assert.equal(action, 'Clear');
 	});
 
 	it('says when this computer is not among them, and when its name is unknown', () => {
-		assert.match(clearConfirmation(LABEL, ['OLD-PC'], false, THIS_PC).detail, /"UCEBNA-PC", is not among them/);
+		assert.match(clearConfirmation(LABEL, ['OLD-PC'], false, THIS_PC).detail, /"HOSTA", is not among them/);
 		assert.match(clearConfirmation(LABEL, ['OLD-PC'], false, undefined).detail, /name is unknown/);
 		// Over Bluetooth alone, the entry the brick marks connected stands in for the unknown name.
 		const linked = clearConfirmation(LABEL, ['OLD-PC'], true, undefined).detail;
@@ -190,11 +166,11 @@ describe('Clear a Brick\'s Bluetooth List — asking first (R16)', () => {
 		assert.match(linked, /pairing is removed too/);
 		assert.doesNotMatch(linked, /nothing shows whether/);
 		// The name is known but not on the list: the linked entry stands in, and the text must not
-		// claim the current name is among them (R16).
+		// claim the current name is among them.
 		const renamed = clearConfirmation(LABEL, ['OLD-PC', 'Zed'], true, THIS_PC).detail;
-		assert.match(renamed, /No entry carries this computer's current name, "UCEBNA-PC"/);
+		assert.match(renamed, /No entry carries this computer's current name, "HOSTA"/);
 		assert.match(renamed, /holds its Bluetooth link to this computer/);
-		assert.doesNotMatch(renamed, /"UCEBNA-PC", is among them/);
+		assert.doesNotMatch(renamed, /"HOSTA", is among them/);
 	});
 
 	it('shows nothing and logs nothing when the user declines', async () => {
@@ -214,12 +190,12 @@ describe('Clear a Brick\'s Bluetooth List — asking first (R16)', () => {
 	});
 });
 
-describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () => {
+describe('Clear a Brick\'s Bluetooth List — what the message says', () => {
 	it('three entries over USB, this computer among them, unpaired: every entry, the key, and the menu power-off', () => {
 		const text = details(report());
 		assert.match(text, /over USB/);
 		assert.match(text, /"OLD-PC": removed/);
-		assert.match(text, /"UCEBNA-PC" \(this computer\): removed/);
+		assert.match(text, /"HOSTA" \(this computer\): removed/);
 		assert.match(text, /"Zed": removed/);
 		assert.match(text, /\(BT\): removed/);
 		assert.match(text, /memory of its Bluetooth channel: cleared/);
@@ -243,8 +219,8 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 			],
 		});
 		const text = details(r);
-		assert.match(text, /"UCEBNA-PC" \(this computer\): removal sent, not confirmed\. BT reply timed out\./);
-		assert.match(text, /On the brick: "UCEBNA-PC" may still be in its Bluetooth list/);
+		assert.match(text, /"HOSTA" \(this computer\): removal sent, not confirmed\. BT reply timed out\./);
+		assert.match(text, /On the brick: "HOSTA" may still be in its Bluetooth list/);
 		assert.match(text, /blocks re-pairing with this computer/);
 		assert.match(text, /switched off from its own menu/);
 		assert.match(clearNotification(r, LABEL), /removed 2 of 3 entries.*sent the removal of 1 more without confirmation/);
@@ -296,7 +272,7 @@ describe('Clear a Brick\'s Bluetooth List — what the message says (R19)', () =
 	});
 
 	it('every entry it was shown confirmed gone, but the list read back still holds one: not called empty', () => {
-		// An entry that appeared while the clear ran is not removed unseen (R16), and stays.
+		// An entry that appeared while the clear ran is not removed unseen, and stays.
 		const r = report({
 			peers: ['OLD-PC', 'Zed'], entries: [{ status: 'confirmed', name: 'OLD-PC' }, { status: 'confirmed', name: 'Zed' }],
 			left: ['NEWCOMER'], pairing: [], pairingLeft: 'not-on-brick', memory: undefined, residue: [],

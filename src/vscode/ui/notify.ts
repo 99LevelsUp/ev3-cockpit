@@ -1,5 +1,5 @@
 /**
- * Notifications that are also written to the log (owner, U10 hardware session, 09.11.2026).
+ * Notifications that are also written to the log (the owner, after a hardware session on 09.11.2026).
  *
  * The person at the bench watches the brick's display, not the screen, and a user reporting a
  * problem rarely copies a toast. The log has to say what the person was told, word for word.

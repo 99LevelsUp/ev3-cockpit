@@ -1,22 +1,28 @@
 /**
- * Starts a bundled daemon on simulated bricks and checks that it answers the `ev3` command (U15).
+ * Starts a native daemon as an installed client would and checks that it serves a recorded brick.
  *
- *   node scripts/daemon-smoke.cjs                                   the bundles in out/
- *   node scripts/daemon-smoke.cjs --install-root .vsix-staging/darwin-arm64
- *                                                                   the daemon a staged VSIX carries
- *   node scripts/daemon-smoke.cjs --cli dist/npm/cockpit/out/cli.js another ev3 command
+ *   node scripts/daemon-smoke.cjs                                   the development build
+ *                                                                   (npm run daemon:build)
+ *   node scripts/daemon-smoke.cjs --daemon-dir .vsix-staging/linux-x64
+ *                                                                   the daemon a staged VSIX or npm
+ *                                                                   platform package carries
+ *   node scripts/daemon-smoke.cjs --scenario <name>                 another recording of daemon/fixtures/link
  *
- * The daemon runs on a channel of its own, with its state, key and socket in a temporary home, so
- * neither the user's daemon nor their files are touched. The check is that `ev3 status` reaches
- * this very daemon (its pid) at the installation's version: a command that found nobody would have
- * started a daemon of its own, without simulated bricks. The daemon is stopped at the end.
+ * It needs the compiled client library (`npm run compile`). The client takes the daemon from the
+ * folder's manifest (`packagedDaemon`), so it copies the binary into a private folder, checks the
+ * copy's SHA-256 and starts that copy: what an installed extension or `ev3` command does. The daemon
+ * runs on a test channel of its own with its state root in a temporary home, in matched replay of a
+ * recording of brick AAA, so neither the user's daemon, their files nor any hardware is touched.
+ *
+ * The checks: the daemon reports the package.json version, the build kind and SHA-256 its manifest
+ * records and the client's contract version; it connects AAA from the recording, and its status
+ * lists it. The daemon is stopped at the end.
  */
 'use strict';
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const BUDGET_MS = 30_000;
@@ -28,60 +34,79 @@ function option(args, name) {
 	return at >= 0 ? args[at + 1] : undefined;
 }
 
+function check(condition, message) {
+	if (!condition) { throw new Error(message); }
+}
+
 async function main() {
 	const args = process.argv.slice(2);
-	const installRoot = path.resolve(option(args, '--install-root') ?? REPO);
-	const daemonFile = path.join(installRoot, 'out', 'daemon.js');
-	const cli = path.resolve(option(args, '--cli') ?? (fs.existsSync(path.join(installRoot, 'out', 'cli.js')) ? path.join(installRoot, 'out', 'cli.js') : path.join(REPO, 'out', 'cli.js')));
-	for (const file of [daemonFile, cli, path.join(installRoot, 'package.json')]) {
-		if (!fs.existsSync(file)) { throw new Error(`${file} is missing; build first (npm run bundle).`); }
-	}
-	const version = JSON.parse(fs.readFileSync(path.join(installRoot, 'package.json'), 'utf8')).version;
+	const compiled = path.join(REPO, 'out', 'client', 'index.js');
+	check(fs.existsSync(compiled), `${compiled} is missing; compile first (npm run compile).`);
+	const client = require(compiled);
+	const { readChannelRecord } = require(path.join(REPO, 'out', 'client', 'channel.js'));
 
-	const channel = `ci-smoke-${process.pid}`;
+	const daemonDir = option(args, '--daemon-dir');
+	const launch = daemonDir ? client.packagedDaemon(path.resolve(daemonDir)) : client.developmentDaemon(REPO);
+	const scenario = option(args, '--scenario') ?? 'usb-connect-commands-aaa';
+	const fixtures = path.join(REPO, 'daemon', 'fixtures', 'link', scenario);
+	check(fs.existsSync(fixtures), `${fixtures} is missing.`);
+	const version = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version;
+	check(launch.version === version, `The manifest of ${launch.binary} records version ${launch.version}; package.json is ${version}.`);
+
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-smoke-'));
-	const env = {
-		...process.env, LOCALAPPDATA: home, XDG_STATE_HOME: home, XDG_RUNTIME_DIR: home, HOME: home, USERPROFILE: home,
-		EV3_COCKPIT_CHANNEL: channel,
-	};
-	delete env.ELECTRON_RUN_AS_NODE;
-	const ev3 = (...cliArgs) => spawnSync(process.execPath, [cli, ...cliArgs], { env, encoding: 'utf8', timeout: BUDGET_MS });
-
-	const daemon = spawn(process.execPath, [daemonFile, '--install-root', installRoot, '--channel', channel, '--simulated'], {
-		env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
-	});
-	let stderr = '';
-	daemon.stderr.on('data', (chunk) => { stderr += String(chunk); });
-	let exitCode;
-	daemon.once('exit', (code) => { exitCode = code; });
-	const logFile = ev3('daemon', 'log').stdout.trim();
-	const logTail = () => { try { return fs.readFileSync(logFile, 'utf8').trimEnd().split('\n').slice(-15).join('\n'); } catch { return '(no log)'; } };
-
+	const stateRoot = client.nativeStateRoot({ env: { LOCALAPPDATA: home, XDG_STATE_HOME: home }, homedir: home });
+	const channel = `smoke-${process.pid}`;
+	const files = client.nativeChannelFiles(stateRoot, channel);
+	let cockpit;
 	try {
-		// Ready once it says it serves; asking earlier would make the command start a daemon itself.
-		const until = Date.now() + BUDGET_MS;
-		for (;;) {
-			if (exitCode !== undefined) { throw new Error(`The daemon exited with code ${exitCode}.\n${stderr}\n${logTail()}`); }
-			if (fs.existsSync(logFile) && /serving on/.test(fs.readFileSync(logFile, 'utf8'))) { break; }
-			if (Date.now() > until) { throw new Error(`The daemon did not serve within ${BUDGET_MS / 1000} s.\n${stderr}\n${logTail()}`); }
+		cockpit = await client.NativeCockpitClient.connect({
+			name: 'daemon smoke', kind: 'cli', version, buildKind: launch.buildKind, daemon: launch,
+			channel, stateRoot, daemonArgs: ['--mode', 'replay', '--fixtures', fixtures], reconnect: false,
+		});
+		const daemon = cockpit.daemon;
+		check(daemon.version === version, `The daemon reports version ${daemon.version}; package.json is ${version}.`);
+		check(daemon.buildKind === launch.buildKind, `The daemon reports a ${daemon.buildKind} build; its manifest records ${launch.buildKind}.`);
+		check(daemon.buildId === launch.sha256, `The daemon's build id is ${daemon.buildId}; its manifest records SHA-256 ${launch.sha256}.`);
+		check(daemon.contractVersion === client.nativeContract.CONTRACT_VERSION,
+			`The daemon speaks contract ${daemon.contractVersion}; the client ${client.nativeContract.CONTRACT_VERSION}.`);
+		check(daemon.mode === 'replay', `The daemon runs in ${daemon.mode} mode, not replay.`);
+
+		// By its id: before it connects, a brick may carry its USB descriptor's name, not its own.
+		let usb;
+		for (const until = Date.now() + BUDGET_MS; !usb; await sleep(200)) {
+			const { bricks } = await cockpit.request('bricks/list', {});
+			usb = bricks.find((b) => b.channels.some((c) => c.transport === 'usb'));
+			check(usb || Date.now() < until, `No USB brick appeared within ${BUDGET_MS / 1000} s.`);
+		}
+		const brick = await cockpit.request('bricks/connect', { brick: usb.brickId });
+		check(brick.connected === true, `${usb.brickId} did not connect: ${JSON.stringify(brick)}`);
+		const status = await cockpit.request('daemon/status', {});
+		check(status.bricks.some((b) => b.name === 'AAA'), `The daemon's status does not list AAA: ${JSON.stringify(status.bricks)}`);
+		console.log(`Daemon ${daemon.version} (${daemon.buildKind}, SHA-256 ${daemon.buildId}, pid ${daemon.pid}) from ${launch.binary} served AAA from ${scenario} on channel ${channel}.`);
+	} catch (error) {
+		// The log names the exchange a replay could not match, which is how a stale recording shows.
+		try {
+			const log = fs.readFileSync(path.join(files.dir, 'daemon.log'), 'utf8').trimEnd().split('\n').slice(-20).join('\n');
+			console.error(`The end of the daemon's log:\n${log}`);
+		} catch { /* no log */ }
+		throw error;
+	} finally {
+		if (cockpit) { cockpit.dispose(); }
+		const until = Date.now() + 5_000;
+		while (Date.now() < until) {
+			let pid;
+			try { pid = readChannelRecord(fs.readFileSync(files.channelFile, 'utf8'))?.pid; } catch { /* none */ }
+			if (pid === undefined) { break; }
+			try { process.kill(pid); } catch { /* gone */ }
+			try { fs.rmSync(files.channelFile, { force: true }); } catch { /* the daemon may still hold it */ }
 			await sleep(200);
 		}
-		const answer = ev3('--json', 'status');
-		if (answer.status !== 0) { throw new Error(`ev3 status failed (exit ${answer.status}):\n${answer.stdout}${answer.stderr}`); }
-		const status = JSON.parse(answer.stdout);
-		if (status.pid !== daemon.pid) { throw new Error(`ev3 status reached pid ${status.pid}, not the daemon started here (${daemon.pid}).`); }
-		if (status.version !== version) { throw new Error(`The daemon says version ${status.version}; the installation is ${version}.`); }
-		console.log(`Daemon ${status.version} (pid ${status.pid}, Node ${status.runtime.node}) from ${daemonFile} answered ev3 status on channel ${channel}.`);
-	} finally {
-		if (exitCode === undefined) {
-			const exited = new Promise((resolve) => daemon.once('exit', resolve));
-			daemon.kill();
-			await Promise.race([exited, sleep(5_000)]);
-		}
-		fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+		fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
 	}
 }
 
+const timer = setTimeout(() => { console.error(`The smoke did not finish within ${BUDGET_MS / 1000} s.`); process.exit(1); }, BUDGET_MS * 2);
+timer.unref();
 main().catch((error) => {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;

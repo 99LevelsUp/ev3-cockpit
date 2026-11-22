@@ -24,7 +24,7 @@ const ls: Command = {
 		atMost(ctx, 1, this.usage);
 		const folder = ctx.args[0] ?? PROJECTS;
 		const { client, brickId } = await connectedBrick(ctx, ctx.brick);
-		const entries = await client.request('files/list', { brick: brickId, path: folder });
+		const { entries } = await client.request('files/list', { brick: brickId, path: folder });
 		return {
 			value: entries,
 			human: entries.length === 0 ? `${folder} is empty.` : table(entries.map((e) => [

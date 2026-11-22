@@ -28,6 +28,13 @@ import { SessionManager } from '../core/runtime/sessionManager';
 import { BrickManager } from '../core/runtime/brickManager';
 import type { OneSidedRepair } from '../core/runtime/forgetReport';
 import { connectPickedBrick, describeRepair, followPairing } from '../vscode/ui/connectBrick';
+import { contractPairingStarted, contractRepair, coreConnect, coreList } from './coreAsContract';
+
+/** The extension's notification for a core repair, as the bridge reports the daemon's. */
+function describeCoreRepair(repair: OneSidedRepair, label: string): { message: string; warning: boolean } {
+	const { repair: reported, pairingAgain } = contractRepair(repair);
+	return describeRepair(reported, label, pairingAgain);
+}
 import { waitFor } from './waitFor';
 
 const THIS_PC = 'Učebna PC';
@@ -1584,10 +1591,10 @@ describe('Connect a Brick connects every channel', () => {
 			return task(() => { /* the messages are not under test here */ });
 		};
 		const showError = (message: string): void => { shown.errors.push(message); };
-		w.bricks.onPairingStarted((event) => { void followPairing(event, { aggregator: w.aggregator, progress, showError }); });
+		w.bricks.onPairingStarted((event) => { void followPairing(contractPairingStarted(event), { list: coreList(w.aggregator, w.bricks), progress, showError }); });
 		const log = { info: () => { /* quiet */ }, warn: () => { /* quiet */ }, error: () => { /* quiet */ }, debug: () => { /* quiet */ } };
 		const deps = {
-			aggregator: w.aggregator, bricks: w.bricks, log, progress, showError,
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks), log, progress, showError,
 			showInfo: (message: string) => { shown.info.push(message); },
 		};
 		return { shown, connect: () => connectPickedBrick(CCC, deps) };
@@ -1873,8 +1880,8 @@ describe('A pairing broken on one side, repaired over USB', () => {
 	function connect(w: World): Promise<void> {
 		const quiet = () => { /* not under test here */ };
 		return connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
 		});
 	}
@@ -2070,7 +2077,7 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		assert.equal(repairs[0].removal?.status, 'failed');
 		assert.equal(repairs[0].pairing, undefined);
 		assert.equal(w.pairing.calls, 0, 'paired beside the entry the brick kept');
-		assert.equal(describeRepair(repairs[0], 'CCC').warning, true);
+		assert.equal(describeCoreRepair(repairs[0], 'CCC').warning, true);
 		w.done();
 	});
 
@@ -2082,7 +2089,7 @@ describe('A pairing broken on one side, repaired over USB', () => {
 		await waitFor(() => repairs.length === 1, 3000);
 
 		assert.deepEqual(repairs[0].others, ['OLD-PC']);
-		const { message } = describeRepair(repairs[0], 'CCC');
+		const { message } = describeCoreRepair(repairs[0], 'CCC');
 		assert.match(message, /OLD-PC/);
 		assert.match(message, /Clear a Brick's Bluetooth List/);
 		w.done();
@@ -2091,7 +2098,7 @@ describe('A pairing broken on one side, repaired over USB', () => {
 	it('says "this computer", not "Windows": the same repair runs on Linux (HOSTD, 14.11.2026)', () => {
 		for (const found of ['windows-only', 'brick-only'] as const) {
 			const repair: OneSidedRepair = { brickId: CCC, found, others: [], removal: { status: 'removed', channel: btKey } } as OneSidedRepair;
-			assert.doesNotMatch(describeRepair(repair, 'CCC').message, /Windows/, found);
+			assert.doesNotMatch(describeCoreRepair(repair, 'CCC').message, /Windows/, found);
 		}
 	});
 
@@ -2291,8 +2298,8 @@ describe('Bluetooth joins after the one-sided check when USB is there', () => {
 		const quiet = () => { /* not under test here */ };
 
 		const connecting = connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: (message) => { errors.push(message); },
 		});
 		await settle();
@@ -2397,8 +2404,8 @@ describe('Bluetooth joins after the one-sided check when USB is there', () => {
 
 		// Connect a Brick waits for the Bluetooth join it starts, so it ends only after the check.
 		const connecting = connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
 		});
 		await settle();
@@ -2437,8 +2444,8 @@ describe('Bluetooth joins after the one-sided check when USB is there', () => {
 		w.brick.holds.set('brick:bluetoothPeerCount', read.promise);   // the check never gets its list
 		const quiet = () => { /* not under test here */ };
 		const connecting = connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
 		});
 		await settle();
@@ -2462,8 +2469,8 @@ describe('Bluetooth joins after the one-sided check when USB is there', () => {
 		const quiet = () => { /* not under test here */ };
 
 		const connecting = connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
 		});
 
@@ -2507,11 +2514,11 @@ describe('Connect a Brick over Bluetooth alone, when it fails', () => {
 		const quiet = () => { /* not under test here */ };
 		const showError = (message: string): void => { errors.push(message); };
 		w.bricks.onPairingStarted((event) => {
-			void followPairing(event, { aggregator: w.aggregator, progress: (_title, task) => task(quiet), showError });
+			void followPairing(contractPairingStarted(event), { list: coreList(w.aggregator, w.bricks), progress: (_title, task) => task(quiet), showError });
 		});
 		const connect = () => connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError,
 		});
 		return { errors, connect };
@@ -2763,8 +2770,8 @@ describe('Connect a Brick on a signed-in brick, with a channel waiting to rejoin
 	function connect(w: World): Promise<void> {
 		const quiet = () => { /* not under test here */ };
 		return connectPickedBrick(CCC, {
-			aggregator: w.aggregator, bricks: w.bricks,
-			log: { info: quiet, warn: quiet, error: quiet, debug: quiet },
+			list: coreList(w.aggregator, w.bricks), bricks: coreConnect(w.aggregator, w.bricks),
+			log: { info: quiet, warn: quiet, error: quiet },
 			progress: (_title, task) => task(quiet), showInfo: quiet, showError: quiet,
 		});
 	}

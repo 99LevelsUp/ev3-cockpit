@@ -1,12 +1,13 @@
 /**
  * The cockpit's MCP server, driven by the MCP SDK's own client over a linked in-memory transport
- * and served the way stdio serves it: tools that start nothing until a brick is needed, refuse to
- * widen the agent's rights, ask the user before forgetting or clearing, and keep local paths inside
- * the roots the host declares.
+ * and served the way stdio serves it: tools that start nothing until a brick is needed, introduce
+ * the agent to the daemon by its MCP client's name, leave every dangerous action to a person in
+ * VS Code or a terminal, and keep local paths inside the roots the host declares.
  *
- * Real daemons on simulated bricks where the daemon's own answer matters; a stand-in client where
- * the test has to see exactly what reaches the daemon, or an outcome the simulated brick cannot
- * produce (a start whose reply was lost).
+ * The native daemon in matched replay of brick AAA over USB where the daemon's own answer matters
+ * (skipped without `daemon/target/debug/ev3-cockpitd(.exe)`); a stand-in client where the test has
+ * to see exactly what reaches the daemon, or an outcome the recording cannot produce (a start whose
+ * reply was lost).
  */
 
 import assert from 'node:assert/strict';
@@ -16,22 +17,22 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { after, describe, it } from 'node:test';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import type { ClientCapabilities, ElicitRequest } from '@modelcontextprotocol/client';
+import type { ClientCapabilities } from '@modelcontextprotocol/client';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
-import { CockpitClient, ContractError } from '../client';
+import { ContractError } from '../client/connection';
+import { NativeCockpitClient } from '../client/nativeClient';
+import { DaemonStartError } from '../client/nativeLaunch';
 import { WireErrorCode } from '../contract/errors';
-import type { ContractBrick, DeployResult, Question, QuestionAnswer } from '../contract/models';
-import { CockpitMcp, CockpitConnection, MCP_CLIENT_NAME } from '../mcp/tools';
-import { privateHome, testDaemon } from './clientDaemonHelpers';
+import type { DeployResult, Question } from '../contract/generated';
+import { CockpitMcp, CockpitConnection, MCP_CLIENT_NAME, clientNameOf } from '../mcp/tools';
+import { NativeTestChannel, nativeBinaryMissing, nativeTestChannel, sleep } from './clientDaemonHelpers';
 
-const home = privateHome();
-
-type Elicit = (params: ElicitRequest['params']) => { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, string | number | boolean> };
+const HOST_NAME = 'test host';
 
 interface HostOptions {
-	readonly elicit?: Elicit;
 	readonly roots?: readonly string[];
 	readonly modern?: boolean;
+	readonly name?: string;
 }
 
 interface ToolResult {
@@ -41,28 +42,36 @@ interface ToolResult {
 }
 
 const opened: { close(): Promise<void> }[] = [];
-after(async () => { for (const o of opened) { await o.close().catch(() => undefined); } });
+const channels: NativeTestChannel[] = [];
+const temps: string[] = [];
+after(async () => {
+	for (const o of opened) { await o.close().catch(() => undefined); }
+	for (const channel of channels) { await channel.stop(); }
+	await sleep(200);
+	// Each home holds its own verified copy of the daemon: removed again, a few tries while it lets go.
+	for (const dir of temps) {
+		for (let attempt = 0; attempt < 10; attempt++) {
+			try { fs.rmSync(dir, { recursive: true, force: true }); break; } catch { await sleep(200); }
+		}
+	}
+});
+
+/** A temporary folder the run removes at its end. */
+function temp(prefix: string): string {
+	const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+	temps.push(dir);
+	return dir;
+}
 
 /** An MCP host connected to a cockpit MCP server, as an agent's host would be. */
-async function host(cockpit: CockpitMcp, options: HostOptions = {}): Promise<{ client: Client; asked: ElicitRequest['params'][]; call(name: string, args?: Record<string, unknown>): Promise<ToolResult> }> {
+async function host(cockpit: CockpitMcp, options: HostOptions = {}): Promise<{ client: Client; call(name: string, args?: Record<string, unknown>): Promise<ToolResult> }> {
 	const [hostSide, serverSide] = InMemoryTransport.createLinkedPair();
 	const served = serveStdio(() => cockpit.createServer(), { transport: serverSide });
-	const capabilities: ClientCapabilities = {
-		...(options.elicit ? { elicitation: { form: {} } } : {}),
-		...(options.roots ? { roots: {} } : {}),
-	};
-	const client = new Client({ name: 'test host', version: '1.0.0' }, {
+	const capabilities: ClientCapabilities = options.roots ? { roots: {} } : {};
+	const client = new Client({ name: options.name ?? HOST_NAME, version: '1.0.0' }, {
 		capabilities,
 		...(options.modern ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {}),
 	});
-	const asked: ElicitRequest['params'][] = [];
-	if (options.elicit) {
-		const elicit = options.elicit;
-		client.setRequestHandler('elicitation/create', (request) => {
-			asked.push(request.params);
-			return Promise.resolve(elicit(request.params));
-		});
-	}
 	if (options.roots) {
 		const roots = options.roots;
 		client.setRequestHandler('roots/list', () => Promise.resolve({ roots: roots.map((r) => ({ uri: pathToFileURL(r).href })) }));
@@ -70,118 +79,105 @@ async function host(cockpit: CockpitMcp, options: HostOptions = {}): Promise<{ c
 	await client.connect(hostSide);
 	opened.push({ close: async () => { await client.close(); await served.close(); } });
 	return {
-		client, asked,
+		client,
 		call: async (name, args = {}) => await client.callTool({ name, arguments: args }) as unknown as ToolResult,
 	};
 }
 
 const textOf = (result: ToolResult): string => result.content.map((c) => c.text ?? '').join('\n');
+const errorOf = (result: ToolResult): { code?: string; command?: string } => (result.structuredContent?.error ?? {}) as { code?: string; command?: string };
 
-/** A cockpit MCP server on a fresh private daemon channel; `connects` counts how often it reached for the daemon. */
-function onDaemon(extraArgs: readonly string[] = []) {
-	const d = testDaemon(home);
-	let connects = 0;
+/** A fresh test channel whose daemon replays AAA over USB. */
+function freshChannel(): NativeTestChannel {
+	const channel = nativeTestChannel(temp('ev3-mcp-'));
+	channels.push(channel);
+	return channel;
+}
+
+/** A cockpit MCP server on `channel`; it records the names it connected as. */
+function onDaemon(channel: NativeTestChannel = freshChannel()) {
+	const names: string[] = [];
 	const cockpit = new CockpitMcp({
 		version: '0.0.1',
-		connect: () => {
-			connects++;
-			return CockpitClient.connect({ name: MCP_CLIENT_NAME, kind: 'mcp', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: [...d.launchArgs, ...extraArgs] });
+		connect: (clientName, onNotice) => {
+			names.push(clientName);
+			return NativeCockpitClient.connect(channel.client('mcp', 'development', { name: clientName }), onNotice);
 		},
 	});
 	opened.push({ close: () => { cockpit.dispose(); return Promise.resolve(); } });
-	return { d, cockpit, connects: () => connects };
-}
-
-/** Whether a daemon serves the channel, asked without starting one. */
-async function daemonRuns(d: ReturnType<typeof testDaemon>): Promise<boolean> {
-	try {
-		const probe = await CockpitClient.connect({ name: 'probe', kind: 'cli', version: '0.0.1', paths: d.paths, readinessMs: 500, reconnect: false });
-		probe.dispose();
-		return true;
-	} catch (error) {
-		if (error instanceof ContractError && error.code === WireErrorCode.DaemonUnavailable) { return false; }
-		throw error;
-	}
-}
-
-/** A workspace whose simulated brick AAA remembers two Bluetooth peers. */
-function workspaceWithPeers(): string {
-	const ws = fs.mkdtempSync(path.join(home, 'ws-'));
-	fs.mkdirSync(path.join(ws, '.vscode'));
-	fs.writeFileSync(path.join(ws, '.vscode', 'ev3-cockpit-mock.json'), JSON.stringify({
-		transport: 'mock',
-		bricks: [{ id: 'aaa', displayName: 'AAA', battery: { level: 80 }, motorPorts: [], sensorPorts: [], firmwareVersion: 'V1.09D', filesystem: [], bluetoothPeers: ['HOSTA', 'BBB'] }],
-	}));
-	return ws;
+	return { channel, cockpit, names };
 }
 
 /** A stand-in for the client library that records what would reach the daemon. */
 class StandIn {
 	readonly requests: { method: string; params: Record<string, unknown> }[] = [];
-	readonly answers: QuestionAnswer[] = [];
-	private handler: ((q: Question) => Promise<QuestionAnswer> | QuestionAnswer) | undefined;
-	noticeListener: ((notice: { text: string }) => void) | undefined;
+	noticeListener: ((text: string) => void) | undefined;
 	daemonVersion = '0.0.1';
-	constructor(private readonly respond: (method: string, params: Record<string, unknown>, standIn: StandIn) => unknown) {}
+	constructor(private readonly respond: (method: string, params: Record<string, unknown>) => unknown) {}
 	get daemon(): { version: string } { return { version: this.daemonVersion }; }
 	request(method: string, params: Record<string, unknown>): Promise<unknown> {
 		this.requests.push({ method, params });
-		try { return Promise.resolve(this.respond(method, params, this)); } catch (error) { return Promise.reject(error); }
+		try { return Promise.resolve(this.respond(method, params)); } catch (error) { return Promise.reject(error); }
 	}
-	onQuestion(handler: ((q: Question) => Promise<QuestionAnswer> | QuestionAnswer) | undefined): void { this.handler = handler; }
-	async ask(question: Question): Promise<QuestionAnswer> {
-		const answer = this.handler ? await this.handler(question) : 'keep';
-		this.answers.push(answer);
-		return answer;
-	}
-	onNotice(listener: (notice: { text: string }) => void): { dispose(): void } { this.noticeListener = listener; return { dispose: () => undefined }; }
+	onNotice(listener: (text: string) => void): { dispose(): void } { this.noticeListener = listener; return { dispose: () => undefined }; }
 	onLost(): { dispose(): void } { return { dispose: () => undefined }; }
 	dispose(): void { /* nothing held */ }
-	bricks(): readonly ContractBrick[] {
-		return [{ brickId: 'mock:marvin', name: 'Marvin', nameConfirmed: true, connected: true, paired: false, channels: [], holders: [] }];
+	/** Telemetry: the snapshot `telemetry` holds, at once; how many subscriptions ended. */
+	telemetry: { rowId: string; value: number | null; sampledAt: number; stale: boolean; unit?: string }[] = [];
+	subscriptionsEnded = 0;
+	subscribeTelemetry(brick: string, request: { rows: string[] }, listener: (update: unknown) => void): Promise<{ grant: Record<string, number>; dispose(): void }> {
+		this.requests.push({ method: 'telemetry/subscribe', params: { brick, request } });
+		listener({ subscriptionId: 's1', brickId: '001653F00A0C', kind: 'snapshot', values: this.telemetry.filter((v) => request.rows.includes(v.rowId)), removed: [] });
+		return Promise.resolve({ grant: {}, dispose: () => { this.subscriptionsEnded++; } });
 	}
 }
 
-function withStandIn(respond: (method: string, params: Record<string, unknown>, standIn: StandIn) => unknown, cwd?: string) {
+function withStandIn(respond: (method: string, params: Record<string, unknown>) => unknown, cwd?: string) {
 	const standIn = new StandIn(respond);
 	let connects = 0;
+	const names: string[] = [];
 	const cockpit = new CockpitMcp({
 		version: '0.0.1', ...(cwd ? { cwd } : {}),
-		connect: () => { connects++; return Promise.resolve(standIn as unknown as CockpitConnection); },
+		connect: (clientName, onNotice) => {
+			connects++;
+			names.push(clientName);
+			standIn.noticeListener = onNotice;
+			return Promise.resolve(standIn as unknown as CockpitConnection);
+		},
 	});
-	return { standIn, cockpit, connects: () => connects };
+	return { standIn, cockpit, connects: () => connects, names };
 }
 
-describe('the cockpit MCP server on a daemon', () => {
+describe('the cockpit MCP server on the native daemon', { skip: nativeBinaryMissing }, () => {
 	it('starts no daemon when it starts and lists its tools', async () => {
-		const { d, cockpit, connects } = onDaemon();
+		const { channel, cockpit, names } = onDaemon();
 		const { client } = await host(cockpit);
 		const { tools } = await client.listTools();
 		assert.ok(tools.length > 0);
-		assert.equal(connects(), 0);
-		assert.equal(await daemonRuns(d), false);
+		assert.equal(names.length, 0);
+		assert.equal(fs.existsSync(channel.files.channelFile), false);
 	});
 
-	it('starts and connects to the daemon on the first list_bricks, and lists its bricks', async () => {
-		const { d, cockpit, connects } = onDaemon();
+	it('starts the daemon on the first list_bricks as its MCP client\'s name, and lists the bricks', async () => {
+		const { channel, cockpit, names } = onDaemon();
 		const { call } = await host(cockpit);
 		const result = await call('list_bricks');
 		assert.notEqual(result.isError, true, textOf(result));
-		const bricks = (result.structuredContent?.bricks ?? []) as ContractBrick[];
-		assert.ok(bricks.some((b) => b.name === 'Marvin'), textOf(result));
-		assert.equal(connects(), 1);
-		assert.equal(await daemonRuns(d), true);
+		const bricks = (result.structuredContent?.bricks ?? []) as { name: string }[];
+		assert.deepEqual(bricks.map((b) => b.name), ['AAA'], textOf(result));
+		assert.deepEqual(names, [HOST_NAME]);
+		assert.equal(fs.existsSync(channel.files.channelFile), true);
 		await call('list_bricks');
-		assert.equal(connects(), 1, 'a second call connected again');
+		assert.equal(names.length, 1, 'a second call connected again');
 	});
 
-	it('refuses access mode full with the exact ev3 config command, and the mode stays safe', async () => {
+	it('with nobody to ask, refuses access mode full with the exact ev3 config command, and the mode stays safe', async () => {
 		const { cockpit } = onDaemon();
 		const { call } = await host(cockpit);
 		const result = await call('set_setting', { key: 'accessMode', value: 'full' });
 		assert.equal(result.isError, true);
 		assert.match(textOf(result), /ev3 config set access-mode full/);
-		assert.equal((result.structuredContent?.error as { code?: string } | undefined)?.code, 'needs_person');
+		assert.equal(errorOf(result).code, 'needs_person');
 		const settings = await call('get_settings');
 		const access = (settings.structuredContent?.settings as { key: string; value: unknown }[]).find((s) => s.key === 'accessMode');
 		assert.equal(access?.value, 'safe');
@@ -197,109 +193,98 @@ describe('the cockpit MCP server on a daemon', () => {
 		assert.equal(factor?.value, 5);
 	});
 
-	it('has no daemon restart and no way to send a person\'s confirmation', async () => {
+	it('has no daemon restart or exit and no way to send a person\'s confirmation', async () => {
 		const { cockpit } = onDaemon();
 		const { client } = await host(cockpit);
 		const { tools } = await client.listTools();
-		assert.equal(tools.some((t) => /restart/i.test(t.name)), false);
+		assert.equal(tools.some((t) => /restart|exit/i.test(t.name)), false);
 		for (const tool of tools) {
 			assert.equal(JSON.stringify(tool.inputSchema).includes('confirmedByPerson'), false, `${tool.name} takes a confirmation`);
 		}
 	});
 
-	it('forgets a brick when the user says yes in the host\'s prompt', async () => {
-		const { cockpit } = onDaemon();
-		const { call, asked } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		await call('list_bricks');
-		const result = await call('forget', { brick: 'Marvin' });
-		assert.notEqual(result.isError, true, textOf(result));
-		assert.equal(result.structuredContent?.forgotten, true);
-		assert.equal(asked.length, 1);
-		assert.match(asked[0]!.message, /Forget Marvin\?/);
-	});
-
-	for (const [label, reply] of [['says no', { action: 'decline' }], ['dismisses the prompt', { action: 'cancel' }], ['leaves the box unticked', { action: 'accept', content: { confirm: false } }]] as const) {
-		it(`leaves a brick paired when the user ${label}`, async () => {
-			const { cockpit } = onDaemon();
-			const { call, asked } = await host(cockpit, { elicit: () => reply });
-			const result = await call('forget', { brick: 'Marvin' });
-			assert.equal(asked.length, 1);
-			assert.notEqual(result.structuredContent?.forgotten, true, textOf(result));
-			assert.match(textOf(result), /not forgotten/i);
-		});
-	}
-
-	it('refuses forget without elicitation, naming the exact ev3 command', async () => {
+	it('with nobody to ask, refuses forget naming the exact ev3 command, and forgets nothing', async () => {
 		const { cockpit } = onDaemon();
 		const { call } = await host(cockpit);
-		const result = await call('forget', { brick: 'Marvin' });
+		const result = await call('forget', { brick: 'AAA' });
 		assert.equal(result.isError, true);
-		assert.match(textOf(result), /ev3 forget Marvin/);
-		assert.equal((result.structuredContent?.error as { command?: string }).command, 'ev3 forget Marvin');
+		assert.equal(errorOf(result).code, 'needs_person');
+		assert.equal(errorOf(result).command, 'ev3 forget AAA');
+		assert.match(textOf(result), /ev3 forget AAA/);
+		const listed = await call('list_bricks');
+		assert.deepEqual((listed.structuredContent?.bricks as { name: string }[]).map((b) => b.name), ['AAA']);
 	});
 
-	it('refuses clear_bluetooth_list without elicitation, naming the exact ev3 command, and keeps the list', async () => {
-		const ws = workspaceWithPeers();
-		const { cockpit } = onDaemon(['--mock-workspace', ws]);
-		const { call } = await host(cockpit);
-		await call('connect_brick', { brick: 'AAA' });
-		const result = await call('clear_bluetooth_list', { brick: 'AAA' });
-		assert.equal(result.isError, true);
-		assert.match(textOf(result), /ev3 bt-clear AAA/);
-		// The same daemon, asked through a host that can prompt: the list it shows is still whole.
-		const prompting = await host(cockpit, { elicit: () => ({ action: 'decline' }) });
-		await prompting.call('clear_bluetooth_list', { brick: 'AAA' });
-		assert.equal(prompting.asked.length, 1);
-		assert.match(prompting.asked[0]!.message, /HOSTA/);
-		assert.match(prompting.asked[0]!.message, /BBB/);
-	});
-
-	it('clears a Bluetooth list after the user says yes to the entries shown', async () => {
-		const ws = workspaceWithPeers();
-		const { cockpit } = onDaemon(['--mock-workspace', ws]);
-		const { call, asked } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		await call('connect_brick', { brick: 'AAA' });
-		const result = await call('clear_bluetooth_list', { brick: 'AAA' });
-		assert.notEqual(result.isError, true, textOf(result));
-		assert.deepEqual(result.structuredContent?.removed, ['HOSTA', 'BBB']);
+	it('a forget puts the question to the person in VS Code, naming the MCP client, and their no stands', async () => {
+		const channel = freshChannel();
+		const window = await NativeCockpitClient.connect(channel.client('vscode', 'development', { name: 'VS Code (test)', reconnect: false }));
+		opened.push({ close: () => { window.dispose(); return Promise.resolve(); } });
+		const asked: Question[] = [];
+		window.onQuestion((q) => { asked.push(q); return 'no'; });
+		const { cockpit } = onDaemon(channel);
+		const { call } = await host(cockpit, { name: 'Some Agent Host' });
+		const result = await call('forget', { brick: 'AAA' });
+		assert.equal(result.isError, true, textOf(result));
+		assert.equal(errorOf(result).code, 'cancelled');
 		assert.equal(asked.length, 1);
+		assert.equal(asked[0].kind, 'forget');
+		assert.ok('requester' in asked[0]);
+		assert.deepEqual(asked[0].requester, { name: 'Some Agent Host', kind: 'mcp' });
 	});
 
-	it('pairs without a prompt and returns the brick\'s answer', async () => {
-		const { cockpit } = onDaemon();
-		const { call, asked } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		const result = await call('pair', { brick: 'Marvin' });
-		assert.equal(asked.length, 0);
-		assert.equal(result.structuredContent?.paired, false);
-		assert.match(textOf(result), /no Bluetooth channel/);
-	});
-
-	it('serves a host on the 2026-07-28 protocol: forget asks there too', async () => {
-		const { cockpit } = onDaemon();
-		const { call, asked } = await host(cockpit, { modern: true, elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		const result = await call('forget', { brick: 'Marvin' });
+	it('serves a host on the 2026-07-28 protocol under its name', async () => {
+		const { cockpit, names } = onDaemon();
+		const { call } = await host(cockpit, { modern: true, name: 'modern host' });
+		const result = await call('list_bricks');
 		assert.notEqual(result.isError, true, textOf(result));
-		assert.equal(result.structuredContent?.forgotten, true);
-		assert.equal(asked.length, 1);
+		assert.deepEqual(names, ['modern host']);
 	});
 });
 
 describe('what reaches the daemon', () => {
+	it('reads telemetry once on a subscription of its own, ends it, and names the rows that had no value', async () => {
+		const { standIn, cockpit } = withStandIn((method) => {
+			assert.equal(method, 'telemetry/rows');
+			return { rows: [{ id: 'system.battery.voltage', tier: 'live', unit: 'V' }, { id: 'program.user.running', tier: 'live' }] };
+		});
+		standIn.telemetry = [{ rowId: 'system.battery.voltage', value: 7.9, unit: 'V', sampledAt: 0, stale: false }];
+		const { call } = await host(cockpit);
+		const listed = await call('list_telemetry_rows');
+		assert.match(textOf(listed), /system\.battery\.voltage \(V\)/);
+		const read = await call('read_telemetry', { brick: 'CCC', waitMs: 50 });
+		assert.match(textOf(read), /system\.battery\.voltage = 7\.9 V/);
+		assert.match(textOf(read), /No value yet for program\.user\.running\./);
+		assert.deepEqual(standIn.requests.find((r) => r.method === 'telemetry/subscribe')?.params,
+			{ brick: 'CCC', request: { rows: ['system.battery.voltage', 'program.user.running'], intervalMs: 1000 } });
+		assert.equal(standIn.subscriptionsEnded, 1);
+	});
+
 	it('asks for the bricks after discovery has settled', async () => {
-		const { standIn, cockpit } = withStandIn(() => []);
+		const { standIn, cockpit } = withStandIn(() => ({ bricks: [] }));
 		const { call } = await host(cockpit);
 		await call('list_bricks');
 		assert.deepEqual(standIn.requests[0], { method: 'bricks/list', params: { waitForDiscovery: true } });
 	});
 
+	it('introduces itself by a name the daemon accepts, whatever its MCP client called itself', async () => {
+		assert.equal(clientNameOf('  Agent  '), 'Agent');
+		assert.equal(clientNameOf(''), MCP_CLIENT_NAME);
+		assert.equal(clientNameOf(undefined), MCP_CLIENT_NAME);
+		assert.equal(clientNameOf('x'.repeat(500)).length, 200);
+		const { cockpit, names } = withStandIn(() => ({ bricks: [] }));
+		const { call } = await host(cockpit, { name: '   ' });
+		await call('list_bricks');
+		assert.deepEqual(names, [MCP_CLIENT_NAME]);
+	});
+
 	it('returns a start whose reply was lost as uncertain, with what to do next, not as an error', async () => {
-		const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-mcp-')));
+		const dir = temp('ev3-mcp-');
 		fs.writeFileSync(path.join(dir, 'Demo.rbf'), 'LEGO');
-		const lost: DeployResult = { brickId: 'mock:marvin', outcome: 'uncertain', runSeq: 3, uploaded: ['/home/root/lms2012/prjs/Demo/Demo.rbf'], skipped: [] };
+		const lost: DeployResult = { brickId: '001653F00A0A', outcome: 'uncertain', runSeq: 3, uploaded: ['/home/root/lms2012/prjs/Demo/Demo.rbf'], skipped: [] };
 		const { cockpit } = withStandIn(() => lost, dir);
 		const { call } = await host(cockpit);
 		const result = await call('deploy_and_run', {
-			brick: 'Marvin', runPath: '/home/root/lms2012/prjs/Demo/Demo.rbf',
+			brick: 'AAA', runPath: '/home/root/lms2012/prjs/Demo/Demo.rbf',
 			files: [{ localPath: path.join(dir, 'Demo.rbf'), remotePath: '/home/root/lms2012/prjs/Demo/Demo.rbf' }],
 		});
 		assert.notEqual(result.isError, true);
@@ -307,49 +292,14 @@ describe('what reaches the daemon', () => {
 		assert.match(textOf(result), /Do not run it again; check program_status first/);
 	});
 
-	it('answers keep and then yes to the daemon\'s forget question, only after the user said yes', async () => {
-		const forget = (_m: string, params: Record<string, unknown>, standIn: StandIn): Promise<unknown> =>
-			standIn.ask({ questionId: 'q', kind: 'forget', brickId: 'mock:marvin', text: `Forget ${String(params.brick)}?`, timeoutMs: 60_000 }).then((answer) => {
-				if (answer === 'yes') { return { forgotten: true, report: [] }; }
-				throw new ContractError(WireErrorCode.NeedsPerson, 'needs a person', { command: 'ev3 forget Marvin' });
-			});
-		const yes = withStandIn(forget);
-		await (await host(yes.cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) })).call('forget', { brick: 'Marvin' });
-		assert.deepEqual(yes.standIn.answers, ['keep', 'yes']);
-		const no = withStandIn(forget);
-		await (await host(no.cockpit, { elicit: () => ({ action: 'decline' }) })).call('forget', { brick: 'Marvin' });
-		assert.deepEqual(no.standIn.answers, ['keep'], 'a declined prompt still reached the daemon');
-		assert.equal(no.standIn.requests.length, 1);
-	});
-
-	it('asks again when the daemon\'s question changed after the user said yes to the first one', async () => {
-		let calls = 0;
-		const { standIn, cockpit } = withStandIn((_m, _p, s) => {
-			const details = ++calls === 1 ? ['HOSTA'] : ['HOSTA', 'BBB'];
-			return s.ask({ questionId: `q${calls}`, kind: 'clearBluetoothList', brickId: 'mock:marvin', text: `Remove ${details.length} entries?`, details, timeoutMs: 60_000 })
-				.then((answer) => {
-					if (answer === 'yes') { return { removed: details, kept: [] }; }
-					throw new ContractError(WireErrorCode.NeedsPerson, 'needs a person', { command: 'ev3 bt-clear Marvin' });
-				});
+	it('sends a forget as the brick alone, and passes a person\'s refusal on with the command', async () => {
+		const { standIn, cockpit } = withStandIn(() => {
+			throw new ContractError(WireErrorCode.NeedsPerson, 'Forgetting AAA needs a person.', { command: 'ev3 forget AAA' });
 		});
-		const { call, asked } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		const result = await call('clear_bluetooth_list', { brick: 'Marvin' });
-		assert.deepEqual(standIn.answers, ['keep', 'keep', 'yes']);
-		assert.equal(asked.length, 2);
-		assert.match(asked[1]!.message, /BBB/);
-		assert.deepEqual(result.structuredContent?.removed, ['HOSTA', 'BBB']);
-	});
-
-	it('recognises the question about a brick the agent spelled differently from its listed name', async () => {
-		const { standIn, cockpit } = withStandIn((_m, _p, s) =>
-			s.ask({ questionId: 'q', kind: 'forget', brickId: 'mock:marvin', text: 'Forget Marvin?', timeoutMs: 60_000 }).then((answer) => {
-				if (answer === 'yes') { return { forgotten: true, report: [] }; }
-				throw new ContractError(WireErrorCode.NeedsPerson, 'needs a person', { command: 'ev3 forget Marvin' });
-			}));
-		const { call, asked } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		const result = await call('forget', { brick: ' marvin' });
-		assert.equal(asked.length, 1, textOf(result));
-		assert.deepEqual(standIn.answers, ['keep', 'yes']);
+		const { call } = await host(cockpit);
+		const result = await call('forget', { brick: 'AAA', confirmedByPerson: true });
+		assert.deepEqual(standIn.requests, [{ method: 'bricks/forget', params: { brick: 'AAA' } }]);
+		assert.match(textOf(result), /Ask them to run: ev3 forget AAA/);
 	});
 
 	it('sends a setting change as key and value only, never as a person\'s confirmation', async () => {
@@ -360,49 +310,71 @@ describe('what reaches the daemon', () => {
 	});
 
 	it('says who holds a busy brick, and not to run again when the outcome is unknown', async () => {
-		let next: ContractError = new ContractError(WireErrorCode.BrickBusy, 'Brick mock:marvin is busy: EVƎ C (VS Code) holds its write lease.', { holder: 'EVƎ C (VS Code)' });
+		let next: ContractError = new ContractError(WireErrorCode.BrickBusy, 'AAA is busy: EVƎ C (VS Code) holds its write lease.', { holder: 'EVƎ C (VS Code)' });
 		const { cockpit } = withStandIn(() => { throw next; });
 		const { call } = await host(cockpit);
-		const busy = await call('make_directory', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x' });
+		const busy = await call('make_directory', { brick: 'AAA', path: '/home/root/lms2012/prjs/x' });
 		assert.equal(busy.isError, true);
 		assert.equal((busy.structuredContent?.error as { holder?: string }).holder, 'EVƎ C (VS Code)');
 		assert.match(textOf(busy), /EVƎ C \(VS Code\) is working with the brick now/);
 		next = new ContractError(WireErrorCode.OutcomeUnknown, 'The daemon went away during programs/run.');
-		const unknown = await call('run_program', { brick: 'Marvin', path: '/home/root/lms2012/prjs/Demo/Demo.rbf' });
+		const unknown = await call('run_program', { brick: 'AAA', path: '/home/root/lms2012/prjs/Demo/Demo.rbf' });
 		assert.match(textOf(unknown), /Do not run it again; check program_status first/);
 	});
 
-	it('carries a version notice in the next tool result, once', async () => {
-		const { standIn, cockpit } = withStandIn(() => []);
-		standIn.daemonVersion = '0.0.2';
+	it('carries a notice in the next tool result, once, including one raised while it connected', async () => {
+		const { standIn, cockpit } = withStandIn(() => ({ bricks: [] }));
 		const { call } = await host(cockpit);
+		const quiet = await call('list_bricks');
+		assert.equal(quiet.structuredContent?.notices, undefined, 'no notice of its own');
+		const text = 'A development build of the EVƎ Cockpit daemon (version 0.1.0) runs; this client uses it.';
+		standIn.noticeListener?.(text);
 		const first = await call('list_bricks');
-		assert.match(textOf(first), /Notice: .*0\.0\.2/);
-		assert.equal((first.structuredContent?.notices as string[]).length, 1);
+		assert.deepEqual(first.structuredContent?.notices, [text]);
+		assert.match(textOf(first), /Notice: A development build/);
+		standIn.noticeListener?.(text);
 		const second = await call('list_bricks');
-		assert.equal(second.structuredContent?.notices, undefined);
-		standIn.noticeListener?.({ text: 'A newer EVƎ Cockpit runs.' });
-		const third = await call('list_bricks');
-		assert.deepEqual(third.structuredContent?.notices, ['A newer EVƎ Cockpit runs.']);
+		assert.equal(second.structuredContent?.notices, undefined, 'a notice is shown once');
 	});
 
-	it('answers keep to questions about anything it was not asked to do', async () => {
-		const { standIn, cockpit } = withStandIn((_m, _p, s) => s.ask({ questionId: 'q', kind: 'sweep', text: 'Release?', timeoutMs: 60_000 }).then(() => []));
-		const { call } = await host(cockpit, { elicit: () => ({ action: 'accept', content: { confirm: true } }) });
-		await call('list_bricks');
-		assert.deepEqual(standIn.answers, ['keep']);
+	it('returns a daemon that cannot start as a tool error naming why, and starts a blocked one only once', async () => {
+		let connects = 0;
+		const cockpit = new CockpitMcp({
+			version: '0.0.1',
+			connect: () => { connects++; return Promise.reject(new DaemonStartError('smart_app_control', 'Windows Smart App Control blocked the EVƎ Cockpit daemon.')); },
+		});
+		const { call } = await host(cockpit);
+		const first = await call('list_bricks');
+		assert.equal(first.isError, true);
+		assert.deepEqual(first.structuredContent?.error, { code: 'daemon_unavailable', message: 'Windows Smart App Control blocked the EVƎ Cockpit daemon.', failure: 'smart_app_control' });
+		assert.match(textOf(first), /cannot run on this computer while Windows Smart App Control is on/);
+		const second = await call('brick_info', { brick: 'AAA' });
+		assert.equal((second.structuredContent?.error as { failure?: string }).failure, 'smart_app_control');
+		assert.equal(connects, 1, 'the blocked binary was started again');
+
+		let tries = 0;
+		const missing = new CockpitMcp({
+			version: '0.0.1',
+			connect: () => { tries++; return Promise.reject(new DaemonStartError('missing_binary', 'The cockpit daemon is missing.')); },
+		});
+		const other = await host(missing);
+		const gone = await other.call('list_bricks');
+		assert.equal((gone.structuredContent?.error as { failure?: string }).failure, 'missing_binary');
+		assert.match(textOf(gone), /reinstall/);
+		await other.call('list_bricks');
+		assert.equal(tries, 2, 'a missing daemon is looked for again: it may have been installed meanwhile');
 	});
 
 	describe('local paths', () => {
-		const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-mcp-root-')));
-		const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-mcp-outside-')));
+		const root = temp('ev3-mcp-root-');
+		const outside = temp('ev3-mcp-outside-');
 		fs.writeFileSync(path.join(root, 'in.txt'), 'in');
 		fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
 
 		it('refuses a ../ path outside the declared roots, and sends nothing', async () => {
 			const { standIn, cockpit, connects } = withStandIn(() => ({ bytes: 1 }));
 			const { call } = await host(cockpit, { roots: [root] });
-			const result = await call('write_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/secret.txt', localPath: path.join(root, '..', path.basename(outside), 'secret.txt') });
+			const result = await call('write_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/secret.txt', localPath: path.join(root, '..', path.basename(outside), 'secret.txt') });
 			assert.equal(result.isError, true);
 			assert.equal((result.structuredContent?.error as { code?: string }).code, 'path_outside_roots');
 			assert.equal(connects(), 0);
@@ -419,9 +391,9 @@ describe('what reaches the daemon', () => {
 			}
 			const { standIn, cockpit } = withStandIn(() => ({ bytes: 1 }));
 			const { call } = await host(cockpit, { roots: [root] });
-			const read = await call('read_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(link, 'stolen.txt') });
+			const read = await call('read_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(link, 'stolen.txt') });
 			assert.equal(read.isError, true, textOf(read));
-			const write = await call('write_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(link, 'secret.txt') });
+			const write = await call('write_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(link, 'secret.txt') });
 			assert.equal(write.isError, true, textOf(write));
 			assert.equal(standIn.requests.length, 0);
 		});
@@ -437,7 +409,7 @@ describe('what reaches the daemon', () => {
 			t.after(() => { try { fs.unlinkSync(link); } catch { /* gone */ } });
 			const { standIn, cockpit } = withStandIn(() => ({ bytes: 1 }));
 			const { call } = await host(cockpit, { roots: [root] });
-			const read = await call('read_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: link });
+			const read = await call('read_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/a.txt', localPath: link });
 			assert.equal(read.isError, true, textOf(read));
 			assert.equal(standIn.requests.length, 0);
 		});
@@ -445,18 +417,18 @@ describe('what reaches the daemon', () => {
 		it('sends a path inside the roots as its absolute real path', async () => {
 			const { standIn, cockpit } = withStandIn(() => ({ bytes: 2 }));
 			const { call } = await host(cockpit, { roots: [root] });
-			const result = await call('write_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/in.txt', localPath: path.join(root, 'in.txt') });
+			const result = await call('write_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/in.txt', localPath: path.join(root, 'in.txt') });
 			assert.notEqual(result.isError, true, textOf(result));
-			assert.deepEqual(standIn.requests.at(-1), { method: 'files/write', params: { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/in.txt', fromLocalPath: path.join(root, 'in.txt') } });
+			assert.deepEqual(standIn.requests.at(-1), { method: 'files/write', params: { brick: 'AAA', path: '/home/root/lms2012/prjs/x/in.txt', fromLocalPath: path.join(root, 'in.txt') } });
 		});
 
 		it('keeps paths to the working directory when the host declares no roots', async () => {
 			const { standIn, cockpit } = withStandIn(() => ({ bytes: 2 }), root);
 			const { call } = await host(cockpit);
-			const refused = await call('read_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(outside, 'copy.txt') });
+			const refused = await call('read_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/a.txt', localPath: path.join(outside, 'copy.txt') });
 			assert.equal(refused.isError, true);
 			assert.equal(standIn.requests.length, 0);
-			const allowed = await call('read_file', { brick: 'Marvin', path: '/home/root/lms2012/prjs/x/a.txt', localPath: 'copy.txt' });
+			const allowed = await call('read_file', { brick: 'AAA', path: '/home/root/lms2012/prjs/x/a.txt', localPath: 'copy.txt' });
 			assert.notEqual(allowed.isError, true, textOf(allowed));
 			assert.equal(standIn.requests.at(-1)?.params.toLocalPath, path.join(root, 'copy.txt'));
 		});

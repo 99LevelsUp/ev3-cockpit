@@ -1,5 +1,5 @@
 /**
- * The core's event emitter delivers as VS Code's does.
+ * The extension's event emitter delivers as VS Code's does.
  *
  * The expected observations below were recorded from VS Code's own `EventEmitter` in the extension
  * host (VS Code 1.146, 18.11.2026), by running the same scenarios (`src/test/emitterScenarios.ts`);
@@ -13,7 +13,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { EventEmitter, setListenerErrorHandler } from '../core/events';
+import * as core from '../core/events';
+import { EventEmitter, setListenerErrorHandler } from '../vscode/events';
 import { observeEmitter } from '../test/emitterScenarios';
 
 const RECORDED_FROM_VSCODE = [
@@ -60,6 +61,19 @@ describe('EventEmitter delivers as VS Code\'s does', () => {
 	});
 });
 
+// The Node core carries the same emitter until it goes; it is held to the same recording.
+describe('the core\'s EventEmitter delivers as VS Code\'s does', () => {
+	it('sees every recorded scenario as VS Code did', () => {
+		const errors: unknown[] = [];
+		const previous = core.setListenerErrorHandler((error) => errors.push(error));
+		try {
+			assert.deepEqual(observeEmitter(() => new core.EventEmitter()), RECORDED_FROM_VSCODE);
+		} finally {
+			core.setListenerErrorHandler(previous);
+		}
+	});
+});
+
 describe('EventEmitter listener errors', () => {
 	it('hands an error a listener throws to the error handler exactly once, and fire does not throw', () => {
 		collectingListenerErrors((errors) => {
@@ -101,7 +115,7 @@ describe('EventEmitter listener errors', () => {
 		fs.writeFileSync(file, [
 			`const { it } = require('node:test');`,
 			`const assert = require('node:assert/strict');`,
-			`const { EventEmitter } = require(${JSON.stringify(path.join(repo, 'out', 'core', 'events'))});`,
+			`const { EventEmitter } = require(${JSON.stringify(path.join(repo, 'out', 'vscode', 'events'))});`,
 			`it('asserts inside a listener', () => {`,
 			`  const emitter = new EventEmitter();`,
 			`  emitter.event((n) => assert.equal(n, 2));`,

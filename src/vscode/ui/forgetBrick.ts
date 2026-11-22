@@ -1,27 +1,26 @@
 /**
- * The "Forget a Brick" command (step-3 plan, U5, KTD1): pick a brick this computer knows,
- * confirm, forget it across every layer, and say part by part what happened and what is left.
+ * The "Forget a Brick" command: pick a brick this computer knows, confirm, forget it across every
+ * layer, and say part by part what happened and what is left.
  *
  * Free of `vscode`, so the flow and its text can be tested; the command in `extension.ts` hands
- * it a picker, a modal confirmation, a progress notification and messages.
+ * it a picker, a modal confirmation, a progress notification, messages and the bridge.
  *
- * The text is built from a `ForgetReport` by pure functions (KTD8). Each part has its own
- * builder so "Clear a Brick's Bluetooth List" (U8) can render its report of the same shape. The
- * fixed wording names no operating system (R12): the pairing refusal and the residue are the
- * provider's own words, printed as they came. It names where a record is and why it stays,
- * never how to get around what protects it (R6, R11, KD3).
+ * The text is built from the daemon's `ForgetReport` by pure functions. Each part has its own
+ * builder so "Clear a Brick's Bluetooth List" can render its report of the same shape. The fixed
+ * wording names no operating system: the pairing refusal and the residue are the provider's own
+ * words, printed as they came. It names where a record is and why it stays, never how to get
+ * around what protects it.
  */
 
-import { BrickEntry, BrickId, BrickKey } from '../../core/contracts';
-import type { BrickManager } from '../../core/runtime/brickManager';
-import { brickLabel, transportLabel } from '../../core/runtime/brickLabels';
-import type { RuntimeLog } from '../../core/runtime/createRuntime';
-import type { BrickSideOutcome, ForgetReport } from '../../core/runtime/forgetReport';
-import type { PresenceAggregator } from '../../core/runtime/presenceAggregator';
+import type { BrickSideOutcome, ContractBrick, ForgetReport, ForgetResult } from '../../contract/generated';
+import { brickLabel, transportLabel } from './brickLabels';
 import { compareBricks } from './brickOrder';
-import { BrickPickRow, describeChannels } from './brickPickRows';
+import { BrickPickRow, plainPickRow } from './brickPickRows';
+import { BrickList, CommandLog, asError } from './commandTypes';
 
-/** The one action of the confirmation (R2). */
+export { plainPickRow } from './brickPickRows';
+
+/** The one action of the confirmation. */
 export const FORGET_ACTION = 'Forget';
 
 /**
@@ -32,33 +31,24 @@ export const MENU_SAVE_NOTE = 'The brick saves its list only when it is switched
 export const MENU_POWER_OFF_NOTE = `${MENU_SAVE_NOTE} `
 	+ 'If its battery is pulled instead, the entry comes back, and it then blocks re-pairing with this computer.';
 
-/** Why this computer's entry left on a brick matters, and what removes it (R11, KD7). */
+/** Why this computer's entry left on a brick matters, and what removes it. */
 export const LEFT_BEHIND_NOTE = 'It blocks re-pairing with this computer until it is removed. '
 	+ '"Clear a Brick\'s Bluetooth List" removes it once the brick is reachable.';
 
 /**
- * The bricks there is something to forget about: paired with this computer, or remembered
- * (R1, KD6). A brick only an inquiry heard has no pairing and no memory to remove. In D5 order.
+ * The bricks there is something to forget about: paired with this computer. A brick only an
+ * inquiry heard has no pairing to remove. In the owner's order.
  */
-export function forgetCandidates(list: readonly BrickEntry[]): BrickEntry[] {
-	return list.filter((brick) => brick.paired || brick.remembered).sort(compareBricks);
+export function forgetCandidates(list: readonly ContractBrick[]): ContractBrick[] {
+	return list.filter((brick) => brick.paired).sort(compareBricks);
 }
 
 /**
  * The picker's rows: like the connect picker's, without its "new" mark, which says picking a
  * brick pairs it first and every brick here is known already.
  */
-export function forgetPickRows(list: readonly BrickEntry[], isSignedIn: (brickId: BrickId) => boolean): BrickPickRow[] {
-	return forgetCandidates(list).map((brick) => plainPickRow(brick, isSignedIn));
-}
-
-export function plainPickRow(brick: BrickEntry, isSignedIn: (brickId: BrickId) => boolean): BrickPickRow {
-	return {
-		label: `${isSignedIn(brick.brickId) ? '$(check) ' : ''}${brick.name.value}`,
-		description: `${brick.name.confirmed ? '' : '(name unconfirmed) '}${describeChannels(brick)}`,
-		detail: brick.brickId,
-		brickId: brick.brickId,
-	};
+export function forgetPickRows(list: readonly ContractBrick[]): BrickPickRow[] {
+	return forgetCandidates(list).map(plainPickRow);
 }
 
 /** Ends `text` with a full stop unless it already ends a sentence. */
@@ -72,10 +62,10 @@ export function quoteNames(names: readonly string[]): string {
 	return names.map((name) => `"${name}"`).join(', ');
 }
 
-/** "over USB", "over BT": the channel something went over. */
-export const over = (key: BrickKey): string => `over ${transportLabel(key)}`;
+/** "over USB", "over BT": the channel, by its key, something went over. */
+export const over = (key: string): string => `over ${transportLabel(key)}`;
 
-/** The cockpit's own memory of the brick (R10); `of` names the part of it, when not all of it. */
+/** The cockpit's own memory of the brick; `of` names the part of it, when not all of it. */
 export function memoryLines(report: Pick<ForgetReport, 'memory'>, of = ''): string[] {
 	const memory = `The cockpit's memory${of ? ` of ${of}` : ''}`;
 	return report.memory.status === 'cleared'
@@ -83,7 +73,7 @@ export function memoryLines(report: Pick<ForgetReport, 'memory'>, of = ''): stri
 		: [`${memory}: not fully cleared — ${sentence(report.memory.detail)}`];
 }
 
-/** This computer's pairing, one line per channel that had one (R5, R10). */
+/** This computer's pairing, one line per channel that had one. */
 export function pairingLines(report: Pick<ForgetReport, 'pairing'>): string[] {
 	if (report.pairing.length === 0) {
 		return ['Pairing on this computer: nothing to unpair; the brick has no Bluetooth pairing.'];
@@ -93,7 +83,7 @@ export function pairingLines(report: Pick<ForgetReport, 'pairing'>): string[] {
 		: `Pairing on this computer (${transportLabel(outcome.channel)}): refused — ${sentence(outcome.reason)}`);
 }
 
-/** Why nothing was done on the brick (R8). */
+/** Why nothing was done on the brick. */
 function skipReason(side: Extract<BrickSideOutcome, { status: 'skipped' }>): string {
 	const detail = side.detail ? ` ${sentence(side.detail)}` : '';
 	switch (side.reason) {
@@ -112,7 +102,7 @@ function skipReason(side: Extract<BrickSideOutcome, { status: 'skipped' }>): str
 	}
 }
 
-/** This computer's entry on the brick's own Bluetooth list (R7–R9, R10). */
+/** This computer's entry on the brick's own Bluetooth list. */
 export function brickSideLines(report: ForgetReport): string[] {
 	const side = report.brickSide;
 	const lines: string[] = [];
@@ -156,7 +146,7 @@ const moreEntries = (count: number): string => `${count} more ${count === 1 ? 'e
 
 /**
  * This computer's entry on the brick, when it may still be there: the removal was not run,
- * failed, or was sent without proof (R11), or removed one of several entries under the name. A
+ * failed, or was sent without proof, or removed one of several entries under the name. A
  * list read without this computer's name has no such entry, so `no-match` adds none.
  */
 function brickEntryLeftBehind(side: BrickSideOutcome): string | undefined {
@@ -174,7 +164,7 @@ function brickEntryLeftBehind(side: BrickSideOutcome): string | undefined {
 	}
 }
 
-/** Every record the forget could not remove, with its exact location and why it stays (R11). */
+/** Every record the forget could not remove, with its exact location and why it stays. */
 export function leftBehindLines(report: ForgetReport): string[] {
 	const lines: string[] = [];
 	const onBrick = brickEntryLeftBehind(report.brickSide);
@@ -185,12 +175,12 @@ export function leftBehindLines(report: ForgetReport): string[] {
 	return lines.length > 0 ? ['Left behind:', ...lines] : ['Left behind: nothing.'];
 }
 
-/** The records a provider said it left, each with where it is and why it stays, as the provider gave them (R11, R12). */
+/** The records a provider said it left, each with where it is and why it stays, as the provider gave them. */
 export function residueLines(residue: ForgetReport['residue']): string[] {
 	return residue.flatMap((record) => [`  ${record.location}`, `    ${record.reason}`]);
 }
 
-/** The output channel's account of a forget, part by part (KTD8). */
+/** The output channel's account of a forget, part by part. */
 export function forgetDetails(report: ForgetReport, label: string): string[] {
 	return [
 		`Forgot ${label}.`,
@@ -235,7 +225,7 @@ export function forgetNotification(report: ForgetReport, label: string): string 
 
 /** What a brick command needs besides the brick layer, whose part it uses is `B`. */
 export interface BrickCommandDeps<B> {
-	readonly aggregator: Pick<PresenceAggregator, 'getDiscoveryList' | 'getBrick'>;
+	readonly list: Pick<BrickList, 'bricks' | 'brick'>;
 	readonly bricks: B;
 	/** Shows the rows and resolves with the one picked, or undefined when dismissed. */
 	readonly pick: (rows: readonly BrickPickRow[]) => PromiseLike<BrickPickRow | undefined>;
@@ -243,15 +233,21 @@ export interface BrickCommandDeps<B> {
 	readonly confirm: (message: string, detail: string, action: string) => PromiseLike<boolean>;
 	/** A notification that stays up while `task` runs. */
 	readonly progress: <T>(title: string, task: () => Promise<T>) => PromiseLike<T>;
-	readonly log: RuntimeLog;
+	readonly log: CommandLog;
 	readonly showInfo: (message: string) => void;
 	/** The outcome, with a way to the details already written to the log. */
 	readonly showResult: (message: string) => void;
 	readonly showError: (message: string) => void;
 }
 
+/** The brick layer as forgetting uses it. */
+export interface ForgetBricks {
+	/** Forgets the brick; the person has already said yes in VS Code. */
+	forget(brickId: string): Promise<ForgetResult>;
+}
+
 /** What the command needs besides the brick layer. */
-export type ForgetBrickDeps = BrickCommandDeps<Pick<BrickManager, 'forget' | 'isSignedIn'>>;
+export type ForgetBrickDeps = BrickCommandDeps<ForgetBricks>;
 
 /**
  * Offers the bricks this computer knows, asks before forgetting the one picked, forgets it, and
@@ -259,17 +255,17 @@ export type ForgetBrickDeps = BrickCommandDeps<Pick<BrickManager, 'forget' | 'is
  * is no longer offered, so the forget cannot be run again to see them.
  */
 export async function forgetBrick(deps: ForgetBrickDeps): Promise<void> {
-	const { aggregator, bricks, log } = deps;
-	const rows = forgetPickRows(aggregator.getDiscoveryList(), (brickId) => bricks.isSignedIn(brickId));
+	const { list, bricks, log } = deps;
+	const rows = forgetPickRows(list.bricks());
 	if (rows.length === 0) {
-		deps.showInfo('EVƎ Cockpit: no brick to forget. Only bricks this computer is paired with or remembers can be forgotten.');
+		deps.showInfo('EVƎ Cockpit: no brick to forget. Only bricks this computer is paired with can be forgotten.');
 		return;
 	}
 	const picked = await deps.pick(rows);
 	if (!picked) { return; }
 
 	// Named now: once forgotten, the brick is gone from the list its name comes from.
-	const label = brickLabel(aggregator, picked.brickId);
+	const label = brickLabel(list, picked.brickId);
 	const agreed = await deps.confirm(
 		`Forget ${label}?`,
 		'It will be disconnected and unpaired from this computer, and EVƎ Cockpit will forget it. '
@@ -278,15 +274,21 @@ export async function forgetBrick(deps: ForgetBrickDeps): Promise<void> {
 	);
 	if (!agreed) { return; }
 
-	let report: ForgetReport;
+	let result: ForgetResult;
 	try {
-		report = await deps.progress(`EVƎ Cockpit: forgetting ${label}`, () => bricks.forget(picked.brickId));
+		result = await deps.progress(`EVƎ Cockpit: forgetting ${label}`, () => bricks.forget(picked.brickId));
 	} catch (error) {
-		const err = error instanceof Error ? error : new Error(String(error));
+		const err = asError(error);
 		log.error(`Forgetting ${label} failed:`, err);
 		deps.showError(`EVƎ Cockpit: could not forget ${label} — ${err.message}`);
 		return;
 	}
-	for (const line of forgetDetails(report, label)) { log.info(line); }
-	deps.showResult(forgetNotification(report, label));
+	// The report is optional in the contract; without it, the daemon's own lines say what happened.
+	if (!result.report) {
+		for (const line of [`Forgot ${label}.`, ...result.lines]) { log.info(line); }
+		deps.showResult(`EVƎ Cockpit: forgot ${label}.`);
+		return;
+	}
+	for (const line of forgetDetails(result.report, label)) { log.info(line); }
+	deps.showResult(forgetNotification(result.report, label));
 }

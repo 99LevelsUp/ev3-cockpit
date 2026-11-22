@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import {
 	CONTRACT_VERSION, ERROR_KINDS, WireErrorCode, errorKindOf, wireErrorNumber,
 } from '../contract';
+import { ERROR_FAMILY, ERROR_FAMILY_NUMBER } from '../contract/generated';
 import * as coreErrors from '../core/errors/CockpitError';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -37,6 +38,14 @@ describe('the contract', () => {
 		for (const code of Object.values(WireErrorCode)) {
 			const n = wireErrorNumber(code);
 			assert.ok(n < -32768 || n > -32000, `${code} maps to ${n}`);
+		}
+	});
+
+	it('names every code the contract defines, in the family the contract gives it', () => {
+		const named = new Set<string>(Object.values(WireErrorCode));
+		for (const [code, family] of Object.entries(ERROR_FAMILY)) {
+			assert.ok(named.has(code), `${code} has no name in WireErrorCode`);
+			assert.equal(wireErrorNumber(code as WireErrorCode), ERROR_FAMILY_NUMBER[family], code);
 		}
 	});
 

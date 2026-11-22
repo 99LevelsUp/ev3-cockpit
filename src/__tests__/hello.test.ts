@@ -70,10 +70,12 @@ describe('the handshake', () => {
 	it('closes a connection that sends another request before the handshake', async () => {
 		const [a, b] = duplexPair();
 		const daemon = createEndpoint(b);
-		const accepting = acceptHello(daemon, { key: randomBytes(32), accepted });
+		// Handled from the start: the client's request fails only after the client has handled what
+		// came before the daemon closed, a few turns after the handshake was refused.
+		const refused = assert.rejects(acceptHello(daemon, { key: randomBytes(32), accepted }));
 		const client = createEndpoint(a);
 		await assert.rejects(client.request('bricks/list', {}));
-		await assert.rejects(accepting);
+		await refused;
 		assert.equal(daemon.closed, true);
 	});
 

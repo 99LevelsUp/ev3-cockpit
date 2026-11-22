@@ -1,0 +1,43 @@
+[package]
+name = "ev3-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# The `ev3` command and its MCP server (`ev3 mcp`): the cockpit from a terminal, a script or an
+# agent, through the user's daemon, which it starts when none runs. It links no transport.
+
+[[bin]]
+name = "ev3"
+path = "src/main.rs"
+
+[dependencies]
+ev3-channel = { path = "../channel" }
+ev3-contract = { path = "../contract" }
+futures-util = { version = "0.3.34", default-features = false, features = ["std", "sink"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+tokio = { version = "1.54.1", features = ["rt", "net", "io-util", "io-std", "sync", "time", "macros", "signal"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_System_Threading",
+  "Win32_System_Time",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "macros", "process", "time"] }
+
+[build-dependencies]
+serde_json = "1.0.154"
+
+[lints]
+workspace = true
