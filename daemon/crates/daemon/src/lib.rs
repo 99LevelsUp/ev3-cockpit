@@ -27,20 +27,6 @@ pub mod settings;
 pub mod state;
 pub mod surface;
 
-/// Exit codes of the binary.
-pub mod exit_code {
-    /// A clean exit: idle, asked to exit, the key changed, or a signal.
-    pub const CLEAN: i32 = 0;
-    /// Something failed that the daemon could not work around.
-    pub const FAILED: i32 = 1;
-    /// Another daemon holds this channel's lock.
-    pub const LOCK_HELD: i32 = 2;
-    /// The daemon refused to run: elevated or root, a pipe name someone else holds, a socket
-    /// directory others can reach, or a channel and mode that must not run together.
-    pub const REFUSED: i32 = 3;
-    /// The command line was not understood.
-    pub const USAGE: i32 = 64;
-}
-
 // Shared with the native clients, which must not link the transports.
+pub use ev3_channel::daemon_exit as exit_code;
 pub use ev3_channel::{codec, fsutil, hex, paths, random_bytes, security};

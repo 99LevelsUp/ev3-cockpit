@@ -10,7 +10,7 @@ use std::time::Duration;
 use ev3_channel::key::read_key;
 use ev3_channel::paths::Paths;
 use ev3_channel::record::{ChannelRecord, parse_record};
-use ev3_contract::hello::{client_proof, daemon_proof};
+use ev3_contract::hello::{client_proof, daemon_proof, proofs_match};
 use ev3_contract::{CONTRACT_VERSION, HELLO_FINISH, HELLO_START};
 use serde_json::{Value, json};
 
@@ -142,7 +142,6 @@ mod platform {
 #[cfg(unix)]
 mod platform {
     use super::*;
-    use std::os::unix::fs::MetadataExt;
 
     fn process_alive(pid: u32) -> bool {
         let Ok(pid) = libc::pid_t::try_from(pid) else {
@@ -159,30 +158,13 @@ mod platform {
     /// Refuses a socket directory anyone but the user could have put a socket in.
     fn check_socket_dir(socket: &str) -> Result<()> {
         let dir = Path::new(socket).parent().unwrap_or(Path::new("/"));
-        let refuse = |why: String| {
-            Err(CliError::unavailable(format!(
+        match ev3_channel::fsutil::unix_dir_problem(dir) {
+            Some(why) => Err(CliError::unavailable(format!(
                 "The cockpit daemon's socket directory {} {why}; the client did not connect.",
                 dir.display()
-            )))
-        };
-        let meta = match std::fs::symlink_metadata(dir) {
-            Ok(meta) => meta,
-            Err(error) => return refuse(format!("cannot be checked ({error})")),
-        };
-        if !meta.is_dir() {
-            return refuse("is not a plain directory".into());
+            ))),
+            None => Ok(()),
         }
-        // SAFETY: geteuid has no preconditions.
-        if meta.uid() != unsafe { libc::geteuid() } {
-            return refuse("belongs to another user".into());
-        }
-        if meta.mode() & 0o077 != 0 {
-            return refuse(format!(
-                "can be opened by other users (mode {:o})",
-                meta.mode() & 0o777
-            ));
-        }
-        Ok(())
     }
 
     pub async fn open(
@@ -219,13 +201,6 @@ fn nonce() -> String {
     ev3_channel::hex(&ev3_channel::random_bytes::<16>())
 }
 
-/// Equal in constant time, for proofs.
-fn proofs_match(expected: &str, given: Option<&str>) -> bool {
-    let Some(given) = given else { return false };
-    let (a, b) = (expected.as_bytes(), given.as_bytes());
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 /// The hello: the daemon's proof is checked before anything it says is trusted and before this
 /// client proves itself.
 pub async fn hello(endpoint: &Endpoint, key: &[u8], client: &Identity) -> Result<DaemonIdentity> {
@@ -247,10 +222,10 @@ pub async fn hello(endpoint: &Endpoint, key: &[u8], client: &Identity) -> Result
         .to_owned();
     let expected = daemon_proof(key, &client_nonce, &daemon_nonce);
     if daemon_nonce.is_empty()
-        || !proofs_match(
-            &expected,
-            challenge.get("daemonProof").and_then(Value::as_str),
-        )
+        || !challenge
+            .get("daemonProof")
+            .and_then(Value::as_str)
+            .is_some_and(|given| proofs_match(&expected, given))
     {
         endpoint.close();
         return Err(CliError::unavailable(
@@ -323,14 +298,6 @@ pub async fn connect(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn proofs_compare_whole() {
-        assert!(proofs_match("abcd", Some("abcd")));
-        assert!(!proofs_match("abcd", Some("abce")));
-        assert!(!proofs_match("abcd", Some("abc")));
-        assert!(!proofs_match("abcd", None));
-    }
 
     #[test]
     fn a_nonce_has_32_lowercase_hex_digits() {

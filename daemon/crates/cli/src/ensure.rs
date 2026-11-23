@@ -14,6 +14,7 @@
 use std::time::{Duration, Instant};
 
 use ev3_channel::paths::Paths;
+use ev3_channel::version::compare_versions;
 use ev3_contract::CONTRACT_VERSION;
 use serde_json::{Value, json};
 
@@ -51,20 +52,6 @@ pub enum Decision {
     Use(Option<String>),
     Replace,
     Stop(String),
-}
-
-/// Versions compare by their first three parts, split at `.`, `+` and `-`, each read by its
-/// leading digits, missing parts as 0.
-pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let parts = |v: &str| -> [u64; 3] {
-        let mut out = [0u64; 3];
-        for (slot, part) in out.iter_mut().zip(v.split(['.', '+', '-'])) {
-            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
-            *slot = digits.parse().unwrap_or(0);
-        }
-        out
-    };
-    parts(a).cmp(&parts(b))
 }
 
 fn speaks_our_contract(daemon: &DaemonIdentity) -> bool {
@@ -356,7 +343,6 @@ async fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cmp::Ordering;
 
     fn daemon(version: &str, build_kind: &str, contract: u64) -> DaemonIdentity {
         DaemonIdentity {
@@ -367,14 +353,6 @@ mod tests {
             pid: 1,
             state: None,
         }
-    }
-
-    #[test]
-    fn versions_compare_by_their_first_three_numbers() {
-        assert_eq!(compare_versions("0.2.552", "0.2.551"), Ordering::Greater);
-        assert_eq!(compare_versions("0.2.10", "0.2.9"), Ordering::Greater);
-        assert_eq!(compare_versions("1.0", "1.0.0"), Ordering::Equal);
-        assert_eq!(compare_versions("1.2.3-beta", "1.2.3+x"), Ordering::Equal);
     }
 
     #[test]

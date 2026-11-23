@@ -1114,9 +1114,25 @@ fn status_lines(status: &Value) -> Vec<String> {
     if text(status, "mode") == "replay" {
         kind.push_str(", replaying recordings");
     }
+    let bricks = array(status, "bricks");
+    // The brick a client shows, by its name where the daemon holds it.
+    let shown = |id: &str| -> String {
+        bricks
+            .iter()
+            .find(|b| text(b, "brickId") == id)
+            .map_or_else(|| id.to_owned(), |b| text(b, "name").to_owned())
+    };
     let clients: Vec<String> = array(status, "clients")
         .iter()
-        .map(|c| format!("{} ({})", text(c, "name"), text(c, "kind")))
+        .map(|c| match c.get("shows").and_then(Value::as_str) {
+            Some(id) => format!(
+                "{} ({}, shows {})",
+                text(c, "name"),
+                text(c, "kind"),
+                shown(id)
+            ),
+            None => format!("{} ({})", text(c, "name"), text(c, "kind")),
+        })
         .collect();
     let mut lines = vec![
         format!(
@@ -1139,7 +1155,6 @@ fn status_lines(status: &Value) -> Vec<String> {
             }
         ),
     ];
-    let bricks = array(status, "bricks");
     if bricks.is_empty() {
         lines.push("Held bricks: none".into());
     } else {
@@ -1237,6 +1252,29 @@ async fn restart(ctx: &mut Ctx) -> Result<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_names_the_brick_each_client_shows() {
+        let status = json!({
+            "version": "1.2.3", "contractVersion": 2, "pid": 7, "channel": "user",
+            "logPath": "daemon.log",
+            "clients": [
+                { "name": "VS Code", "kind": "vscode", "shows": "0016530f0c0c" },
+                { "name": "VS Code", "kind": "vscode", "shows": "0016530f0b0b" },
+                { "name": "ev3", "kind": "cli" },
+            ],
+            "bricks": [{ "name": "CCC", "brickId": "0016530f0c0c", "holders": [] }],
+        });
+        let lines = status_lines(&status);
+        let clients = lines
+            .iter()
+            .find(|l| l.starts_with("Clients: "))
+            .expect("clients line");
+        assert_eq!(
+            clients,
+            "Clients: VS Code (vscode, shows CCC), VS Code (vscode, shows 0016530f0b0b), ev3 (cli)"
+        );
+    }
 
     #[test]
     fn a_local_path_is_absolute_with_dot_and_dot_dot_resolved() {

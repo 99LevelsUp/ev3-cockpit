@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ev3_contract::hello::{client_proof, daemon_proof};
+use ev3_contract::hello::{client_proof, daemon_proof, proofs_match};
 use ev3_contract::{
     BuildKind, CONTRACT_VERSION, ClientInfo, ClientKind, ContractError, ErrorCode, HELLO_FINISH,
     HELLO_START, HelloAccepted, HelloChallenge, HelloFinish, HelloStart,
@@ -217,12 +217,6 @@ impl RequestContext {
 /// Lowercase hex of at least 32 digits.
 fn is_nonce(text: &str) -> bool {
     text.len() >= 32 && text.len() <= 256 && text.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Compares two strings in time that does not depend on where they differ.
-fn same_secret(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// A request's id and params, if `message` is a request for `method`.
@@ -462,7 +456,7 @@ where
     let (id, params) = request_for(&second, HELLO_FINISH)?;
     let finish: HelloFinish = serde_json::from_value(params).ok()?;
     let expected = client_proof(&shared.key, &start.client_nonce, &daemon_nonce);
-    if !same_secret(&expected, &finish.client_proof) {
+    if !proofs_match(&expected, &finish.client_proof) {
         shared.log.warn(&format!(
             "A client calling itself {:?} could not prove it holds the key; connection closed.",
             start.client_name
@@ -504,13 +498,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn secrets_compare_equal_only_when_equal() {
-        assert!(same_secret("abcd", "abcd"));
-        assert!(!same_secret("abcd", "abce"));
-        assert!(!same_secret("abcd", "abc"));
-    }
 
     #[test]
     fn a_nonce_is_hex_of_at_least_32_digits() {

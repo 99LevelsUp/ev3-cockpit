@@ -144,6 +144,8 @@ describe('disconnecting a brick others hold', () => {
 				sent.push(params);
 				return Promise.resolve({ stillHeldBy: params.forEveryone ? [] : ['VS Code (other window)'] });
 			},
+			activeBrick: () => undefined,
+			setActiveBrick: () => Promise.resolve(),
 		};
 		await disconnectBrick(client, {
 			pick: (items) => Promise.resolve(items[0]),
@@ -153,5 +155,26 @@ describe('disconnecting a brick others hold', () => {
 		assert.match(told[0], /VS Code \(other window\)/);
 		assert.deepEqual(sent, [{ brick: 'CCC' }, { brick: 'CCC', forEveryone: true }]);
 		assert.equal(FOR_EVERYONE_ACTION, 'Disconnect for everyone');
+	});
+
+	it('stops showing the brick it let go of, and keeps showing another', async () => {
+		let active: string | undefined = 'CCC';
+		const set: (string | undefined)[] = [];
+		const client = (shows: string) => {
+			active = shows;
+			return {
+				bricks: () => [ccc],
+				request: () => Promise.resolve({ stillHeldBy: [] }),
+				activeBrick: () => active,
+				setActiveBrick: (id: string | undefined) => { set.push(id); active = id; return Promise.resolve(); },
+			};
+		};
+		const ui = { pick: <T>(items: readonly T[]) => Promise.resolve(items[0]), notify: () => Promise.resolve(undefined), log: () => undefined };
+		await disconnectBrick(client('CCC'), ui, () => '');
+		assert.deepEqual(set, [undefined]);
+		assert.equal(active, undefined);
+		await disconnectBrick(client('BBB'), ui, () => '');
+		assert.deepEqual(set, [undefined], 'a window showing another brick keeps showing it');
+		assert.equal(active, 'BBB');
 	});
 });
