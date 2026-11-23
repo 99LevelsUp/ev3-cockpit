@@ -46,6 +46,7 @@ The per-user daemon `ev3-cockpitd` and the native `ev3` command are a Cargo work
 - `daemon/crates/daemon/` — the `ev3-cockpitd` binary: channel, key, lock, JSON-RPC, hello, holders and write leases, questions, settings, lifecycle, the state migration, the contract surface
 - `daemon/crates/channel/` — what the daemon and its native clients share: state root, key, `channel.json`, framing (`docs/channel.md`)
 - `daemon/crates/contract/` — the contract generated from `contract/`
+- `daemon/crates/client/` — `ev3-client`, the native client of the daemon (find or start it, the hello, typed requests); `ev3`, `ev3 mcp` and Rust add-ons such as EVƎ C use it
 - `daemon/crates/cli/` — the native `ev3` command and `ev3 mcp`
 - `daemon/fixtures/` — recorded brick sessions the tests replay
 
