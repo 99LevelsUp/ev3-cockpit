@@ -963,6 +963,20 @@ async fn telemetry_command(ctx: &mut Ctx) -> Result<Outcome> {
     if !missing.is_empty() {
         human.push(format!("No value yet for {}.", missing.join(", ")));
     }
+    let unavailable = strings(&reading, "unavailable");
+    if !unavailable.is_empty() {
+        human.push(if rows.is_empty() {
+            format!(
+                "{} more rows have no value with nothing on their ports or no daisy chain.",
+                unavailable.len()
+            )
+        } else {
+            format!(
+                "No value for {}: nothing on the port, or no daisy chain that deep.",
+                unavailable.join(", ")
+            )
+        });
+    }
     Ok(Outcome::new(reading, human))
 }
 
