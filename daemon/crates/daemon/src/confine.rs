@@ -285,24 +285,30 @@ fn search(dir: &Path, identity: FileIdentity, budget: &mut usize) -> Search {
     }
 }
 
-/// Whether `path` is `root` or lies inside it; letters compare without case on Windows.
+/// Whether `path` is `root` or lies inside it, part by part (see [`same_name`]).
 fn inside(path: &Path, root: &Path) -> bool {
-    let norm = |c: Component<'_>| {
-        let text = c.as_os_str().to_string_lossy().into_owned();
-        if cfg!(windows) {
-            text.to_lowercase()
-        } else {
-            text
-        }
-    };
     let mut path = path.components();
     for part in root.components() {
         match path.next() {
-            Some(other) if norm(other) == norm(part) => {}
+            Some(other) if same_name(other, part) => {}
             _ => return false,
         }
     }
     true
+}
+
+/// Whether two parts of a path name the same thing. On Windows letters compare without case.
+#[cfg(windows)]
+fn same_name(a: Component<'_>, b: Component<'_>) -> bool {
+    let norm = |c: Component<'_>| c.as_os_str().to_string_lossy().to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// Whether two parts of a path name the same thing: compared as the bytes the system keeps, since
+/// names that are not valid text would read the same once made text.
+#[cfg(not(windows))]
+fn same_name(a: Component<'_>, b: Component<'_>) -> bool {
+    a == b
 }
 
 impl Confinement {
@@ -736,12 +742,57 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn letters_compare_without_case_on_windows() {
+        assert!(inside(
+            Path::new(r"C:\Base\STATE\x"),
+            Path::new(r"c:\base\State")
+        ));
+        assert!(!inside(
+            Path::new(r"C:\Base\States\x"),
+            Path::new(r"c:\base\State")
+        ));
+        // A root that does not exist yet keeps its letters through the resolution, and so does
+        // a path under it spelt in other case: only the comparison can tell they are the same.
         let base = temp_dir();
-        let state = base.join("State");
+        let confinement = Confinement::new([base.join("State")]).expect("roots");
+        let shouted = base.join("STATE").join("x");
+        assert_eq!(
+            confinement.check(&shouted).expect_err("refused").data.code,
+            ErrorCode::AccessDenied
+        );
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn names_compare_as_the_bytes_the_system_keeps_on_linux() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        // Two names that are not valid text read the same once made text; they are two folders.
+        let named = |bytes: &[u8]| PathBuf::from(OsStr::from_bytes(bytes));
+        assert!(!inside(&named(b"/base/\xfe/file"), &named(b"/base/\xff")));
+        assert!(inside(&named(b"/base/\xff/file"), &named(b"/base/\xff")));
+        assert!(!inside(
+            Path::new("/base/State/x"),
+            Path::new("/base/state")
+        ));
+
+        let base = temp_dir();
+        let state = base.join(OsStr::from_bytes(b"\xff"));
+        let other = base.join(OsStr::from_bytes(b"\xfe"));
         std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&other).expect("other");
         let confinement = Confinement::new([state.clone()]).expect("roots");
-        let shouted = PathBuf::from(state.to_string_lossy().to_uppercase()).join("x");
-        assert!(confinement.check(&shouted).is_err());
+        confinement
+            .check(&other.join("file"))
+            .expect("another folder");
+        assert_eq!(
+            confinement
+                .check(&state.join("file"))
+                .expect_err("the state")
+                .data
+                .code,
+            ErrorCode::AccessDenied
+        );
         std::fs::remove_dir_all(base).expect("clean");
     }
 }
