@@ -14,6 +14,17 @@ use serde_json::{Value, json};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+/// Whether this process runs elevated (administrator or root), as GitHub's Windows runners run
+/// every step: the daemon refuses to run so, and its own files would belong to the Administrators
+/// group. A process test then says so and has nothing to check.
+pub fn refuses_this_process() -> bool {
+    let elevated = ev3_cockpitd::security::is_elevated().unwrap_or(false);
+    if elevated {
+        eprintln!("skipped: this process runs elevated, and the cockpit daemon refuses to run so");
+    }
+    elevated
+}
+
 /// The daemon binary: the one cargo built for these tests, or, for test binaries built on one
 /// system and run on another, the `ev3-cockpitd` found next to or above the test binary.
 pub fn bin() -> &'static Path {

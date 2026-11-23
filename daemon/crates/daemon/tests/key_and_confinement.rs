@@ -12,6 +12,9 @@ use ev3_contract::ErrorCode;
 
 #[test]
 fn many_starters_at_once_end_with_one_key_and_no_temporary_files() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("keyrace");
     let file = root.path().join("native").join("key");
     let barrier = Arc::new(Barrier::new(8));
@@ -38,6 +41,9 @@ fn many_starters_at_once_end_with_one_key_and_no_temporary_files() {
 
 #[test]
 fn an_existing_key_is_never_replaced() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("keykeep");
     let file = root.path().join("key");
     std::fs::write(&file, [9u8; KEY_BYTES]).expect("key");
@@ -73,6 +79,9 @@ fn link_dir(target: &Path, link: &Path) {
 
 #[test]
 fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("junction");
     let state = root.path().join("state");
     let elsewhere = root.path().join("projects");
@@ -98,6 +107,9 @@ fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
 #[cfg(unix)]
 #[test]
 fn a_file_link_or_a_dangling_link_into_the_state_root_is_refused() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("filelink");
     let state = root.path().join("state");
     std::fs::create_dir_all(&state).expect("state");

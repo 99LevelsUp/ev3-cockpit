@@ -24,6 +24,9 @@ fn code(answer: &Value) -> &str {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn with_only_an_mcp_client_switching_to_full_is_refused_at_once_naming_the_person_command() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("agent-only");
     let daemon = Daemon::start(&root, "t");
     let mut agent = client(&daemon, &root, "mcp", "an agent").await;
@@ -54,6 +57,9 @@ async fn with_only_an_mcp_client_switching_to_full_is_refused_at_once_naming_the
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_question_an_mcp_request_raises_reaches_vscode_naming_the_mcp_client() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("ask");
     let daemon = Daemon::start(&root, "t");
     let mut vscode = client(&daemon, &root, "vscode", "VS Code").await;
@@ -85,6 +91,9 @@ async fn a_question_an_mcp_request_raises_reaches_vscode_naming_the_mcp_client()
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_remembered_answer_does_not_answer_a_question_another_client_raises() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("remember");
     let daemon = Daemon::start(&root, "t");
     let mut vscode = client(&daemon, &root, "vscode", "VS Code").await;
@@ -140,6 +149,9 @@ async fn a_remembered_answer_does_not_answer_a_question_another_client_raises() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forget_an_agent_asks_for_with_nobody_to_ask_is_refused_naming_the_person_command() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("forget");
     let daemon = Daemon::replaying(&root, "t", "usb-discovery-aaa");
     let mut agent = client(&daemon, &root, "mcp", "an agent").await;
@@ -166,6 +178,9 @@ async fn a_forget_an_agent_asks_for_with_nobody_to_ask_is_refused_naming_the_per
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_path_into_the_state_root_is_refused_for_every_client_kind() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("confine");
     let daemon = Daemon::start(&root, "t");
     let state = root.channel_dir("t");
@@ -204,6 +219,9 @@ async fn a_local_path_into_the_state_root_is_refused_for_every_client_kind() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_leased_write_to_a_brick_gets_brick_busy_naming_the_holder() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("lease");
     let daemon = Daemon::replaying(&root, "t", "usb-discovery-aaa");
     let mut vscode = client(&daemon, &root, "vscode", "VS Code").await;
@@ -245,6 +263,9 @@ async fn a_second_leased_write_to_a_brick_gets_brick_busy_naming_the_holder() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_hold_ev3_connect_leaves_is_in_held_json_and_goes_with_ev3_disconnect() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("hold");
     let daemon = Daemon::replaying(&root, "t", "usb-connect-commands-aaa");
     let mut terminal = client(&daemon, &root, "cli", "ev3 connect").await;
@@ -287,6 +308,9 @@ async fn a_hold_ev3_connect_leaves_is_in_held_json_and_goes_with_ev3_disconnect(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_brick_held_by_the_previous_daemon_is_connected_again_at_start() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("held-again");
     let dir = root.channel_dir("t");
     std::fs::create_dir_all(&dir).unwrap();
@@ -311,6 +335,9 @@ async fn a_brick_held_by_the_previous_daemon_is_connected_again_at_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_connect_tells_every_client_the_brick_came_and_the_list_changed() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("notify");
     let daemon = Daemon::replaying(&root, "t", "usb-connect-commands-aaa");
     let mut vscode = client(&daemon, &root, "vscode", "VS Code").await;
@@ -346,6 +373,9 @@ async fn a_connect_tells_every_client_the_brick_came_and_the_list_changed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_hold_survives_the_client_that_made_it_and_a_client_hold_does_not() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("survive");
     let daemon = Daemon::replaying(&root, "t", "usb-connect-commands-aaa");
     let mut terminal = client(&daemon, &root, "cli", "ev3 connect").await;
@@ -368,6 +398,9 @@ async fn a_hold_survives_the_client_that_made_it_and_a_client_hold_does_not() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_gone_while_its_brick_connects_leaves_it_signed_out_with_no_holder() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("orphan");
     let daemon = Daemon::replaying(&root, "t", "usb-connect-commands-aaa");
     let mut leaving = client(&daemon, &root, "vscode", "VS Code").await;
@@ -392,6 +425,9 @@ async fn a_client_gone_while_its_brick_connects_leaves_it_signed_out_with_no_hol
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_damaged_ledger_is_moved_aside_and_the_daemon_serves() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("ledger");
     let dir = root.channel_dir("t");
     std::fs::create_dir_all(&dir).unwrap();
@@ -449,6 +485,9 @@ fn params_of(method: &str) -> Value {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_method_answers_without_no_provider() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("all");
     let mut daemon = Daemon::start(&root, "t");
     let mut c = client(&daemon, &root, "vscode", "VS Code").await;

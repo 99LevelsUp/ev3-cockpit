@@ -49,13 +49,12 @@ fn write_manifest(dir: &Path, sha: &str) {
 }
 
 /// The daemon cargo built beside `ev3`, with a manifest that matches it now; `None` when it was
-/// not built.
+/// not built or would not run for this process (see `common::daemon_beside_ev3`).
 fn daemon_binary() -> Option<PathBuf> {
-    let daemon = ev3().parent()?.join(daemon_name());
-    if !daemon.exists() {
+    let Some(daemon) = common::daemon_beside_ev3() else {
         eprintln!("skipped: build ev3-cockpitd first (npm run daemon:build)");
         return None;
-    }
+    };
     write_manifest(daemon.parent()?, &sha256(&daemon));
     Some(daemon)
 }

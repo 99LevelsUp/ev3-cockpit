@@ -8,6 +8,7 @@
  * the rest drive the bridge over a stand-in for the client library.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -231,7 +232,7 @@ describe('the bridge follows the daemon\'s pairings and repairs', () => {
 	});
 });
 
-describe('starting the daemon', () => {
+describe('starting the daemon', { skip: daemonRefusesThisProcess }, () => {
 	it('shows a Smart App Control block once, says the cockpit cannot run while it is on, and never starts the daemon again', {
 		// The launch's directory checks follow the host's platform: Smart App Control exists only on Windows.
 		skip: process.platform !== 'win32' ? 'Smart App Control exists only on Windows' : nativeBinaryMissing,

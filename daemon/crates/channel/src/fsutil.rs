@@ -522,6 +522,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_private_directory_lets_in_the_user_alone() {
+        // Elevated, what a process creates belongs to the Administrators group, not to the user.
+        if crate::security::is_elevated().unwrap_or(false) {
+            eprintln!("skipped: this process runs elevated");
+            return;
+        }
         let dir = temp_dir();
         let private = dir.join("bin");
         windows::create_private_dir(&private).expect("create");

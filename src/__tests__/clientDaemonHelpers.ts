@@ -3,6 +3,7 @@
  * gets the home as its profile, so the daemons it starts keep their state there too.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -54,10 +55,10 @@ export function sleep(ms: number): Promise<void> {
 
 /** The development build of the native daemon. */
 export const NATIVE_BINARY = path.join(REPO, 'daemon', 'target', 'debug', daemonBinaryName());
-/** Why native-daemon tests are skipped, or false when the build is there. */
-export const nativeBinaryMissing: string | false = fs.existsSync(NATIVE_BINARY)
+/** Why native-daemon tests are skipped: the daemon would refuse this process, or its build is missing; false otherwise. */
+export const nativeBinaryMissing: string | false = daemonRefusesThisProcess || (fs.existsSync(NATIVE_BINARY)
 	? false
-	: `the daemon binary ${NATIVE_BINARY} is missing; run npm run daemon:build (or cargo build -p ev3-cockpitd in daemon/) to run these tests`;
+	: `the daemon binary ${NATIVE_BINARY} is missing; run npm run daemon:build (or cargo build -p ev3-cockpitd in daemon/) to run these tests`);
 /**
  * A recorded scenario of a real brick, with the brick names and inputs its script published: a link
  * recording by its name, a service recording as `service/<name>`.

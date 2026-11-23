@@ -92,6 +92,9 @@ fn assert_exits_cleanly(daemon: &mut Daemon, root: &TempRoot) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_release_daemon_is_replaced_by_a_development_client_without_asking_anyone() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("rel-dev");
     let mut daemon = release_daemon(&root);
     // A development build replaces it whatever the versions: the same one, where a release
@@ -113,6 +116,9 @@ async fn a_release_daemon_is_replaced_by_a_development_client_without_asking_any
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_release_daemon_is_replaced_by_a_newer_release_client_without_asking_anyone() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("rel-newer");
     let mut daemon = release_daemon(&root);
     let newer = newer_than(ev3_cockpitd::build_info::VERSION);
@@ -133,6 +139,9 @@ async fn a_release_daemon_is_replaced_by_a_newer_release_client_without_asking_a
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_equal_release_client_or_an_unknown_build_kind_does_not_replace_a_release_daemon() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("rel-equal");
     let mut daemon = release_daemon(&root);
     let version = ev3_cockpitd::build_info::VERSION;
@@ -165,6 +174,9 @@ async fn an_equal_release_client_or_an_unknown_build_kind_does_not_replace_a_rel
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_add_on_never_replaces_a_release_daemon_whatever_its_own_build() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("rel-addon");
     let mut daemon = release_daemon(&root);
     let (mut vscode, _) = client(
@@ -206,6 +218,9 @@ async fn an_add_on_never_replaces_a_release_daemon_whatever_its_own_build() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_development_daemon_stays_when_a_newer_release_client_asks() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("dev-rel");
     let mut daemon = Daemon::start(&root, "t");
     let newer = newer_than(ev3_cockpitd::build_info::VERSION);
@@ -227,6 +242,9 @@ async fn a_development_daemon_stays_when_a_newer_release_client_asks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn another_development_client_restarts_a_development_daemon_only_after_a_yes() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("dev-dev");
     let mut daemon = Daemon::start(&root, "t");
     let newer = newer_than(ev3_cockpitd::build_info::VERSION);
@@ -252,6 +270,9 @@ async fn another_development_client_restarts_a_development_daemon_only_after_a_y
 #[tokio::test(flavor = "multi_thread")]
 async fn an_add_ons_restart_asks_the_person_in_vs_code_naming_it_and_with_nobody_there_is_refused()
 {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("addon");
     let mut daemon = Daemon::start(&root, "t");
     let (mut addon, _) = client(
@@ -300,6 +321,9 @@ async fn an_add_ons_restart_asks_the_person_in_vs_code_naming_it_and_with_nobody
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_mcp_client_may_not_ask_even_a_release_daemon_it_would_otherwise_replace() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("mcp");
     let mut daemon = release_daemon(&root);
     let (mut agent, _) = client(
@@ -323,6 +347,9 @@ async fn an_mcp_client_may_not_ask_even_a_release_daemon_it_would_otherwise_repl
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_write_in_progress_finishes_before_the_daemon_exits_for_a_replacing_client() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("drain");
     let mut daemon = Daemon::replaying_with(
         &root,
@@ -379,6 +406,9 @@ async fn a_write_in_progress_finishes_before_the_daemon_exits_for_a_replacing_cl
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_held_brick_is_connected_again_by_the_daemon_that_replaced_the_one_holding_it() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("replace-hold");
     let mut old = Daemon::replaying_with(
         &root,
@@ -469,6 +499,9 @@ fn usage_exit(bin: &std::path::Path, extra: &[&str]) -> Option<i32> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_environment_variable_or_argument_makes_a_build_report_development_against_its_kind() {
+    if common::refuses_this_process() {
+        return;
+    }
     let bin = common::bin();
     // This development build: the variables change nothing, and its one argument only ever
     // reports release.
@@ -505,6 +538,9 @@ async fn no_environment_variable_or_argument_makes_a_build_report_development_ag
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_development_client_replaces_a_release_marked_daemon() {
+    if common::refuses_this_process() {
+        return;
+    }
     let Some(release) = std::env::var_os("EV3_COCKPITD_RELEASE_BIN").map(PathBuf::from) else {
         eprintln!("skipped: EV3_COCKPITD_RELEASE_BIN names no release-marked binary");
         return;
@@ -522,6 +558,9 @@ async fn a_development_client_replaces_a_release_marked_daemon() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_on_another_contract_learns_the_daemons_and_is_served_only_the_stable_core() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("contract");
     let mut daemon = release_daemon(&root);
     let ours = u64::from(ev3_contract::CONTRACT_VERSION);

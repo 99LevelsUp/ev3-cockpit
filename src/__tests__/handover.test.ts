@@ -7,6 +7,7 @@
  * different versions.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -41,7 +42,7 @@ const log = (d: ReturnType<typeof testDaemon>): string => {
 	try { return fs.readFileSync(d.paths.logFile, 'utf8'); } catch { return ''; }
 };
 
-describe('handing the daemon over', () => {
+describe('handing the daemon over', { skip: daemonRefusesThisProcess }, () => {
 	it('never lets an older client replace a newer daemon', async (t) => {
 		const { d, connect } = connector();
 		const newer = await connect('newer', 'cli', '0.0.2');

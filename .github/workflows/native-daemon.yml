@@ -70,7 +70,9 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test --locked --workspace
+        # GitHub's Windows runner runs every step elevated; the daemon refuses to run so, and the
+        # tests that start it say they are skipped. Every failure shows, not only the first crate's.
+        run: cargo test --locked --workspace --no-fail-fast
 
   package:
     name: Release build, packages and smoke (${{ matrix.target }})
@@ -134,6 +136,8 @@ jobs:
         run: node scripts/package-vsix.cjs ${{ matrix.target }} --daemon-dir daemon/target/release
 
       - name: The VSIX's daemon serves a recorded brick
+        # Not on Windows: GitHub's Windows runner is elevated, and the daemon never runs elevated.
+        if: matrix.target != 'win32-x64'
         run: node scripts/daemon-smoke.cjs --daemon-dir .vsix-staging/${{ matrix.target }}
 
       - name: Stage and pack the npm platform package

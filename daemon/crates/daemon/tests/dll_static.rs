@@ -170,6 +170,9 @@ fn starts(exe: &Path) -> Option<i32> {
 
 #[test]
 fn the_binary_resolves_its_static_imports_from_system32_only() {
+    if common::refuses_this_process() {
+        return;
+    }
     let pe = Pe::read(common::bin());
     assert_eq!(
         pe.u16(pe.dependent_load_flags_offset()),
@@ -179,6 +182,9 @@ fn the_binary_resolves_its_static_imports_from_system32_only() {
 
 #[test]
 fn a_dll_planted_beside_the_binary_under_an_imported_name_is_not_loaded() {
+    if common::refuses_this_process() {
+        return;
+    }
     set_quiet_error_mode();
     let pe = Pe::read(common::bin());
     // With the C runtime linked statically the remaining imports are system DLLs the loader
@@ -214,6 +220,9 @@ fn a_dll_planted_beside_the_binary_under_an_imported_name_is_not_loaded() {
 
 #[test]
 fn the_binary_does_not_import_the_c_runtime() {
+    if common::refuses_this_process() {
+        return;
+    }
     let pe = Pe::read(common::bin());
     let imports: Vec<String> = pe
         .imports()

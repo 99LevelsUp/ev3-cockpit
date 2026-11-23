@@ -1,5 +1,6 @@
 /** A client finds or starts this user's daemon; two at once share one; a dead start is reported. */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -14,7 +15,7 @@ import { privateHome, testDaemon } from './clientDaemonHelpers';
 
 const home = privateHome();
 
-describe('reaching the daemon', () => {
+describe('reaching the daemon', { skip: daemonRefusesThisProcess }, () => {
 	it('starts a daemon when none runs, and connects to it', async () => {
 		const d = testDaemon(home);
 		const client = await CockpitClient.connect({ name: 'test', kind: 'cli', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs });

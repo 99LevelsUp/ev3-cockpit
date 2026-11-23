@@ -240,6 +240,9 @@ impl Replay {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_info_storage_and_a_listing_replay_strictly() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("usb-info-storage-listing-ccc").await;
     let listed = run.find_brick("usb").await;
     assert_eq!(listed["brickId"], CCC_ID);
@@ -312,6 +315,9 @@ fn assert_firmware_folder(listing: &Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tcp_info_storage_and_a_listing_replay_strictly() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("tcp-info-storage-listing-ccc").await;
     let listed = run.find_brick("tcp").await;
     assert!(
@@ -393,6 +399,9 @@ async fn connect_usb_and_check_folder(run: &mut Replay) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_file_round_trip_replays_strictly() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("usb-file-round-trip-ccc").await;
     connect_usb_and_check_folder(&mut run).await;
     let note = repeated(3000);
@@ -466,6 +475,9 @@ fn states(notes: &[Value]) -> Vec<(u64, bool, Option<String>)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_deploy_and_run_replays_strictly_and_hears_the_program_end() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("usb-deploy-and-run-ccc").await;
     connect_usb_and_check_folder(&mut run).await;
     let subscription = run.call("programs/subscribe", json!({"brick": CCC})).await;
@@ -507,6 +519,9 @@ async fn usb_deploy_and_run_replays_strictly_and_hears_the_program_end() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_programs_run_stop_and_status_replay_strictly() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("usb-programs-ccc").await;
     connect_usb_and_check_folder(&mut run).await;
     let program = format!("{DIR}/Wait.rbf");
@@ -557,6 +572,9 @@ async fn usb_programs_run_stop_and_status_replay_strictly() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_cut_upload_fails_the_write_and_the_brick_comes_back_in_matched_replay() {
+    if common::refuses_this_process() {
+        return;
+    }
     // Matched: where the cut lands is a race between the second client and the packets in
     // flight, so no replay cuts at the recorded packet.
     let mut run = Replay::start_as("usb-cut-upload-ccc", false).await;
@@ -637,6 +655,9 @@ const TELEMETRY_UPDATES: usize = 59;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn usb_telemetry_minute_replays_strictly_at_the_recorded_pace() {
+    if common::refuses_this_process() {
+        return;
+    }
     // The throttle slows a row whose reads take long at the tail. On the recording host it never
     // acted, so every read came at 1000 ms; a replay host's coarser timers (Windows sleeps in
     // steps of about 15 ms) can look slow to it and stretch the minute. Off, the replay keeps the
@@ -707,6 +728,9 @@ async fn usb_telemetry_minute_replays_strictly_at_the_recorded_pace() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_strict_replay_that_stops_short_ends_the_daemon_with_code_1_naming_the_first_call_left() {
+    if common::refuses_this_process() {
+        return;
+    }
     let mut run = Replay::start("usb-info-storage-listing-ccc").await;
     run.find_brick("usb").await;
     run.call("bricks/connect", json!({"brick": CCC})).await;

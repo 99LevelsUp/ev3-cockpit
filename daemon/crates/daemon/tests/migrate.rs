@@ -129,6 +129,9 @@ fn slot(handle: u8, delete: Option<&str>) -> TransferDebt {
 
 #[test]
 fn a_debt_the_node_daemon_recorded_is_still_owed_after_the_switch() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("owed");
     node_state(&layout);
 
@@ -161,6 +164,9 @@ fn a_debt_the_node_daemon_recorded_is_still_owed_after_the_switch() {
 
 #[test]
 fn old_debts_merge_into_a_native_ledger_that_holds_others_without_doubling_a_slot() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("merge");
     let native = LedgerFile::open(&layout.native.ledger).expect("empty");
     native.save(
@@ -212,6 +218,9 @@ fn old_debts_merge_into_a_native_ledger_that_holds_others_without_doubling_a_slo
 
 #[test]
 fn old_settings_are_in_effect_when_the_native_daemon_had_none() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("settings");
     layout.old_file(
         "settings.json",
@@ -238,6 +247,9 @@ fn old_settings_are_in_effect_when_the_native_daemon_had_none() {
 
 #[test]
 fn native_settings_that_exist_are_left_untouched() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("settings-kept");
     let native = "{\n  \"transfer.tcpPacketBytes\": 2048\n}\n";
     std::fs::write(&layout.native.settings, native).expect("native settings");
@@ -256,6 +268,9 @@ fn native_settings_that_exist_are_left_untouched() {
 
 #[test]
 fn what_only_the_node_daemon_used_is_removed_and_nothing_else() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("removed");
     node_state(&layout);
     layout.old_file("held.json", "[]");
@@ -301,6 +316,9 @@ fn what_only_the_node_daemon_used_is_removed_and_nothing_else() {
 
 #[test]
 fn a_second_start_changes_nothing() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("twice");
     node_state(&layout);
     let first = layout.run();
@@ -321,6 +339,9 @@ fn a_second_start_changes_nothing() {
 
 #[test]
 fn a_node_daemon_that_writes_its_ledger_again_does_not_double_a_debt() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("again");
     let text = r#"{ "001653F00A0A": [ { "kind": "slot", "handle": 7 }, { "kind": "unknown" } ] }"#;
     layout.old_file("ledger.json", text);
@@ -339,6 +360,9 @@ fn a_node_daemon_that_writes_its_ledger_again_does_not_double_a_debt() {
 
 #[test]
 fn a_damaged_old_ledger_is_left_in_place_and_the_rest_goes_on() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("damaged");
     layout.old_file("ledger.json", "{ not json");
     layout.old_file("settings.json", r#"{ "transfer.tcpPacketBytes": 512 }"#);
@@ -364,6 +388,9 @@ fn a_damaged_old_ledger_is_left_in_place_and_the_rest_goes_on() {
 
 #[test]
 fn a_damaged_native_ledger_keeps_the_old_one_for_a_later_start() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("native-damaged");
     std::fs::write(&layout.native.ledger, "{ not json").expect("damaged");
     let text = r#"{ "001653F00A0A": [ { "kind": "slot", "handle": 7 } ] }"#;
@@ -386,6 +413,9 @@ fn a_damaged_native_ledger_keeps_the_old_one_for_a_later_start() {
 
 #[test]
 fn a_test_channel_never_takes_anything_over() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::on_channel("test-channel", Some("ci"));
     node_state(&layout);
     let before = layout.snapshot();
@@ -416,6 +446,9 @@ fn link_dir(target: &Path, link: &Path) {
 
 #[test]
 fn a_channels_link_out_of_the_old_root_is_not_followed() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("channels-link");
     let elsewhere = layout._temp.path().join("elsewhere");
     std::fs::create_dir_all(elsewhere.join("dev")).expect("elsewhere");
@@ -434,6 +467,9 @@ fn a_channels_link_out_of_the_old_root_is_not_followed() {
 
 #[test]
 fn a_dev_channel_that_is_a_link_goes_as_a_link() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("dev-link");
     let elsewhere = layout._temp.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("elsewhere");
@@ -454,6 +490,9 @@ fn a_dev_channel_that_is_a_link_goes_as_a_link() {
 #[cfg(unix)]
 #[test]
 fn an_old_key_that_is_a_link_goes_as_a_link_and_a_linked_ledger_is_not_read() {
+    if common::refuses_this_process() {
+        return;
+    }
     let layout = Layout::new("file-link");
     let elsewhere = layout._temp.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("elsewhere");
@@ -484,6 +523,9 @@ fn an_old_key_that_is_a_link_goes_as_a_link_and_a_linked_ledger_is_not_read() {
 
 #[test]
 fn the_old_root_is_the_parent_of_the_native_one() {
+    if common::refuses_this_process() {
+        return;
+    }
     let base = PathBuf::from(if cfg!(windows) { "C:\\s" } else { "/s" });
     assert_eq!(
         old_root(&base.join("ev3-cockpit").join("native")),

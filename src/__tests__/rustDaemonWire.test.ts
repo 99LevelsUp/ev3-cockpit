@@ -7,6 +7,7 @@
  * `cargo build -p ev3-cockpitd` in `daemon/`. Without it the tests are skipped and say so.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { ChildProcess, spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
@@ -99,7 +100,7 @@ async function connect(files: NativeChannelFiles, client: NativeClientIdentity =
 	return connection;
 }
 
-describe('the native daemon over the wire', { skip: missing }, () => {
+describe('the native daemon over the wire', { skip: daemonRefusesThisProcess || missing }, () => {
 	it('finishes the hello and answers daemon/status and settings/list on a test channel', async () => {
 		const root = tempRoot();
 		const daemon = await startDaemon(root, 'wire-hello');

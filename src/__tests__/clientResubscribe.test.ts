@@ -1,5 +1,6 @@
 /** A client outlives its daemon: it connects to the next one and renews its subscriptions by itself. */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CockpitClient } from '../client';
@@ -9,7 +10,7 @@ import { waitFor } from './waitFor';
 
 const home = privateHome();
 
-describe('a client across daemons', () => {
+describe('a client across daemons', { skip: daemonRefusesThisProcess }, () => {
 	it('connects to a new daemon after the old one is killed and renews its subscriptions with a snapshot', async (t) => {
 		const d = testDaemon(home, '0.0.1', 5000);
 		const client = await CockpitClient.connect({ name: 'test', kind: 'cli', version: '0.0.1', paths: d.paths, launch: d.launch, launchArgs: d.launchArgs });

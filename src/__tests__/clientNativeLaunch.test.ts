@@ -4,6 +4,7 @@
  * classified (Smart App Control above all), and what the client decides about a daemon it meets.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -208,7 +209,7 @@ describe('the verified copy', () => {
 	});
 });
 
-describe('the folder of the verified copies', () => {
+describe('the folder of the verified copies', { skip: daemonRefusesThisProcess }, () => {
 	const stat = (over: Partial<{ dir: boolean; link: boolean; uid: number; mode: number }> = {}) => ({
 		isDirectory: () => over.dir ?? true, isSymbolicLink: () => over.link ?? false, uid: over.uid ?? 1000, mode: over.mode ?? 0o40700,
 	});

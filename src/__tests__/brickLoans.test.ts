@@ -7,6 +7,7 @@
  * Both daemons run simulated bricks with the hardware lock forced on, each on its own channel.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -70,7 +71,7 @@ async function endAll(): Promise<void> {
 
 const brick = (client: CockpitClient, name: string) => client.bricks().find((b) => b.name === name);
 
-describe('brick loans between daemons', () => {
+describe('brick loans between daemons', { skip: daemonRefusesThisProcess }, () => {
 	it('keeps a development channel apart from the user\'s daemon', () => {
 		const env = { ...process.env };
 		delete env.EV3_COCKPIT_CHANNEL;

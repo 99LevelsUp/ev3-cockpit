@@ -13,6 +13,9 @@ const EXIT_REFUSED: i32 = 3;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn daemon_exit_is_answered_before_the_daemon_ends_and_the_record_goes() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("exit");
     // As a release daemon, which a development client replaces without asking anyone.
     let mut daemon = Daemon::start_with(&root, "t", &[std::ffi::OsStr::new("--report-release")]);
@@ -32,6 +35,9 @@ async fn daemon_exit_is_answered_before_the_daemon_ends_and_the_record_goes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_hello_names_the_transports_the_daemon_loaded() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("transports");
     let daemon = Daemon::replaying(&root, "t", "usb-connect-commands-aaa");
     let mut client = Client::connect(&daemon.path()).await;
@@ -41,6 +47,9 @@ async fn the_hello_names_the_transports_the_daemon_loaded() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_mcp_client_may_not_ask_the_daemon_to_exit() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("mcp");
     let mut daemon = Daemon::start(&root, "t");
     let mut client = Client::connect(&daemon.path()).await;
@@ -55,6 +64,9 @@ async fn an_mcp_client_may_not_ask_the_daemon_to_exit() {
 
 #[test]
 fn a_second_daemon_exits_with_code_2_while_the_first_holds_the_lock() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("lock");
     let _first = Daemon::start(&root, "t");
     let mut second = spawn(root.path(), "t");
@@ -69,6 +81,9 @@ fn a_second_daemon_exits_with_code_2_while_the_first_holds_the_lock() {
 
 #[test]
 fn two_daemons_started_at_once_leave_one() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("race");
     let mut a = spawn(root.path(), "t");
     let mut b = spawn(root.path(), "t");
@@ -97,6 +112,9 @@ fn two_daemons_started_at_once_leave_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_daemons_starting_at_once_on_an_empty_root_end_with_one_key() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("key");
     let mut a = spawn(root.path(), "a");
     let mut b = spawn(root.path(), "b");
@@ -122,6 +140,9 @@ async fn two_daemons_starting_at_once_on_an_empty_root_end_with_one_key() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_replaced_key_ends_the_daemon_on_the_next_connection() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("rekey");
     let mut daemon = Daemon::start(&root, "t");
     let old = root.key();
@@ -139,6 +160,9 @@ async fn a_replaced_key_ends_the_daemon_on_the_next_connection() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_message_over_1_mib_closes_the_connection() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("big");
     let daemon = Daemon::start(&root, "t");
     let mut client = Client::connect(&daemon.path()).await;
@@ -161,6 +185,9 @@ async fn a_message_over_1_mib_closes_the_connection() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn anything_but_the_hello_first_or_a_wrong_proof_closes_the_connection() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("hello");
     let daemon = Daemon::start(&root, "t");
 
@@ -202,6 +229,9 @@ async fn anything_but_the_hello_first_or_a_wrong_proof_closes_the_connection() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_replay_daemon_without_a_recording_has_no_brick() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("brick");
     let daemon = Daemon::start(&root, "t");
     let mut client = Client::connect(&daemon.path()).await;
@@ -226,6 +256,9 @@ async fn a_replay_daemon_without_a_recording_has_no_brick() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_daemon_exits_10_s_after_the_last_client() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("idle");
     let mut daemon = Daemon::start(&root, "t");
     let mut client = Client::connect(&daemon.path()).await;
@@ -251,6 +284,9 @@ async fn the_daemon_exits_10_s_after_the_last_client() {
 
 #[test]
 fn a_test_channel_refuses_hardware_and_a_bad_argument_is_a_usage_error() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("mode");
     let mut hardware = std::process::Command::new(common::bin())
         .args(["--channel", "t", "--mode", "hardware", "--state-root"])
@@ -276,6 +312,9 @@ fn a_test_channel_refuses_hardware_and_a_bad_argument_is_a_usage_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn after_a_crash_a_fresh_daemon_takes_a_new_name_and_never_contacts_a_squatter() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("crash");
     let mut first = Daemon::start(&root, "t");
     let old = first.path();

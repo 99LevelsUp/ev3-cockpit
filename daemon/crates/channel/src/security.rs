@@ -98,8 +98,9 @@ mod tests {
     }
 
     #[test]
-    fn this_test_process_is_not_elevated() {
-        // The tests run as the user; were they elevated, the daemon they start would refuse.
-        assert!(!is_elevated().expect("the token can be read"));
+    fn this_process_can_tell_whether_it_is_elevated() {
+        // Elevated, as GitHub's Windows runners run every step, the process tests skip themselves.
+        let elevated = is_elevated().expect("the token can be read");
+        assert!(privilege_refusal(elevated).is_some() == elevated);
     }
 }

@@ -3,6 +3,7 @@
  * neither is true — also when a client goes without a word.
  */
 
+import { daemonRefusesThisProcess } from './elevation';
 import assert from 'node:assert/strict';
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -85,7 +86,7 @@ describe('the daemon lifecycle', () => {
 	});
 });
 
-describe('the daemon process', () => {
+describe('the daemon process', { skip: daemonRefusesThisProcess }, () => {
 	it('serves a client on simulated bricks and ends on its own after the client leaves', async (t) => {
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-daemon-'));
 		const channel = `t-${randomBytes(3).toString('hex')}`;
@@ -135,7 +136,7 @@ describe('the daemon process', () => {
 	});
 });
 
-describe('a client still in its handshake', () => {
+describe('a client still in its handshake', { skip: daemonRefusesThisProcess }, () => {
 	it('keeps the daemon from exiting under it when the grace runs out first', async (t) => {
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-daemon-'));
 		const channel = `t-${randomBytes(3).toString('hex')}`;

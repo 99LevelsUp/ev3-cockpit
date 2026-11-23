@@ -11,6 +11,9 @@ use ev3_cockpitd::lock::{self, LockError};
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pipe_name_someone_else_created_is_refused() {
+    if common::refuses_this_process() {
+        return;
+    }
     let name = format!(
         r"\\.\pipe\ev3-cockpit-{}",
         ev3_cockpitd::hex(&ev3_cockpitd::random_bytes::<8>())
@@ -33,6 +36,9 @@ async fn a_pipe_name_someone_else_created_is_refused() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_socket_name_someone_else_created_is_refused() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("sock");
     let dir = root.path().join("run");
     std::fs::create_dir(&dir).expect("dir");
@@ -54,6 +60,9 @@ async fn a_socket_name_someone_else_created_is_refused() {
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn every_pipe_instance_is_the_daemons_and_one_always_listens() {
+    if common::refuses_this_process() {
+        return;
+    }
     let name = format!(
         r"\\.\pipe\ev3-cockpit-{}",
         ev3_cockpitd::hex(&ev3_cockpitd::random_bytes::<8>())
@@ -78,6 +87,9 @@ async fn every_pipe_instance_is_the_daemons_and_one_always_listens() {
 #[cfg(windows)]
 #[test]
 fn a_held_lock_refuses_a_clients_open_and_a_free_one_allows_it() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("share");
     let path = root.path().join("daemon.lock");
     let held = lock::acquire(&path).expect("take");
@@ -103,6 +115,9 @@ fn a_held_lock_refuses_a_clients_open_and_a_free_one_allows_it() {
 #[cfg(windows)]
 #[test]
 fn a_brief_client_probe_does_not_keep_the_daemon_from_the_lock() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("probe");
     let path = root.path().join("daemon.lock");
     std::fs::write(&path, b"").expect("lock file");
@@ -124,6 +139,9 @@ fn a_brief_client_probe_does_not_keep_the_daemon_from_the_lock() {
 
 #[test]
 fn a_probe_that_never_lets_go_reads_as_another_daemon() {
+    if common::refuses_this_process() {
+        return;
+    }
     let root = TempRoot::new("stuck");
     let path = root.path().join("daemon.lock");
     let _first = lock::acquire(&path).expect("first");

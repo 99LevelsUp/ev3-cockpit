@@ -22,8 +22,13 @@ pub fn ev3() -> PathBuf {
         .join(name)
 }
 
-/// The daemon cargo built beside `ev3`, when it was built.
+/// The daemon cargo built beside `ev3`, when it was built and would run for this process: never
+/// elevated (as administrator or root), as GitHub's Windows runners run every step.
 pub fn daemon_beside_ev3() -> Option<PathBuf> {
+    if ev3_channel::security::is_elevated().unwrap_or(false) {
+        eprintln!("skipped: this process runs elevated, and the cockpit daemon refuses to run so");
+        return None;
+    }
     let name = if cfg!(windows) {
         "ev3-cockpitd.exe"
     } else {
