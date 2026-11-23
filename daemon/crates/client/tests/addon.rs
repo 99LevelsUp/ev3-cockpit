@@ -447,3 +447,125 @@ async fn a_readers_events_end_when_the_daemon_goes() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cockpit_dropped_without_shutdown_lets_go_of_its_brick() {
+    let root = std::env::temp_dir().join(format!(
+        "ev3c-drop-{}",
+        ev3_channel::hex(&ev3_channel::random_bytes::<6>())
+    ));
+    let paths = Paths::new(&root, Some("drop"));
+    let Some(_daemon) = ReplayDaemon::start(&paths, "service/usb-info-storage-listing-ccc") else {
+        return;
+    };
+    let options = |name: &str| ev3_client::CockpitOptions {
+        name: name.into(),
+        kind: "addon",
+        version: "1.0.0".into(),
+        build_kind: "release".into(),
+        daemon: Launch::Nothing,
+        paths: paths.clone(),
+        daemon_args: Vec::new(),
+        asker: None,
+        notice: std::sync::Arc::new(|_: &str| {}),
+    };
+    let watcher = ev3_client::Cockpit::connect(options("watcher"))
+        .await
+        .expect("watcher");
+    let holder = ev3_client::Cockpit::connect(options("holder"))
+        .await
+        .expect("holder");
+    holder
+        .request("bricks/list", json!({ "waitForDiscovery": true }))
+        .await
+        .expect("list");
+    holder
+        .request("bricks/connect", json!({ "brick": "CCC" }))
+        .await
+        .expect("connect");
+    let held_by = |list: serde_json::Value| -> Vec<String> {
+        list["bricks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["name"] == "CCC")
+            .flat_map(|b| b["holders"].as_array().cloned().unwrap_or_default())
+            .filter_map(|h| h["client"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let listed = watcher
+        .request("bricks/list", json!({}))
+        .await
+        .expect("list");
+    assert_eq!(held_by(listed), ["holder"]);
+
+    drop(holder);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let listed = watcher
+            .request("bricks/list", json!({}))
+            .await
+            .expect("list");
+        if held_by(listed).is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the dropped cockpit still holds CCC"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    watcher.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cockpit_keeps_trying_after_its_daemon_went_and_needs_no_request_to_come_back() {
+    let root = std::env::temp_dir().join(format!(
+        "ev3c-retry-{}",
+        ev3_channel::hex(&ev3_channel::random_bytes::<6>())
+    ));
+    let paths = Paths::new(&root, Some("retry"));
+    let scenario = "service/usb-info-storage-listing-ccc";
+    let Some(first) = ReplayDaemon::start(&paths, scenario) else {
+        return;
+    };
+    let cockpit = ev3_client::Cockpit::connect(ev3_client::CockpitOptions {
+        name: "EVƎ C test".into(),
+        kind: "addon",
+        version: "1.0.0".into(),
+        build_kind: "release".into(),
+        daemon: Launch::Nothing,
+        paths: paths.clone(),
+        daemon_args: Vec::new(),
+        asker: None,
+        notice: std::sync::Arc::new(|_: &str| {}),
+    })
+    .await
+    .expect("connected");
+    let mut events = cockpit.events();
+    drop(first);
+    // No daemon for a while: the cockpit says so once.
+    let lost = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let Ok(ev3_client::CockpitEvent::Lost(_)) = events.recv().await {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(lost.is_ok(), "no Lost while no daemon ran");
+    // A daemon comes back; nobody sends a request.
+    let _second = ReplayDaemon::start(&paths, scenario).expect("again");
+    let back = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        loop {
+            if let Ok(ev3_client::CockpitEvent::Reconnected(_)) = events.recv().await {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(back.is_ok(), "not connected again without a request");
+    cockpit.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}

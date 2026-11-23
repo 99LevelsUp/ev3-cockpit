@@ -65,6 +65,15 @@ impl Drop for DoneOnDrop {
 /// How many notifications a slow subscriber may fall behind before it misses some.
 const NOTIFICATION_BACKLOG: usize = 4096;
 
+/// How long a closed connection still reads what the daemon sends before the stream goes. On Linux
+/// and macOS the daemon closes its side after this side's half-close, and a stream dropped with
+/// unread data is reset, which the daemon logs as a failure; a named pipe has neither.
+const CLOSE_GRACE: Duration = if cfg!(unix) {
+    Duration::from_millis(500)
+} else {
+    Duration::ZERO
+};
+
 impl Endpoint {
     /// Starts reading and writing `stream` on the current runtime.
     pub fn new(stream: Box<dyn Duplex>, on_request: Option<RequestHandler>) -> Self {
@@ -98,9 +107,23 @@ impl Endpoint {
         let reader_out = out.clone();
         let reader_notifications = notifications.clone();
         let (read_done_tx, read_done) = watch::channel(false);
+        let reader_closed = closed.clone();
         tokio::spawn(async move {
             let _done = DoneOnDrop(read_done_tx);
-            while let Some(Ok(message)) = source.next().await {
+            // Once this side closed, what the daemon still sends is read for a moment and then the
+            // stream goes, both halves: a named pipe has no half-close, so on Windows the daemon
+            // would otherwise see the client stay, holding its bricks, as long as the process.
+            let let_go = async move {
+                until_closed(reader_closed).await;
+                tokio::time::sleep(CLOSE_GRACE).await;
+            };
+            tokio::pin!(let_go);
+            loop {
+                let message = tokio::select! {
+                    message = source.next() => message,
+                    () = &mut let_go => break,
+                };
+                let Some(Ok(message)) = message else { break };
                 dispatch(
                     message,
                     &reader_shared,

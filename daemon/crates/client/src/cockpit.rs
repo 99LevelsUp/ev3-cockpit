@@ -243,6 +243,25 @@ impl Drop for CockpitPrograms {
     }
 }
 
+/// Dropping the last clone of a [`Cockpit`] closes it as [`Cockpit::shutdown`] does, without
+/// waiting: the connection closes, so the daemon releases what this client held, no reconnect
+/// follows, and every subscription ends.
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+        for (_, renewable) in self.renewables.lock().expect("renewables").drain() {
+            if let Some(forward) = renewable.forward {
+                forward.abort();
+            }
+        }
+        if let Ok(current) = self.current.try_lock()
+            && let Some(client) = current.as_ref()
+        {
+            client.endpoint.close();
+        }
+    }
+}
+
 /// Hands every change of `states` to `sender`; ends with the connection or the reader. Dropping
 /// `states` when the task ends cancels the subscription on the daemon.
 fn forward(
@@ -267,16 +286,36 @@ fn watch(inner: &Arc<Inner>, client: &Arc<Client>) {
             let Some(inner) = weak.upgrade() else { return };
             let _ = inner.events.send(CockpitEvent::Notification(notification));
         }
-        // The connection closed.
-        let Some(inner) = weak.upgrade() else { return };
-        if inner.closed.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Err(error) = inner.client().await {
-            let _ = inner.events.send(CockpitEvent::Lost(error));
+        // The connection closed: connect again, and keep trying while no daemon can be reached, so
+        // a reader waiting for a program's end needs no request of its own to bring it back. Lost
+        // is told once per outage; the pause grows to RETRY_MAX.
+        let mut pause = RETRY_FIRST;
+        let mut told = false;
+        loop {
+            let Some(inner) = weak.upgrade() else { return };
+            if inner.closed.load(Ordering::SeqCst) {
+                return;
+            }
+            match inner.client().await {
+                // `client` watches the new connection itself.
+                Ok(_) => return,
+                Err(error) => {
+                    if !told {
+                        let _ = inner.events.send(CockpitEvent::Lost(error));
+                        told = true;
+                    }
+                }
+            }
+            drop(inner);
+            tokio::time::sleep(pause).await;
+            pause = (pause * 2).min(RETRY_MAX);
         }
     });
 }
+
+/// The first pause before connecting again after no daemon could be reached, and the longest.
+const RETRY_FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+const RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Inner {
     /// A new connection, with the options kept for every reconnect.
