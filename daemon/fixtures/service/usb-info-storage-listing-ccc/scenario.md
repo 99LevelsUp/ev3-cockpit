@@ -25,7 +25,7 @@ daemon's own name probe, recorded as `open_probe` and one exchange), then
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js info-storage-listing --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
+  node scripts/hardware-scenario.mts info-storage-listing --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same

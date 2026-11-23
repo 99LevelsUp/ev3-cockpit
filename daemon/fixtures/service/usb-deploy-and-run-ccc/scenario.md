@@ -34,7 +34,7 @@ A program deployed and run in one call, heard ending through a program subscript
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js deploy-and-run --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
+  node scripts/hardware-scenario.mts deploy-and-run --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same

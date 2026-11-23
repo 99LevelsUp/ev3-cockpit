@@ -24,7 +24,7 @@ Starting, stopping and following a program already on the brick. Find CCC, `bric
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js programs --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
+  node scripts/hardware-scenario.mts programs --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same
