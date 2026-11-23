@@ -1,9 +1,17 @@
 # EVƎ Cockpit - Implementation Plan
 
-> Version: 2026-10-29
+> Version: 2026-10-29, updated 2026-11-23
 > Repository state: Phases 0-2 implemented, Phase 3 and the filesystem part of Phase 4 partly built.
 > Goal of the current work: publish a working cockpit first; user feedback and the deferred items come after.
-> Active step: `docs/plans/2026-10-29-1200-step1-close-historical-gaps.md`.
+> Active step: `docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md` (the native daemon; open: U16 hardware sign-off, the rest of U17 and U28).
+>
+> **The switch, 23.11.2026** (native daemon plan, U17): the per-user daemon is now the native Rust
+> binary `ev3-cockpitd` (Cargo workspace `daemon/`), with the native `ev3` and `ev3 mcp`. The
+> TypeScript core (`src/core/`), the Node daemon (`src/daemon/`), the C# pairing helper, the Swift
+> macOS helper, the hand-written TypeScript contract and the lab probe scripts left the repository.
+> Entries below written before that date describe the TypeScript implementation and keep the names
+> and paths they were written with; its rules were ported to Rust one by one (native plan KTD11).
+> Simulated bricks are deferred, and macOS is GitHub issue #1.
 
 This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete implementation order.
 
@@ -19,7 +27,8 @@ This document translates `REQUIREMENTS.md` and `DESIGN.md` into a concrete imple
 
 **Checked against the code on 29.10.2026.** This section has drifted from the checkboxes four
 times; the checkboxes are the ground truth and this is a summary of them. Verify before
-trusting it.
+trusting it. **Since 23.11.2026 it describes the TypeScript implementation the native daemon
+replaced** (see the note at the top); the native daemon's state is in its plan.
 
 Built and passing (427 unit tests, 4 extension-host integration tests):
 
@@ -129,7 +138,10 @@ Open, by phase:
 
 ### What Linux needs
 
-REQUIREMENTS §12 makes Linux a required platform. Nothing below blocks the Windows release.
+REQUIREMENTS §12 makes Linux a required platform. Nothing below blocks the Windows release. The
+native daemon ports this design (`daemon/crates/transports/src/bt_linux/`: RFCOMM and L2CAP through
+libc sockets, BlueZ over `zbus`); the items below record the TypeScript implementation, and the
+native daemon's Linux round is its plan's U16. The user steps at the end still hold.
 Since 11.11.2026 a Linux host (HOSTC, Raspberry Pi 5, arm64, Debian 13, BlueZ 5.82) builds and
 measures it on the `linux-backend` branch; the Bluetooth items are the step-7 plan
 (`docs/plans/2026-11-13-step7-linux-bluetooth.md`).
@@ -187,7 +199,7 @@ measures it on the `linux-backend` branch; the Bluetooth items are the step-7 pl
 | 1 | Transport contracts and discovery | ⚠ gaps (see §2) |
 | 2 | Session runtime and lifecycle | ✅ DoD met, BT items carried (see §2) |
 | 3 | Telemetry and adaptive throttling | 🔄 in progress — loop and service built, not wired; read model, subscriptions, throttling open |
-| 4 | Public API and filesystem services | 🔄 filesystem built; public API not started |
+| 4 | Public API and filesystem services | 🔄 as of 29.10.2026; since then the daemon and its contract (4.10.2) and the native daemon (4.10.4) replaced the public API |
 | 5 | Cockpit panel and UX | ⬜ planned — UX direction for the discovery row decided (step-1 plan, D2) |
 | 6 | Persistence, favorites, and remembered devices | ⬜ planned |
 | 7 | Hardening, tests, and release discipline | ⬜ planned |
@@ -1039,6 +1051,10 @@ Build the source of truth for connected bricks.
     machine that installs the extension), and `DeviceInformationCustomPairing` support is
     unconfirmed in either. Rejected as strictly worse than the helper process: a subprocess we
     build once beats a native addon every user's machine must compile.
+
+    **Superseded 23.11.2026** by the native daemon plan
+    (`docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`): not an addon, the whole daemon
+    became Rust, and WinRT pairing runs inside it (its KTD5); the net48 helper left at its U17.
 
     The one *real* no-.NET alternative, not yet attempted: a small **Rust N-API addon**
     (`windows-rs` — Microsoft's own actively-maintained Rust WinRT projection — plus `napi-rs`
@@ -2005,7 +2021,9 @@ the devices.
   packet sizes, intervals) from a configuration the host passes in, and leave the extension a thin
   host. Check that the native modules (`usb`, `node-hid`, `@serialport/bindings-cpp`, `koffi`, all
   N-API) and the Windows Bluetooth helper load in plain Node, not only in Electron.
-- [x] 4.10.1m **macOS on Apple Silicon (item 8, the Mac visit, 18.11.2026).** A borrowed M4 on
+- [x] 4.10.1m **macOS on Apple Silicon (item 8, the Mac visit, 18.11.2026).** *Superseded 23.11.2026:
+  the TypeScript core and the Swift helper left with the switch; macOS is GitHub issue #1, to be
+  written in Rust (native daemon plan, U28). What the Mac measured stays below.* A borrowed M4 on
   macOS 27, driven over SSH; brick CCC (V1.09H). The core runs in plain Node there (natives load,
   unit suite green), and a `darwin-arm64` VSIX installs and connects over all three channels:
   - **USB through HID, at full speed.** macOS's HID driver holds the interface, so libusb may not
@@ -2038,7 +2056,10 @@ the devices.
   it; notarising needs a paid Apple Developer account). Seen on the
   way: CCC froze when USB was plugged in during a Bluetooth session, right after a Wi-Fi run; the same
   step on a freshly started brick did not (owner's hypothesis: Wi-Fi leaves the firmware fragile).
-- [~] 4.10.2 **The cockpit daemon and its clients.** **Built 20.11.2026** on `feat/cockpit-daemon`
+- [~] 4.10.2 **The cockpit daemon and its clients.** *Superseded 23.11.2026 by 4.10.4: the Node daemon
+  described here was replaced by the native one. The development daemon, brick loans, the hardware
+  lock and the handover were dropped in the rewrite; the open hardware rounds below moved to the
+  native plan's U16, run against the native daemon.* **Built 20.11.2026** on `feat/cockpit-daemon`
   (plan `docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`, U1–U17); hardware
   rounds still open (below). One daemon per user holds the bricks: connections (a Bluetooth connect
   takes 2–20 s, so a command must not open one each time), presence, telemetry, programs, files,
@@ -2101,6 +2122,18 @@ the devices.
   bricks, files, programs and settings. Built 20.11.2026 with 4.10.2. Forget and clearing a
   Bluetooth list ask the user through MCP elicitation, and without it refuse with the `ev3` command;
   `daemon restart` and switching to `full` stay out. Open: a real agent session against CCC (F2).
+  Since the native daemon plan's U27 the same tools are also `ev3 mcp` in the native `ev3`; the
+  TypeScript server stays in the npm package until the native `ev3` is packaged there.
+- [~] 4.10.4 **The native daemon** (plan `docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`).
+  The whole per-user daemon is one Rust binary, `ev3-cockpitd`, for Windows x64, Linux x64 and
+  Linux arm64: no Node runtime, independent of VS Code, a channel only the user's account can use
+  (`docs/channel.md`). One JSON Schema contract (`contract/`) is generated into Rust and
+  TypeScript; the VS Code extension, the client library, the TypeScript `ev3` and MCP server and
+  the native `ev3`/`ev3 mcp` are its clients. Recorded brick sessions (`daemon/fixtures/`) replace
+  simulated bricks in tests. Squash-merged into master 23.11.2026; the switch (U17) removed the
+  TypeScript core, the Node daemon and the C# and Swift helpers, and the daemon migrates the user's
+  state from the Node daemon's root (`migrate.rs`). **Open:** the hardware sign-off U16, the rest
+  of U17 (path confinement items, `shows`, `runSeq` across a replacement) and U28 (two languages).
 
 ## 9. Phase 5 — Cockpit Panel and UX
 
@@ -2301,7 +2334,10 @@ Stabilize the system for long-term use and further development.
   - [ ] 7.7.5 VSIX packaging and manual validation
   - [ ] 7.7.6 Documentation update checklist
 - [ ] **7.8 Repository hygiene: code outside TypeScript** (owner's question 13.11.2026; GitHub shows
-  TypeScript 88 %, JavaScript 10 %, C# 2 %, other 0.5 %)
+  TypeScript 88 %, JavaScript 10 %, C# 2 %, other 0.5 %). **Superseded 23.11.2026** by the native
+  daemon plan's U28 ("Two languages"): the repository keeps Rust and TypeScript only. The probes
+  and the C# helper left with U17 (so 7.8.1–7.8.4 no longer apply as written); the build scripts
+  become TypeScript, and the scripts that drive the daemon become Rust.
   - [ ] 7.8.1 The hardware probes and measurement scripts (`scripts/*-probe.js`, `*-sweep.js`, `*-matrix.js`,
     `*scenario*.js`, `bt-backend-comparison.js`, `signal-monitor.js`; 20 files, about 3 900 lines) become
     TypeScript compiled with the rest. They load the compiled cockpit from `out/` without types, and a probe

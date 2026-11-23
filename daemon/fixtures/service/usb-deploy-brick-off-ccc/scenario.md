@@ -1,6 +1,6 @@
 # deploy-brick-off on CCC over USB (owner-run, not recorded yet)
 
-Deploy-and-run with the brick switched off while its program runs. `scripts/hardware-scenario.js`
+Deploy-and-run with the brick switched off while its program runs. `scripts/hardware-scenario.mts`
 drives it and refuses to start without `--owner-present`; `recording.jsonl` goes into this
 directory once the owner has run it and the recording passed the identifier search.
 

@@ -1,7 +1,7 @@
 ---
 concept: Transport Contract Pattern
-last_compiled: 2026-04-13
-topics_connected: [contracts, transports, mock, runtime]
+last_compiled: 2026-11-23
+topics_connected: [contracts, transports, runtime, testing]
 status: active
 ---
 
@@ -9,24 +9,22 @@ status: active
 
 ## Pattern
 
-A single `TransportProvider` interface governs all communication channels — Mock, USB, TCP, and Bluetooth. Every provider implements the same 6-method contract (`discover`, `connect`, `disconnect`, `send`, optional `recover` and `forget`), and the runtime layer consumes them interchangeably through the `ProviderRegistry`. This means the entire session lifecycle, discovery aggregation, and command dispatch are transport-agnostic: the `SessionManager` does not know or care whether it is talking to a simulated brick or a physical one connected via Bluetooth.
+One trait, `TransportProvider` (`daemon/crates/transports/src/provider.rs`), governs every channel to a brick — USB, TCP and Bluetooth. Every provider discovers, connects, disconnects and exchanges packets through the same calls, and offers `recover`, `forget`, `pair` and `check_presence` where its transport has them. The runtime consumes providers interchangeably: sessions, discovery and the brick layer do not know whether they talk to a cable, a radio or a recording.
 
-This pattern enabled the project's "runtime-first" implementation strategy — Mock was built early as a first-class transport, and all runtime infrastructure (PresenceAggregator, SessionManager, HeartbeatMonitor, ReconnectStrategy) was developed and tested against it before any physical transport existed.
+The trait is byte level. A provider carries frames and knows nothing about what a command means; the codec and the message counter belong to the command layer in the runtime. An earlier version handed providers typed commands, which made the lowest layer own the vocabulary of every layer above it.
 
 ## Instances
 
-- **Phase 0** in [contracts](../topics/contracts.md): `TransportProvider` interface defined with `BrickCommand`/`BrickResponse` discriminated unions, establishing the contract that all transports must satisfy.
-- **Phase 1** in [mock](../topics/mock.md): `MockTransportProvider` was the first implementation, used as the reference for contract compliance testing.
-- **Phase 1** in [transports](../topics/transports.md): USB, TCP, and BT providers each implement the same contract with transport-specific adapters underneath. The two-layer architecture (adapter for raw I/O, provider for contract compliance) keeps each implementation thin.
-- **Phase 2** in [runtime](../topics/runtime.md): `SessionManager` and `DiscoveryScheduler` consume providers purely through the `TransportProvider` interface and `ProviderRegistry`, with no transport-specific logic.
+- In [transports](../topics/transports.md): the USB, TCP and Bluetooth providers (Windows and Linux), each over its own links; the recorder wraps any provider, and replay implements the trait from a recording.
+- In [runtime](../topics/runtime.md): `session.rs`, `discovery.rs` and `bricks.rs` use providers only through the trait; routing picks a channel by the provider's declared priority (USB 30, Bluetooth 20, TCP 10).
+- In [testing](../topics/testing.md): recorded sessions replayed at the trait stand in for hardware, so everything above runs unchanged in tests.
 
 ## What This Means
 
-The transport contract is the architectural seam that makes the entire codebase modular. Adding a new transport (e.g., Wi-Fi Direct, mDNS) requires only implementing the `TransportProvider` interface and registering it — zero changes to runtime, discovery, or session management. Similarly, the mock transport provides an exact behavioral replica of real hardware, making the test suite reliable without physical devices. This is a deliberate inversion: the protocol and I/O complexity is pushed down into adapters, while the contract keeps everything above simple and composable.
+The trait is the seam that keeps the runtime transport-agnostic. A new transport implements the trait and is built in the daemon's runtime composition, with no change to sessions, discovery or the brick layer. The same seam is where recording and replay sit, which replaced the TypeScript mock as the way to test without bricks.
 
 ## Sources
 
-- [contracts](../topics/contracts.md)
 - [transports](../topics/transports.md)
-- [mock](../topics/mock.md)
 - [runtime](../topics/runtime.md)
+- [testing](../topics/testing.md)

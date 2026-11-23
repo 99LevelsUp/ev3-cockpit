@@ -1,78 +1,47 @@
 ---
 topic: Contracts
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
 # Contracts
 
-## Purpose [coverage: high — 6 sources]
+## Purpose [coverage: high — 5 sources]
 
-The `src/core/contracts/` module defines all shared types, enums, interfaces, and data models used across the entire EVƎ Cockpit codebase. It is the foundation layer with zero dependencies on runtime, transport, or UI modules. Every other module imports from contracts; contracts import from nothing else in the project.
+The contract between the daemon and its clients is one language-neutral schema in `contract/`, generated into Rust (`daemon/crates/contract`) and TypeScript (`src/contract/generated/`). Nothing is mirrored by hand, so neither side can drift (native plan KTD1).
 
-## Architecture [coverage: high — 6 sources]
+## Architecture [coverage: high — 5 sources]
 
-Six files, re-exported through a barrel `index.ts`:
+- **`contract/schema/*.json`** — JSON Schema draft-07: `core`, `bricks`, `files`, `messages`, `reports`, `settings`, `telemetry`, `daemon` (hello, questions, status).
+- **`contract/methods.json`** — the method table: every request with its params and result types, `leased`, `needsPerson`, `callableBy` (client kinds) and `stableCore`; the notifications; the daemon's request to a client (`question/ask`); the hello; the error codes and their families; `contractVersion`.
+- **`contract/vectors/`** — cross-language test vectors: the hello proofs and `channel.json` (`channel.json`), and messages (`messages.json`).
+- **Generators** — `npm run contract:generate` writes `src/contract/generated/` (`types.ts` through `json-schema-to-typescript`, `methods.ts` with `Methods`, `Notifications`, `METHODS`, `ERROR_FAMILY`, `CONTRACT_VERSION`); `npm run contract:check` fails on a stale output. The Rust crate's `build.rs` generates the types (`typify`), the `Methods` dispatch trait, the `Notification` enum and the error families at build time.
+- **`src/contract/errors.ts`** — the wire error codes as `WireErrorCode`, held by the compiler to the generated `ErrorCode` ([errors](errors.md)).
 
-- **enums.ts** — `Transport`, `PresenceState`, `ConnectionState`, `ActivityMode`, `TelemetryCategory`
-- **brickKey.ts** — branded `BrickKey` type and `makeBrickKey()` factory
-- **models.ts** — `DiscoveryItem`, `ConnectedSession`, `ActiveBrickViewModel`, `PortState`, `BatteryState`, `SignalInfo`, `HeartbeatState`, `ValueDisplayStyle`
-- **transport.ts** — `TransportProvider` interface, `SessionHandle`, `TransportCapabilities`, `DiscoveryScanResult`, `BrickCommand`/`BrickResponse` discriminated unions
-- **api.ts** — earlier snapshot models (the daemon's contract models now live in `src/contract/models.ts`): `ConnectedBrickSnapshot`, `BrickStateChangeEvent`, `ActiveBrickSnapshot`, `TelemetrySnapshot`, `TelemetryEvent`, `FilesystemEvent`
+## Talks To [coverage: high — 4 sources]
 
-## Talks To [coverage: high — 6 sources]
+- **daemon** — dispatches through the generated trait (`ev3-contract`).
+- **runtime** — uses the contract's brick and telemetry types for what the daemon serves.
+- **client library** — exports the generated contract at the top level of `@ev3-cockpit/client`.
+- **native `ev3`** — the same crate.
 
-Contracts is consumed by every module in the codebase:
-- **runtime/** — uses `ConnectionState`, `ActivityMode`, `DiscoveryItem`, `ConnectedSession`
-- **transports/** — implements `TransportProvider`, uses `BrickCommand`, `BrickResponse`, `SessionHandle`
-- **mock/** — implements `TransportProvider` using `MockConfig` types and contract models
-- **protocol/** — maps `BrickCommand` to bytecode and raw replies to `BrickResponse`
-- **errors/** — error codes align with contract categories (transport, session, API)
-- **events/** — generic infrastructure, but typed events carry contract types
+## Key Decisions [coverage: high — 4 sources]
 
-## API Surface [coverage: high — 6 sources]
+- **Schema first, both sides generated** — readable by clients in other languages later (ev3-python).
+- **The contract version marks breaking changes only** — a removed or renamed method, field or code, a type change, a newly required field, a changed meaning. Additive changes keep it, so a client meeting a newer daemon with the same version keeps working. It is 2 today.
+- **Schema rules** — no `anyOf`; `oneOf` only with a required `const` tag; objects on the stable core accept unknown properties.
+- **Errors by code** — clients decide on `data.code`, never on a class name.
 
-Key types exported:
+## Gotchas [coverage: medium — 2 sources]
 
-| Type | Kind | Description |
-|------|------|-------------|
-| `Transport` | enum | `mock`, `usb`, `tcp`, `bt` |
-| `PresenceState` | enum | `remembered`, `available`, `unavailable`, `removed` |
-| `ConnectionState` | enum | `connecting`, `connected`, `reconnecting`, `disconnected` |
-| `ActivityMode` | enum | `foreground`, `subscribed`, `minimal`, `none` |
-| `TelemetryCategory` | enum | `ports`, `filesystem`, `system` |
-| `BrickKey` | branded string | `transport:id` format, stable identifier |
-| `DiscoveryItem` | interface | full discovery list entry |
-| `ConnectedSession` | interface | connected brick session model |
-| `ActiveBrickViewModel` | interface | foreground brick UI model |
-| `TransportProvider` | interface | unified transport contract (discover, connect, disconnect, send, recover?, forget?) |
-| `BrickCommand` | discriminated union | 9 command kinds (battery, ports, buttons, info, fs:*) |
-| `BrickResponse` | discriminated union | 9 response kinds matching commands |
-
-## Data [coverage: high — 6 sources]
-
-The `BrickCommand` union covers: `battery`, `ports`, `buttons`, `info`, `fs:list`, `fs:read`, `fs:write`, `fs:exists`, `fs:delete`.
-
-`BrickKey` is a branded string (`string & { __brand: 'BrickKey' }`) created via `makeBrickKey(transport, id)` producing `"transport:id"` format. It is explicitly not based on `displayName` to ensure stable ordering.
-
-`DiscoveryItem` tracks: brickKey, displayName, transport, presenceState, remembered, connected, favorite, signalInfo (optional RSSI + strength), availableTransports, btVisible, lastSeenAt.
-
-## Key Decisions [coverage: medium — 3 sources]
-
-- **Branded types for BrickKey** — prevents accidental string usage as brick identifiers; enforced via TypeScript's structural typing.
-- **Discriminated unions for commands/responses** — narrow on `kind` field for type-safe access to typed response fields.
-- **API models separate from internal models** — `ConnectedBrickSnapshot` and `TelemetrySnapshot` are public-facing; `ConnectedSession` and `ActiveBrickViewModel` are internal. Since 4.10.2 the public surface is the daemon's contract in `src/contract/`.
-- **Transport capabilities are declarative** — `TransportCapabilities.supportsSignalInfo` allows runtime to query provider features without try-catch.
-
-## Gotchas [coverage: low — 1 source]
-
-- The `DiscoveryItem.remembered` field has a documented invariant: when `presenceState === Remembered`, `remembered` is always `true`, but the inverse does not hold — a brick can be `remembered: true` while `presenceState: Available`.
+- Edit `contract/`, never `src/contract/generated/`; regenerate and commit both.
+- A daemon on another contract version serves a client only `daemon/exit` (the stable core).
+- `BrickKey` (`transport:id`, one channel) and the brick id (the twelve hex digits shared by USB serial, Bluetooth address and TCP beacon) are different things; the contract names bricks by id or name.
 
 ## Sources
 
-- [src/core/contracts/index.ts](../../src/core/contracts/index.ts)
-- [src/core/contracts/enums.ts](../../src/core/contracts/enums.ts)
-- [src/core/contracts/brickKey.ts](../../src/core/contracts/brickKey.ts)
-- [src/core/contracts/models.ts](../../src/core/contracts/models.ts)
-- [src/core/contracts/transport.ts](../../src/core/contracts/transport.ts)
-- [src/core/contracts/api.ts](../../src/core/contracts/api.ts)
+- [contract/methods.json](../../contract/methods.json)
+- [contract/schema/bricks.json](../../contract/schema/bricks.json)
+- [daemon/crates/contract/src/lib.rs](../../daemon/crates/contract/src/lib.rs)
+- [src/contract/generated/methods.ts](../../src/contract/generated/methods.ts)
+- [docs/protocol.md](../../docs/protocol.md)

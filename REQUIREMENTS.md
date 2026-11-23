@@ -7,7 +7,7 @@
 
 EVƎ Cockpit is a Visual Studio Code extension that:
 
-- discovers EV3 bricks available via `mock`, `usb`, `tcp`, and `bt`,
+- discovers EV3 bricks available via `mock` (deferred, §13), `usb`, `tcp`, and `bt`,
 - connects one or more bricks into the Cockpit runtime,
 - displays the state of the active brick in the Cockpit panel,
 - runs as one per-user daemon that VS Code, the `ev3` command, an MCP server and add-ons share through one public contract.
@@ -39,8 +39,8 @@ In scope for this version:
 - subscription-based telemetry for other extensions,
 - a public contract and client library for other programs,
 - filesystem operations for other programs,
-- transport support: `mock`, `usb`, `tcp`, `bt`,
-- mock runtime,
+- transport support: `mock` (deferred, §13), `usb`, `tcp`, `bt`,
+- mock runtime (deferred, §13),
 - persistence of favorites and remembered metadata.
 
 ## 4. Deferred to a Later Version
@@ -247,7 +247,9 @@ and nothing the host can read tells a frozen chain from a still one.
 
 Other programs communicate with bricks exclusively through the cockpit daemon — they never connect
 to bricks directly. One daemon runs per user; the VS Code extension, the `ev3` command, the MCP
-server and add-ons are its clients (4.10.2, `docs/protocol.md`).
+server and add-ons are its clients (4.10.2, `docs/protocol.md`). The daemon runs on its own: a
+native program that needs neither VS Code nor a Node runtime, on a channel only the user's account
+can use (IMPLEMENTATION_PLAN 4.10.4, `docs/channel.md`).
 
 The contract exposes:
 
@@ -287,7 +289,7 @@ The panel must be able to recover its full state after a reload or restart by re
 
 Supported transports:
 
-- `mock`,
+- `mock` (deferred, §13),
 - `usb`,
 - `tcp`,
 - `bt`.
@@ -313,6 +315,11 @@ The choice of specific technology for a given transport may rely on external exp
 - Pairing phases and changes between a Bluetooth channel being heard and not heard are logged.
 
 ## 13. Mock
+
+> **Deferred 20.11.2026** (owner, native daemon plan `docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`):
+> the native daemon has no simulated bricks yet, and the `ev3-cockpit.mockBricks` setting went with
+> the TypeScript core. Recorded brick sessions replayed by a test daemon guard regressions instead.
+> The requirements below stand for when mock comes back.
 
 Mock is a full transport channel within the same architecture as physical transports.
 

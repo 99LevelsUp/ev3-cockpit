@@ -1,6 +1,6 @@
 ---
 topic: Runtime
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
@@ -8,89 +8,56 @@ status: active
 
 ## Purpose [coverage: high — 7 sources]
 
-The `src/core/runtime/` module is the central coordination layer of EVƎ Cockpit. It manages the lifecycle of connected brick sessions (connect, disconnect, heartbeat, reconnect), unified discovery (aggregating results from all transport providers), foreground/background switching, and command dispatch. The runtime is the single source of truth for connection state — it runs inside the cockpit daemon, whose clients reach it only through the contract.
+`daemon/crates/runtime` (`ev3-runtime`) is the brick runtime inside the daemon: sessions, the per-session queue and the per-brick guard, discovery and presence, bricks across channels, and the services on top (files and transfers, the debt ledger, programs, telemetry, forget, clear and the one-sided repair). The session manager is the single source of truth for connection state; clients reach the runtime only through the [daemon](daemon.md)'s contract.
 
 ## Architecture [coverage: high — 7 sources]
 
-Six classes, re-exported via `index.ts`:
+From the bottom up (`src/`):
 
-- **SessionManager** — central coordinator for all connected brick sessions. Manages connect/disconnect flows, foreground switching (at most one `ActivityMode.Foreground`), command dispatch via per-brick queues, heartbeat monitoring, and automatic reconnect with exponential backoff. Owns a `Map<BrickKey, SessionResources>` where each entry bundles `SessionEntry`, `CommandQueue`, `HeartbeatMonitor`, and `ReconnectStrategy`.
-
-- **PresenceAggregator** — unifies discovery output from the `DiscoveryScheduler` with remembered bricks from persistence into a single, stably-ordered discovery list. Uses `TRANSPORT_ORDER` (Mock=0, USB=1, TCP=2, BT=3) for primary sorting, then signal strength descending, then brickKey lexicographic. Maintains a sorted cache that's invalidated on any mutation. Exposes `onListChanged` and `onPresenceChanged` events.
-
-- **DiscoveryScheduler** — drives periodic discovery polling across all registered transport providers. Manages per-brick state machines (`available` → `unavailable` → `removed`), emits `onPresenceChanged` and `onScanCompleted` events. Supports `start()`, `stop()`, `scanOnce()`.
-
-- **SessionEntry** — data holder for one connected session. Tracks `brickKey`, `transport`, `displayName`, `connectionState`, `activeMode`, `heartbeatState`, `lastError`, `subscribedCategories`, `explicitlyDisconnected`. Provides `transition()` for state machine enforcement and `toConnectedSession()` for snapshot generation.
-
-- **CommandQueue** — per-brick FIFO command queue with executor pattern. `send(command)` enqueues and resolves when the executor completes. `drainWith(error)` rejects all pending promises on disconnect. Tracks queue depth for future adaptive throttling (Phase 3).
-
-- **HeartbeatMonitor** — periodic heartbeat probe per connected session. Configurable interval and miss threshold. Calls `probe()` (typically `send({ kind: 'battery' })`) and fires `onSuccess`/`onFailure` callbacks.
-
-- **ReconnectStrategy** — exponential backoff calculator. `nextDelay()` returns the next wait time or `undefined` when `maxAttempts` is exhausted. `reset()` after successful reconnect.
+- **`session.rs`** — one session per channel (one brick on one transport), from connect to disconnect: the codec and message counter per link, the heartbeat, reconnect with backoff. A dead link puts the session into `Reconnecting`; it ends only when someone disconnects it.
+- **`queue.rs`** — one FIFO per session; commands go out one at a time, in order. On the transition to reconnecting the queue is drained.
+- **`guard.rs`** — the firmware guard: a rate window per brick across all its channels (1000 commands/s; a full window waits, it does not refuse) and failure counting per channel, so a pulled cable degrades its USB channel and not the Bluetooth link standing by.
+- **`heartbeat.rs`, `reconnect.rs`** — the battery query as probe and what counts as a missed beat; the reconnect backoff.
+- **`discovery.rs`** — `DiscoveryScheduler`: every transport polled on its own timer, each channel's presence followed from scan to scan.
+- **`presence.rs`** — the discovery list: one entry per brick, channels grouped by the brick's hardware digits. It does not order the list; views sort it.
+- **`bricks.rs`** — the brick layer: signs a brick in over every channel that reaches it, routes each command over the highest-priority connected channel (USB, then Bluetooth, then TCP), fails over on a link fault, pins a file transfer to its channel.
+- **`fs.rs`, `transfer.rs`, `ledger.rs`** — filesystem operations, chunked transfers over one pinned link, and the debt ledger of firmware file slots a cut transfer left taken.
+- **`programs.rs`, `deploy.rs`, `shell.rs`** — running, stopping and watching the user-slot program; deploy-and-run as one operation; shell commands.
+- **`telemetry/`** — rows, the EV3 row catalogue, one base tick per brick with integer dividers, the frame assembler, claims, the throttle, the read model, one delivery order for every subscription.
+- **`forget.rs`, `clear.rs`, `repair.rs`, `chain.rs`** — forget a brick, clear its Bluetooth list, repair a pairing broken on one side, the daisy chain.
+- **`ports.rs`** — the two ports the runtime owns and the daemon answers: ask a person, report write activity.
 
 ## Talks To [coverage: high — 6 sources]
 
-- **transports/ProviderRegistry** — `SessionManager` looks up providers for connect/disconnect/send; `DiscoveryScheduler` iterates all providers for discovery polling
-- **contracts/** — uses all enums, `BrickKey`, `DiscoveryItem`, `ConnectedSession`, `BrickCommand`/`BrickResponse`
-- **events/** — `PresenceAggregator` uses `createTypedEvent`; `SessionManager` uses the core's `EventEmitter` directly
-- **extension.ts** — instantiates `SessionManager`, `DiscoveryScheduler`, `PresenceAggregator`; subscribes to events for logging
+- **transports** — providers for discovery, links, pairing, forget and presence.
+- **protocol** — `build_command`, `encode_ev3_packet`, `decode_ev3_packet`, `parse_response`.
+- **contract** — the brick and telemetry types the daemon serves (`ev3-contract`).
+- **daemon** — builds the runtime from the providers its channel and mode allow (`surface/runtime.rs`) and implements the ports.
 
-## API Surface [coverage: high — 7 sources]
+## Data [coverage: medium — 4 sources]
 
-**SessionManager:**
-| Method | Description |
-|--------|-------------|
-| `connect(brickKey, transport, displayName?)` | Connect to a brick via specified transport |
-| `disconnect(brickKey, explicit?)` | Disconnect; explicit=true suppresses auto-reconnect |
-| `send(brickKey, command)` | Send command via per-brick queue |
-| `setActiveBrick(brickKey)` | Promote to foreground (demotes previous) |
-| `clearActiveBrick()` | No foreground brick |
-| `getActiveBrickKey()` | Current foreground brick or undefined |
-| `getSession(brickKey)` | Snapshot of one session |
-| `getAllSessions()` | Snapshot of all sessions |
-| `isSuppressed(brickKey)` | Check auto-connect suppression |
-| `onSessionStateChange` | Event: connection state transitions |
-| `onActiveBrickChange` | Event: foreground brick switches |
-
-**PresenceAggregator:**
-| Method | Description |
-|--------|-------------|
-| `getDiscoveryList()` | Stably-ordered discovery list |
-| `getBrick(brickKey)` | Single brick lookup |
-| `mergeRemembered(items)` | Import remembered bricks from persistence |
-| `updateBrick(brickKey, patch)` | Patch connected/favorite/remembered flags |
-| `onListChanged` | Event: any list mutation |
-| `onPresenceChanged` | Event: individual presence transitions |
-
-**DiscoveryScheduler:** `start()`, `stop()`, `scanOnce()`, `getTrackedBricks()`, `onPresenceChanged`, `onScanCompleted`.
-
-## Data [coverage: high — 5 sources]
-
-`SessionResources` per brick: `{ entry: SessionEntry, commandQueue: CommandQueue, heartbeat: HeartbeatMonitor, reconnect: ReconnectStrategy, reconnectTimer?: NodeJS.Timeout }`.
-
-Default configuration values (from `FIRMWARE_SAFETY` constants): heartbeat interval, miss threshold=2, reconnect base/max delays, max reconnect attempts.
+The heartbeat interval is at least 3 s (`MIN_HEARTBEAT_INTERVAL`). Telemetry ticks per transport (`telemetry/cadence.rs`): USB 100 ms (floor 50), TCP 200 ms (floor 100), Bluetooth 500 ms (floor 250).
 
 ## Key Decisions [coverage: high — 5 sources]
 
-- **Session Manager is the exclusive session owner** — only the daemon opens a session; clients ask with `bricks/connect`, and `deviceGate.ts` keeps a daemon off devices it lent or did not borrow.
-- **Per-brick command queue** — shared across all transport providers for the same brick, preventing conflicts between transport layers.
-- **Auto-connect suppression** — after explicit disconnect, the brick is added to `suppressedBricks` set to prevent auto-reconnect from favorites for the rest of the session.
-- **Reconnect vs explicit disconnect precedence** — explicit disconnect always wins. During reconnect backoff, if `explicitlyDisconnected` becomes true, reconnect is aborted.
-- **Heartbeat uses battery command** — the battery query is lightweight and serves double duty: keep-alive probe and battery level monitoring.
+- **One owner of sessions** — only the daemon opens a session; clients ask with `bricks/connect`.
+- **A queue per session, a guard per brick** — a USB exchange hung after a cable pull does not stall the same brick's Bluetooth traffic; writes to one brick are serialized by its lease (native plan KTD14).
+- **No "one transport at a time"** — two links open to one brick with commands on both froze nothing; the rule and its 2 s cooldown are gone.
+- **Consent and activity are ports** — services ask a person and report writes through interfaces the daemon implements; lower-layer tests use fakes.
+- **Today's TypeScript was the spec** — each subsystem was ported rule by rule from the TypeScript core, with a Rust test or a fixture per rule (native plan KTD11).
 
 ## Gotchas [coverage: medium — 3 sources]
 
-- **Reconnect timer uses `.unref()`** — prevents the timer from keeping the Node.js event loop alive, allowing clean extension deactivation.
-- **Demoted brick gets `Subscribed` mode, not `Minimal`** — when a foreground brick is demoted, it transitions to `Subscribed`, not `Minimal`, even if no subscriptions exist. This may change with Phase 3 telemetry implementation.
-- **`drainWith(error)` on disconnect** — all pending command promises are rejected when a session disconnects, ensuring no promises hang indefinitely.
+- **Explicit disconnect wins** — a disconnect during reconnect backoff ends the reconnect.
+- **Telemetry runs only on demand** — for a client that shows the brick, or while a subscription asks for rows; connecting starts none.
+- **Firmware workarounds** must work on the original and on a fixed firmware.
 
 ## Sources
 
-- [src/core/runtime/index.ts](../../src/core/runtime/index.ts)
-- [src/core/runtime/sessionManager.ts](../../src/core/runtime/sessionManager.ts)
-- [src/core/runtime/presenceAggregator.ts](../../src/core/runtime/presenceAggregator.ts)
-- [src/core/runtime/discoveryScheduler.ts](../../src/core/runtime/discoveryScheduler.ts)
-- [src/core/runtime/sessionEntry.ts](../../src/core/runtime/sessionEntry.ts)
-- [src/core/runtime/commandQueue.ts](../../src/core/runtime/commandQueue.ts)
-- [src/core/runtime/heartbeatMonitor.ts](../../src/core/runtime/heartbeatMonitor.ts)
-- [src/core/runtime/reconnectStrategy.ts](../../src/core/runtime/reconnectStrategy.ts)
+- [daemon/crates/runtime/src/lib.rs](../../daemon/crates/runtime/src/lib.rs)
+- [daemon/crates/runtime/src/session.rs](../../daemon/crates/runtime/src/session.rs)
+- [daemon/crates/runtime/src/guard.rs](../../daemon/crates/runtime/src/guard.rs)
+- [daemon/crates/runtime/src/bricks.rs](../../daemon/crates/runtime/src/bricks.rs)
+- [daemon/crates/runtime/src/presence.rs](../../daemon/crates/runtime/src/presence.rs)
+- [daemon/crates/runtime/src/telemetry/mod.rs](../../daemon/crates/runtime/src/telemetry/mod.rs)
+- [DESIGN.md](../../DESIGN.md) §4.2–4.5

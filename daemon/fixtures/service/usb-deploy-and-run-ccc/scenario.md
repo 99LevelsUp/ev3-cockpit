@@ -24,7 +24,7 @@ A program deployed and run in one call, heard ending through a program subscript
 
   It waits eight seconds and ends; it draws nothing, writes nothing and moves no motor.
 - **Recorded** 22.11.2026 through the native daemon 0.2.519 in record mode on a test channel, on a
-  Raspberry Pi 5 (linux-arm64), with `scripts/hardware-scenario.js` as the only client (kind
+  Raspberry Pi 5 (linux-arm64), with `scripts/hardware-scenario.mts` as the only client (kind
   `cli`, named `hardware scenario`, development build, version 0.0.1). The run ends with
   `bricks/disconnect` and `daemon/exit`, whose restart question the script answers yes.
 - **Brick state:** CCC on the USB cable, on the main menu, paired over Bluetooth and on Wi-Fi;
@@ -38,5 +38,5 @@ A program deployed and run in one call, heard ending through a program subscript
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same
-  calls replay matched with `node scripts/hardware-scenario.js deploy-and-run --daemon <ev3-cockpitd>
+  calls replay matched with `node scripts/hardware-scenario.mts deploy-and-run --daemon <ev3-cockpitd>
   --brick CCC --replay daemon/fixtures/service/<this directory> --transport usb`.

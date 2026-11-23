@@ -1,8 +1,14 @@
 # EVƎ Cockpit - Design
 
-> Version: 2026-04-02
+> Version: 2026-04-02, updated 2026-11-23
 > Status: target design for new implementation
 > Input: `REQUIREMENTS.md`
+>
+> Since 23.11.2026 the design is implemented by the native daemon `ev3-cockpitd`, a Rust workspace
+> in `daemon/` (plan `docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`), which ported the
+> TypeScript core rule by rule (its KTD11). Where a section below names a TypeScript class or file
+> that no longer exists, it records how the rule was found; the Rust module named beside it, or in
+> `docs/ARCHITECTURE.md`, holds it now.
 
 ## 1. Design Goal
 
@@ -91,7 +97,6 @@ This is a fundamental architectural rule. The active tab in the panel and API su
 ```mermaid
 graph TD
     subgraph Providers["Transport Providers"]
-        PM[Mock]
         PU[USB]
         PT[TCP]
         PB[BT]
@@ -127,69 +132,65 @@ graph TD
 
 ### 4.1 Transport Providers
 
-Each transport implements a shared contract:
+Each transport implements a shared contract (`TransportProvider`,
+`daemon/crates/transports/src/provider.rs`):
 
 - `discover`,
 - `connect`,
 - `disconnect`,
-- `send`,
+- `send_packet`,
 - `recover`,
-- `forget` where applicable.
+- `forget`, `pair` and `check_presence` where applicable.
 
 Supported providers:
 
-- `mock`,
 - `usb`,
 - `tcp`,
 - `bt`.
 
+Simulated bricks (`mock`) are deferred (native daemon plan, Key Decisions); recorded brick
+sessions replayed at the provider trait stand in for hardware in tests (§13).
+
 #### 4.1.1 Internal Structure
 
-Physical transport providers (USB, TCP, BT) share a layered internal structure.
-Mock bypasses the protocol and adapter layers because it simulates responses directly.
+The providers carry bytes; the command layer above them owns the codec (§4.3a).
 
 ```mermaid
 graph LR
-    subgraph TransportProvider
-        CMD[BrickCommand]
-        CMD --> ENC[ev3Commands]
-        ENC --> PKT[ev3Packet]
-        PKT --> ADP[TransportAdapter]
-        ADP -->|raw bytes| BRICK[EV3 Brick]
-        BRICK -->|raw bytes| ADP
-        ADP --> DPKT[ev3Packet decode]
-        DPKT --> RESP[ev3Responses]
-        RESP --> RES[BrickResponse]
-    end
+    CMD[BrickCommand] --> ENC[commands: build_command]
+    ENC --> PKT[packet: encode]
+    PKT --> LINK[provider link]
+    LINK -->|raw bytes| BRICK[EV3 Brick]
+    BRICK -->|raw bytes| LINK
+    LINK --> DPKT[packet: decode]
+    DPKT --> RESP[responses: parse_response]
+    RESP --> RES[BrickResponse]
 ```
 
-**Protocol layer** (`src/core/protocol/`): Pure functions with no I/O.
+**Protocol layer** (`daemon/crates/protocol`): Pure functions with no I/O.
 
-- `ev3Bytecode` — encoding primitives (local constants, global variables, integer encoding).
-- `ev3Packet` — packet framing: `[length:2LE][counter:2LE][type:1B][payload]`. Encode and decode.
-- `ev3Commands` — maps `BrickCommand` to EV3 direct/system command bytecode.
-- `ev3Responses` — parses raw EV3 reply bytes into typed `BrickResponse`.
+- `bytecode` — encoding primitives (local constants, global variables, integer encoding).
+- `packet` — packet framing: `[length:2LE][counter:2LE][type:1B][payload]`. Encode and decode.
+- `commands` — maps `BrickCommand` to EV3 direct/system command bytecode.
+- `responses` — parses raw EV3 reply bytes into typed `BrickResponse`.
 
-**Transport adapter** (`TransportAdapter` interface): Raw I/O only.
+**Links** (`daemon/crates/transports`): raw I/O only. A link opens and closes the physical
+connection and exchanges one framed packet for its reply, with a deadline, cancellation and the
+expected message counter (`pending.rs`, shared by every byte link).
 
-- `open()` — establish the physical connection.
-- `close()` — release the physical connection.
-- `send(packet, options?)` — send framed bytes, receive framed reply. `options` carries
-  `timeoutMs`, an `AbortSignal`, and the expected message counter.
+- USB (`usb/`): libusb through `rusb` with a vendored libusb — the brick's interrupt endpoints at
+  the firmware's full 1024-byte frame, the preferred link; HID through `hidapi` as the fallback
+  when libusb cannot claim the interface, 64 bytes per packet.
+- TCP (`tcp/`): the UDP beacon for discovery and a TCP socket, length-prefixed, after the unlock
+  handshake.
+- Bluetooth on Windows (`bt_windows/`): RFCOMM over Winsock `AF_BTH`, connected non-blocking and
+  driven by tokio; presence over uncached SDP; pairing through WinRT; forget through `bthprops`.
+- Bluetooth on Linux (`bt_linux/`): an `AF_BLUETOOTH` RFCOMM socket to channel 1 through libc
+  ("Bluetooth on Linux" below).
 
-Concrete adapters:
-
-- `UsbLibusbAdapter` — USB interrupt endpoints via `usb` (libusb). Reaches the firmware's
-  full 1024-byte frame. The preferred USB backend.
-- `UsbHidAdapter` — USB HID via `node-hid`. Fallback for when libusb cannot claim the
-  interface; delivers 64 bytes per packet.
-- `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream.
-- `BtWinsockAdapter` — Bluetooth RFCOMM over WinSock2 `AF_BTH` via `koffi` FFI. The preferred
-  BT backend on Windows.
-- `BtSppAdapter` — Bluetooth RFCOMM over the paired brick's outgoing serial port via
-  `serialport`. Fallback, and the only path on hosts where the FFI cannot load.
-- `BtBluezAdapter` — Bluetooth RFCOMM on Linux: an `AF_BLUETOOTH` socket to channel 1 through
-  libc via `koffi`. The only BT backend on Linux ("Bluetooth on Linux" below).
+The serial-port (SPP) Bluetooth fallback of the TypeScript implementation was not ported: the
+communication lab found Winsock working on both adapters measured and SPP transferring nothing on
+one.
 
 #### USB has two backends, and they are not equivalent
 
@@ -197,7 +198,7 @@ Concrete adapters:
 descriptor declares `Report Count 0` for both the input and the output report, so Windows
 derives no usable report length and a write delivers 64 bytes however large a report it is
 handed — while the interrupt endpoints underneath advertise `wMaxPacketSize` **1024**.
-Nothing above HID can lift that: the ceiling is the descriptor, not `node-hid`.
+Nothing above HID can lift that: the ceiling is the descriptor, not the HID library.
 
 Going straight at the endpoints through libusb reaches the firmware's real frame. Two
 measured quirks shape that path, both invisible in review and fatal in practice:
@@ -255,14 +256,21 @@ detected it because every command sent before the filesystem work fit inside 64 
 
 #### Bluetooth has one runtime backend, and WinRT is not it
 
+> **Superseded 23.11.2026** by the native daemon plan
+> (`docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`, KTD5): the daemon is a native
+> process, so WinRT is reachable in-process. Pairing runs through WinRT
+> `DeviceInformationCustomPairing` inside the daemon, on its own thread; the data channel stays on
+> Winsock `AF_BTH`, and SPP was not ported. The two paragraphs below record the rule of the
+> TypeScript implementation.
+
 The design used to name three backends in a fallback chain: WinRT `StreamSocket`, then
-WinSock2 through `koffi`, then SPP over a serial port. Only the last was ever built, and
+WinSock2 through an FFI, then SPP over a serial port. Only the last was ever built, and
 building the first was never the right plan.
 
 **WinRT is excluded deliberately.** LEGO's own desktop products do use it — EV3 Classroom
 opens `RfcommDeviceService` and a `StreamSocket` — but they are .NET applications and we
 are a VS Code extension. Reaching WinRT from Node means a .NET helper process, and the
-testlab ruled that class of solution out at the start: native Windows API through `koffi`
+testlab ruled that class of solution out at the start: native Windows API through an
 FFI, never a `child_process` shelling out to .NET, PowerShell or Python. A backend that
 cannot be built within the extension's own process is not a backend, it is a dependency on
 a runtime the user may not have. The chain is now **WinSock2 → SPP**, and nothing above
@@ -325,9 +333,10 @@ Three things in this section were **assumptions, not measurements**. Measured on
   per brick. The queue's 15 s between bricks and 30 s after a failure stay for the release,
   as slow and safe; tuning them is post-release work. The ~50 % connect failures belong to
   one host's Realtek adapter; the same stack on an Intel adapter opened 96 %.
-- **The connect itself** ran blocking on a koffi worker thread and was "aborted" by closing the
+- **The connect itself** ran blocking on an FFI worker thread and was "aborted" by closing the
   socket, which did not end it: four deadlines in one process ended Bluetooth until the
-  process exited. It is now non-blocking, polled with `select` on the main thread.
+  process exited. It is now non-blocking, its completion reported by tokio's reactor
+  (`bt_windows/winsock.rs`).
 - **"One active transport per brick"** in the transport guard. Measured 29.10.2026 on all
   three bricks and both firmware versions: USB and Bluetooth open to the same brick at once,
   even with commands in flight on both, answered every request with no freeze; a USB cable
@@ -339,37 +348,37 @@ Three things in this section were **assumptions, not measurements**. Measured on
 #### Bluetooth on Linux: BlueZ, through our own D-Bus client
 
 Linux has the same seams as Windows and different things behind them (step-7 plan, KTD1):
-`BtTransportProvider`, `BtClassicDiscovery`, `BtPresenceMonitor` and `BtConnectionQueue` are
-shared, and one factory, `createBluezBluetooth` (`bluezBluetooth.ts`), fills every seam the
-Windows backend fills — the RFCOMM backend, the paired-device list, this computer's radio name,
-pairing, forget and its residue, the presence check and the inquiry. `createRuntime` builds it on
-`linux` only; nothing of it loads on Windows. What was measured first is in
+the connection queue and the presence monitor are shared (`daemon/crates/transports/src/bt/`), and
+the Linux provider (`bt_linux/provider.rs`) fills every seam the Windows one fills — the RFCOMM
+link, the paired-device list, this computer's radio name, pairing, forget and its residue, the
+presence check and the inquiry. It is compiled on Linux only. What was measured first is in
 `docs/plans/linux-session-results/2026-11-11-hostc.md` and in the step-7 plan's U0 and U6.
 
-**Data: a libc RFCOMM socket, no helper process.** `BtBluezAdapter` opens `AF_BLUETOOTH` /
-`BTPROTO_RFCOMM` to channel 1, the brick's only service, through `koffi` (`linuxBluetoothSocket.ts`).
-As on Windows the connect is non-blocking and polled on the main thread (`poll`, then `SO_ERROR`),
+**Data: a libc RFCOMM socket, no helper process.** The link (`bt_linux/rfcomm.rs`) opens
+`AF_BLUETOOTH` / `BTPROTO_RFCOMM` to channel 1, the brick's only service, through libc.
+As on Windows the connect is non-blocking (`SO_ERROR` read once the socket is writable),
 so a deadline really ends it. `EHOSTDOWN`, `EHOSTUNREACH`, `ETIMEDOUT` and `ECONNREFUSED` are an
 unreachable brick; `EBUSY` is one closed a moment ago — a reconnect needs about 2.5 s on Linux,
 which the provider's 5 s per-brick gap already covers. A kernel without Bluetooth sockets makes
 the backend unavailable, not the brick unreachable.
 
-**BlueZ is reached through a D-Bus client of our own (owner decision D1).** About 900
-lines in `src/core/transports/dbus/`: the `EXTERNAL` handshake on the system bus socket, method calls,
-signals and exported objects — only what BlueZ needs. A library would have added a runtime
-dependency and its transitive ones to a public extension; `libdbus` through FFI more native
-surface; `bluetoothctl` a human interface that changes between versions. On Debian 13 / Raspberry
-Pi OS the bus policy lets a desktop user talk to BlueZ with no group and no `sudo`.
+**BlueZ is reached through `zbus`** (native daemon plan, KTD6), a pure-Rust D-Bus library, behind
+one trait so the logic above runs against a fake BlueZ in tests (`bt_linux/bluez.rs`,
+`system_bus.rs`). The TypeScript implementation had a D-Bus client of its own (owner decision D1),
+since a library would have added runtime dependencies to a public extension; in a Rust binary a
+crate is compiled in and pinned. `bluer` was rejected: it links `libdbus`. `bluetoothctl` stays out,
+a human interface that changes between versions. On Debian 13 / Raspberry Pi OS the bus policy lets
+a desktop user talk to BlueZ with no group and no `sudo`.
 
-**One object cache answers the synchronous seams** (`bluezObjects.ts`): `GetManagedObjects` once,
+**One object cache answers the synchronous seams** (`bt_linux/bluez.rs`): `GetManagedObjects` once,
 then `InterfacesAdded`, `InterfacesRemoved` and `PropertiesChanged`. Paired bricks keep the name
 BlueZ learned, even while the brick is off — better than Windows, which forgets it. **Who speaks
-for BlueZ is checked.** The factory tracks `org.bluez`'s unique name with `GetNameOwner` and
+for BlueZ is checked.** The bus session (`bt_linux/session.rs`) tracks `org.bluez`'s unique name with `GetNameOwner` and
 `NameOwnerChanged` (from the bus daemon only); the cache and the pairing agent take signals and
 calls from that name only, and from nobody while it is unknown. When BlueZ restarts, the cache is
 dropped, its listeners told, and a fresh snapshot read once BlueZ is back.
 
-**Pairing goes through an agent we own** (`bluezPairing.ts`). `RegisterAgent` as
+**Pairing goes through an agent we own** (`bt_linux/agent.rs`). `RegisterAgent` as
 `KeyboardDisplay`, never `RequestDefaultAgent`: BlueZ asks the agent of the connection that called
 `Pair`, so a desktop's own agent stays the default (measured with the Raspberry Pi OS panel
 running: BlueZ asked ours). The agent answers PIN `1234` and confirms for the brick being
@@ -379,7 +388,7 @@ time. A dialog left unconfirmed on the brick ends after BlueZ's 60 s as `Authent
 reported as such; the dialog stays on the brick. `Trusted` is not set (D3): the cockpit only
 connects out.
 
-**Presence is a short L2CAP connect to PSM 1, SDP, closed at once** (D2, `bluezPresence.ts`).
+**Presence is a short L2CAP connect to PSM 1, SDP, closed at once** (D2, `bt_linux/presence.rs`).
 Every Classic device listens there, and the connect asks the brick nothing: no dialog on any brick,
 no root, no D-Bus. A brick that is on answered in 2.9–4.4 s; one that is off failed with
 `EHOSTDOWN` after 5.1 s. Only what the brick did counts: a page that went unanswered (`EHOSTDOWN`,
@@ -395,19 +404,20 @@ BlueZ still holds is not evidence: under another client's discovery it outlived 
 off. The inquiry and a pairing's search share the radio's discovery, so both go through
 `BtConnectionQueue` (pairing enqueued, presence holding it) and never overlap.
 
-**Forget is `Adapter1.RemoveDevice` through the adapter that holds the brick** (`bluezForget.ts`).
+**Forget is `Adapter1.RemoveDevice` through the adapter that holds the brick** (`bt_linux/provider.rs`).
 It drops the link key; BlueZ keeps the brick's name cache under
 `/var/lib/bluetooth/<adapter>/cache/<brick>`, root-owned, which is reported as the residue and not
 touched, as on Windows. A brick BlueZ does not hold counts as forgotten.
 
 **Where a distribution limits BlueZ to the `bluetooth` group, the cockpit offers the fix** (D4,
-`bluezAccess.ts`). An `AccessDenied` from the bus is told apart from every other failure; with the
+`bt_linux/access.rs`). An `AccessDenied` from the bus is told apart from every other failure; with the
 user's confirmation the cockpit runs `pkexec usermod -aG bluetooth <user>` — a fixed argv, no
 shell, the user from the OS, the password asked by polkit and never seen by the cockpit. Without
 `pkexec` it shows the command to copy. The group applies to a new login; "check again" opens a new
 bus connection.
 
-Measured through the factory on HOSTC (step-7 plan, U9): the hardware matrix on all three bricks, a BlueZ restart, a brick switched off and on, forget and re-pair. With HOSTC's own Wi-Fi up, one matrix run in two had page timeouts (`EHOSTDOWN`) on two bricks; the Pi 5's Wi-Fi and Bluetooth share one chip. Unverified: the cockpit's wiring end to end in VS Code; other distributions' bus
+Measured through the TypeScript implementation on HOSTC (step-7 plan, U9; the native daemon's
+Linux round is U16): the hardware matrix on all three bricks, a BlueZ restart, a brick switched off and on, forget and re-pair. With HOSTC's own Wi-Fi up, one matrix run in two had page timeouts (`EHOSTDOWN`) on two bricks; the Pi 5's Wi-Fi and Bluetooth share one chip. Unverified: the cockpit's wiring end to end in VS Code; other distributions' bus
 policy; desktop agents other than Raspberry Pi OS's (blueman, GNOME); other adapters' behaviour
 on the L2CAP page; a second adapter (out of scope: the first one is used and forget refuses a
 brick held by another).
@@ -437,7 +447,7 @@ sorts it for itself.
 The Session Manager manages physically connected channels — one session per channel to a
 brick. It is the exclusive owner of the connection state.
 
-**Brick layer** (`BrickManager`, above it). Signs a brick in over every channel it is available
+**Brick layer** (`daemon/crates/runtime/src/bricks.rs`, above it). Signs a brick in over every channel it is available
 on, and over every channel that appears while it stays signed in; sends each command over the
 connected channel with the highest priority its provider declares (USB, then Bluetooth, then
 TCP). A link fault on that channel takes it out of routing at once, so the next command goes
@@ -445,8 +455,7 @@ over the next channel, and probes it: back in routing if it answers, reconnectin
 file transfer keeps the channel it started on and fails only if that channel is lost. Sign-out
 is per brick and closes every channel. A failed join is retried on a backoff, except where the
 provider opts out (`rejoinOnEvidenceOnly`, Bluetooth): there only when the brick is seen again
-or answers a presence check. The extension and the hardware harness build this whole runtime
-through one function, `createRuntime`.
+or answers a presence check. The daemon builds this whole runtime once, at its start.
 
 Responsibilities:
 
@@ -461,25 +470,25 @@ Clients never open a brick themselves: `bricks/connect` and `bricks/disconnect` 
 ### 4.3a Command Layer
 
 Owns the typed command vocabulary and everything needed to execute one command against
-one connected brick: the EV3 codec (`src/core/protocol/`), message counters, reply matching,
-and command-to-response typing.
+one connected brick: the EV3 codec (`daemon/crates/protocol`), message counters, reply matching,
+and command-to-response typing (`daemon/crates/runtime/src/session.rs`).
 
 It sits above the session manager, which owns connections, and below telemetry and the
 filesystem, which both orchestrate commands rather than issue them one at a time.
 
-**The transports beneath it carry bytes.** `TransportProvider.sendPacket` takes a packet
+**The transports beneath it carry bytes.** `TransportProvider::send_packet` takes a packet
 and returns a packet; it does not know what a command means. Until this was separated, a
 provider accepted a typed `BrickCommand`, which inverted the dependency — the lowest
 layer owned the vocabulary every layer above it was defined in terms of, and the codec
-lived inside `src/core/transports/`.
+lived inside the transports.
 
 A channel is **session-scoped**, because the message counter is. Two channels over one
 connection would hand out colliding counters and match each other's replies. The session
 manager builds one per session.
 
-The mock is the single provider that stays at the command level, through an optional
-`createCommandChannel`. A mock brick simulates what a command *means*; making it decode
-real EV3 framing back into commands would be work in service of nothing.
+The TypeScript mock was the single provider that stayed at the command level. Simulated bricks
+are deferred in the native daemon (§13); a replayed recording sits at the provider trait and
+carries bytes like any link.
 
 ### 4.3b Service Tier
 
@@ -538,7 +547,7 @@ other's outstanding command, is the arrangement this replaced.
 Two consequences worth stating, because both were found by building it:
 
 - **The tick period comes from the transport, and the figures are measured** (§9.2, and
-  `telemetry/telemetryConstants.ts` for the derivation): USB 100 ms, TCP 200 ms, BT 500 ms.
+  `daemon/crates/runtime/src/telemetry/cadence.rs` for the derivation): USB 100 ms, TCP 200 ms, BT 500 ms.
   Bluetooth sets the shape — at 10.7 commands a second, a uniform 10 Hz target would consume
   the whole link and leave nothing for the heartbeat.
 - **The packet budget is a property of the live link, not of the session**, so the scheduler
@@ -549,9 +558,9 @@ Two consequences worth stating, because both were found by building it:
   failure would be silent.
 
 A transport that cannot execute a composed frame says so through `TransportCapabilities`, and a
-brick on it runs in `minimal` regardless of whether it is the active one. The mock is not such a
-transport: it decodes the opcodes the assembler emits and answers from its own ports, so
-telemetry runs on it as on a brick (owner, 11.11.2026, step-6 plan D4).
+brick on it runs in `minimal` regardless of whether it is the active one. The TypeScript mock was
+not such a transport: it decoded the opcodes the assembler emits and answered from its own ports
+(owner, 11.11.2026, step-6 plan D4); simulated bricks wait in the native daemon (§13).
 
 ### 4.5 Adaptive Throttling
 
@@ -616,9 +625,11 @@ screen open must not slow telemetry for the other two.
 
 ### 4.6 Daemon and Contract
 
-The daemon (`src/daemon/`) serves the runtime to its clients over the contract (`src/contract/`,
-§10): brick list and holders, write leases, files, programs, telemetry subscriptions, the daisy
-chain, settings, and questions for a person. Clients use the client library (`src/client/`).
+The daemon (`daemon/crates/daemon`, the binary `ev3-cockpitd`) serves the runtime to its clients
+over the contract (`contract/`, §10): brick list and holders, write leases, files, programs,
+telemetry subscriptions, the daisy chain, settings, and questions for a person. TypeScript clients
+use the client library (`src/client/`); the native `ev3` command speaks the same contract
+(`daemon/crates/cli`).
 
 ### 4.6a The `ev3://` Scheme Is Not Cockpit's
 
@@ -707,7 +718,7 @@ Transport-specific `brickKey` definitions:
 - **TCP**: Serial number reported by the brick, falling back to the IP address when the
   brick reports no serial. Keying on IP alone would break every TCP favorite on a DHCP
   lease change.
-- **Mock**: Synthetic identifier from the JSON configuration (e.g., `mock:<id>` where `id` is defined in the config file).
+- **Mock** (deferred, §13): Synthetic identifier from the JSON configuration (e.g., `mock:<id>` where `id` is defined in the config file).
 
 ### 5.2 Connected Session
 
@@ -721,7 +732,7 @@ Model of a connected session:
 - `heartbeatState`.
 
 What telemetry a brick runs (foreground, subscribed, minimal) is not part of the session: the
-telemetry service is its one source (`TelemetryService.modeOf`), and claims are on rows, not
+telemetry service is its one source (`daemon/crates/runtime/src/telemetry/service.rs`), and claims are on rows, not
 categories (§9.3). The session once carried both and the two disagreed (step-6 plan, drift 3).
 
 ### 5.3 Active Brick View Model
@@ -743,8 +754,8 @@ Model for the foreground panel:
 
 ### 5.4 Contract Models
 
-The contract does not use UI models or the core's internal ones. Its own models are in
-`src/contract/models.ts`: `ContractBrick` (a brick with its channels, holders, and whether it is
+The contract does not use UI models or the runtime's internal ones. Its own models are JSON Schema
+in `contract/schema/`, generated into Rust and TypeScript: `ContractBrick` (a brick with its channels, holders, and whether it is
 reconnecting or blocked), `DaemonStatus`, `ProgramState` (with `runSeq` and `stoppedBy`),
 `DeployResult`, `TelemetryRowInfo`, `TelemetryValue` (one row's value with its own `sampledAt`,
 `effectiveIntervalMs` and `stale`), `TelemetryUpdate` (a `snapshot` first, then each `change`, and
@@ -1008,7 +1019,7 @@ removes every entry, whatever its name.
 
 That entry is **not** the source of a USB brick's display name, despite an earlier note here
 saying so. USB name resolution reads libusb string descriptors straight off the device and
-gets the current name; it is `node-hid`'s cached `product` string that goes stale, reporting
+gets the current name; it is the HID enumeration's cached `product` string that goes stale, reporting
 the generic `"Xfer data to and from EV3 brick"` for two of three bricks where libusb
 returned AAA, BBB and CCC correctly. So the stale-name problem is real, and it belongs to
 the Bluetooth path once BT discovery is wired (1.11.7a).
@@ -1231,8 +1242,8 @@ One rule genuinely follows from round trips being scarce, and it survives:
   When it does bind, the rejection is not silent. The brick answers `DIRECT_REPLY_ERROR`, and
   `c_com.c` copies the full declared global buffer into that error reply exactly as into a
   successful one — so the payload is whatever the *previous* command left there. It reads as
-  data only to a parser that ignores the reply-type byte. Ours checks it (`validateReply` in
-  `ev3Responses.ts`), which is why shipped code was never exposed; the earlier claim that the
+  data only to a parser that ignores the reply-type byte. Ours checks it (`validate_reply` in
+  `daemon/crates/protocol/src/responses.rs`), which is why shipped code was never exposed; the earlier claim that the
   brick "skips the command silently" came from a probe of mine that did not check it.
 
 - **The assembler must bound the reply, not just the request.** The reply on the wire is
@@ -1468,9 +1479,9 @@ tacho row for a member, because the position does not cross the chain. The sched
 member's rows only within the reported depth, a member's value only after its occupancy says a
 device is there, and nothing of the chain on the HID fallback, where the 33-byte list would take
 the brick's own readings' frames. The chain itself is derived from the depth row, never stored,
-and each member carries what it can do from one module (`telemetry/chainCapabilities.ts`): today
+and each member carries what it can do from one module (`daemon/crates/runtime/src/chain.rs`): today
 sensors, motor types on the layers measured, and nothing a host cannot address to a layer
-(name, files, programs). The API offers it as `getChain` and `onChainChanged`.
+(name, files, programs). The contract offers it as `chain/get` and `chain/follow`.
 
 Subscribers are identified by an opaque handle returned from subscribe, so unsubscribing
 releases exactly one claim on a row and the effective interval is recomputed from those that
@@ -1547,37 +1558,43 @@ sequenceDiagram
 
 ## 10. Daemon and Clients
 
-Built in 4.10.2 (`docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`). The wire
-protocol is described in `docs/protocol.md`; add-on authors start with `docs/api-for-consumers.md`.
+Built in 4.10.2 (`docs/plans/2026-11-19-0937-feat-cockpit-daemon-and-clients-plan.md`) as a Node
+daemon, rewritten as the native daemon `ev3-cockpitd`
+(`docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`), which replaced it on 23.11.2026. The
+wire protocol is described in `docs/protocol.md`, the channel in `docs/channel.md`; add-on authors
+start with `docs/api-for-consumers.md`.
 
 ### 10.1 One Daemon, Many Clients
 
 One daemon per user holds the bricks: their connections, presence, telemetry, programs, files,
-the transfer ledger and the settings. Every client goes through it:
+the transfer ledger and the settings. It is a native binary for Windows x64, Linux x64 and Linux
+arm64 that needs no Node runtime, shipped in the VSIX and npm packages. Every client goes through
+it:
 
-- the VS Code extension, one client per window, on VS Code's own Node (R32);
+- the VS Code extension, one client per window;
 - the `ev3` command, for a shell, scripts and agents;
-- the MCP server `ev3-cockpit-mcp`;
+- the MCP server, `ev3 mcp` (the npm package still carries the TypeScript `ev3-cockpit-mcp`);
 - add-ons such as EVƎ C, through the client library `@ev3-cockpit/client`.
 
-The first client starts the daemon; it ends 10 s after its last client has gone and no brick is
-held through `ev3 connect`. Only the daemon opens a brick, so two programs never pull at one.
-The extension exports no API (KTD18).
+The first client starts a verified copy of the daemon binary; it ends 10 s after its last client
+has gone and no brick is held through `ev3 connect`. Only the daemon opens a brick, so two programs
+never pull at one. The extension exports no API (KTD18).
 
 ### 10.2 The Contract
 
-One contract for every client: `src/contract/` holds the method names, parameters, results,
-notifications, error codes and the contract version; `src/client/` is the library that finds or
-starts the daemon, proves the user's key, keeps the brick list and settings current, and renews
-subscriptions after the daemon is replaced. Everything that crosses it is plain JSON; every error
-carries a stable code. A brick is named by id or name; a write takes the brick's lease for one
-request, and a second writer gets `brick_busy` naming the holder; stop and emergency stop never
-wait. Questions for a person go to the client that started the operation; a client without a
-person answers `keep`, which changes nothing.
+One contract for every client: JSON Schema in `contract/` holds the method names, parameters,
+results, notifications, error codes and the contract version, generated into Rust and into
+`src/contract/generated/`; `src/client/` is the library that finds or starts the daemon, proves
+the user's key, keeps the brick list and settings current, and renews subscriptions after the
+daemon is replaced. Everything that crosses it is plain JSON; every error carries a stable code.
+A brick is named by id or name; a write takes the brick's lease for one request, and a second
+writer gets `brick_busy` naming the holder; stop and emergency stop never wait. Questions for a
+person go only to a VS Code window or a terminal: the requesting client when it is one, else the
+one that connected last; an add-on or an MCP server is never asked, and the question names who
+requested. An unanswered question changes nothing.
 
-The per-brick services behind the contract (`src/core/api/cockpitApi.ts`) run one session per
-client: one program service per brick for everyone, so every stop reaches it, and each client's
-telemetry in its own order. Until 4.10.2 this was the extension's public API v1.
+The daemon runs one program service per brick for everyone, so every stop reaches it, and
+delivers every client's telemetry from one queue in one order.
 
 ### 10.3 Access Mode
 
@@ -1586,7 +1603,7 @@ default: a client writes, deletes and runs only under `/home/root/lms2012/prjs` 
 and reads everywhere; paths are resolved as the brick resolves them, so `..` cannot climb out, and
 a user area itself cannot be removed. **full**: the whole brick, shell included. Switching to full
 needs a person's confirmation from VS Code (`EVƎ: Settings`) or the `ev3` command; an MCP server or
-an add-on cannot switch it. Full lasts until the daemon ends (a restart keeps it). The daemon
+an add-on cannot switch it. Full lasts until the daemon ends; it is never stored. The daemon
 enforces it for every client. **It is a guardrail against mistakes, not a sandbox:** a program run
 in safe mode can do anything on the brick (`opSYSTEM` is open to every `.rbf`), and the check
 reads paths as written, so a symbolic link inside a user area that points outside it is not caught.
@@ -1600,9 +1617,13 @@ holder; a disconnect drops only the caller's own hold (R36).
 
 ### 10.5 Replacement and Development
 
-A newer client replaces an idle daemon with its own version; `ev3 daemon restart` does it now,
-keeping held and connected bricks (R37). The extension's development host runs its own daemon on
-the `dev` channel, which borrows bricks from the user's daemon with their holders' consent (KTD17).
+A newer release client, or a development client meeting a release daemon, asks the daemon to end
+(`daemon/exit`) once no write is in progress and starts its own; any other exit request is a
+restart that needs a person's yes (`ev3 daemon restart`, "Restart the Cockpit Daemon"). Nothing is
+handed over: the new daemon connects again the bricks held with `ev3 connect` (`held.json`), and
+each client reconnects its own bricks. Development and release builds share the user's channel; the
+separate development daemon with brick loans and the handover of 4.10.2 were dropped in the native
+rewrite (`docs/channel.md`, "The daemon's life").
 
 ## 11. Filesystem Design
 
@@ -1709,6 +1730,12 @@ Displays:
 
 ## 13. Mock Design
 
+> **Deferred 20.11.2026** (native daemon plan, Key Decisions): the native daemon has no simulated
+> bricks yet. Recorded brick sessions guard regressions instead: a recording made on hardware
+> (`daemon/fixtures/`) is replayed at the provider trait, strictly for the Rust failure-path tests
+> and matched for the client tests on a test channel (`docs/channel.md`, `--replay`). The design
+> below is what a mock provider will implement when it comes back.
+
 Mock is an equal transport provider.
 
 ### 13.1 Mock Runtime
@@ -1734,7 +1761,8 @@ The format must support:
 
 A GUI editor for this configuration is deferred — see `REQUIREMENTS.md §16`.
 
-Whether the mock provider exists is decided where the runtime is composed: `createRuntime({ mockBricks })` registers it only when `mockBricks` is true. The extension passes the `ev3-cockpit.mockBricks` setting when the user has set it, and otherwise whether it runs in `ExtensionMode.Development`. Without the provider there are no mock bricks in discovery and no mock lines in the log.
+In the TypeScript implementation the mock provider was registered only in development or when the
+user asked for it; without it there were no mock bricks in discovery and no mock lines in the log.
 
 ## 14. Commands and VS Code Integration
 

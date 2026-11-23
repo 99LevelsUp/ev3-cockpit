@@ -6,11 +6,14 @@ solid boxes are implemented; dimmed, dashed boxes are designed (see `DESIGN.md`)
 built. This document expands on `DESIGN.md` §4 with an implementation-status view; `DESIGN.md`
 remains the source of truth for the design rationale itself.
 
+Everything inside the daemon is Rust, the Cargo workspace in `daemon/`; the clients above it are
+TypeScript (`src/`), except the native `ev3` command (`daemon/crates/cli`). Each section below names
+the crate that holds its layer.
+
 ```mermaid
 graph TD
-    subgraph Daemon["Cockpit daemon (one per user)"]
+    subgraph Daemon["Cockpit daemon ev3-cockpitd (one per user)"]
         subgraph Providers["Transport Providers"]
-            PM[Mock]
             PU[USB]
             PT[TCP]
             PB[BT]
@@ -43,41 +46,37 @@ graph TD
 
 ## 1. Protocol layer
 
-**Status: ✅ implemented.**
+**Status: ✅ implemented** (`daemon/crates/protocol`).
 
 Pure encode/decode functions, no I/O at all: packet framing, the EV3 direct/system command
 bytecode, and reply parsing. It has no idea a USB cable or a Bluetooth radio exists — feed
 it a `BrickCommand`, it hands back bytes; feed it bytes, it hands back a typed response.
-Every transport adapter and the mock both sit on top of the same protocol code, which is
-what keeps a mocked brick's replies shaped exactly like a real one's.
 
-## 2. Transport adapters & providers
+## 2. Transport providers
 
-**Status: ✅ implemented for USB, TCP and Bluetooth** (Bluetooth carries two known open
-items: an intermittent connect failure under investigation, and pairing-from-Cockpit is
-proven to work but not yet wired into the extension — see `IMPLEMENTATION_PLAN.md` 2.8.16
-and 2.8.18).
+**Status: ✅ implemented for USB, TCP and Bluetooth on Windows and Linux**
+(`daemon/crates/transports`). Simulated bricks are deferred; recorded brick sessions replayed at
+the provider trait (`daemon/fixtures/`) stand in for hardware in tests. macOS is not supported
+yet (GitHub issue #1).
 
-A **transport adapter** does raw I/O only — open, close, send framed bytes, receive framed
-bytes — for one physical channel (USB, Bluetooth, TCP) or the mock. USB and Bluetooth each
-have two adapter implementations, because the "obvious" one carries a real cost: USB's HID
-path caps every packet at 64 bytes (a defect in the brick's own descriptor, not a library
-limitation), so the extension prefers a libusb adapter that reaches the firmware's real
-1024-byte frame and falls back to HID loudly rather than silently. Bluetooth's two adapters
-on Windows were chosen the same way — measured against live bricks, not assumed. On Linux
-Bluetooth has one adapter, an RFCOMM socket through libc, with BlueZ reached for discovery,
-pairing, presence and forget through the cockpit's own D-Bus client (DESIGN §4.1.1, "Bluetooth
-on Linux"; built, not yet wired into the runtime).
+A **transport provider** implements the one contract every transport shares (`TransportProvider`):
+`discover`, `connect`, `disconnect`, `send_packet`, and where the transport has them `recover`,
+`forget`, `pair` and `check_presence`. It carries bytes and knows nothing about what a command
+means. This is the layer where discovery and communication live *together* — a USB provider both
+finds USB bricks and talks to them once connected.
 
-A **transport provider** composes an adapter with the protocol layer and implements the one
-contract every transport shares: `discover`, `connect`, `disconnect`, `send`, `recover`,
-`forget`. This is the layer where discovery and communication live *together*, in the same
-object — a USB provider both finds USB bricks and talks to them once connected. There is no
-separate "discovery layer" below "communication"; the provider is both, per transport.
+USB has two links, because the "obvious" one carries a real cost: USB's HID path caps every
+packet at 64 bytes (a defect in the brick's own descriptor, not a library limitation), so the
+provider prefers libusb, which reaches the firmware's real 1024-byte frame, and falls back to HID
+loudly rather than silently. Bluetooth on Windows is a Winsock RFCOMM socket, with presence over
+uncached SDP and pairing through WinRT, all inside the daemon. On Linux it is an RFCOMM socket
+through libc, with BlueZ reached over D-Bus (`zbus`) for discovery, pairing, presence and forget
+(DESIGN §4.1.1, "Bluetooth on Linux"). Every operation that pages the radio takes its turn in one
+Bluetooth connection queue.
 
 ## 3. Presence aggregator
 
-**Status: ✅ implemented.**
+**Status: ✅ implemented** (`daemon/crates/runtime`, `discovery.rs`, `presence.rs`).
 
 Sits above every transport provider and merges their individual `discover()` results into
 one unified, deduplicated list — a brick reachable over both USB and Bluetooth appears once,
@@ -89,7 +88,8 @@ Session Manager below only ever sees a brick after this layer has already found 
 
 ## 4. Session manager
 
-**Status: ✅ implemented.**
+**Status: ✅ implemented** (`daemon/crates/runtime`, `session.rs`, and the brick layer above it,
+`bricks.rs`).
 
 The exclusive owner of *connection* state, as opposed to presence. Cockpit distinguishes two
 independent things a user or the world can do to a brick — **signed in** (the user's
@@ -141,7 +141,8 @@ connected while it has a holder (`docs/protocol.md`).
 
 ## 5. Command layer
 
-**Status: ✅ implemented.**
+**Status: ✅ implemented** (`daemon/crates/runtime`: the codec and message counter per link in
+`session.rs`, the per-session FIFO in `queue.rs`, the firmware guard in `guard.rs`).
 
 Owns the typed command vocabulary for one connected brick: turning a `BrickCommand` into
 protocol bytes, matching replies by message counter, typing the result. It sits directly
@@ -152,7 +153,8 @@ colliding counters and steal each other's replies.
 
 ## 6. Service tier
 
-**Status: ✅ implemented.**
+**Status: ✅ implemented** (`daemon/crates/runtime`: `telemetry/`, `fs.rs`, `transfer.rs`,
+`ledger.rs`, `programs.rs`, `deploy.rs`).
 
 Three peer services sit side by side above the Command Layer, each earning its place by
 needing more than a single pass-through command:
@@ -174,13 +176,14 @@ gets a service; the Command Layer already delivers it whole.
 
 ## 7. Daemon and clients
 
-**Status: ✅ implemented (4.10.2).**
+**Status: ✅ implemented** (`daemon/crates/daemon`, the native daemon plan
+`docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`; hardware sign-off U16 open).
 
 One daemon per user runs everything above, and every client reaches it over one contract
-(`src/contract/`, `docs/protocol.md`): the VS Code extension, the `ev3` command, the MCP server
-and add-ons through the client library. The daemon adds what several clients need: holders per
-brick, a write lease per request, questions for a person, the settings, version replacement and
-brick loans to a development daemon. It composes the Session Manager and the Service Tier rather
+(`contract/`, `docs/protocol.md`, `docs/channel.md`): the VS Code extension, the `ev3` command, the
+MCP server and add-ons through the client library (`src/client/`). The daemon adds what several
+clients need: holders per brick, a write lease per request, questions for a person, the settings,
+and replacement by a newer release. It composes the Session Manager and the Service Tier rather
 than containing their logic.
 
 ## 8. Cockpit UI layer
@@ -197,5 +200,5 @@ brick and telemetry through the contract and sends user actions back.
 
 Backs the Presence Aggregator and Session Manager with data that survives a restart —
 favorites, remembered bricks, last-known metadata. The daemon already keeps its settings, the
-transfer debts and a handover's state in its per-user state folder; favorites and remembered
-bricks are not built yet.
+transfer debts and the bricks held with `ev3 connect` in its per-user state folder; favorites and
+remembered bricks are not built yet.

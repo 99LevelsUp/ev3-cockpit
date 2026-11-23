@@ -1,6 +1,6 @@
 ---
 topic: Transports
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
@@ -8,86 +8,53 @@ status: active
 
 ## Purpose [coverage: high — 8 sources]
 
-The `src/core/transports/` module provides the physical I/O layer for communicating with EV3 bricks over USB, TCP, and Bluetooth. It contains transport adapters (raw I/O), transport providers (implementing the `TransportProvider` contract), a provider registry, and infrastructure components (TransportGuard, BtConnectionQueue, PendingReply). Mock transport is handled separately in `src/core/mock/`.
+`daemon/crates/transports` (`ev3-transports`) is the I/O layer to the bricks over USB, TCP and Bluetooth: the provider trait every transport implements, the request-reply machinery the byte links share, and record and replay at the provider level. A provider carries bytes and knows nothing about what a command means; the [runtime](runtime.md) above owns the codec ([protocol](protocol.md)).
 
 ## Architecture [coverage: high — 8 sources]
 
-The module follows a two-layer architecture per transport:
-
-**Transport Adapters** (`TransportAdapter` interface): `open()`, `close()`, `sendPacket(packet)` — raw I/O only.
-- `UsbHidAdapter` — USB HID via `node-hid`. VID `0x0694`, PID `0x0005`. 1025-byte reports (1 byte report ID + 1024 payload).
-- `TcpSocketAdapter` — TCP via Node.js `net`. Length-prefixed stream. Connects on port 5555.
-- `BtSppAdapter` — Bluetooth RFCOMM via `serialport` (SPP fallback).
-
-**Transport Providers** (`TransportProvider` interface): compose adapter + protocol for full `discover/connect/disconnect/send/recover/forget`.
-- `UsbTransportProvider` — USB device enumeration via `node-hid`. BrickKey: `usb:<serial>`. Lazy-loads node-hid with try-catch fallback.
-- `TcpTransportProvider` — UDP beacon discovery on port 3015 (`dgram`), TCP connection on port 5555. VMTP1.0 unlock handshake. BrickKey: `tcp:<serial>` or `tcp:<ip>`. Hybrid beacon + direct-IP recovery.
-- `BtTransportProvider` — two backends on Windows: WinSock2 `AF_BTH` via `koffi` FFI (preferred), then SPP via `serialport`. BrickKey: `bt:<mac>`.
-
-**Infrastructure:**
-- `ProviderRegistry` — register/unregister/enumerate/lookup transport providers by type
-- `TransportGuard` — rate limiting (≤10 commands/second per brick), firmware freeze protection (one active transport at a time, 2-second switch cooldown), degradation tracking
-- `BtConnectionQueue` — serialized RFCOMM connections (1 slot, 15-second inter-connection cooldown, exponential backoff on errors)
-- `PendingReply` — correlates outgoing commands with their reply promises
-- `transportConstants.ts` — empirical timing values (`USB`, `TCP`, `BT`, `FIRMWARE_SAFETY`)
+- **`provider.rs`** — `TransportProvider`: `transport`, `priority`, `capabilities`, `discover`, `connect`, `disconnect`, `send_packet`, `max_packet_bytes`, `open_probe`, and with defaults `recover`, `forget`, `pair`, `check_presence`, `dispose`. Also `DiscoveryItem`, `DiscoveryScanResult`, `SessionHandle`, `TransportCapabilities`.
+- **`brick_key.rs`** — `BrickKey` (`transport:id`, one channel to one brick) and `Transport`.
+- **`pending.rs`** — the exchange every byte link shares: message counters, the round-trip timer, stepping over stale replies, discarding what an abandoned exchange left.
+- **`usb/`** — libusb through `rusb` (vendored libusb) at the brick's full 1024-byte frame, preferred; HID through `hidapi`, 64 bytes per packet, as the loud fallback. Discovery reads both enumerations and never opens a device a link holds.
+- **`tcp/`** — the UDP beacon on port 3015 (bound only while scanning, with an outbound datagram to open host firewalls), a bounded untrusted beacon cache, and the TCP link with the unlock handshake.
+- **`bt/`** — shared Bluetooth parts: `BtConnectionQueue` (every operation that pages the radio takes its turn) and the presence monitor.
+- **`bt_windows/`** — Winsock `AF_BTH` RFCOMM on channel 1, non-blocking and driven by tokio; presence by uncached SDP; discovery from `bthprops` and a WinRT inquiry; pairing through WinRT `DeviceInformationCustomPairing` on a thread of its own; forget through `bthprops`.
+- **`bt_linux/`** — RFCOMM and L2CAP through libc sockets; BlueZ over `zbus` behind a trait (fake BlueZ in tests); an agent of its own answering PIN 1234; presence as an L2CAP connect to PSM 1; the radio watch that restarts an adapter that stopped answering; the `bluetooth` group offer through `pkexec`.
+- **`policy.rs`** — which providers a daemon may build from its channel and mode.
+- **`recorder.rs`, `replay.rs`, `fixture.rs`, `scrub.rs`** — record a session at the provider trait with identifiers replaced by placeholders, and replay it strictly or matched ([testing](testing.md)).
 
 ## Talks To [coverage: high — 6 sources]
 
-- **contracts/** — implements `TransportProvider`, `TransportAdapter` interfaces; uses `BrickCommand`, `BrickResponse`
-- **protocol/** — uses `buildCommand`, `encodeEv3Packet`, `decodeEv3Packet`, `parseResponse` for all physical transports
-- **runtime/** — `ProviderRegistry` is consumed by `DiscoveryScheduler` (for discovery polling) and `SessionManager` (for connect/disconnect/send)
-- **extension.ts** — all providers are instantiated and registered in `activate()`
-- **External native modules** — `node-hid` (USB), Node.js `net`/`dgram` (TCP), `serialport`/`koffi` (BT)
-
-## API Surface [coverage: high — 8 sources]
-
-| Export | Description |
-|--------|-------------|
-| `ProviderRegistry` | Register/unregister/enumerate/get providers |
-| `UsbTransportProvider` | USB HID transport provider |
-| `TcpTransportProvider` | TCP/UDP transport provider |
-| `BtTransportProvider` | Bluetooth RFCOMM transport provider |
-| `UsbHidAdapter` | Raw USB HID I/O adapter |
-| `TcpSocketAdapter` | Raw TCP socket I/O adapter |
-| `BtSppAdapter` | Raw BT SPP I/O adapter |
-| `TransportGuard` | Rate limiting and firmware safety |
-| `BtConnectionQueue` | Serialized BT RFCOMM connection queue |
-| `USB`, `TCP`, `BT`, `FIRMWARE_SAFETY` | Timing constants |
+- **protocol** — the links frame and unframe packets (`ev3-protocol`).
+- **runtime** — sessions call `connect`, `send_packet`, `recover`; discovery calls `discover`; the brick layer calls `pair`, `forget`, `check_presence`. The runtime's consent and activity ports reach the Linux provider through `bt_linux/access.rs`.
+- **The OS** — libusb and hidapi, `ws2_32`, `bthprops` and WinRT (`windows`, `windows-sys` crates), BlueZ on the system bus, libc sockets.
 
 ## Data [coverage: medium — 3 sources]
 
-Transport timing constants (from `transportConstants.ts`):
-- `FIRMWARE_SAFETY.MAX_COMMANDS_PER_SECOND` = 10
-- `FIRMWARE_SAFETY.TRANSPORT_SWITCH_COOLDOWN_MS` = 2000
-- `FIRMWARE_SAFETY.MIN_HEARTBEAT_INTERVAL_MS`, `RECONNECT_BASE_MS`, `RECONNECT_MAX_MS`, `MAX_RECONNECT_ATTEMPTS`
-- Per-transport discovery intervals, timeouts, and retry parameters
+`bt/queue.rs`: 15 s between connection openings, 30 s after a failure, backoff capped at 30 s, 45 s to wait for a turn; a brick gets 5 s after its own close before it is connected again (`RECONNECT_GAP_AFTER_CLOSE`), and a new daemon treats a busy brick within 5 s of its start as retryable. The rate guard lives in the runtime (`guard.rs`).
 
 ## Key Decisions [coverage: high — 5 sources]
 
-- **Adapter/provider separation** — adapters handle only raw I/O; providers compose adapter + protocol + discovery. This keeps adapters thin and testable.
-- **Two BT backends** — WinSock2 is the testlab's measured choice; SPP remains because it needs no FFI. A WinRT backend was dropped: it would need a .NET helper process.
-- **Lazy native loading** — `node-hid` and other native modules are loaded with `require()` inside try-catch, allowing the extension to function without native dependencies installed.
-- **Serialized BT connections** — Windows RFCOMM allows only one active connection at a time; the `BtConnectionQueue` enforces this with a 15-second inter-connection cooldown.
-- **Rate limiting at transport guard level** — ≤10 commands/second protects EV3 firmware from freezes; applied per-brick regardless of how many consumers send commands.
+- **Byte level on purpose** — the codec and message counter belong to the command layer, so the lowest layer does not own the command vocabulary.
+- **libusb first, HID loudly** — HID's 64-byte ceiling is a defect in the brick's descriptor; a silent fallback would look working and transfer 40× slower.
+- **Bluetooth in the daemon** — Winsock for data, WinRT for pairing, BlueZ over `zbus` on Linux; no helper process (native plan KTD5, KTD6). The serial-port (SPP) fallback was not ported.
+- **Opening is serialised, holding is not** — several Bluetooth sessions can be held at once; only the radio's paging operations queue.
+- **Record and replay at the provider trait** — everything above runs unchanged on a recording (native plan KTD7).
 
 ## Gotchas [coverage: medium — 3 sources]
 
-- **Native module availability** — `node-hid`, `serialport`, `koffi` may not load in VS Code extension host depending on the platform and build. Providers return empty discovery results if their native module is unavailable.
-- **TCP VMTP1.0 unlock** — the EV3 brick requires a specific handshake string before it accepts TCP commands.
-- **Firmware freeze** — sending commands too fast or switching transports without cooldown can freeze the EV3 firmware, requiring a physical reboot.
+- **TCP unlock** — the brick wants a handshake before it accepts commands; it authenticates nothing, so the beacon cache's bounds are security properties.
+- **Linux USB** — the kernel's `usbhid` holds the interface; the link detaches it and clears the halt on both endpoints. The udev rule `native/linux/70-lego-ev3.rules` grants the user the device.
+- **Windows USB reads** — libusb's HID backend counts the report id, reporting 1025 bytes for a 1024-byte frame.
 
 ## Sources
 
-- [src/core/transports/index.ts](../../src/core/transports/index.ts)
-- [src/core/transports/transportAdapter.ts](../../src/core/transports/transportAdapter.ts)
-- [src/core/transports/providerRegistry.ts](../../src/core/transports/providerRegistry.ts)
-- [src/core/transports/usbHidAdapter.ts](../../src/core/transports/usbHidAdapter.ts)
-- [src/core/transports/tcpSocketAdapter.ts](../../src/core/transports/tcpSocketAdapter.ts)
-- [src/core/transports/btSppAdapter.ts](../../src/core/transports/btSppAdapter.ts)
-- [src/core/transports/usbTransportProvider.ts](../../src/core/transports/usbTransportProvider.ts)
-- [src/core/transports/tcpTransportProvider.ts](../../src/core/transports/tcpTransportProvider.ts)
-- [src/core/transports/btTransportProvider.ts](../../src/core/transports/btTransportProvider.ts)
-- [src/core/transports/transportGuard.ts](../../src/core/transports/transportGuard.ts)
-- [src/core/transports/btConnectionQueue.ts](../../src/core/transports/btConnectionQueue.ts)
-- [src/core/transports/pendingReply.ts](../../src/core/transports/pendingReply.ts)
-- [src/core/transports/transportConstants.ts](../../src/core/transports/transportConstants.ts)
+- [daemon/crates/transports/src/lib.rs](../../daemon/crates/transports/src/lib.rs)
+- [daemon/crates/transports/src/provider.rs](../../daemon/crates/transports/src/provider.rs)
+- [daemon/crates/transports/src/pending.rs](../../daemon/crates/transports/src/pending.rs)
+- [daemon/crates/transports/src/usb/mod.rs](../../daemon/crates/transports/src/usb/mod.rs)
+- [daemon/crates/transports/src/tcp/mod.rs](../../daemon/crates/transports/src/tcp/mod.rs)
+- [daemon/crates/transports/src/bt/queue.rs](../../daemon/crates/transports/src/bt/queue.rs)
+- [daemon/crates/transports/src/bt_windows/mod.rs](../../daemon/crates/transports/src/bt_windows/mod.rs)
+- [daemon/crates/transports/src/bt_linux/mod.rs](../../daemon/crates/transports/src/bt_linux/mod.rs)
+- [DESIGN.md](../../DESIGN.md) §4.1

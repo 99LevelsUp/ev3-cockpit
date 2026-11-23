@@ -1,6 +1,6 @@
 ---
 topic: Protocol
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
@@ -8,59 +8,43 @@ status: active
 
 ## Purpose [coverage: high — 5 sources]
 
-The `src/core/protocol/` module implements the EV3 communication protocol as pure functions with no I/O. It handles bytecode encoding primitives, packet framing, command building (from `BrickCommand` to raw bytes), and response parsing (from raw bytes to typed `BrickResponse`). This layer sits between the transport adapters (raw I/O) and the higher-level transport providers.
+`daemon/crates/protocol` (`ev3-protocol`) implements the EV3 communication protocol with no I/O: bytecode encoding, packet framing, building commands and parsing replies. Nothing in it opens a link, reads a clock or waits. It is a rule-by-rule port of the TypeScript protocol layer. It sits between the [transports](transports.md), which carry bytes, and the [runtime](runtime.md), which sends commands.
 
 ## Architecture [coverage: high — 5 sources]
 
-Four files, re-exported via `index.ts`:
+`src/`:
 
-- **ev3Bytecode.ts** — low-level encoding primitives: `lc0`/`lc1`/`lc2`/`lcs` (local constants), `gv0`/`gv1` (global variables), `uint16le`/`uint32le`/`readUint16le`/`readUint32le`/`readInt32le`/`readFloat32le`, `concatBytes`, `cString`, `readFixedCString`
-- **ev3Packet.ts** — packet framing: `[length:2LE][counter:2LE][type:1B][payload]`. Exports `encodeEv3Packet`, `decodeEv3Packet`, `extractLengthPrefixedPacket`. Defines constants: `EV3_COMMAND`, `EV3_REPLY`, `EV3_SYSTEM`, `EV3_OPCODE`, `UI_READ_SUB`, `INPUT_DEVICE_SUB`, `EV3_SYSTEM_STATUS`
-- **ev3Commands.ts** — `buildCommand(command: BrickCommand)` maps typed commands to `{ type, payload }` encoded bytes. Exports `INFO_LAYOUT` for brick info field definitions
-- **ev3Responses.ts** — `parseResponse(kind, replyPayload)` converts raw EV3 reply bytes into typed `BrickResponse` objects
+- **`bytecode.rs`** — encoding primitives: local constants (LC0/LC1/LC2/LCS), global variable indexes, little-endian integers, C strings.
+- **`packet.rs`** — framing `[length:2LE][counter:2LE][type:1B][payload]`: `encode_ev3_packet`, `decode_ev3_packet`, `extract_length_prefixed_packet`, and the command, opcode and subcode constants of firmware 1.09d.
+- **`commands.rs`** — `build_command(&BrickCommand)` → `EncodedCommand`. `BrickCommand` covers telemetry frames, battery, ports, buttons, info, the brick's name and Bluetooth settings and peer list, program run/stop/status/emergency stop, system run, and the file system (list, read, write, exists, delete, chunked begin/continue for reads and writes, size, free space, make directory, copy, remove tree, close handle).
+- **`responses.rs`** — `parse_response` → `BrickResponse`; `validate_reply` checks the reply type first, so an error reply is never read as data.
+- **`peripherals.rs`** — what is plugged into a port, from the firmware's type code.
+- **`error.rs`** — `ProtocolError`, the one error the crate returns.
 
 ## Talks To [coverage: medium — 3 sources]
 
-- **transports/** — transport providers (`UsbTransportProvider`, `TcpTransportProvider`, `BtTransportProvider`) use `buildCommand` + `encodeEv3Packet` to send, and `decodeEv3Packet` + `parseResponse` to receive
-- **contracts/** — consumes `BrickCommand` and produces `BrickResponse` types
-- **mock/** — mock transport bypasses the protocol layer entirely, simulating responses directly
-
-## API Surface [coverage: high — 5 sources]
-
-| Export | Description |
-|--------|-------------|
-| `buildCommand(cmd)` | `BrickCommand` → `EncodedCommand { type, payload }` |
-| `parseResponse(kind, data)` | raw bytes → typed `BrickResponse` |
-| `encodeEv3Packet(packet)` | `Ev3Packet` → `Uint8Array` with length-prefixed framing |
-| `decodeEv3Packet(data)` | `Uint8Array` → `Ev3Packet` |
-| `extractLengthPrefixedPacket(buf)` | extract first complete packet from a stream buffer |
-| `lc0`, `lc1`, `lc2`, `lcs` | local constant encoders (1/2/3/N bytes) |
-| `gv0`, `gv1` | global variable index encoders |
-| `uint16le`, `uint32le` | little-endian integer encoders |
-| `concatBytes` | concatenate multiple `Uint8Array` fragments |
-| `INFO_LAYOUT` | field layout definition for brick info queries |
+- **runtime** — `session.rs` builds, frames, sends through the transport and parses; the brick layer reads a brick's info the same way.
+- **transports** — only bytes cross; the links know framing lengths, not commands.
 
 ## Data [coverage: medium — 2 sources]
 
-Packet format: `[length:2 bytes LE][counter:2 bytes LE][type:1 byte][payload:N bytes]`.
-
-EV3 opcodes and sub-commands are defined as numeric constants (`EV3_OPCODE`, `UI_READ_SUB`, `INPUT_DEVICE_SUB`). System command status codes in `EV3_SYSTEM_STATUS`.
+Packet format: `[length:2 bytes LE][counter:2 bytes LE][type:1 byte][payload:N bytes]`. Direct commands carry a global-variable reservation; system commands carry their own subcodes. Opcodes and subcodes are taken from the firmware sources (`bytecodes.h`, `c_com.h`), never guessed.
 
 ## Key Decisions [coverage: medium — 2 sources]
 
-- **Pure functions, no I/O** — the protocol layer is completely stateless and testable without mocks or hardware.
-- **Typed command/response pipeline** — `BrickCommand` → `buildCommand` → `encodeEv3Packet` → wire → `decodeEv3Packet` → `parseResponse` → `BrickResponse`. Each step is independently testable.
-- **Separate from transport** — adapters handle raw I/O; protocol handles encoding/decoding. This keeps transport adapters thin and protocol logic reusable.
+- **Pure functions, no I/O** — testable without hardware or fakes (`daemon/crates/protocol/tests/`: `ev3_protocol.rs`, `firmware_codes.rs`, `transfer_limits.rs`, …).
+- **Typed pipeline** — `BrickCommand` → `build_command` → `encode_ev3_packet` → wire → `decode_ev3_packet` → `parse_response` → `BrickResponse`.
+- **Separate from transport** — links handle raw I/O; the codec and the message counter belong to the command layer (DESIGN §4.3a).
 
 ## Gotchas [coverage: medium — 2 sources]
 
-- USB HID packets are 1025 bytes (1 byte report ID + 1024 payload) — the adapter layer handles this padding, not the protocol.
-- TCP uses length-prefixed streaming while USB uses fixed-size HID reports — `extractLengthPrefixedPacket` handles the TCP case; USB reads are always exactly one report.
+- USB through libusb carries 1024-byte frames and reads come back full-length, so a reply is found by its own length prefix; the HID fallback carries 64 bytes per packet. The link handles padding, not the protocol.
+- TCP is a length-prefixed stream; `extract_length_prefixed_packet` finds the first complete packet in a buffer.
 
 ## Sources
 
-- [src/core/protocol/index.ts](../../src/core/protocol/index.ts)
-- [src/core/protocol/ev3Bytecode.ts](../../src/core/protocol/ev3Bytecode.ts)
-- [src/core/protocol/ev3Packet.ts](../../src/core/protocol/ev3Packet.ts)
-- [src/core/protocol/ev3Commands.ts](../../src/core/protocol/ev3Commands.ts)
-- [src/core/protocol/ev3Responses.ts](../../src/core/protocol/ev3Responses.ts)
+- [daemon/crates/protocol/src/lib.rs](../../daemon/crates/protocol/src/lib.rs)
+- [daemon/crates/protocol/src/packet.rs](../../daemon/crates/protocol/src/packet.rs)
+- [daemon/crates/protocol/src/commands.rs](../../daemon/crates/protocol/src/commands.rs)
+- [daemon/crates/protocol/src/responses.rs](../../daemon/crates/protocol/src/responses.rs)
+- [docs/protocol.md](../../docs/protocol.md) is the daemon's protocol, not this one

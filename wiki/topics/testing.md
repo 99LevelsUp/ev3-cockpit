@@ -1,77 +1,57 @@
 ---
 topic: Testing
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
 # Testing
 
-## Purpose [coverage: medium — 4 sources]
+## Purpose [coverage: medium — 5 sources]
 
-The `src/__tests__/` directory and `src/test/` utilities provide comprehensive unit testing for all implemented modules. The test suite validates contract compliance, state machine transitions, protocol encoding/decoding, transport infrastructure, and session runtime behavior. Currently 197+ unit tests cover Phases 0-2 of the implementation.
+Two suites, one per language. The Rust tests cover the daemon, its runtime, transports and protocol; the TypeScript tests cover the client library, the CLI and MCP server, the extension's flows and packaging. Simulated bricks are deferred: recorded brick sessions stand in for hardware (native plan KTD7).
 
-## Architecture [coverage: medium — 4 sources]
+## Architecture [coverage: medium — 5 sources]
 
-**Test files** in `src/__tests__/`:
-- `contracts.test.ts` — type correctness, BrickKey factory, enum values
-- `extension.test.ts` — extension activation/deactivation lifecycle
-- `dynamics.test.ts` — mock value dynamic evaluation (static, sine, triangle, square)
-- `providerRegistry.test.ts` — provider register/unregister/enumerate/lookup
-- `discoveryScheduler.test.ts` — polling, dedup, timeout, state transitions
-- `presenceAggregator.test.ts` — unified list, ordering, presence merge, metadata overlay
-- `mockTransport.test.ts` — mock transport contract compliance, filesystem, error/loss simulation
-- `ev3Protocol.test.ts` — bytecode encoding/decoding round-trips, packet framing
-- `transportInfra.test.ts` — transport guard rate limiting, BT connection queue serialization
-- `sessionRuntime.test.ts` — session state machine, connect/disconnect, multi-brick, foreground switching, heartbeat, reconnect, command queue
+**Rust** (`daemon/crates/*/tests/`, plus unit tests in the modules): `cargo test --locked --workspace` in `daemon/`. Transports have fakes for the USB bus and BlueZ; hardware tests (`usb_hardware.rs`, `tcp_hardware.rs`, `bt_hw.rs`) run only on request.
 
-**Test utilities** in `src/test/`:
-- `vscodeStub.cjs` — VS Code API stub for running tests outside the extension host
-- `emitterScenarios.ts` — event-delivery scenarios run against both the core `EventEmitter` and VS Code's: the unit suite compares the core with a table recorded from VS Code, the host suite compares the two emitters live
+**Recordings** (`daemon/fixtures/`):
 
-The unit-test preload (`scripts/test-setup.cjs`) installs a listener-error handler on the core events; a test during which a listener threw fails.
+- `link/<scenario>-<brick>/` — provider-level recordings (discovery, presence, pairing, link bytes with timing and failures) made by `daemon/crates/transports/examples/record.rs`. The transport and session tests replay them **strictly**: every call in order with its bytes, or the test fails.
+- `service/<scenario>-<brick>/` — recordings made through the daemon by the hardware scenario script (`scripts/hardware-scenario`). `daemon/crates/daemon/tests/service_fixtures.rs` replays them strictly through the daemon.
+- The TypeScript client tests and the CI smoke start a daemon on a test channel that replays a link or service recording **matched** (`--mode replay --fixtures <dir>`, matched by default): each request gets the recorded reply to an equal one, with the message counter rewritten.
+- Each fixture's `scenario.md` says how to record it again.
+- A request with no recorded reply left fails with `replay_unmatched`, so a stale recording shows. A runtime change that changes exchanges is answered by re-recording on hardware (`--mode record`), never by editing a fixture. The recorder replaces identifiers with the repository's placeholders as it writes.
 
-**Test runners:**
-- `npm run test:unit` — Node built-in test runner (`node --test`), uses `assert/strict`
-- `npm run test:host` — VS Code extension host tests
-- `npm run test:pw:smoke` — Playwright smoke tests (placeholder)
-- `npm run test:ci` — compile + lint + unit + host
-- `npm run test:ci:release` — full gate: bundle + VSIX + smoke
+**TypeScript** (`src/__tests__/*.test.ts`, compiled to `out/__tests__/`): the client library against a replay daemon (`clientNativeDaemon`, `clientNativeLaunch`, `clientChannel`), the contract and its vectors (`contractGenerated`, `rustDaemonWire`), the CLI and MCP (`cliCommands`, `mcpTools`, …), the extension's flows (`daemonBridge`, `forgetBrickCommand`, …), packaging (`packaging`, `packageNpm`), and `clientBoundary` (the client and the contract run without VS Code).
 
-## Talks To [coverage: medium — 3 sources]
+**Test utilities** in `src/test/`: `vscodeStub.cjs` (shims `vscode` outside the extension host) and `emitterScenarios.ts` (the emitter characterization, [events](events.md)).
 
-- **All source modules** — tests import directly from contracts, runtime, transports, mock, protocol, errors, events
-- **Node.js test runner** — `node:test` built-in module with `describe`/`it`/`assert`
-- **VS Code extension host** — host tests run inside a real VS Code instance
+**Runners:**
 
-## API Surface [coverage: low — 1 source]
+- `npm run test:unit` — Node's built-in runner, `assert/strict`; tests that start a daemon need `npm run daemon:build` first
+- `npm run test:host` — VS Code extension host tests (`src/vscode/integration/`)
+- `npm run test:ci` — compile, lint, contract check, unit, host
+- `npm run smoke:daemon` — a daemon build serving a recorded brick through the client library
+- `npm run test:pw:smoke` — Playwright (placeholder until the panel)
 
-Test utilities export `vscodeStub.cjs` for shimming `vscode` imports outside the extension host, and `emitterScenarios.ts` (`observeEmitter`) for the emitter characterization.
-
-## Data [coverage: low — 0 sources]
-
-No persistent data. Tests use in-memory mock configurations and synthetic brick definitions.
+CI (`.github/workflows/`): `ci.yml` builds the development daemon and runs `test:ci`; `native-daemon.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test` on Windows x64, Linux x64 and Linux arm64, then a release build, the VSIX with its smoke on a recording, the npm packages and the build attestation.
 
 ## Key Decisions [coverage: medium — 3 sources]
 
-- **Node built-in test runner** — no external test framework dependency (no Jest, Mocha); uses `node:test` and `assert/strict`.
-- **Mock transport is the primary test vehicle** — most runtime and session tests use `MockTransportProvider` rather than mocking individual methods, ensuring tests exercise the real contract.
-- **CI gate before every commit** — `npm run test:ci:release` must pass before committing (enforced by convention, documented in AGENTS.md).
+- **Recordings, not a mock** — a recording is what the brick really answered, and a stale one fails loudly.
+- **Test channels** — a test daemon runs on a private channel with its own state root, never on the user's.
+- **Check that a test discriminates** — revert the fix and see the test fail before trusting it.
 
 ## Gotchas [coverage: low — 1 source]
 
-- Tests compile to `out/__tests__/` alongside production code — the test runner discovers them from the compiled output.
-- Playwright tests are placeholder-only; real browser-based testing will come with Phase 5 (UI implementation).
+- A test that leaves a brick held with `ev3 connect` keeps its daemon alive; release holds when the test ends.
+- An elevated runner cannot start a daemon (it refuses to run as administrator); those tests skip themselves there.
 
 ## Sources
 
-- [src/__tests__/contracts.test.ts](../../src/__tests__/contracts.test.ts)
-- [src/__tests__/extension.test.ts](../../src/__tests__/extension.test.ts)
-- [src/__tests__/dynamics.test.ts](../../src/__tests__/dynamics.test.ts)
-- [src/__tests__/providerRegistry.test.ts](../../src/__tests__/providerRegistry.test.ts)
-- [src/__tests__/discoveryScheduler.test.ts](../../src/__tests__/discoveryScheduler.test.ts)
-- [src/__tests__/presenceAggregator.test.ts](../../src/__tests__/presenceAggregator.test.ts)
-- [src/__tests__/mockTransport.test.ts](../../src/__tests__/mockTransport.test.ts)
-- [src/__tests__/ev3Protocol.test.ts](../../src/__tests__/ev3Protocol.test.ts)
-- [src/__tests__/transportInfra.test.ts](../../src/__tests__/transportInfra.test.ts)
-- [src/__tests__/sessionRuntime.test.ts](../../src/__tests__/sessionRuntime.test.ts)
-- [src/test/vscodeStub.cjs](../../src/test/vscodeStub.cjs)
+- [daemon/crates/transports/src/replay.rs](../../daemon/crates/transports/src/replay.rs)
+- [daemon/crates/transports/src/fixture.rs](../../daemon/crates/transports/src/fixture.rs)
+- [docs/channel.md](../../docs/channel.md)
+- [.github/workflows/ci.yml](../../.github/workflows/ci.yml)
+- [.github/workflows/native-daemon.yml](../../.github/workflows/native-daemon.yml)
+- [package.json](../../package.json)

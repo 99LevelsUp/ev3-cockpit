@@ -1,7 +1,7 @@
 # cable-pull on CCC over USB (owner-run, not recorded yet)
 
 Reconnect after a pulled USB cable, through the daemon's surface, with the daemon recording only
-its USB provider. `scripts/cable-pull-probe.js` drives it; `recording.jsonl` goes into this
+its USB provider. `scripts/cable-pull-probe.mts` drives it; `recording.jsonl` goes into this
 directory once the owner has run it and the recording passed the identifier search.
 
 1. `bricks/list` with `waitForDiscovery`, then the list until CCC is listed on USB with its name

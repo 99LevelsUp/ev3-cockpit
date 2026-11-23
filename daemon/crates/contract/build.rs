@@ -2,7 +2,7 @@
 //! (through typify), and from the method table the contract version, the method metadata, the
 //! dispatch trait, the notification enum, the error families and the settings spec. Everything
 //! lands in `OUT_DIR`, so the Rust side can never be stale. The rules the schema must follow are
-//! checked by `scripts/generate-contract.cjs`, which also writes the TypeScript side.
+//! checked by `scripts/generate-contract.mts`, which also writes the TypeScript side.
 
 use std::collections::BTreeMap;
 use std::env;

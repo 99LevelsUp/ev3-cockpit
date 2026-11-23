@@ -38,8 +38,9 @@ ev3 daemon restart | log
 `--json` gives machine-readable output for scripts, and `ev3 help` lists the exit codes. An
 add-on's own commands run as `ev3 <name>` (the `ev3-<name>` program on the PATH).
 
-**For an AI agent**, `ev3-cockpit-mcp` is an MCP server over stdio with tools for bricks, files,
-programs, telemetry and settings.
+**For an AI agent**, `ev3 mcp` is an MCP server over stdio with tools for bricks, files,
+programs, telemetry and settings (the npm package still carries it as `ev3-cockpit-mcp`, the
+TypeScript server, until the native `ev3` is packaged there).
 
 Connecting a brick from a terminal or an agent does not start telemetry: the daemon reads a brick
 only for VS Code's panel showing it, or while `ev3 telemetry` or the `read_telemetry` tool runs. Forgetting a brick, clearing its Bluetooth list and switching to `full` run
@@ -54,12 +55,11 @@ or the `ev3` command, and it lasts until the daemon ends.
 
 ```mermaid
 graph TD
-    subgraph Daemon["Cockpit daemon (one per user)"]
+    subgraph Daemon["Cockpit daemon ev3-cockpitd (one per user, native)"]
         subgraph Providers["Transport Providers"]
             PU[USB]
             PT[TCP]
             PB[BT]
-            PM[Mock]
         end
         PA[Presence Aggregator]
         SM[Session Manager]
@@ -84,6 +84,11 @@ graph TD
     SRV --> ADD[Add-ons, e.g. EVƎ C]
 ```
 
+The daemon is a native Rust binary (the Cargo workspace in `daemon/`) for Windows x64, Linux x64 and
+Linux arm64; it needs no Node runtime. The VS Code extension and the client library are TypeScript,
+and both sides are generated from one contract, the JSON Schema in `contract/`. macOS is not
+supported yet.
+
 The VS Code panel (Phase 5) is the next layer to be built. For the layers and their status see
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); for the reasons behind them, [`DESIGN.md`](DESIGN.md);
 for product scope, [`REQUIREMENTS.md`](REQUIREMENTS.md).
@@ -94,5 +99,6 @@ for product scope, [`REQUIREMENTS.md`](REQUIREMENTS.md).
 - [`DESIGN.md`](DESIGN.md): architecture decisions and their reasons
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the layers one by one, with their status
 - [`docs/protocol.md`](docs/protocol.md): the daemon's protocol
+- [`docs/channel.md`](docs/channel.md): how a client finds the daemon and proves itself
 - [`docs/api-for-consumers.md`](docs/api-for-consumers.md): writing an add-on with the client library
 - [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md): execution order and hardware findings

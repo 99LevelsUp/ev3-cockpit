@@ -24,7 +24,7 @@ Find CCC, `bricks/connect`, `files/exists` of `/home/root/lms2012/prjs/CockpitFi
   `tcp-info-storage-listing-ccc`) although the file was removed; the firmware likely still holds
   the cut download's handle, which nothing closed.
 - **Recorded** 22.11.2026 through the native daemon 0.2.519 in record mode on a test channel, on a
-  Raspberry Pi 5 (linux-arm64), with `scripts/hardware-scenario.js` as the only client (kind
+  Raspberry Pi 5 (linux-arm64), with `scripts/hardware-scenario.mts` as the only client (kind
   `cli`, named `hardware scenario`, development build, version 0.0.1). The run ends with
   `bricks/disconnect` and `daemon/exit`, whose restart question the script answers yes.
 - **Brick state:** CCC on the USB cable, on the main menu, paired over Bluetooth and on Wi-Fi;
@@ -38,5 +38,5 @@ Find CCC, `bricks/connect`, `files/exists` of `/home/root/lms2012/prjs/CockpitFi
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it matched; the same
-  calls replay matched with `node scripts/hardware-scenario.js cut-upload --daemon <ev3-cockpitd>
+  calls replay matched with `node scripts/hardware-scenario.mts cut-upload --daemon <ev3-cockpitd>
   --brick CCC --replay daemon/fixtures/service/<this directory> --transport usb`.

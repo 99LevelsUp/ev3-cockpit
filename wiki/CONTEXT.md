@@ -2,6 +2,8 @@
 
 This project has a compiled knowledge wiki. Use it instead of scanning raw files.
 
+The code is in two languages: the daemon `ev3-cockpitd` and the native `ev3` are Rust (`daemon/`), the VS Code extension and the client library are TypeScript (`src/`), and both are generated from one contract (`contract/`).
+
 ## How to use this wiki
 
 1. Start at INDEX.md — scan the topic table to find relevant modules
@@ -10,7 +12,7 @@ This project has a compiled knowledge wiki. Use it instead of scanning raw files
    - [coverage: high] — trust this section, skip raw files
    - [coverage: medium] — good overview, check raw sources for implementation details
    - [coverage: low] — read the raw source files listed in Sources
-4. Check concepts/ for cross-cutting patterns (transport contract, firmware safety, etc.)
+4. Check concepts/ for cross-cutting patterns (transport contract, firmware safety)
 5. Only read raw source files when you need code-level detail
 
 ## When NOT to use the wiki
@@ -19,4 +21,4 @@ This project has a compiled knowledge wiki. Use it instead of scanning raw files
 - The wiki article says [coverage: low] for what you need
 
 ## Stats
-Compiled: 2026-04-13 | Topics: 9 | Sources: 53 | Auto-updates on session start
+Compiled: 2026-11-23 | Topics: 10 | Concepts: 2

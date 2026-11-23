@@ -1,58 +1,46 @@
 ---
 topic: Errors
-last_compiled: 2026-04-13
+last_compiled: 2026-11-23
 status: active
 ---
 
 # Errors
 
-## Purpose [coverage: high — 2 sources]
+## Purpose [coverage: high — 4 sources]
 
-The `src/core/errors/` module provides a typed error hierarchy for the entire EVƎ Cockpit extension. Every error thrown within the codebase can be narrowed to a specific category (transport, session, or API) via the `ErrorCode` field, enabling consistent error handling and logging across all layers.
+Every failure a client sees carries a stable string code from the contract. A client decides on that code; the message is ready to show.
 
-## Architecture [coverage: high — 2 sources]
+## Architecture [coverage: high — 4 sources]
 
-Single file `CockpitError.ts`, re-exported via `index.ts`:
+- **The contract** (`contract/methods.json`) lists every error code with its family. On the wire an error is a JSON-RPC error whose numeric `code` is the family's — `brick` 1000, `lease` 1100, `person` 1200, `daemon` 1300, `cancelled` 1400, `request` 1500, `internal` 1900 — and whose `data` holds `code`, `family`, and `holder`, `candidates` or `command` where they apply.
+- **Rust:** each layer has its own error (`ev3_transports::TransportError` with an `ErrorCode`, `ev3_protocol::ProtocolError`, `ev3_runtime::SessionError`, telemetry's errors); `daemon/crates/daemon/src/surface/errors.rs` maps them to contract errors.
+- **TypeScript:** `src/contract/errors.ts` names every code (`WireErrorCode`); the client library rejects a failed request with `ContractError` (`src/client/connection.ts`) and a failed start with `DaemonStartError` (`code` `daemon_unavailable`, `failure` saying which case).
 
-- **`ErrorCode`** — const object with 7 error codes: `transport_failed`, `connection_failed`, `timeout`, `session_failed`, `heartbeat_failed`, `consumer_failed`, `subscription_failed`
-- **`CockpitError`** — base class extending `Error` with `code: ErrorCode` and optional `cause`
-- **Subclasses** — `TransportError`, `ConnectionError`, `TimeoutError`, `SessionError`, `HeartbeatError`, `ConsumerError`, `SubscriptionError`
+## API Surface [coverage: high — 3 sources]
 
-Each subclass sets its own `name` property and delegates to a specific error code.
+| Family | Codes |
+|--------|-------|
+| `brick` | `transport_failed`, `connection_failed`, `timeout`, `protocol_failed`, `brick_unreachable`, `link_lost`, `backend_unavailable`, `device_permission`, `not_connected`, `brick_ambiguous`, `brick_not_found`, `program_running`, `program_not_found`, `mode_conflict`, `access_denied`, … |
+| `lease` | `brick_busy` |
+| `person` | `needs_person` |
+| `daemon` | `daemon_unavailable`, `outcome_unknown`, `replay_unmatched` |
+| `cancelled` | `cancelled` |
+| `request` | `invalid_request` |
+| `internal` | `internal` |
 
-## Talks To [coverage: medium — 2 sources]
+## Key Decisions [coverage: medium — 2 sources]
 
-- **transports/** — throws `TransportError`, `ConnectionError`, `TimeoutError` during I/O operations
-- **runtime/** — `SessionManager` catches transport errors and may throw `SessionError`; `HeartbeatMonitor` triggers on `HeartbeatError`
-- **api/** — the per-brick services use `ConsumerError` and `SubscriptionError`; the daemon's contract maps every error to a stable wire code (`src/contract/errors.ts`)
-
-## API Surface [coverage: high — 2 sources]
-
-| Class | Error Code | Usage |
-|-------|-----------|-------|
-| `CockpitError` | any | Base class — catch all Cockpit errors |
-| `TransportError` | `transport_failed` | I/O failures in transport adapters |
-| `ConnectionError` | `connection_failed` | Connection establishment failures |
-| `TimeoutError` | `timeout` | Operation timeouts |
-| `SessionError` | `session_failed` | Session lifecycle failures |
-| `HeartbeatError` | `heartbeat_failed` | Heartbeat probe failures |
-| `ConsumerError` | `consumer_failed` | API consumer registration issues |
-| `SubscriptionError` | `subscription_failed` | Telemetry subscription issues |
-
-## Data [coverage: high — 2 sources]
-
-`CockpitError` carries three fields: `code` (typed `ErrorCode`), `message` (string), and optional `cause` (unknown) for error chaining.
-
-## Key Decisions [coverage: medium — 1 source]
-
-- **Enum-like const object for codes** — `ErrorCode` uses `as const` pattern rather than a TypeScript `enum`, enabling both string literal types and runtime iteration.
-- **Error chaining via `cause`** — follows the standard `Error` cause pattern for wrapping lower-level errors without losing context.
+- **Decide by code, never by class name** — the native daemon sends no class name. `ContractError.kind` remains in the TypeScript client for now and reads `Unknown` for daemon errors; removing it is open.
+- **Families for the numeric code** — JSON-RPC reserves -32768..-32000, so the contract's numbers are positive.
+- **`outcome_unknown` is never retried** — a write cut off by the daemon going may or may not have happened; the caller reads the state first.
 
 ## Gotchas [coverage: low — 1 source]
 
-- On the wire every error becomes a code from `src/contract/errors.ts`; the daemon adds codes of its own (`brick_busy`, `needs_person`, `outcome_unknown`, …).
+- `program_cancelled` is still in `WireErrorCode`; only the TypeScript daemon raised it, and the native daemon ends a stopped run with `cancelled`.
 
 ## Sources
 
-- [src/core/errors/index.ts](../../src/core/errors/index.ts)
-- [src/core/errors/CockpitError.ts](../../src/core/errors/CockpitError.ts)
+- [contract/methods.json](../../contract/methods.json)
+- [src/contract/errors.ts](../../src/contract/errors.ts)
+- [src/client/connection.ts](../../src/client/connection.ts)
+- [daemon/crates/daemon/src/surface/errors.rs](../../daemon/crates/daemon/src/surface/errors.rs)

@@ -35,35 +35,46 @@ The only exception is conversation with the user, which is conducted in the user
 
 ## Project Structure
 
-Source code under `src/`:
+The repository has two languages: Rust for everything that works with bricks, TypeScript for the
+VS Code extension and the clients (plan `docs/plans/2026-11-20-1845-refactor-native-daemon-plan.md`).
 
-- `src/core/` — everything that works with bricks, and runs anywhere: in the daemon on plain Node or VS Code's Node (IMPLEMENTATION_PLAN 4.10). It never imports `vscode` or anything under `src/vscode/`; lint and `src/__tests__/coreBoundary.test.ts` enforce it.
-  - `src/core/contracts/` — shared types and contracts
-  - `src/core/events/` — the core's own event emitter, delivering as VS Code's does
-  - `src/core/runtime/` — sessions, bricks, presence, the runtime factory
-  - `src/core/transports/` — USB, BT, TCP, Mock providers; Bluetooth backends per OS: Winsock (Windows), BlueZ (Linux), the IOBluetooth helper (macOS, `macBluetooth.ts`)
-  - `src/core/fs/`, `src/core/programs/`, `src/core/telemetry/`, `src/core/protocol/`, `src/core/commands/`, `src/core/errors/`
-  - `src/core/api/` — the per-brick services the daemon runs for each client (API v1 until 4.10.2), and the access policy
-  - `src/core/mock/` — simulated bricks
-- `src/contract/` — the daemon's contract: methods, notifications, models, error codes, the contract version, the handshake (`docs/protocol.md`)
-- `src/client/` — the client library every client uses: finds or starts the daemon, proves the key, keeps state, renews subscriptions
-- `src/daemon/` — the per-user daemon: channel, handshake, holders and write leases, questions, settings, handover, brick loans (`daemon/main.ts`)
-- `src/cli/` — the `ev3` command; `src/mcp/` — the MCP server `ev3-cockpit-mcp`
-- `src/vscode/` — what needs VS Code: the entry point `src/vscode/extension.ts` (a client of the daemon), the bridge its commands run on (`daemonBridge.ts`), the `ui/` flows, and the extension-host tests in `integration/`
+The per-user daemon `ev3-cockpitd` and the native `ev3` command are a Cargo workspace in `daemon/`:
+
+- `daemon/crates/protocol/` — EV3 packets, bytecode, commands and replies, with no I/O
+- `daemon/crates/transports/` — the provider trait, USB (libusb, HID fallback), TCP and its beacon, Bluetooth on Windows (Winsock RFCOMM, SDP presence, WinRT pairing) and Linux (BlueZ over zbus, RFCOMM and L2CAP sockets), record and replay
+- `daemon/crates/runtime/` — sessions, the per-brick queue and guard, bricks across channels, discovery and presence, files, transfers and the ledger, programs, telemetry, forget and clear, the consent and activity ports
+- `daemon/crates/daemon/` — the `ev3-cockpitd` binary: channel, key, lock, JSON-RPC, hello, holders and write leases, questions, settings, lifecycle, the state migration, the contract surface
+- `daemon/crates/channel/` — what the daemon and its native clients share: state root, key, `channel.json`, framing (`docs/channel.md`)
+- `daemon/crates/contract/` — the contract generated from `contract/`
+- `daemon/crates/cli/` — the native `ev3` command and `ev3 mcp`
+- `daemon/fixtures/` — recorded brick sessions the tests replay
+
+The contract is JSON Schema in `contract/` (`schema/`, the method table `methods.json`, test vectors in `vectors/`), generated into Rust and into `src/contract/generated/` (`npm run contract:generate`).
+
+TypeScript under `src/`:
+
+- `src/contract/` — the generated contract (`generated/`) and the wire error codes (`errors.ts`)
+- `src/client/` — the client library `@ev3-cockpit/client`: finds the user's daemon or starts a verified copy of it, proves the key, keeps state, renews subscriptions
+- `src/cli/` — the TypeScript `ev3` command; `src/mcp/` — the TypeScript MCP server `ev3-cockpit-mcp`. Both still ship in the npm package until the native `ev3` and `ev3 mcp` are packaged there.
+- `src/vscode/` — the extension: the entry point `src/vscode/extension.ts` (a client of the daemon), the bridge its commands run on (`daemonBridge.ts`), its event emitter (`events.ts`), the `ui/` flows, and the extension-host tests in `integration/`
 - `src/persistence/` — globalState adapter (placeholder)
 - `src/test/` — test utilities: the `vscode` stub and the shared emitter scenarios
 
-`scripts/core-smoke.js` checks a real brick through the daemon and the client library (`node scripts/core-smoke.js <brick> <usb|bt|tcp>`).
+The client library and the contract run without VS Code; lint and `src/__tests__/clientBoundary.test.ts` enforce it.
 
-Native helpers under `native/`: the Windows pairing helper (`bt-pairing-helper/`, .NET, `npm run build:helper`), the macOS Bluetooth helper (`macos/ev3-bt-helper.swift`, built on a Mac with `npm run build:helper:macos`), and the Linux udev rules (`linux/`). Builds land in `native/bin/`, which is not committed.
+`native/linux/` holds the udev and polkit rules the Linux packages ship.
 
-Unit tests: `src/__tests__/*.test.ts`, compiled to `out/__tests__`.  
+Unit tests: `src/__tests__/*.test.ts`, compiled to `out/__tests__`; Rust tests under `daemon/crates/*/tests/`.  
 Playwright tests: `tests/*.spec.ts`.  
 Scripts and outputs: `scripts/`, `out/`, `artifacts/`.
 
 ## Build and Test Commands
 
 - `npm install` — install dependencies (Node 20+)
+- `npm run daemon:build` — debug build of `ev3-cockpitd` and `ev3`, with the manifest the development clients and the tests read; needs a Rust toolchain
+- `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all --check` — in `daemon/`, the Rust gate CI runs
+- `npm run contract:generate` / `contract:check` — regenerate the contract, or check it is current
+- `npm run smoke:daemon` — a daemon build serving a recorded brick through the client library
 - `npm run compile` — TypeScript compilation to `out/`
 - `npm run watch` — incremental watch mode
 - `npm run lint` — ESLint on `src/**/*.ts`
@@ -89,12 +100,14 @@ Scripts and outputs: `scripts/`, `out/`, `artifacts/`.
 
 TypeScript, `strict` mode, ES2022, CommonJS. Indent with tabs, use semicolons, single-quote imports.
 
+Rust: edition 2024, `rustfmt` defaults, clippy warnings are errors.
+
 Naming:
 
 - `PascalCase` — classes, interfaces, types
 - `camelCase` — functions, methods, variables
 - `SCREAMING_SNAKE_CASE` — environment variables (`EV3_COCKPIT_*`)
-- Files: `camelCase.ts` (example: `presenceAggregator.ts`)
+- Files: `camelCase.ts` (example: `daemonBridge.ts`); Rust files `snake_case.rs`
 
 ## Testing Rules
 
@@ -118,6 +131,7 @@ After every code or configuration change:
 1. `npm run compile`
 2. `npm run lint`
 3. `npm run test:unit` + `npm run test:host`
+4. after a change under `daemon/`: the Rust gate above, then `npm run daemon:build`
 
 If the change touches UI/webview, also run: `npm run test:pw:smoke`.
 

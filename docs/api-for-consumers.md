@@ -4,16 +4,19 @@ For add-on authors: EVƎ C (formerly ev3-native), ev3-explorer, and later ev3-py
 or an MCP server of your own. It says what the cockpit provides, how to reach it, and where the
 sibling designs assumed something else.
 
-The cockpit is a per-user daemon. The VS Code extension, the `ev3` command, the cockpit's MCP
-server and every add-on are its clients and talk to it over JSON-RPC on a local pipe or socket.
-The VS Code extension exports nothing: an add-on does not ask it for anything.
+The cockpit is a per-user daemon, the native binary `ev3-cockpitd`. The VS Code extension, the
+`ev3` command, the cockpit's MCP server and every add-on are its clients and talk to it over
+JSON-RPC on a local pipe or socket. The VS Code extension exports nothing: an add-on does not ask it
+for anything.
 
-The reference is the contract in `src/contract/` (`methods.ts`, `models.ts`, `events.ts`,
-`errors.ts`) and the client library in `src/client/index.ts`. Both ship as one package,
-`@ev3-cockpit/client`, built from this repository and carrying no native modules
-(`npm run package:npm` stages it in `dist/npm/client/`; it is not published yet). Until it is,
-load the library from a compiled checkout (`npm run compile`, then `out/client/index.js`), as
-`scripts/api-check` does.
+The reference is the contract, JSON Schema in `contract/` generated into TypeScript in
+`src/contract/generated/`, with the wire error codes in `src/contract/errors.ts`, and the client
+library in `src/client/index.ts`. Both ship as one package, `@ev3-cockpit/client`, built from this
+repository and carrying no native modules and no daemon (`npm run package:npm` stages it in
+`dist/npm/client/`; it is not published yet). Until it is, load the library from a compiled
+checkout (`npm run compile`, then `out/client/index.js`), as `scripts/api-check` does.
+[`protocol.md`](protocol.md) describes the protocol underneath, [`channel.md`](channel.md) how a
+client finds the daemon.
 
 ## Connecting
 
@@ -21,10 +24,9 @@ load the library from a compiled checkout (`npm run compile`, then `out/client/i
 import { CockpitClient, ContractError, WireErrorCode } from '@ev3-cockpit/client';
 
 const cockpit = await CockpitClient.connect({
-  name: 'EVƎ C (VS Code)',   // say where it runs: other clients read it in brick_busy and stoppedBy
+  name: 'EVƎ C (VS Code)',   // say where it runs: other clients read it in brick_busy, questions and stoppedBy
   kind: 'addon',
   version: '1.4.0',          // your add-on's version
-  launch,                    // how to start the daemon when none runs; see below
 });
 context.subscriptions.push(cockpit);   // dispose() closes the connection and every subscription
 ```
@@ -32,21 +34,22 @@ context.subscriptions.push(cockpit);   // dispose() closes the connection and ev
 - `kind` is `addon` for everything an add-on runs: its VS Code extension and its `ev3 <name>`
   command alike.
 - `name` should say where the client runs, for example "EVƎ C (VS Code)" or "ev3 c run
-  (terminal)". It appears in the daemon's log, in another client's `brick_busy` error, and as
-  `stoppedBy` when you stop a program.
+  (terminal)". It appears in the daemon's log, in another client's `brick_busy` error, in the
+  questions your requests raise, and as `stoppedBy` when you stop a program.
 - A VS Code add-on needs no `extensionDependencies` on the cockpit to work; the cockpit must be
   installed for its daemon to exist.
-- `EV3_COCKPIT_CHANNEL` (or the `channel` option) selects a development or test daemon instead
-  of the user's own; the cockpit sets it in its own Development and Test modes.
+- The `channel` and `stateRoot` options put a client on a test channel, with a daemon and state of
+  its own; an add-on leaves them out and reaches the user's daemon.
 
 **Starting the daemon.** `connect` finds the user's daemon and proves both sides hold the user's
-key. When no daemon runs, it starts one from `launch`; an add-on (kind `addon`) given none starts the
-one the installed cockpit recorded. The cockpit records how to start its daemon each time VS Code
-starts it; `installedLaunch(clientPaths())`, both exported from the package, reads that record and
-returns `undefined` when there is none. With nothing to start, `connect` fails with
-`daemon_unavailable`, and you tell the user to install (or open) EVƎ Cockpit.
+key. When no daemon runs, an add-on starts the one the installed cockpit recorded in `install.json`
+(see [`install.json`](#installjson)); `installedNativeLaunch(nativeChannelFiles(nativeStateRoot()))`,
+exported from the package, reads that record and returns `undefined` when there is none. With
+nothing to start, `connect` fails with a `DaemonStartError` (`failure: 'missing_binary'`), and you
+tell the user to install (or open) EVƎ Cockpit.
 
-An add-on never replaces the daemon and never compares package versions with it; see
+An add-on passes no daemon of its own (the `daemon` option is for the cockpit's own clients), never
+asks the daemon to exit and never compares package versions with it; see
 [Version notices](#version-notices).
 
 ## Naming a brick
@@ -75,7 +78,7 @@ trip: `bricks()`, `brick(ref)`, `settings()`, `accessMode()`.
 
 | Need | Method or call |
 |---|---|
-| bricks, including ones not connected | `bricks()`, `onBricksChanged`; `bricks/list` (`waitForDiscovery`) |
+| bricks, including ones not connected | `bricks()`, `onBricksChanged`; `bricks/list` (`waitForDiscovery`) → `{ bricks }` |
 | connect / disconnect | `bricks/connect` (pairs on the way if needed), `bricks/disconnect` |
 | firmware version | `bricks/info` → name, firmware, OS |
 | storage | `bricks/storage` → `totalKb`, `freeKb` |
@@ -90,26 +93,35 @@ trip: `bricks()`, `brick(ref)`, `settings()`, `accessMode()`.
 | the daisy chain | `chain/get`, `followChain(brick, listener)` |
 | pairing, forgetting, clearing a Bluetooth list | `bricks/pair`, `bricks/forget`, `bricks/clearBluetoothList` (the last two ask the person) |
 
-`bricks/disconnect` drops your client's hold. The brick stays connected while anyone else holds
-it (VS Code, `ev3 connect`, remembered bricks); the answer's `stillHeldBy` says who. When your
-client's connection closes, its holds go with it.
+Results are objects: `bricks/list` answers `{ bricks }`, `settings/list` `{ settings }`,
+`settings/accessMode` `{ mode }`, `files/list` `{ entries }`, `files/exists` `{ exists }`;
+`telemetry/foreground` takes `{ brick? }` (absent for none).
+
+**Hold the brick you work with.** A request on a brick nobody connected fails with
+`not_connected`, and a brick another client holds can go when that client lets it go. Connect it
+(`bricks/connect`, no `hold`) for as long as you work with it; the library connects it again after
+a daemon replacement. `bricks/disconnect` drops your client's hold. The brick stays connected while
+anyone else holds it (a VS Code window, `ev3 connect`); the answer's `stillHeldBy` says who. When
+your client's connection closes, its holds go with it.
 
 ## Errors
 
 A failed request rejects with a `ContractError`:
 
-- `code` is a stable string from `WireErrorCode`; decide on it.
-- `kind` names the error class the daemon raised (`LinkLostError`, `BrickUnreachableError`,
-  `TimeoutError`, …; `Unknown` for a class your copy of the contract does not know). Use it where
-  the code is too coarse: a link that dropped and a brick that never answered are both
-  `transport_failed`.
-- `data` carries extras: `holder` for `brick_busy`, `candidates` for `brick_ambiguous`, `command`
+- `code` is a stable string from `WireErrorCode` (the generated `ErrorCode`); decide on it. The
+  codes say what happened finely enough: a link that dropped is `link_lost`, a brick that never
+  answered `brick_unreachable`.
+- `data` carries the code's `family` (`brick`, `lease`, `person`, `daemon`, `cancelled`, `request`,
+  `internal`) and extras: `holder` for `brick_busy`, `candidates` for `brick_ambiguous`, `command`
   (what a person should run) for `needs_person`.
+- `kind` is still on `ContractError` for now, but the native daemon names no error class, so it
+  reads `Unknown` for every error from the daemon. Do not decide on it; whether it goes is open.
 
 The codes an add-on meets most: `brick_busy`, `brick_ambiguous`, `brick_not_found`,
 `not_connected`, `access_denied`, `program_running`, `program_not_found`, `mode_conflict`,
 `subscription_failed`, `needs_person`, `daemon_unavailable`, `outcome_unknown`, `cancelled`,
-`invalid_request`, `transport_failed`, `timeout`, `protocol_failed`.
+`invalid_request`, `transport_failed`, `link_lost`, `brick_unreachable`, `timeout`,
+`protocol_failed`.
 
 ## Write leases and `brick_busy`
 
@@ -129,7 +141,7 @@ have settled, so a dead client's upload never interleaves with the next writer.
 
 ## `outcome_unknown`
 
-If the daemon goes away (a crash, or a newer version taking over) while a request that changes a
+If the daemon goes away (a crash, a restart, or a newer version taking over) while a request that changes a
 brick is running, the request ends with `outcome_unknown`: it may or may not have taken effect.
 Nobody retries it, not the library and not the daemon. Read the state first (`programs/status`,
 `files/exists`, `files/list`) and decide from that. The same failure during a read is
@@ -137,33 +149,32 @@ Nobody retries it, not the library and not the daemon. Read the state first (`pr
 
 ## Questions for a person, and `needs_person`
 
-Some operations need a person's yes. The daemon sends the question to the client that started the
-operation, through `onQuestion`:
+Some operations need a person's yes. The daemon asks only a VS Code window or a terminal: the
+requesting client when it is one of those (kind `vscode` or `cli`), otherwise the VS Code window
+that connected last, else the terminal that connected last. An add-on or an MCP server is never
+asked. The question names the client whose request raised it (`question.requester`, its name and
+kind), so the person sees that your add-on asked.
 
-```ts
-cockpit.onQuestion(async (question) => {
-  // question.kind: 'sweep' | 'forget' | 'clearBluetoothList' | 'bluetoothAccess' | 'brickLoan'
-  const answer = await vscode.window.showWarningMessage(question.text, { modal: true }, 'Yes', 'No');
-  return answer === 'Yes' ? 'yes' : answer === 'No' ? 'no' : 'keep';
-});
-```
+What this means for an add-on:
 
-- `keep` leaves things as they are. A client without a handler answers `keep` at once; so does
-  a question nobody answers within `question.timeoutMs` (60 s), or whose client leaves. It is
-  never taken as `no`.
-- When the time runs out, the daemon sends `question/withdrawn` with the `questionId`; close your
-  dialog then.
-- What an add-on may be asked: `sweep` when a transfer of yours starts and an earlier transfer
-  left a file slot open on the brick (`yes` releases it, `no` drops the debt for good, `keep`
-  lets your transfer go ahead and keeps the debt, with a warning in the log); `forget` and `clearBluetoothList` if you call those methods; `brickLoan`
-  when a developer's cockpit wants to borrow a brick you hold.
-- On any kind but `sweep`, `keep` ends the operation with `needs_person`, and
+- `bricks/forget` and `bricks/clearBluetoothList` from your add-on raise the question in the
+  user's VS Code or terminal. A `no` ends the request with `cancelled` and changes nothing. When no
+  answer comes (`keep`, silence for 60 s, or nobody to ask), it ends with `needs_person`, and
   `error.data.command` is the `ev3` command a person can run instead.
+- `sweep` is asked when a transfer of yours starts and an earlier transfer left a file slot open on
+  the brick: `yes` releases it, `no` drops the debt for good, `keep` lets your transfer go ahead and
+  keeps the debt, with a warning in the log. With nobody to ask it counts as `keep`.
+- `daemon/exit` from an add-on is always a restart, asked of the person the same way; it answers
+  `{ accepted: false, reason }` when no yes comes (`channel.md`, "`daemon/exit`").
+- `CockpitClient.onQuestion` is how the cockpit's own `vscode` and `cli` clients answer; an add-on
+  that sets a handler is never called. The answers are `'yes' | 'no' | 'keep'`, or
+  `{ answer, remember: true }` to apply a yes or no to the same question about that client's own
+  later requests while its connection lasts; `keep` is never taken as `no`.
 
 Some changes need a person in any case. The access mode is the one dangerous setting today:
-`settings/set` with `accessMode: 'full'` from an add-on is refused with `needs_person`, whatever
-the add-on says; the user switches it in VS Code (EVƎ: Settings) or with `ev3 config` in a
-terminal. Setting it back to `safe` is allowed.
+`settings/set` with `accessMode: 'full'` from an add-on is refused with `needs_person`; the user
+switches it in VS Code (EVƎ: Settings) or with `ev3 config` in a terminal. Setting it back to
+`safe` is allowed.
 
 ## Files
 
@@ -216,7 +227,8 @@ never followed by a start.
 
 - `runSeq` counts the starts the daemon sent to the brick (0 before any). `DeployResult.runSeq` is
   your start's number. The daemon takes a number before the start is checked, so a refused or
-  cancelled start uses one too and the numbers you see have gaps.
+  cancelled start uses one too and the numbers you see have gaps. A new daemon counts from 0 again;
+  keeping the count across a replacement is open.
 - A state is told with the number of the latest start at the time it is told. So a higher
   `runSeq` than yours means someone started again after you. The same number does not prove the
   state is about your program: when you start with `replace`, the previous program ending is told
@@ -260,6 +272,8 @@ sub.dispose();  // ends exactly this subscription
   not read yet is missing from the snapshot and arrives as a change. Values turn `stale` in an
   outage, and the first reading after it is sent even if unchanged; values stale long enough are
   dropped and listed in `removed`.
+- Connecting a brick starts no telemetry: the daemon reads a brick for a client that shows it
+  (`telemetry/foreground`, which `setActiveBrick` sends) or while a subscription asks for rows.
 - A subscription to a brick nobody shows in the foreground runs that brick's telemetry for you;
   each telemetry command costs a program running on the brick about 2 ms, so ask for what you
   need.
@@ -281,13 +295,15 @@ write cancelled halfway may leave a partial file on the brick.
 ## Reconnects and subscriptions
 
 When the daemon goes — a crash, `ev3 daemon restart`, a newer version taking over — the library
-connects again by itself:
+connects again by itself. Nothing is handed over between daemons: the library waits a moment for a
+successor (another client replacing the daemon starts one), then:
 
 - every subscription made through `subscribeTelemetry`, `subscribePrograms` and `followChain` is
   renewed, and the ids and disposables it gave you stay valid. A telemetry listener hears a fresh
   `snapshot` first; a chain listener hears the chain; a program listener hears the current
   state, which may repeat the last one it heard;
 - bricks your client connected are connected again if the new daemon does not hold them already;
+  bricks held with `ev3 connect` the new daemon connects itself;
 - `onReconnected` fires once this is done; `onLost` fires if no daemon could be reached again.
 
 A `programs/subscribe`, `telemetry/subscribe` or `chain/follow` sent through `request` is not
@@ -295,14 +311,19 @@ renewed: its id is valid on one connection only. Use the library's calls.
 
 ## Version notices
 
-An add-on compares only the contract version (`CONTRACT_VERSION`, now 1), never the package
-versions, and never asks the daemon to step aside. If the running daemon offers an older contract
-than yours needs, `onNotice` fires with a text ready to show ("update EVƎ Cockpit"). A newer
-contract than yours is no reason to warn.
+An add-on compares only the contract version (`CONTRACT_VERSION`, now 2), never the package
+versions, and never asks the daemon to step aside. The contract version rises only on a breaking
+change, so a daemon from a newer release with the same contract version serves you as before. The
+hello carries both sides' versions; a daemon on another contract version answers only
+`daemon/exit`, and `connect` rejects with a `DaemonStartError` whose `failure` is
+`contract_mismatch` and whose message says which side to update.
+
+`onNotice` gives other things the user should know as a text ready to show, for example that a
+development daemon runs.
 
 ## Events and ordering
 
-The daemon sends notifications (`src/contract/events.ts`); the library dispatches them to
+The daemon sends notifications (`Notifications` in the generated contract); the library dispatches them to
 `on(name, handler)` and keeps its cache current from them. What holds:
 
 - **One connection, one order.** On one connection, notifications arrive in the order the daemon
@@ -334,21 +355,20 @@ The user chooses it, in VS Code or with `ev3 config`; the daemon enforces it for
 (`accessMode()`, `settings/accessModeChanged`) to grey out what cannot be done; do not enforce it
 yourself. Safe mode is a guardrail against mistakes, not a sandbox: a program it runs can do
 anything on the brick, and a symbolic link inside a user area that points outside is not caught.
-Full mode is never stored in the settings file: it lasts until the daemon ends (a newer daemon
-taking over keeps it).
+Full mode is never stored in the settings file: it lasts until the daemon ends, and a new daemon
+starts in safe.
 
 ## The daemon's log
 
 The daemon logs every client's connection, connects, deployments, stops and setting changes under
 the client's `name`:
 
-- Windows: `%LOCALAPPDATA%\ev3-cockpit\logs\daemon.log`
-- macOS: `~/Library/Logs/ev3-cockpit/daemon.log`
-- Linux: `$XDG_STATE_HOME/ev3-cockpit/logs/daemon.log` (`~/.local/state/…` by default)
+- Windows: `%LOCALAPPDATA%\ev3-cockpit\native\daemon.log`
+- Linux: `$XDG_STATE_HOME/ev3-cockpit/native/daemon.log` (`~/.local/state/…` by default)
 
-A development or test daemon logs to `daemon-<channel>.log` beside it. `daemon/status` returns the
-path as `logPath`, and a `daemon_unavailable` error from `connect` includes it with the log's last
-lines. The log rotates at 5 MB and keeps three files.
+A test daemon logs to `daemon.log` in its channel's directory, `channels/<name>/`. `daemon/status`
+returns the path as `logPath`, and a start failure from `connect` includes the log's last lines.
+The log rotates at 5 MB and keeps three files.
 
 ## Running a native program (EVƎ C)
 
@@ -359,65 +379,20 @@ unchanged binary on the brick). Setting the binary executable, or `ldconfig` for
 ev3lib" action, is a shell command: `shell/run`, which needs full mode. The program state the
 cockpit reports is the launcher's slot, not the native process it started.
 
-## Moving to the native daemon: what changes in the package
+## What the package exports
 
-The per-user daemon is being rewritten as one native binary, `ev3-cockpitd`, on a contract
-generated from the JSON Schema in `contract/` (`src/contract/generated/`). Until the switch the
-package carries both: everything above still talks to the current daemon, and the native side is
-exported beside it. At the switch the current daemon and its contract leave, and the native side
-becomes the package's only one. No compatibility shim is kept; an add-on moves in one step. The
-names in the "After the switch" column are settled (22.11.2026); the exports in the middle column
-are what the package carries today.
+| Export | What |
+|---|---|
+| `CockpitClient` | the client: `connect`, `request`, the cache, subscriptions, questions |
+| the generated contract, at the top level | `Methods`, `Notifications`, `ParamsOf`, `ResultOf`, `METHODS`, `ERROR_FAMILY`, `CONTRACT_VERSION`, `readClientKind`, `readBuildKind` and every type (`ContractBrick`, `ProgramState`, `TelemetryUpdate`, `Question`, …) |
+| `WireErrorCode`, `ContractError` | the error codes and the error a failed request rejects with |
+| `DaemonStartError` | why `connect` could not reach or start a daemon (`failure`, below) |
+| `installedNativeLaunch`, `nativeChannelFiles`, `nativeStateRoot`, `nativeInstallFile` | where the installed cockpit recorded its daemon, and the state root's files |
+| `packagedDaemon`, `developmentDaemon`, `ensureNativeDaemon`, `decideOnDaemon`, `DAEMON_MANIFEST`, `recordNativeInstall` | how the cockpit's own clients carry and start their daemon; an add-on does not need them |
 
-### Exports
+`CockpitClient.connect` takes `buildKind` too (`release` by default for an add-on).
 
-| Now (current daemon) | Native daemon, exported now | After the switch |
-|---|---|---|
-| `CockpitClient` | `NativeCockpitClient` | `CockpitClient` is the native client |
-| `export * from '../contract'` (`WireErrorCode`, `models`, `events`, …) | `nativeContract` namespace (`Methods`, `Notifications`, `ParamsOf`, `ResultOf`, `METHODS`, `ERROR_FAMILY`, `CONTRACT_VERSION`, `readClientKind`, `readBuildKind`, every type) | the generated contract is exported at the top level |
-| `clientPaths(options)` → `DaemonPaths` | `nativeChannelFiles(nativeStateRoot(), channel?)` → `{ dir, keyFile, lockFile, channelFile }` | `clientPaths` is gone |
-| `installedLaunch(paths)` → `{ runtime, entry, installRoot, version, electronRunAsNode? }` | `installedNativeLaunch(files)` → `LaunchSpec` `{ binary, sha256, version, buildKind }` | `installedLaunch` is gone |
-| connect option `launch`, `launchArgs` | option `daemon` (a `LaunchSpec`, for the cockpit's own clients only); an add-on passes none | add-ons pass no launch |
-| — | option `buildKind` (`release` by default for an add-on) | |
-| version notices (`VersionNotice`) | `onNotice` gives a string ready to show | |
-| — | `DaemonStartError` with `failure` (see below), `ensureNativeDaemon`, `decideOnDaemon`, `packagedDaemon`, `developmentDaemon`, `DAEMON_MANIFEST`, `nativeInstallFile` | |
-
-`NativeCockpitClient.connect({ name, kind: 'addon', version })` finds the user's daemon and, when
-none runs, starts the one the installed cockpit recorded. It never asks a daemon to exit.
-
-### What reads differently
-
-- **Contract version.** `CONTRACT_VERSION` is an integer that rises only on a breaking change (now
-  2). The hello carries both sides' versions; a daemon on another contract version answers only
-  `daemon/exit`. Where the current client fires a notice ("update EVƎ Cockpit"), the native client
-  refuses to connect with a `DaemonStartError` whose `failure` is `contract_mismatch` and whose
-  message says which side to update.
-- **Results are objects.** `bricks/list` answers `{ bricks }`, `settings/list` `{ settings }`,
-  `settings/accessMode` `{ mode }`, `files/list` `{ entries }`, `files/exists` `{ exists }`;
-  `telemetry/foreground` takes `{ brick? }` (absent for none).
-- **Telemetry runs only on demand.** Connecting a brick starts no telemetry: the daemon reads a
-  brick for a client that shows it (`telemetry/foreground`) or while a subscription asks for
-  rows (`subscribeTelemetry`).
-- **Hold the brick you work with.** A request on a brick nobody connected fails with
-  `not_connected`, and a brick another client holds can go when that client lets it go. Connect it
-  (`bricks/connect`, no `hold`) for as long as you work with it; the library connects it again
-  after a daemon replacement.
-  The library's cached `bricks()`, `settings()` and `accessMode()` read as before.
-- **Errors.** Decide on `error.code` (the generated `ErrorCode`). `data` carries `family`, and
-  `holder`, `candidates` and `command` as before; the class name (`kind`) is gone with the switch.
-- **Questions.** The handler is `onQuestion((question, { signal }) => answer)`. `question.requester`
-  names who asked, `{ name, kind }`, for the kinds a request raises (`forget`,
-  `clearBluetoothList`, `sweep`, `setting`, `restart`); `bluetoothAccess` and `bluetoothCheckAgain`
-  come from the daemon itself. `brickLoan` is gone. Answer `'yes' | 'no' | 'keep'`, or
-  `{ answer, remember: true }` to apply a yes or no to the same question about your client's own
-  later requests, for as long as its connection lasts. `signal` aborts when the daemon withdraws the question.
-  Without a handler every answer is `keep`, which the daemon reads as unanswered.
-- **Reconnects.** As above, with one difference: nothing is handed over between daemons. When the
-  daemon goes, the library waits a moment for a successor (another client replacing the daemon
-  starts one), connects your own bricks again and renews your subscriptions. Bricks held with
-  `ev3 connect` the new daemon connects itself.
-
-### Start failures
+## Start failures
 
 `connect` rejects with a `DaemonStartError`. Its `code` is `daemon_unavailable`, so code-based
 handling keeps working; its `failure` says which case it is, and every client tells them apart the
@@ -434,14 +409,18 @@ same way:
 | `contract_mismatch` | the running daemon speaks another contract version and could not be replaced |
 | `failed` | anything else; the message carries the exit code and the end of the daemon's log |
 
-### `install.json`
+## `install.json`
 
-| | Now | Native |
-|---|---|---|
-| Where | the current daemon's state root | the native state root, `<state root>/install.json` (`%LOCALAPPDATA%\ev3-cockpit\native` on Windows, `$XDG_STATE_HOME/ev3-cockpit/native` on Linux); a test channel's in `channels/<name>/` |
-| Shape | `{ runtime, entry, installRoot, version, electronRunAsNode? }` | `LaunchSpec`: `{ binary, sha256, version, buildKind }`, schema-typed |
-| Written by | the VS Code extension each time it starts the daemon | the VS Code extension and the `ev3` command of a release build, whenever they connect; whole or not at all, in the user's own state root (mode `0600` on Linux and macOS) |
-| Used | run `entry` with `runtime` | `binary` is never started itself: the client copies it to `bin/<sha256>/` under the state root, checks the copy against `sha256`, and starts that copy |
+How the installed cockpit's daemon is started, for add-ons that carry none:
+
+- **Where:** the native state root, `<state root>/install.json` (`%LOCALAPPDATA%\ev3-cockpit\native`
+  on Windows, `$XDG_STATE_HOME/ev3-cockpit/native` on Linux); a test channel's in
+  `channels/<name>/`.
+- **Shape:** a `LaunchSpec`, `{ binary, sha256, version, buildKind }`, schema-typed.
+- **Written by:** the VS Code extension and the `ev3` command of a release build, whenever they
+  connect; whole or not at all, in the user's own state root (mode `0600` on Linux).
+- **Used:** `binary` is never started itself. The client copies it to `bin/<sha256>/` under the
+  state root, checks the copy against `sha256`, and starts that copy.
 
 An add-on reads it through `installedNativeLaunch`; `undefined` means the cockpit is not installed
 (or has not run yet), and `connect` then fails with `missing_binary`.
