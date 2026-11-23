@@ -11,8 +11,26 @@ bricks named AAA/BBB/CCC only.
 - **Build under test:** the master tip's CI artifacts (`native-daemon.yml`: the npm platform
   packages carry `ev3` and `ev3-cockpitd`) or a local `npm run daemon:build` on HOSTA. Write the
   version (`ev3 --version`) and the commit into the checklist.
-- **Hosts:** HOSTA (Windows x64, VS Code), HOSTD (Debian x64 over ssh), the RPi5 (Linux arm64).
-  The recording scripts (`scripts/*.mts`) need Node ≥ 22.18; they run on HOSTA only.
+- **Hosts:** the matrix below. The recording scripts (`scripts/*.mts`) need Node ≥ 22.18; they
+  run on HOSTA only.
+- **VS Code is deferred** (owner, 23.11.2026): until the whole backend works through `ev3` and
+  `ev3 mcp`, the rounds drive the daemon with `ev3` and `ev3 mcp` only; F1 and `api-check` wait.
+
+## Host matrix
+
+The cockpit has to run everywhere it ships. HOSTA, HOSTB and the RPi5 are this round's hosts;
+the rest run once the backend is complete.
+
+| Host | System | Processor | Package | When |
+|---|---|---|---|---|
+| HOSTA | Windows 11 | x64 | win32-x64 | now |
+| HOSTB | Ubuntu 26.04 | x64 | linux-x64 | now |
+| RPi5 | Raspberry Pi OS 64-bit | arm64 | linux-arm64 | now |
+| RPi2 | Raspberry Pi OS 32-bit | armv7 | none yet (a linux-arm target) | later |
+| a laptop | antiX 64-bit | x64 | linux-x64 | later |
+| a tablet | Windows 32-bit | x86 | win32-ia32 | later |
+| a PC | antiX 32-bit | x86 | linux-ia32 | later |
+| a PC | a minimal 32-bit Linux (planned) | x86 | linux-ia32 | later |
 - **Bricks:** AAA (Wi-Fi dongle, the TCP brick), BBB, CCC; all charged, on the main menu, no
   `CockpitFixture` folder in the projects folder.
 - **No stray processes:** on each host, list processes by command line and confirm no other
@@ -76,14 +94,27 @@ update finishes without a "file in use" error; the daemon keeps running from its
 
 ## Checklist
 
-| Check | HOSTA | HOSTD | RPi5 |
+| Check | HOSTA | HOSTB | RPi5 |
 |---|---|---|---|
-| F1 USB / BT / TCP | | — | — |
-| F2 USB | | | |
-| F2 Bluetooth | | | |
+| F2 USB | passed, AAA, BBB, CCC (23.11.) | | |
+| F2 Bluetooth | passed, BBB and CCC with Wi-Fi off (23.11.) | | |
 | F2 TCP (AAA) | | | |
-| `ev3 mcp` agent | | — | — |
-| `api-check` | | — | — |
-| deploy-brick-off recorded | | — | — |
-| cable-pull recorded | | — | — |
-| VS Code update while running | | — | — |
+| pairing, forget, list clearing | passed, CCC (23.11.) | | |
+| `ev3 mcp` agent | | | |
+| deploy-brick-off recorded | done, CCC (23.11.) | — | — |
+| cable-pull recorded | done, CCC (23.11.) | — | — |
+| F1, `api-check`, VS Code update | deferred with VS Code | — | — |
+
+## Findings, 23.11.2026
+
+- **Bluetooth beside Wi-Fi on HOSTA.** Its Realtek 8822CE is one card for Wi-Fi and Bluetooth.
+  With Wi-Fi on, CCC over Bluetooth failed 6 of 15 steps (each 20–40 s, WSA 10060 and 10051);
+  with Wi-Fi off, the same brick and pairing minutes later passed all 15 (60–250 ms a step).
+  Not something the daemon can fix; its message could say so on Windows.
+- **A broken pairing on the brick.** CCC listed six paired devices and no longer answered this
+  computer (WSA 10051, no question on the display when pairing). `ev3 forget`, `ev3 bt-clear`
+  over USB and `ev3 pair` brought it back.
+- **A failing Bluetooth command takes 30–40 s** before it gives up; too long for a person.
+- **`ev3 telemetry` without rows waits its full 5 s**: 40 of 69 rows (empty sensor ports, absent
+  daisy-chain layers) never get a value, so a single reading never completes early.
+- **An owner-run scenario beeped twice** (start notice and instruction); fixed, one beep now.
