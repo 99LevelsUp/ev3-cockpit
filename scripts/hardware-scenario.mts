@@ -727,7 +727,8 @@ async function main(): Promise<number> {
 	};
 	let failure: Error | undefined;
 	if (scenario.needsOwner && !args.replay) {
-		beep();
+		// No beep here: the one beep a scenario gives is its instruction, so a person waiting for
+		// it never acts on a notice that the run is about to start.
 		say(`${args.scenario}: ${scenario.needsOwner}. Starting in 5 s.`);
 		await wait(5000);
 	}
