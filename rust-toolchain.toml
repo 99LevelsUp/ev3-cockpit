@@ -1,0 +1,6 @@
+# The Rust release every build of the daemon and ev3 uses, locally and in CI: one compiler, one set
+# of clippy lints. Raise it on purpose, in a commit of its own, after the gate passes on it.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

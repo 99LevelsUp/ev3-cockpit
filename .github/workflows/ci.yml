@@ -29,9 +29,10 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
+        # The release rust-toolchain.toml names, with its components; rustup is on every runner.
+        run: rustup toolchain install
       - name: Cache the daemon's build
+
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: daemon
