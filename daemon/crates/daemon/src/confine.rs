@@ -968,21 +968,26 @@ mod tests {
         make_fifo(&state.join("pipe"));
         let alias = base.join("alias");
         std::fs::hard_link(state.join("pipe"), &alias).expect("a second name");
-        for named in [null_device().to_path_buf(), pipe, alias] {
-            let error = confinement.check(&named).expect_err("checked");
-            assert_eq!(error.data.code, ErrorCode::InvalidRequest, "{error:?}");
+        // The state's pipe by its second name first: the case a search of regular files missed.
+        for named in [alias, pipe, null_device().to_path_buf()] {
+            // Reading and writing refuse it on their own, as for a path checked before it was
+            // swapped for a special file.
             let resolved = std::fs::canonicalize(&named).expect("resolved");
-            let confinement = confinement.clone();
-            let (read, write) = without_waiting(move || {
-                (
-                    confinement.read(&named, &resolved),
-                    confinement.write(&named, &resolved, b"x"),
-                )
+            let (read, write) = without_waiting({
+                let (confinement, named) = (confinement.clone(), named.clone());
+                move || {
+                    (
+                        confinement.read(&named, &resolved),
+                        confinement.write(&named, &resolved, b"x"),
+                    )
+                }
             });
             for refused in [read.map(|_| ()), write] {
                 let error = refused.expect_err("refused");
                 assert!(error.message.contains("regular file"), "{}", error.message);
             }
+            let error = confinement.check(&named).expect_err("checked");
+            assert_eq!(error.data.code, ErrorCode::InvalidRequest, "{error:?}");
         }
         std::fs::remove_dir_all(base).expect("clean");
     }

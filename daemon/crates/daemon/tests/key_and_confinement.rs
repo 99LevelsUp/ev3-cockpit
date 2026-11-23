@@ -123,6 +123,45 @@ fn a_protected_directory_that_cannot_be_resolved_stops_the_start() {
     );
 }
 
+/// The user's state root cannot be found at all (none of the variables that name it is set): on
+/// a test channel too the daemon does not start, rather than leave that root unprotected.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+#[test]
+fn a_user_state_root_that_cannot_be_found_stops_the_start() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("noroot");
+    let unset: &[&str] = if cfg!(windows) {
+        &["LOCALAPPDATA", "USERPROFILE"]
+    } else {
+        &["XDG_STATE_HOME", "HOME"]
+    };
+    let mut command = std::process::Command::new(common::bin());
+    command
+        .args(["--channel", "t", "--state-root"])
+        .arg(root.path().join("state"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    for name in unset {
+        command.env_remove(name);
+    }
+    let mut child = command.spawn().expect("the daemon starts");
+    let status = common::wait_exit(&mut child, std::time::Duration::from_secs(30));
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let status = status.expect("the daemon ends instead of serving");
+    let stderr = common::stderr_of(&mut child);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cannot find the user's state root"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
     if common::refuses_this_process() {
