@@ -20,7 +20,7 @@
       "leased": false,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "The daemon, its clients and the bricks it holds."
+      "doc": "The daemon, its clients (with the brick each shows) and the bricks it holds."
     },
     "daemon/exit": {
       "stableCore": true,
@@ -317,7 +317,7 @@
       "leased": false,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "The brick whose telemetry this client shows in the foreground."
+      "doc": "The brick whose telemetry this client shows in the foreground; daemon/status names it as the client's shows, and a change reaches every client as daemon/showsChanged."
     },
     "chain/get": {
       "params": "BrickParams",
@@ -356,7 +356,8 @@
     "chain/changed": { "payload": "ChainChanged", "doc": "A followed daisy chain changed." },
     "settings/changed": { "payload": "SettingChanged", "doc": "A setting changed." },
     "settings/accessModeChanged": { "payload": "AccessModeState", "doc": "The access mode changed." },
-    "question/withdrawn": { "payload": "QuestionWithdrawn", "doc": "A question this client was asked is no longer open." }
+    "question/withdrawn": { "payload": "QuestionWithdrawn", "doc": "A question this client was asked is no longer open." },
+    "daemon/showsChanged": { "payload": "ShowsChanged", "doc": "The brick a client shows changed: it showed another or none, or it left while showing one. Carries every client as daemon/status names it." }
   },
   "clientRequests": {
     "question/ask": {

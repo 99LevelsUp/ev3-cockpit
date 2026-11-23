@@ -107,6 +107,8 @@ pub struct Surface {
     list_changed: Notify,
     /// Wakes whoever waits for a repair's pairing to end.
     repair_settled: Notify,
+    /// Held while the clients' shown bricks are read and sent, so the lists go out in order.
+    shows_order: Mutex<()>,
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
@@ -151,6 +153,7 @@ impl Surface {
             state: Mutex::new(State::default()),
             list_changed: Notify::new(),
             repair_settled: Notify::new(),
+            shows_order: Mutex::new(()),
             tasks: Mutex::new(Vec::new()),
         });
         surface.follow_runtime();
@@ -589,6 +592,8 @@ impl Surface {
         }
         if foreground_changed {
             self.apply_foreground();
+            // The client is out of the list already: the others hear it shows nothing any more.
+            self.shows_changed();
         }
         self.leases.client_left(connection);
         self.questions.client_left(connection);

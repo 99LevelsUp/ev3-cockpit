@@ -371,6 +371,126 @@ async fn a_connect_tells_every_client_the_brick_came_and_the_list_changed() {
     );
 }
 
+fn is_shows_changed(message: &Value) -> bool {
+    message["method"] == "daemon/showsChanged"
+}
+
+/// The brick each client shows, by name, as a client list names it; `None` for one that shows none.
+fn shows(clients: &Value) -> Vec<(String, Option<String>)> {
+    let mut shown: Vec<(String, Option<String>)> = clients
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap_or("").to_owned(),
+                c["shows"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    shown.sort();
+    shown
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_client_hears_which_brick_a_client_shows_and_daemon_status_names_it() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("shows");
+    let daemon = Daemon::replaying(&root, "t", "usb-discovery-aaa");
+    let mut vscode = client(&daemon, &root, "vscode", "VS Code").await;
+    let mut addon = client(&daemon, &root, "addon", "add-on").await;
+    vscode
+        .request("bricks/list", json!({"waitForDiscovery": true}))
+        .await
+        .expect("answered");
+    let status = addon
+        .request("daemon/status", json!({}))
+        .await
+        .expect("answered");
+    assert_eq!(
+        shows(&status["result"]["clients"]),
+        [("VS Code".into(), None), ("add-on".into(), None)],
+        "{status}"
+    );
+
+    let shown = vscode
+        .request("telemetry/foreground", json!({"brick": "AAA"}))
+        .await
+        .expect("answered");
+    assert!(shown.get("error").is_none(), "{shown}");
+    let heard = addon
+        .within(Duration::from_secs(5), is_shows_changed)
+        .await
+        .expect("the add-on hears it");
+    let now = [
+        ("VS Code".to_owned(), Some(AAA.to_owned())),
+        ("add-on".into(), None),
+    ];
+    assert_eq!(shows(&heard["params"]["clients"]), now, "{heard}");
+    let status = addon
+        .request("daemon/status", json!({}))
+        .await
+        .expect("answered");
+    assert_eq!(shows(&status["result"]["clients"]), now, "{status}");
+    let window = status["result"]["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "VS Code")
+        .cloned()
+        .unwrap();
+    assert_eq!(window["kind"], "vscode");
+
+    // The same brick again changes nothing, so nobody hears anything.
+    vscode
+        .request("telemetry/foreground", json!({"brick": AAA}))
+        .await
+        .expect("answered");
+    assert!(
+        addon
+            .within(Duration::from_millis(700), is_shows_changed)
+            .await
+            .is_none(),
+        "a foreground that did not change was announced"
+    );
+
+    vscode
+        .request("telemetry/foreground", json!({}))
+        .await
+        .expect("answered");
+    let heard = addon
+        .within(Duration::from_secs(5), is_shows_changed)
+        .await
+        .expect("the add-on hears it shows none");
+    assert_eq!(
+        shows(&heard["params"]["clients"]),
+        [("VS Code".into(), None), ("add-on".into(), None)],
+        "{heard}"
+    );
+
+    // A client that leaves while it shows a brick shows it no longer.
+    vscode
+        .request("telemetry/foreground", json!({"brick": "AAA"}))
+        .await
+        .expect("answered");
+    addon
+        .within(Duration::from_secs(5), is_shows_changed)
+        .await
+        .expect("shown again");
+    drop(vscode);
+    let heard = addon
+        .within(Duration::from_secs(5), is_shows_changed)
+        .await
+        .expect("the add-on hears the window went");
+    assert_eq!(
+        shows(&heard["params"]["clients"]),
+        [("add-on".into(), None)],
+        "{heard}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_hold_survives_the_client_that_made_it_and_a_client_hold_does_not() {
     if common::refuses_this_process() {

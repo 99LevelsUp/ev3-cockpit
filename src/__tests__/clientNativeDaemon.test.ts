@@ -19,7 +19,7 @@ import { ensureNativeDaemon } from '../client/nativeDaemon';
 import {
 	DaemonStartError, LaunchHost, SpawnedDaemon, daemonBinaryName, installedNativeLaunch, systemLaunchHost,
 } from '../client/nativeLaunch';
-import type { DaemonStatus, Question } from '../contract/generated';
+import type { ClientStatus, DaemonStatus, Question, ShowsChanged } from '../contract/generated';
 import { NATIVE_DAEMON_VERSION, NativeTestChannel, nativeBinaryMissing, nativeLaunch, nativeTestChannel, sleep } from './clientDaemonHelpers';
 
 const homes: string[] = [];
@@ -210,6 +210,29 @@ describe('the client library and the native daemon', { skip: nativeBinaryMissing
 		await reconnected;
 		await until('the renewed subscription to report the state', () => states.length >= 1);
 		subscription.dispose();
+	});
+
+	it('an add-on hears which brick a window shows, and daemon/status names it', async () => {
+		const channel = testChannel();
+		const window = await connect(channel.client('vscode', 'development', { name: 'VS Code (test)' }));
+		const addon = await connect({ ...channel.client('addon', 'development', { name: 'add-on (test)' }), reconnect: false });
+		const heard: ShowsChanged[] = [];
+		addon.on('daemon/showsChanged', (params) => heard.push(params));
+		const listed = await window.request('bricks/list', { waitForDiscovery: true });
+		const aaa = listed.bricks.find((b) => b.name === 'AAA');
+		assert.ok(aaa, 'the scenario\'s brick');
+		const shows = (clients: readonly ClientStatus[]): Array<[string, string | undefined]> =>
+			clients.map((c): [string, string | undefined] => [c.name, c.shows]).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+
+		await window.setActiveBrick(aaa.brickId);
+		await until('the add-on to hear the window shows AAA', () => heard.some((h) => shows(h.clients).some(([name, brick]) => name === 'VS Code (test)' && brick === aaa.brickId)));
+		const status: DaemonStatus = await addon.request('daemon/status', {});
+		assert.deepEqual(shows(status.clients), [['VS Code (test)', aaa.brickId], ['add-on (test)', undefined]]);
+
+		await window.setActiveBrick(undefined);
+		await until('the add-on to hear the window shows none', () => shows(heard[heard.length - 1].clients).every(([, brick]) => brick === undefined));
+		const cleared: DaemonStatus = await addon.request('daemon/status', {});
+		assert.deepEqual(shows(cleared.clients), [['VS Code (test)', undefined], ['add-on (test)', undefined]]);
 	});
 
 	it('puts a question to the handler with who asked, and without a handler leaves it unanswered', async () => {

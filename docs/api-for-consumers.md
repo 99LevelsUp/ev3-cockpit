@@ -68,8 +68,16 @@ Answers that concern a brick carry its id (`brickId`), so use the id from the fi
 rest of the work.
 
 The active brick is your client's own (`activeBrick()`, `setActiveBrick(id)`); the daemon keeps
-none. Setting it tells the daemon to read that brick's telemetry in the foreground for you;
-requests still name the brick.
+none for requests. Setting it tells the daemon to read that brick's telemetry in the foreground for
+you; requests still name the brick.
+
+**Which brick the cockpit shows.** To follow the brick a VS Code window shows, read
+`daemon/status`: each entry of `clients` is `{ name, kind, version, buildKind, shows? }`, where
+`shows` is the id of the brick that client shows (absent when none). Then listen with
+`cockpit.on('daemon/showsChanged', ({ clients }) => …)`: every client hears it whenever any
+client's shown brick changes, including when a window that showed one closes, and it carries the
+whole client list in the same form. Pick the entry with `kind: 'vscode'`; with several windows open,
+several may show a brick.
 
 ## What there is
 

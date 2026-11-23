@@ -77,7 +77,7 @@ lease, whether it needs a person and which client kinds may call it.
 Notifications: `bricks/changed`, `bricks/reconnected`, `bricks/pairingStarted`,
 `bricks/pairingEvent`, `bricks/pairingDone`, `bricks/oneSidedRepair`, `programs/stateChanged`,
 `telemetry/update`, `chain/changed`, `settings/changed`, `settings/accessModeChanged`,
-`question/withdrawn`. The daemon's one request to a client is `question/ask`.
+`question/withdrawn`, `daemon/showsChanged`. The daemon's one request to a client is `question/ask`.
 
 **Naming a brick.** A request names its brick by id or by name; case does not matter.
 
@@ -166,6 +166,12 @@ snapshot first, then changes) and `chain/changed`. `subscriptions/cancel` ends o
 
 Connecting a brick starts no telemetry: the daemon reads a brick for a client that shows it
 (`telemetry/foreground`) or while a subscription asks for rows.
+
+**Which brick a client shows.** `daemon/status` names it per client: each entry of `clients` has
+`shows`, the id of the brick that client last made foreground, and no `shows` when it shows none.
+When that changes for any client (it shows another brick or none, or its connection closes while it
+shows one), every client hears `daemon/showsChanged`, which carries every connected client the way
+`daemon/status` lists them. Sending the same brick again changes nothing and is not announced.
 
 When the daemon is replaced or restarted, the client library connects again and reconnects the
 bricks it connected. It then subscribes again, each subscription with a fresh snapshot first, and
