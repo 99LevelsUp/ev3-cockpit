@@ -564,6 +564,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_recording_directory_grants_the_user_alone_and_passes_it_on() {
+        // Elevated, the folders a process makes belong to the Administrators group, not the user.
+        if crate::security::is_elevated().unwrap_or(false) {
+            eprintln!("skipped: this process runs elevated");
+            return;
+        }
         let sid = crate::fsutil::windows::current_user_sid().expect("sid");
         assert_eq!(windows_dir::sddl(&sid), format!("D:P(A;OICI;GA;;;{sid})"));
         let parent = fresh("dacl");

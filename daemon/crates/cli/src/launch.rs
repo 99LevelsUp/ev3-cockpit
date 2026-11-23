@@ -666,6 +666,11 @@ mod tests {
 
     #[test]
     fn a_copy_is_started_only_when_it_matches_the_manifest() {
+        // Elevated, the folders a process makes belong to the Administrators group, not the user.
+        if ev3_channel::security::is_elevated().unwrap_or(false) {
+            eprintln!("skipped: this process runs elevated");
+            return;
+        }
         let root = temp_dir();
         let source = root.join("source.bin");
         std::fs::write(&source, b"the daemon").expect("source");

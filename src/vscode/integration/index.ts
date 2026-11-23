@@ -10,6 +10,7 @@
 
 import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
+import { daemonRefusesThisProcess } from '../../__tests__/elevation';
 import { NativeCockpitClient } from '../../client/nativeClient';
 import { observeEmitter } from '../../test/emitterScenarios';
 import { EventEmitter, setListenerErrorHandler } from '../events';
@@ -79,6 +80,10 @@ const tests: IntegrationTest[] = [
 	{
 		name: 'the extension starts its own native daemon replaying a recorded brick, which lists and connects it',
 		fn: async () => {
+			if (daemonRefusesThisProcess) {
+				console.log(`skipped: ${daemonRefusesThisProcess}`);
+				return;
+			}
 			const ext = vscode.extensions.getExtension(EXTENSION_ID);
 			assert.ok(ext);
 			await ext.activate();
