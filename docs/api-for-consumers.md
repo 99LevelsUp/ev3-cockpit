@@ -114,8 +114,7 @@ A failed request rejects with a `ContractError`:
 - `data` carries the code's `family` (`brick`, `lease`, `person`, `daemon`, `cancelled`, `request`,
   `internal`) and extras: `holder` for `brick_busy`, `candidates` for `brick_ambiguous`, `command`
   (what a person should run) for `needs_person`.
-- `kind` is still on `ContractError` for now, but the native daemon names no error class, so it
-  reads `Unknown` for every error from the daemon. Do not decide on it; whether it goes is open.
+- There is no class name: `kind` left `ContractError` with the Node daemon (23.11.2026).
 
 The codes an add-on meets most: `brick_busy`, `brick_ambiguous`, `brick_not_found`,
 `not_connected`, `access_denied`, `program_running`, `program_not_found`, `mode_conflict`,

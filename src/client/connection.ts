@@ -18,9 +18,8 @@ import {
 	CancellationToken, CancellationTokenSource, createMessageConnection, MessageConnection, ProgressType, ResponseError,
 	StreamMessageReader, StreamMessageWriter,
 } from 'vscode-jsonrpc/node';
-import {
-	ErrorKind, WireErrorCode, WireErrorData, errorKindOf, wireErrorNumber,
-} from '../contract/errors';
+import { WireErrorCode, WireErrorData, wireErrorNumber } from '../contract/errors';
+import { ERROR_FAMILY } from '../contract/generated';
 
 /** A message larger than this closes the connection. */
 export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -28,20 +27,23 @@ export const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 /** An error that crossed the wire, or one this side raises with a contract code. */
 /** A refusal a person can lift: `command` is what they can run. */
 export function needsPerson(message: string, command: string): ContractError {
-	return new ContractError(WireErrorCode.NeedsPerson, message, { command, kind: 'NeedsPersonError' });
+	return new ContractError(WireErrorCode.NeedsPerson, message, { command });
 }
 
+/**
+ * A contract error: decide on `code`. `data` is the contract's `ErrorData` — the code, its family,
+ * and `holder`, `candidates` or `command` where the code has them.
+ */
 export class ContractError extends Error {
 	readonly code: WireErrorCode;
-	readonly kind: ErrorKind;
 	readonly data: WireErrorData;
 
 	constructor(code: WireErrorCode, message: string, extra: Partial<Omit<WireErrorData, 'code'>> = {}) {
 		super(message);
 		this.name = 'ContractError';
 		this.code = code;
-		this.kind = extra.kind ?? 'Unknown';
-		this.data = { ...extra, code, kind: this.kind };
+		// The family the daemon sent stands: a newer daemon's code may not be in this client's table.
+		this.data = { ...extra, code, family: extra.family ?? ERROR_FAMILY[code] };
 	}
 }
 
@@ -153,14 +155,13 @@ function toResponseError(error: unknown): ResponseError<WireErrorData> {
 	if (error instanceof ContractError) {
 		return new ResponseError(wireErrorNumber(error.code), error.message, error.data);
 	}
-	const known = error as { code?: unknown; name?: unknown; message?: unknown };
+	const known = error as { code?: unknown; message?: unknown };
 	const codes = Object.values(WireErrorCode) as string[];
 	const code = typeof known?.code === 'string' && codes.includes(known.code)
 		? known.code as WireErrorCode
 		: WireErrorCode.Internal;
 	const message = typeof known?.message === 'string' ? known.message : String(error);
-	const kind = errorKindOf(typeof known?.name === 'string' ? known.name : undefined);
-	return new ResponseError(wireErrorNumber(code), message, { code, kind });
+	return new ResponseError(wireErrorNumber(code), message, { code, family: ERROR_FAMILY[code] });
 }
 
 /** The error a failed request rejects with on this side. */

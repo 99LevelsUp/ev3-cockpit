@@ -123,13 +123,13 @@ describe('a contract connection', () => {
 		assert.equal(server.closed, true);
 	});
 
-	it('carries a handler error with its contract code and class', async () => {
+	it('carries a handler error with its contract code, family and extras', async () => {
 		const { client, server } = pair();
 		server.onRequest('bricks/write', () => {
-			throw new ContractError(WireErrorCode.BrickBusy, 'CCC is busy: terminal holds it.', { holder: 'terminal', kind: 'BrickBusyError' });
+			throw new ContractError(WireErrorCode.BrickBusy, 'CCC is busy: terminal holds it.', { holder: 'terminal' });
 		});
 		await assert.rejects(client.request('bricks/write'), (error: unknown) => error instanceof ContractError
-			&& error.code === WireErrorCode.BrickBusy && error.kind === 'BrickBusyError' && error.data.holder === 'terminal');
+			&& error.code === WireErrorCode.BrickBusy && error.data.family === 'lease' && error.data.holder === 'terminal');
 		client.close();
 	});
 });

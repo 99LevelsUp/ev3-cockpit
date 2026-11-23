@@ -30,13 +30,9 @@ Every failure a client sees carries a stable string code from the contract. A cl
 
 ## Key Decisions [coverage: medium — 2 sources]
 
-- **Decide by code, never by class name** — the native daemon sends no class name. `ContractError.kind` remains in the TypeScript client for now and reads `Unknown` for daemon errors; removing it is open.
+- **Decide by code, never by class name** — the native daemon sends no class name, and `ContractError` carries none: its `data` is the contract's `ErrorData` (`code`, `family` and the extras).
 - **Families for the numeric code** — JSON-RPC reserves -32768..-32000, so the contract's numbers are positive.
 - **`outcome_unknown` is never retried** — a write cut off by the daemon going may or may not have happened; the caller reads the state first.
-
-## Gotchas [coverage: low — 1 source]
-
-- `program_cancelled` is still in `WireErrorCode`; only the TypeScript daemon raised it, and the native daemon ends a stopped run with `cancelled`.
 
 ## Sources
 

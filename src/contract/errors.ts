@@ -1,20 +1,17 @@
 /**
  * Errors as they cross the wire.
  *
- * A JSON-RPC error carries a numeric `code` and a `data` object. The number tells a client only
- * which family the error belongs to; what a client decides on is `data.code`, a stable string, and
- * `data.kind`, the name of the error class the daemon raised. Clients choose their messages by kind
- * the way the cockpit used to choose them by class, so a link that dropped and a brick that never
- * answered stay distinguishable although both are transport failures.
+ * A JSON-RPC error carries a numeric `code` and a `data` object, the contract's `ErrorData`. The
+ * number tells a client only which family the error belongs to; what a client decides on is
+ * `data.code`, a stable string, with `data.family` beside it.
  */
 
 import { ERROR_FAMILY, ERROR_FAMILY_NUMBER } from './generated';
-import type { ErrorCode } from './generated';
+import type { ErrorCode, ErrorData } from './generated';
 
 /**
- * Every code a client may see in `data.code`: one name for each code of the contract's generated
- * `ErrorCode`, which the compiler holds this table to, plus `program_cancelled`, which only the
- * Node daemon raises and which goes with it (U17).
+ * Every code a client may see in `data.code`, by name: exactly the contract's generated
+ * `ErrorCode`, which the compiler holds this table to both ways.
  */
 export const WireErrorCode = {
 	TransportFailed: 'transport_failed',
@@ -49,9 +46,9 @@ export const WireErrorCode = {
 	BackendUnavailable: 'backend_unavailable',
 	/** The operating system refused the daemon the device. */
 	DevicePermission: 'device_permission',
-	/** Another client holds the brick's write lease; the message names it. */
+	/** Another client holds the brick's write lease; `data.holder` names it. */
 	BrickBusy: 'brick_busy',
-	/** The operation needs a person's answer, and the client could not ask one. */
+	/** The operation needs a person's answer, and the client could not ask one; `data.command` is what they can run. */
 	NeedsPerson: 'needs_person',
 	/** The daemon is not reachable, could not start, or went away during the call. */
 	DaemonUnavailable: 'daemon_unavailable',
@@ -65,9 +62,7 @@ export const WireErrorCode = {
 	InvalidRequest: 'invalid_request',
 	/** Anything else; the message says what. */
 	Internal: 'internal',
-	/** Raised only by the Node daemon, which goes in U17; the native daemon ends a stopped run with `cancelled`. */
-	ProgramCancelled: 'program_cancelled',
-} as const satisfies Record<string, ErrorCode | 'program_cancelled'>;
+} as const satisfies Record<string, ErrorCode>;
 
 export type WireErrorCode = (typeof WireErrorCode)[keyof typeof WireErrorCode];
 
@@ -75,51 +70,6 @@ export type WireErrorCode = (typeof WireErrorCode)[keyof typeof WireErrorCode];
 type UnnamedErrorCode = Exclude<ErrorCode, WireErrorCode>;
 const everyCodeNamed: [UnnamedErrorCode] extends [never] ? true : UnnamedErrorCode = true;
 void everyCodeNamed;
-
-/**
- * The error classes a daemon may name in `data.kind`, one per class the cockpit raises. A class
- * the client does not know reads as `Unknown`; the code still applies.
- */
-export const ERROR_KINDS = [
-	'CockpitError',
-	'TransportError',
-	'BackendUnavailableError',
-	'BrickUnreachableError',
-	'LinkLostError',
-	'ConnectionError',
-	'ProtocolError',
-	'InvalidBrickKeyError',
-	'TimeoutError',
-	'SessionError',
-	'AlreadyConnectedError',
-	'ChannelChangedError',
-	'ConnectionAbandonedError',
-	'NotConnectedError',
-	'NoProviderError',
-	'InvalidTransitionError',
-	'QueueUnavailableError',
-	'HeartbeatError',
-	'ConsumerError',
-	'SubscriptionError',
-	'ModeConflictError',
-	'ProgramError',
-	'AccessDeniedError',
-	'DevicePermissionError',
-	'BrickBusyError',
-	'NeedsPersonError',
-	'CancelledError',
-	'OutcomeUnknownError',
-	'BrickResolveError',
-	'DaemonUnavailableError',
-	'Unknown',
-] as const;
-
-export type ErrorKind = (typeof ERROR_KINDS)[number];
-
-/** The kind a class name reads as on the wire. */
-export function errorKindOf(className: string | undefined): ErrorKind {
-	return (ERROR_KINDS as readonly string[]).includes(className ?? '') ? className as ErrorKind : 'Unknown';
-}
 
 /**
  * The numeric JSON-RPC code for each family, as the contract defines it. JSON-RPC reserves
@@ -130,18 +80,8 @@ export const WIRE_ERROR_NUMBER = ERROR_FAMILY_NUMBER;
 
 /** The numeric family a string code belongs to, from the contract's family table. */
 export function wireErrorNumber(code: WireErrorCode): number {
-	const family = code === WireErrorCode.ProgramCancelled ? 'brick' : ERROR_FAMILY[code];
-	return ERROR_FAMILY_NUMBER[family];
+	return ERROR_FAMILY_NUMBER[ERROR_FAMILY[code]];
 }
 
-/** What `data` carries on every contract error. */
-export interface WireErrorData {
-	readonly code: WireErrorCode;
-	readonly kind: ErrorKind;
-	/** For `brick_busy`: who holds the lease. */
-	readonly holder?: string;
-	/** For `brick_ambiguous`: the bricks the name matched. */
-	readonly candidates?: readonly { readonly brickId: string; readonly name: string }[];
-	/** For `needs_person` and refusals an agent cannot act on: the command a person should run. */
-	readonly command?: string;
-}
+/** What `data` carries on every contract error: the contract's `ErrorData`. */
+export type WireErrorData = ErrorData;
