@@ -233,10 +233,11 @@ never followed by a start.
 
 **State.** `ProgramState` is `{ brickId, running, runSeq, stoppedBy? }`:
 
-- `runSeq` counts the starts the daemon sent to the brick (0 before any). `DeployResult.runSeq` is
-  your start's number. The daemon takes a number before the start is checked, so a refused or
-  cancelled start uses one too and the numbers you see have gaps. A new daemon counts from 0 again;
-  keeping the count across a replacement is open.
+- `runSeq` counts the starts sent to the brick (0 before any). `DeployResult.runSeq` is your
+  start's number. The daemon takes a number before the start is checked, so a refused or cancelled
+  start uses one too and the numbers you see have gaps. The daemon keeps each brick's last number
+  in its state directory (`runs.json`) before it sends the start, so a daemon that replaces it
+  counts on and a higher `runSeq` is a later run across daemons too.
 - A state is told with the number of the latest start at the time it is told. So a higher
   `runSeq` than yours means someone started again after you. The same number does not prove the
   state is about your program: when you start with `replace`, the previous program ending is told

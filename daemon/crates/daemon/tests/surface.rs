@@ -569,6 +569,36 @@ async fn a_damaged_ledger_is_moved_aside_and_the_daemon_serves() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn damaged_run_numbers_are_moved_aside_said_in_the_log_and_the_daemon_serves() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("runs");
+    let dir = root.channel_dir("t");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("runs.json"), "{ not json").unwrap();
+    let daemon = Daemon::replaying(&root, "t", "usb-discovery-aaa");
+    let mut c = client(&daemon, &root, "cli", "ev3").await;
+    let list = c
+        .request("bricks/list", json!({"waitForDiscovery": true}))
+        .await
+        .expect("answered");
+    assert_eq!(list["result"]["bricks"][0]["brickId"], AAA, "{list}");
+    let aside: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("runs.json.damaged-"))
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    let log = std::fs::read_to_string(dir.join("daemon.log")).unwrap_or_default();
+    assert!(
+        log.contains("program start numbers"),
+        "the log says it: {log}"
+    );
+}
+
 /// Parameters each method accepts, naming a brick the daemon does not have.
 fn params_of(method: &str) -> Value {
     let brick = "AAA";

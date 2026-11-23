@@ -30,6 +30,7 @@ explains it. How a client finds the daemon, the key, the lock, the framing, the 
 | `settings.json` | settings that differ from their defaults |
 | `held.json` | the bricks held with `ev3 connect`, which the next daemon connects again |
 | `ledger.json` | unsettled transfers per brick, settled before that brick's next transfer |
+| `runs.json` | each brick's last `runSeq`, so the next daemon counts on |
 
 ## Messages
 
@@ -128,8 +129,9 @@ start outcome is one of:
 - `uncertain`: the program may have started. Do not start it again; check its state first.
 
 `runSeq` counts the starts on each brick. Program states carry it, and `stoppedBy` when a stop ended
-the program. A new daemon starts counting at 0 again (keeping it across a replacement is open,
-native daemon plan U17).
+the program. The daemon writes each brick's last number to `runs.json` before it sends the start,
+so a daemon that replaces it counts on. A missing `runs.json` counts from 0; a damaged one is moved
+aside, said in the log, and counting starts from 0.
 
 ## Questions for a person
 

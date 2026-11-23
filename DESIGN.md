@@ -1620,8 +1620,9 @@ holder; a disconnect drops only the caller's own hold (R36).
 A newer release client, or a development client meeting a release daemon, asks the daemon to end
 (`daemon/exit`) once no write is in progress and starts its own; any other exit request is a
 restart that needs a person's yes (`ev3 daemon restart`, "Restart the Cockpit Daemon"). Nothing is
-handed over: the new daemon connects again the bricks held with `ev3 connect` (`held.json`), and
-each client reconnects its own bricks. Development and release builds share the user's channel; the
+handed over: the new daemon connects again the bricks held with `ev3 connect` (`held.json`),
+counts each brick's program starts on from the last number (`runs.json`), and each client
+reconnects its own bricks. Development and release builds share the user's channel; the
 separate development daemon with brick loans and the handover of 4.10.2 were dropped in the native
 rewrite (`docs/channel.md`, "The daemon's life").
 

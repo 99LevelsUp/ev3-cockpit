@@ -39,6 +39,7 @@ use crate::leases::{LeaseOwner, Leases};
 use crate::questions::Questions;
 use crate::resolver::{ResolverBrick, resolve_brick};
 use crate::rpc::RequestContext;
+use crate::runs::RunSeqs;
 use crate::state::{ClientEntry, Shared};
 
 use self::pairing::Pairings;
@@ -87,7 +88,6 @@ struct State {
     /// Per connection, the brick whose telemetry it shows in the foreground.
     foreground: HashMap<u64, String>,
     programs: HashMap<String, ProgramService>,
-    run_seq: HashMap<String, u64>,
     stopped_by: HashMap<String, String>,
     /// Bricks whose one-sided repair is pairing them now.
     repair_pairings: HashSet<String>,
@@ -100,6 +100,8 @@ pub struct Surface {
     pub runtime: Runtime,
     pub holders: HolderSets,
     pub leases: Arc<Leases>,
+    /// The last `runSeq` of each brick, kept in `runs.json` for the next daemon.
+    runs: RunSeqs,
     activity: Arc<dyn ActivityPort>,
     pairings: Pairings,
     state: Mutex<State>,
@@ -127,7 +129,8 @@ fn new_id() -> String {
 
 impl Surface {
     /// Builds the runtime on `providers` and starts serving it; the bricks `held` names (from the
-    /// previous daemon's `held.json`) are held again and connected as they show up.
+    /// previous daemon's `held.json`) are held again and connected as they show up, and each
+    /// brick's `runSeq` counts on from the previous daemon's `runs.json`.
     pub fn start(
         shared: Arc<Shared>,
         questions: Arc<Questions>,
@@ -140,7 +143,11 @@ impl Surface {
             questions: questions.clone(),
         });
         let runtime = Runtime::start(providers, &shared, consent, &state_dir.join("ledger.json"))?;
+        let runs = RunSeqs::open(Some(state_dir.join("runs.json")), |warning| {
+            shared.log.warn(&warning);
+        });
         let surface = Arc::new(Self {
+            runs,
             activity: Arc::new(DaemonActivity {
                 shared: shared.clone(),
             }),

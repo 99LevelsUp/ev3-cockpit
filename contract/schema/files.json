@@ -63,7 +63,7 @@
         "runSeq": {
           "type": "integer",
           "minimum": 0,
-          "description": "This start's number on the brick: the daemon counts every start it is asked for per brick, a refused one included, so numbers may skip. A state with a lower runSeq is about an earlier run; with replace, the old program's end may still arrive under the new number."
+          "description": "This start's number on the brick: the daemon counts every start it is asked for per brick, a refused one included, so numbers may skip. The count is kept in the daemon's state directory, so a daemon that replaces another counts on. A state with a lower runSeq is about an earlier run; with replace, the old program's end may still arrive under the new number."
         },
         "uploaded": { "type": "array", "items": { "type": "string" }, "description": "Files that were uploaded." },
         "skipped": { "type": "array", "items": { "type": "string" }, "description": "Files skipped because the brick held the same content." }
@@ -75,7 +75,7 @@
       "properties": {
         "brickId": { "type": "string" },
         "running": { "type": "boolean" },
-        "runSeq": { "type": "integer", "minimum": 0, "description": "The number of the last start the daemon sent to this brick (0 before any)." },
+        "runSeq": { "type": "integer", "minimum": 0, "description": "The number of the last start sent to this brick, by this daemon or one it replaced (0 before any)." },
         "stoppedBy": { "type": "string", "description": "The client that stopped it, when a stop ended it." }
       }
     },

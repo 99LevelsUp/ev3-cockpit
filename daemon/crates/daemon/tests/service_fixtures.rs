@@ -82,6 +82,33 @@ impl Replay {
         }
     }
 
+    /// A strict replay whose channel directory holds `files` (name, content) before the daemon
+    /// starts, as a previous daemon left them.
+    async fn start_seeded(name: &str, files: &[(&str, String)]) -> Self {
+        let root = TempRoot::new("service");
+        let dir = root.channel_dir("t");
+        std::fs::create_dir_all(&dir).expect("channel dir");
+        for (file, text) in files {
+            std::fs::write(dir.join(file), text).expect("seeded file");
+        }
+        let fixture = service_fixture(name);
+        let args: [&std::ffi::OsStr; 4] = [
+            "--fixtures".as_ref(),
+            fixture.as_os_str(),
+            "--replay".as_ref(),
+            "strict".as_ref(),
+        ];
+        let daemon = Daemon::start_with(&root, "t", &args);
+        let client = Self::client_of(&root, &daemon).await;
+        Self {
+            root,
+            daemon,
+            client,
+            notes: Vec::new(),
+            strict: true,
+        }
+    }
+
     async fn client_of(root: &TempRoot, daemon: &Daemon) -> Client {
         let mut client = Client::connect(&daemon.path()).await;
         let hello = client.hello_as(&root.key(), "cli", CLIENT).await;
@@ -201,8 +228,9 @@ impl Replay {
     }
 
     /// `daemon/exit` with its restart question answered yes, as the script ends; the daemon must
-    /// exit 0, which in strict replay says every recorded call was made.
-    async fn end(mut self) {
+    /// exit 0, which in strict replay says every recorded call was made. Returns the state root,
+    /// to read what the daemon left in it.
+    async fn end(mut self) -> TempRoot {
         let id = self.client.send_request("daemon/exit", json!({})).await;
         let question = self.client.question().await.expect("asked");
         assert_eq!(question["params"]["kind"], "restart");
@@ -215,7 +243,7 @@ impl Replay {
                 .wait_exit(Duration::from_secs(20))
                 .expect("the daemon ends");
             assert!(status.success(), "{status}");
-            return;
+            return self.root;
         }
         let status = self
             .daemon
@@ -235,6 +263,7 @@ impl Replay {
             log.contains("Strict replay: every recorded call was made."),
             "{log}"
         );
+        self.root
     }
 }
 
@@ -523,7 +552,39 @@ async fn usb_programs_run_stop_and_status_replay_strictly() {
         return;
     }
     let mut run = Replay::start("usb-programs-ccc").await;
-    connect_usb_and_check_folder(&mut run).await;
+    programs_run_stop_and_status(&mut run, 0).await;
+    let root = run.end().await;
+    let runs: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.channel_dir("t").join("runs.json")).expect("runs.json"),
+    )
+    .expect("json");
+    assert_eq!(runs["bricks"][CCC_ID], 1, "{runs}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_daemon_counts_run_seq_on_from_the_runs_json_the_previous_one_left() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let left = format!("{{\"bricks\":{{\"{CCC_ID}\":41,\"001653F00B0B\":7}}}}");
+    let mut run = Replay::start_seeded("usb-programs-ccc", &[("runs.json", left)]).await;
+    programs_run_stop_and_status(&mut run, 41).await;
+    let root = run.end().await;
+    let runs: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.channel_dir("t").join("runs.json")).expect("runs.json"),
+    )
+    .expect("json");
+    assert_eq!(
+        runs["bricks"],
+        json!({CCC_ID: 42, "001653F00B0B": 7}),
+        "the next daemon counts on from 42, and other bricks keep theirs"
+    );
+}
+
+/// The `usb-programs-ccc` scenario: a program written, started, stopped and its state read, on a
+/// brick whose last start before this daemon was `before`.
+async fn programs_run_stop_and_status(run: &mut Replay, before: u64) {
+    connect_usb_and_check_folder(run).await;
     let program = format!("{DIR}/Wait.rbf");
     run.call("files/makeDirectory", json!({"brick": CCC, "path": DIR}))
         .await;
@@ -535,16 +596,16 @@ async fn usb_programs_run_stop_and_status_replay_strictly() {
         .await;
     assert_eq!(written, json!({"bytes": 36}));
     let subscription = run.call("programs/subscribe", json!({"brick": CCC})).await;
-    assert_eq!(subscription["state"]["runSeq"], 0);
+    assert_eq!(subscription["state"]["runSeq"], before);
     let started = run
         .call("programs/run", json!({"brick": CCC, "path": program}))
         .await;
     assert_eq!(started["outcome"], "started", "{started}");
-    assert_eq!(started["runSeq"], 1);
+    assert_eq!(started["runSeq"], before + 1);
     assert_eq!(started["uploaded"], json!([]));
     let stopped = run.call("programs/stop", json!({"brick": CCC})).await;
     assert_eq!(stopped["running"], false, "{stopped}");
-    assert_eq!(stopped["runSeq"], 1);
+    assert_eq!(stopped["runSeq"], before + 1);
     assert_eq!(stopped["stoppedBy"], CLIENT);
     let status = run.call("programs/status", json!({"brick": CCC})).await;
     assert_eq!(status, stopped);
@@ -553,7 +614,10 @@ async fn usb_programs_run_stop_and_status_replay_strictly() {
         .await;
     assert_eq!(
         states(&heard),
-        [(1, true, None), (1, false, Some(CLIENT.to_string()))],
+        [
+            (before + 1, true, None),
+            (before + 1, false, Some(CLIENT.to_string()))
+        ],
         "{heard:?}"
     );
     run.call(
@@ -567,7 +631,6 @@ async fn usb_programs_run_stop_and_status_replay_strictly() {
     )
     .await;
     run.call("bricks/disconnect", json!({"brick": CCC})).await;
-    run.end().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

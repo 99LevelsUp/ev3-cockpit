@@ -55,11 +55,12 @@ impl Surface {
     }
 
     fn program_state(&self, brick_id: &str, running: bool) -> ProgramState {
+        let run_seq = self.runs.last(brick_id);
         let state = self.lock();
         ProgramState {
             brick_id: brick_id.to_owned(),
             running,
-            run_seq: state.run_seq.get(brick_id).copied().unwrap_or(0),
+            run_seq,
             stopped_by: if running {
                 None
             } else {
@@ -68,12 +69,15 @@ impl Surface {
         }
     }
 
+    /// The next start's number on the brick, written to `runs.json` before the start is sent, so
+    /// a daemon that replaces this one never hands out a number already used.
     fn next_run(&self, brick_id: &str) -> u64 {
-        let mut state = self.lock();
-        state.stopped_by.remove(brick_id);
-        let seq = state.run_seq.entry(brick_id.to_owned()).or_insert(0);
-        *seq += 1;
-        *seq
+        self.lock().stopped_by.remove(brick_id);
+        let (seq, written) = self.runs.next(brick_id);
+        if let Err(warning) = written {
+            self.shared.log.warn(&warning);
+        }
+        seq
     }
 
     pub async fn programs_deploy_and_run(
