@@ -1433,6 +1433,37 @@ fn a_connect_the_brick_never_answered_is_unreachable_and_carries_its_code() {
 }
 
 #[test]
+fn a_failed_connect_says_what_helped_on_hardware() {
+    // A brick that did not answer: on with Bluetooth visible, and Wi-Fi off on a shared card.
+    let silent = ConnectFailure::from_code(10060).into_error(AAA);
+    assert!(
+        silent.message.contains("switching Wi-Fi off"),
+        "{}",
+        silent.message
+    );
+    // One that could not be reached at all: a pairing the brick no longer knows.
+    let unreachable = ConnectFailure::from_code(10051).into_error(AAA);
+    assert!(
+        unreachable.message.contains("WSA error 10051"),
+        "{}",
+        unreachable.message
+    );
+    assert!(
+        unreachable.message.contains("ev3 forget"),
+        "{}",
+        unreachable.message
+    );
+    assert!(
+        unreachable.message.contains("ev3 pair"),
+        "{}",
+        unreachable.message
+    );
+    // Any other refusal makes no such claim.
+    let refused = ConnectFailure::from_code(10061).into_error(AAA);
+    assert!(!refused.message.contains("Wi-Fi") && !refused.message.contains("ev3 forget"));
+}
+
+#[test]
 fn the_bluetooth_socket_address_is_packed_to_30_bytes() {
     use windows_sys::Win32::Devices::Bluetooth::SOCKADDR_BTH;
     assert_eq!(std::mem::size_of::<SOCKADDR_BTH>(), 30);
