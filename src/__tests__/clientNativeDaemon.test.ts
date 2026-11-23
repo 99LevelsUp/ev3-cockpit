@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { ContractError } from '../client/connection';
-import { NativeCockpitClient, NativeCockpitClientOptions } from '../client/nativeClient';
+import { CockpitClient, CockpitClientOptions } from '../client/nativeClient';
 import { ensureNativeDaemon } from '../client/nativeDaemon';
 import {
 	DaemonStartError, LaunchHost, SpawnedDaemon, daemonBinaryName, installedNativeLaunch, systemLaunchHost,
@@ -25,7 +25,7 @@ import { NATIVE_DAEMON_VERSION, NativeTestChannel, nativeBinaryMissing, nativeLa
 
 const homes: string[] = [];
 const channels: NativeTestChannel[] = [];
-const clients: NativeCockpitClient[] = [];
+const clients: CockpitClient[] = [];
 after(async () => {
 	for (const client of clients) { client.dispose(); }
 	for (const channel of channels) { await channel.stop(); }
@@ -45,8 +45,8 @@ function testChannel(): NativeTestChannel {
 	return channel;
 }
 
-async function connect(options: NativeCockpitClientOptions, notices: string[] = []): Promise<NativeCockpitClient> {
-	const client = await NativeCockpitClient.connect(options, (text) => notices.push(text));
+async function connect(options: CockpitClientOptions, notices: string[] = []): Promise<CockpitClient> {
+	const client = await CockpitClient.connect(options, (text) => notices.push(text));
 	clients.push(client);
 	return client;
 }

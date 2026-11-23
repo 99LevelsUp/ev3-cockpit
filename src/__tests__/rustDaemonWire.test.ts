@@ -20,7 +20,7 @@ import { openNativeChannel, readChannelRecord } from '../client/channel';
 import { ContractError, createEndpoint } from '../client/connection';
 import { NativeClientIdentity, connectNativeDaemon } from '../client/hello';
 import { NativeChannelFiles, nativeChannelFiles } from '../client/locate';
-import { newNonce } from '../contract/hello';
+import { newNonce } from '../client/proofs';
 import { CONTRACT_VERSION } from '../contract/generated';
 import type {
 	AccessModeState, BrickList, ChannelRecord, ContractBrick, DaemonStatus, HelloChallenge, Question, SettingList, SettingValue,

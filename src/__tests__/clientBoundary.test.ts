@@ -1,10 +1,10 @@
 /**
- * The core runs without VS Code.
+ * The client library and the contract run without VS Code.
  *
- * Everything under src/core must load in plain Node, where a daemon or a command-line tool will run
- * it, so it may depend neither on the `vscode` module nor on anything under src/vscode. The lint
- * rule for src/core says the same; this test also catches what lint cannot see once the code is
- * compiled, and proves the entry points load in a process with no `vscode` at all.
+ * Add-ons, the `ev3` command and MCP servers load src/client and src/contract in plain Node, so they
+ * may depend neither on the `vscode` module nor on anything under src/vscode. The lint rule for them
+ * says the same; this test also catches what lint cannot see once the code is compiled, and proves
+ * the library loads in a process with no `vscode` at all.
  */
 
 import assert from 'node:assert/strict';
@@ -15,11 +15,10 @@ import { describe, it } from 'node:test';
 import * as ts from 'typescript';
 
 const REPO = path.resolve(__dirname, '..', '..');
-const CORE_SRC = path.join(REPO, 'src', 'core');
-/** The contract add-ons import: it may no more depend on VS Code than the core does. */
+const CLIENT_SRC = path.join(REPO, 'src', 'client');
 const CONTRACT_SRC = path.join(REPO, 'src', 'contract');
 const VSCODE_SRC = path.join(REPO, 'src', 'vscode');
-const CORE_OUT = path.join(REPO, 'out', 'core');
+const CLIENT_OUT = path.join(REPO, 'out', 'client');
 
 function filesUnder(dir: string, extension: string): string[] {
 	const found: string[] = [];
@@ -72,31 +71,31 @@ function crossing(file: string, specifier: string): string | undefined {
 	return undefined;
 }
 
-describe('the core runs without VS Code', () => {
-	it('no core source names the vscode module or a module under src/vscode', () => {
+describe('the client library runs without VS Code', () => {
+	it('no client or contract source names the vscode module or a module under src/vscode', () => {
 		const offences: string[] = [];
 		let scanned = 0;
-		for (const file of [...filesUnder(CORE_SRC, '.ts'), ...filesUnder(CONTRACT_SRC, '.ts')]) {
+		for (const file of [...filesUnder(CLIENT_SRC, '.ts'), ...filesUnder(CONTRACT_SRC, '.ts')]) {
 			for (const specifier of specifiersOf(file, fs.readFileSync(file, 'utf8'))) {
 				scanned += 1;
 				const why = crossing(file, specifier);
 				if (why) { offences.push(`${path.relative(REPO, file)}: '${specifier}' (${why})`); }
 			}
 		}
-		// The core has hundreds of imports: a scan that found almost none would prove nothing.
-		assert.ok(scanned > 300, `only ${scanned} module specifiers found in the core`);
+		// The library has dozens of imports: a scan that found almost none would prove nothing.
+		assert.ok(scanned > 60, `only ${scanned} module specifiers found in the library`);
 		assert.deepEqual(offences, []);
 	});
 
-	it('no compiled core module requires vscode', () => {
-		const offences = filesUnder(CORE_OUT, '.js')
+	it('no compiled library module requires vscode', () => {
+		const offences = filesUnder(CLIENT_OUT, '.js')
 			.filter((file) => specifiersOf(file, fs.readFileSync(file, 'utf8')).some((s) => crossing(file, s) === 'the vscode module'))
 			.map((file) => path.relative(REPO, file));
 		assert.deepEqual(offences, []);
 	});
 
-	it('the core entry points load in a fresh Node process that has no vscode module', () => {
-		const entries = ['runtime/index', 'transports/index', 'api/cockpitApi'].map((e) => path.join(CORE_OUT, e));
+	it('the library loads in a fresh Node process that has no vscode module', () => {
+		const entries = ['index'].map((e) => path.join(CLIENT_OUT, e));
 		const script = `for (const e of ${JSON.stringify(entries)}) { require(e); } process.stdout.write('loaded');`;
 		const env = { ...process.env };
 		delete env.NODE_OPTIONS;

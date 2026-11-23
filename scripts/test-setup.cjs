@@ -28,16 +28,13 @@ if (process.env.NODE_TEST_CONTEXT) {
 	const keepAlive = setInterval(() => {}, 1 << 30);
 	after(() => clearInterval(keepAlive));
 
-	// The core's events, like VS Code's, never let a listener's error reach the code that fired: in
-	// production it goes to the console. Here it fails the running test instead, so an assertion
+	// The extension's events, like VS Code's, never let a listener's error reach the code that fired:
+	// in production it goes to the console. Here it fails the running test instead, so an assertion
 	// inside a listener still guards its test. A test that expects a listener to throw installs its
 	// own handler for the duration.
-	// The extension carries its own copy of the emitter; its listeners are held to the same rule.
 	const listenerErrors = [];
-	for (const events of [['core', 'events'], ['vscode', 'events']]) {
-		const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', ...events));
-		setListenerErrorHandler((error) => listenerErrors.push(error));
-	}
+	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'vscode', 'events'));
+	setListenerErrorHandler((error) => listenerErrors.push(error));
 	afterEach(() => {
 		const errors = listenerErrors.splice(0);
 		if (errors.length > 0) {

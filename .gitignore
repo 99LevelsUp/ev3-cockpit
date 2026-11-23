@@ -26,11 +26,6 @@ CLAUDE.md
 /ev3-resources
 
 # The Bluetooth pairing helper's build output. The C# source under
-# native/bt-pairing-helper/ is committed; everything the toolchain generates from it is not.
-# `npm run build:helper` regenerates native/bin/, and `npm run package` does it for you.
-/native/bin/
-/native/bt-pairing-helper/bin/
-/native/bt-pairing-helper/obj/
 
 # Playwright
 /test-results/
@@ -38,8 +33,6 @@ CLAUDE.md
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
-# Built from Bench.lms with the firmware's assembler
-scripts/bench/*.rbf
 
 # Platform VSIX builds (scripts/package-vsix.cjs): the staging folders and the packages.
 /.vsix-staging/

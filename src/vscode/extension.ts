@@ -13,7 +13,7 @@
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { developmentDaemon, packagedDaemon } from '../client/nativeLaunch';
 import type { ContractBrick, LaunchSpec, Requester } from '../contract/generated';
 import { CockpitStart, DaemonBridge, startFailureMessage } from './daemonBridge';
@@ -65,7 +65,7 @@ function daemonFor(context: vscode.ExtensionContext): DaemonChoice {
 }
 
 interface Cockpit {
-	readonly client: NativeCockpitClient;
+	readonly client: CockpitClient;
 	readonly bridge: DaemonBridge;
 }
 
@@ -98,7 +98,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const start = new CockpitStart<Cockpit>(async () => {
 		const choice = daemonFor(context);
-		const client = await NativeCockpitClient.connect({
+		const client = await CockpitClient.connect({
 			name: me.name, kind: 'vscode', version, daemon: choice.daemon,
 			...(choice.channel ? { channel: choice.channel } : {}),
 			...(choice.daemonArgs ? { daemonArgs: choice.daemonArgs } : {}),

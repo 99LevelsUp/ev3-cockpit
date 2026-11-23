@@ -6,7 +6,7 @@
  * aside once it is idle. An add-on carries no daemon and compares only the contract version.
  */
 
-import type { ClientKind } from '../contract/models';
+import type { ClientKind } from '../contract/generated';
 
 /** Compares dotted versions numerically: negative when `a` is older. */
 export function compareVersions(a: string, b: string): number {

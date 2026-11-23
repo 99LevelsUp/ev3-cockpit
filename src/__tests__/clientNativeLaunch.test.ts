@@ -16,14 +16,14 @@ import { after, describe, it } from 'node:test';
 import type { NativeChannelHost } from '../client/channel';
 import { ContractError, createEndpoint } from '../client/connection';
 import { nativeChannelFiles } from '../client/locate';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { LaunchingClient, askToExit, decideOnDaemon, ensureNativeDaemon } from '../client/nativeDaemon';
 import {
 	DAEMON_MANIFEST, DaemonStartError, LaunchHost, SpawnOutcome, checkPrivateDir, daemonBinaryName, developmentDaemon,
 	ensurePrivateDir, installedNativeLaunch, nativeInstallFile, othersInSddl, packagedDaemon, readLaunchSpec, recordNativeInstall,
 	removeOldCopies, systemLaunchHost, verifiedCopy,
 } from '../client/nativeLaunch';
-import { daemonProof, newNonce } from '../contract/hello';
+import { daemonProof, newNonce } from '../client/proofs';
 import { CONTRACT_VERSION } from '../contract/generated';
 import type { BuildKind, DaemonExitResult, HelloAccepted, HelloStart, LaunchSpec } from '../contract/generated';
 import { duplexPair } from './duplexPair';
@@ -550,7 +550,7 @@ describe('a client whose first requests fail', () => {
 				return Promise.resolve(a as Duplex);
 			},
 		};
-		await assert.rejects(NativeCockpitClient.connect({
+		await assert.rejects(CockpitClient.connect({
 			name: 'ev3 list (terminal)', kind: 'vscode', version: '1.0.0', buildKind: 'release', daemon: fakePackage().launch,
 			stateRoot: root, channel: 'first', host: fakeHost(undefined, 0), channelHost,
 			keyHost: { readFile: () => key, sleep: () => Promise.resolve() },
@@ -620,7 +620,7 @@ describe('a subscription whose first change comes before its answer', () => {
 				return Promise.resolve(a as Duplex);
 			},
 		};
-		const client = await NativeCockpitClient.connect({
+		const client = await CockpitClient.connect({
 			name: 'test', kind: 'vscode', version: '1.0.0', buildKind: 'release', daemon: fakePackage().launch,
 			stateRoot: root, channel: 'early', host: fakeHost(undefined, 0), channelHost,
 			keyHost: { readFile: () => key, sleep: () => Promise.resolve() }, reconnect: false,

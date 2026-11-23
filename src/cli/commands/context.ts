@@ -3,7 +3,7 @@
  * only when the command needs one.
  */
 
-import type { NativeCockpitClient } from '../../client/nativeClient';
+import type { CockpitClient } from '../../client/nativeClient';
 import type { BrickHolder } from '../../contract/generated';
 import type { Confirmer } from '../confirm';
 import { CommandResult, CliIo, UsageError } from '../output';
@@ -21,9 +21,9 @@ export interface CommandContext {
 	readonly flags: ReadonlySet<string>;
 	readonly confirmer: Confirmer;
 	/** Connects on first use, starting the daemon when none runs. */
-	client(): Promise<NativeCockpitClient>;
+	client(): Promise<CockpitClient>;
 	/** Connects again after the daemon went, starting it when no other client did. */
-	reconnect(): Promise<NativeCockpitClient>;
+	reconnect(): Promise<CockpitClient>;
 }
 
 export interface Command {
@@ -60,7 +60,7 @@ export function brickRef(ctx: CommandContext, index?: number): string | undefine
  * a held brick connects only for its own run, and the daemon lets go when the command ends. With no
  * brick named, the one connected brick is meant.
  */
-export async function connectedBrick(ctx: CommandContext, ref: string | undefined): Promise<{ client: NativeCockpitClient; brickId: string; name: string }> {
+export async function connectedBrick(ctx: CommandContext, ref: string | undefined): Promise<{ client: CockpitClient; brickId: string; name: string }> {
 	const client = await ctx.client();
 	const brick = await client.request('bricks/connect', ref === undefined ? {} : { brick: ref });
 	return { client, brickId: brick.brickId, name: brick.name };
@@ -71,7 +71,7 @@ export async function connectedBrick(ctx: CommandContext, ref: string | undefine
  * stopped as it is, without signing it in again, which a forget or a list clearing in progress
  * would refuse. Only a brick not connected at all is connected for the stop.
  */
-export async function stopTarget(ctx: CommandContext, ref: string | undefined): Promise<{ client: NativeCockpitClient; brick: string | undefined; name: string }> {
+export async function stopTarget(ctx: CommandContext, ref: string | undefined): Promise<{ client: CockpitClient; brick: string | undefined; name: string }> {
 	const client = await ctx.client();
 	if (ref === undefined) { return { client, brick: undefined, name: 'the brick' }; }
 	const known = client.brick(ref);

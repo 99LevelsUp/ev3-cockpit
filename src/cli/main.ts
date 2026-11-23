@@ -9,7 +9,7 @@
  * on PATH.
  */
 
-import { NativeCockpitClient, NativeCockpitClientOptions } from '../client/nativeClient';
+import { CockpitClient, CockpitClientOptions } from '../client/nativeClient';
 import { nativeStateRoot } from '../client/locate';
 import { findAddon, runAddon } from './addons';
 import { brickCommands } from './commands/bricks';
@@ -97,7 +97,7 @@ function helpText(): string[] {
 /** What a test may set: the installation, and options for the daemon client (a replay daemon of its own). */
 export interface RunOptions {
 	readonly installation?: Installation;
-	readonly client?: Partial<NativeCockpitClientOptions>;
+	readonly client?: Partial<CockpitClientOptions>;
 }
 
 /** Runs one command line and resolves the exit code. */
@@ -136,9 +136,9 @@ export async function run(argv: readonly string[], io: CliIo, options: RunOption
 	const channel = install.channel(io.env);
 	const name = `ev3 ${parsed.command} (terminal)`;
 	const confirmer = new Confirmer({ input: io.stdin, output: io.stderr, isTTY: io.isTTY }, json, name);
-	let client: NativeCockpitClient | undefined;
-	const open = async (): Promise<NativeCockpitClient> => {
-		const opened = await NativeCockpitClient.connect({
+	let client: CockpitClient | undefined;
+	const open = async (): Promise<CockpitClient> => {
+		const opened = await CockpitClient.connect({
 			name,
 			kind: 'cli',
 			version: install.version,

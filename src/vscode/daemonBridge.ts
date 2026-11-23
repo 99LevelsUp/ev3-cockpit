@@ -12,7 +12,7 @@
  * never answered that way; it goes to `askPerson`, like every other question.
  */
 
-import type { NativeCockpitClient, QuestionContext } from '../client/nativeClient';
+import type { CockpitClient, QuestionContext } from '../client/nativeClient';
 import type {
 	ClearListReport, ContractBrick, ForgetResult, OneSidedRepair, PairingProgress, PairingResult, Question, QuestionAnswer,
 	QuestionReply, Requester, SettingScalar, SettingValue,
@@ -23,7 +23,7 @@ import { errorCode } from './ui/commandTypes';
 import type { PairingStartedEvent } from './ui/connectBrick';
 
 /** The part of the client the bridge uses. */
-export type BridgeClient = Pick<NativeCockpitClient,
+export type BridgeClient = Pick<CockpitClient,
 	'bricks' | 'settings' | 'request' | 'on' | 'onBricksChanged' | 'onReconnected' | 'onQuestion' | 'setActiveBrick'>;
 
 /** A pairing found broken on one side, and whether the daemon is pairing the brick again. */

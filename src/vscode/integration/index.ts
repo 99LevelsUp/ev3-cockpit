@@ -11,7 +11,7 @@
 import * as assert from 'assert/strict';
 import * as vscode from 'vscode';
 import { daemonRefusesThisProcess } from '../../__tests__/elevation';
-import { NativeCockpitClient } from '../../client/nativeClient';
+import { CockpitClient } from '../../client/nativeClient';
 import { observeEmitter } from '../../test/emitterScenarios';
 import { EventEmitter, setListenerErrorHandler } from '../events';
 
@@ -89,10 +89,10 @@ const tests: IntegrationTest[] = [
 			await ext.activate();
 			// The test host's channel, as the extension names it; this suite runs in the same process.
 			// The extension starts the daemon as it activates; an add-on carries none, so it waits for it.
-			let client: NativeCockpitClient | undefined;
+			let client: CockpitClient | undefined;
 			for (const until = Date.now() + 30_000; !client;) {
 				try {
-					client = await NativeCockpitClient.connect({ name: 'integration test', kind: 'addon', version: '0.0.0', channel: `test-${process.pid}`, reconnect: false });
+					client = await CockpitClient.connect({ name: 'integration test', kind: 'addon', version: '0.0.0', channel: `test-${process.pid}`, reconnect: false });
 				} catch (error) {
 					if (Date.now() > until) { throw error; }
 					await new Promise((resolve) => setTimeout(resolve, 250));

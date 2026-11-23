@@ -10,7 +10,7 @@
 
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { nativeStateRoot } from '../client/locate';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { installation } from '../cli/installation';
 import { CockpitMcp } from './tools';
 
@@ -19,7 +19,7 @@ function main(): void {
 	const channel = install.channel(process.env);
 	const cockpit = new CockpitMcp({
 		version: install.version,
-		connect: (clientName, onNotice) => NativeCockpitClient.connect({
+		connect: (clientName, onNotice) => CockpitClient.connect({
 			name: clientName,
 			kind: 'mcp',
 			version: install.version,

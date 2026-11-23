@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { classifyStartFailure, systemLaunchHost } from '../client/nativeLaunch';
 import type { LaunchHost } from '../client/nativeLaunch';
 import type { ContractBrick, Notifications, Question, QuestionReply, Requester } from '../contract/generated';
@@ -26,7 +26,7 @@ import { waitFor } from './waitFor';
 
 const home = privateHome();
 const channels: NativeTestChannel[] = [];
-const clients: NativeCockpitClient[] = [];
+const clients: CockpitClient[] = [];
 after(async () => {
 	for (const c of clients.splice(0)) { c.dispose(); }
 	for (const c of channels.splice(0)) { await c.stop(); }
@@ -39,7 +39,7 @@ const WINDOW: Requester = { name: 'VS Code (test window)', kind: 'vscode' };
 async function windowOnDaemon(choose: (actions: string[]) => string | undefined = () => undefined) {
 	const channel = nativeTestChannel(home);
 	channels.push(channel);
-	const client = await NativeCockpitClient.connect(channel.client('vscode', 'development', { name: WINDOW.name }));
+	const client = await CockpitClient.connect(channel.client('vscode', 'development', { name: WINDOW.name }));
 	clients.push(client);
 	const asked: Question[] = [];
 	const shown: string[] = [];
@@ -53,8 +53,8 @@ async function windowOnDaemon(choose: (actions: string[]) => string | undefined 
 			}, WINDOW);
 		},
 	});
-	const agent = async (): Promise<NativeCockpitClient> => {
-		const c = await NativeCockpitClient.connect({ ...channel.client('mcp', 'development', { name: 'an agent' }), reconnect: false });
+	const agent = async (): Promise<CockpitClient> => {
+		const c = await CockpitClient.connect({ ...channel.client('mcp', 'development', { name: 'an agent' }), reconnect: false });
 		clients.push(c);
 		return c;
 	};
@@ -252,7 +252,7 @@ describe('starting the daemon', { skip: daemonRefusesThisProcess }, () => {
 			},
 		};
 		const shown: string[] = [];
-		const start = new CockpitStart(() => NativeCockpitClient.connect({ ...channel.client('vscode', 'development'), host }), (message) => shown.push(message));
+		const start = new CockpitStart(() => CockpitClient.connect({ ...channel.client('vscode', 'development'), host }), (message) => shown.push(message));
 		for (let attempt = 0; attempt < 3; attempt++) {
 			await assert.rejects(start.ready());
 		}

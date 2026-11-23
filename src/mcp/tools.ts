@@ -33,14 +33,14 @@ import type { CallToolResult, ClientCapabilities, InputRequiredResult, ServerCon
 import { z } from 'zod';
 import { ContractError } from '../client/connection';
 import type { RequestOptions } from '../client/connection';
-import type { NativeCockpitClient } from '../client/nativeClient';
+import type { CockpitClient } from '../client/nativeClient';
 import { DaemonStartError } from '../client/nativeLaunch';
 import { readTelemetryOnce, valueLine } from '../client/telemetryReading';
 import { WireErrorCode } from '../contract/errors';
 import type { BrickHolder, DeployResult } from '../contract/generated';
 
 /** What the server needs of the client library. */
-export type CockpitConnection = Pick<NativeCockpitClient, 'request' | 'subscribeTelemetry' | 'onNotice' | 'onLost' | 'dispose' | 'daemon'>;
+export type CockpitConnection = Pick<CockpitClient, 'request' | 'subscribeTelemetry' | 'onNotice' | 'onLost' | 'dispose' | 'daemon'>;
 
 /** How this server introduces itself when its MCP client gave no usable name. */
 export const MCP_CLIENT_NAME = 'EVƎ Cockpit MCP (agent)';

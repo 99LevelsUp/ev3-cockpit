@@ -15,7 +15,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { after, describe, it } from 'node:test';
 import * as ts from 'typescript';
-import { clientProof, daemonProof } from '../contract/hello';
+import { clientProof, daemonProof } from '../client/proofs';
 import {
 	CONTRACT_VERSION, ERROR_FAMILY, METHODS, SETTING_SPECS, readBuildKind, readClientKind, readDaemonMode, readDaemonState,
 } from '../contract/generated';

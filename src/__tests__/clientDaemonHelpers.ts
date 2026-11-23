@@ -8,13 +8,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { LaunchSpec } from '../contract/models';
 import type { BuildKind, ClientKind, LaunchSpec as GeneratedLaunchSpec } from '../contract/generated';
 import { readChannelRecord } from '../client/channel';
-import { NativeChannelFiles, clientPaths, nativeChannelFiles, nativeStateRoot } from '../client/locate';
-import type { NativeCockpitClientOptions } from '../client/nativeClient';
+import { NativeChannelFiles, nativeChannelFiles, nativeStateRoot } from '../client/locate';
+import type { CockpitClientOptions } from '../client/nativeClient';
 import { daemonBinaryName } from '../client/nativeLaunch';
-import type { DaemonPaths } from '../daemon/paths';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 
@@ -26,23 +24,6 @@ export function privateHome(): string {
 	process.env.HOME = home;
 	delete process.env.NODE_OPTIONS;
 	return home;
-}
-
-export interface TestDaemon {
-	readonly channel: string;
-	readonly paths: DaemonPaths;
-	readonly launch: LaunchSpec;
-	readonly launchArgs: readonly string[];
-}
-
-export function testDaemon(home: string, version = '0.0.1', graceMs = 3000): TestDaemon {
-	const channel = `t-${randomBytes(3).toString('hex')}`;
-	return {
-		channel,
-		paths: clientPaths({ channel, homedir: home }),
-		launch: { runtime: process.execPath, entry: path.join(REPO, 'out', 'daemon', 'main.js'), installRoot: REPO, version },
-		launchArgs: ['--channel', channel, '--simulated', '--grace-ms', String(graceMs)],
-	};
 }
 
 /** The pid of the daemon serving a channel, from its status. */
@@ -107,7 +88,7 @@ export interface NativeTestChannel {
 	readonly stateRoot: string;
 	readonly files: NativeChannelFiles;
 	/** Options for a client on this channel whose daemon replays `scenario`; a release one reports itself as release. */
-	client(kind: ClientKind, buildKind: BuildKind, extra?: Partial<NativeCockpitClientOptions> & { scenario?: string; version?: string }): NativeCockpitClientOptions;
+	client(kind: ClientKind, buildKind: BuildKind, extra?: Partial<CockpitClientOptions> & { scenario?: string; version?: string }): CockpitClientOptions;
 	/** Kills every daemon still serving this channel; the end of a test. */
 	stop(): Promise<void>;
 }

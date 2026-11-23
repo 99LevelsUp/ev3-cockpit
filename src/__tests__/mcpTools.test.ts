@@ -20,7 +20,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import type { ClientCapabilities } from '@modelcontextprotocol/client';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { ContractError } from '../client/connection';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { DaemonStartError } from '../client/nativeLaunch';
 import { WireErrorCode } from '../contract/errors';
 import type { DeployResult, Question } from '../contract/generated';
@@ -101,7 +101,7 @@ function onDaemon(channel: NativeTestChannel = freshChannel()) {
 		version: '0.0.1',
 		connect: (clientName, onNotice) => {
 			names.push(clientName);
-			return NativeCockpitClient.connect(channel.client('mcp', 'development', { name: clientName }), onNotice);
+			return CockpitClient.connect(channel.client('mcp', 'development', { name: clientName }), onNotice);
 		},
 	});
 	opened.push({ close: () => { cockpit.dispose(); return Promise.resolve(); } });
@@ -217,7 +217,7 @@ describe('the cockpit MCP server on the native daemon', { skip: nativeBinaryMiss
 
 	it('a forget puts the question to the person in VS Code, naming the MCP client, and their no stands', async () => {
 		const channel = freshChannel();
-		const window = await NativeCockpitClient.connect(channel.client('vscode', 'development', { name: 'VS Code (test)', reconnect: false }));
+		const window = await CockpitClient.connect(channel.client('vscode', 'development', { name: 'VS Code (test)', reconnect: false }));
 		opened.push({ close: () => { window.dispose(); return Promise.resolve(); } });
 		const asked: Question[] = [];
 		window.onQuestion((q) => { asked.push(q); return 'no'; });

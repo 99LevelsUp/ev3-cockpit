@@ -5,10 +5,10 @@
  */
 
 import type { TelemetryValue } from '../contract/generated';
-import type { NativeCockpitClient } from './nativeClient';
+import type { CockpitClient } from './nativeClient';
 
 /** What a reading needs of the client library. */
-export type TelemetryClient = Pick<NativeCockpitClient, 'request' | 'subscribeTelemetry'>;
+export type TelemetryClient = Pick<CockpitClient, 'request' | 'subscribeTelemetry'>;
 
 /** How often rows are read while a reading or a watch runs. */
 export const ON_DEMAND_INTERVAL_MS = 1000;

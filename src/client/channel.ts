@@ -28,11 +28,6 @@ export function channelFromEnv(env: NodeJS.ProcessEnv = process.env): string | u
 	return channel ? channel : undefined;
 }
 
-/** `dev` and `dev-<suffix>`: a development daemon, which borrows bricks from the user's daemon. */
-export function isDevelopmentChannel(channel: string | undefined): boolean {
-	return channel === 'dev' || (channel?.startsWith('dev-') ?? false);
-}
-
 /** The environment without a channel: what reaches the user's own daemon from inside a development one. */
 export function withoutChannel(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const copy = { ...env };

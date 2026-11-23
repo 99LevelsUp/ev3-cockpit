@@ -28,18 +28,18 @@
   },
   "overrides": [
     {
-      "files": ["src/core/**/*.ts"],
+      "files": ["src/client/**/*.ts", "src/contract/**/*.ts"],
       "rules": {
         "no-restricted-syntax": ["error",
-          { "selector": "ImportDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "ExportNamedDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "ExportAllDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "ImportExpression[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "CallExpression[callee.name='require'][arguments.0.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "TSImportType[argument.literal.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "TSExternalModuleReference[expression.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The core runs without VS Code: it may not depend on the vscode module or on src/vscode." },
-          { "selector": "CallExpression[callee.name='require'][arguments.0.type!='Literal']", "message": "In the core, require() takes a string literal, so where it reaches stays checkable." },
-          { "selector": "ImportExpression[source.type!='Literal']", "message": "In the core, import() takes a string literal, so where it reaches stays checkable." }
+          { "selector": "ImportDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "ExportNamedDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "ExportAllDeclaration[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "ImportExpression[source.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "CallExpression[callee.name='require'][arguments.0.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "TSImportType[argument.literal.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "TSExternalModuleReference[expression.value=/(^|\\x2F)vscode(\\x2F|$)/]", "message": "The client library and the contract run without VS Code: they may not depend on the vscode module or on src/vscode." },
+          { "selector": "CallExpression[callee.name='require'][arguments.0.type!='Literal']", "message": "In the client library, require() takes a string literal, so where it reaches stays checkable." },
+          { "selector": "ImportExpression[source.type!='Literal']", "message": "In the client library, import() takes a string literal, so where it reaches stays checkable." }
         ]
       }
     }

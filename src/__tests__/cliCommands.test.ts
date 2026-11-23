@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { DaemonStartError, StartFailure, developmentDaemon } from '../client/nativeLaunch';
 import { run } from '../cli/main';
 import type { Installation } from '../cli/installation';
@@ -131,7 +131,7 @@ describe('the ev3 command and a brick another client writes to', { skip: nativeB
 
 	it('exits 3 and names the holder when another client is writing to the brick', async () => {
 		// A forget holds the brick's write lease while it waits for the person's answer.
-		const holder = await NativeCockpitClient.connect(w.channel.client('vscode', 'development', { name: 'lease holder', reconnect: false }));
+		const holder = await CockpitClient.connect(w.channel.client('vscode', 'development', { name: 'lease holder', reconnect: false }));
 		let answer: ((a: 'no') => void) | undefined;
 		const asked = new Promise<Question>((resolveAsked) => {
 			holder.onQuestion((q) => { resolveAsked(q); return new Promise((resolve) => { answer = resolve; }); });

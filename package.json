@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.576",
+  "version": "0.2.579",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -76,8 +76,6 @@
     "contract:generate": "node scripts/generate-contract.cjs",
     "contract:check": "node scripts/generate-contract.cjs --check",
     "contract:snapshot": "node scripts/generate-contract.cjs --snapshot",
-    "build:helper": "dotnet publish native/bt-pairing-helper -c Release -o native/bin",
-    "build:helper:macos": "mkdir -p native/bin && swiftc -O -o native/bin/ev3-bt-helper native/macos/ev3-bt-helper.swift",
     "build:dev": "node scripts/bundle.cjs --sourcemap",
     "package": "npm run bundle",
     "bundle": "node scripts/bundle.cjs",

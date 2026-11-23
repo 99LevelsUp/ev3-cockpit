@@ -44,7 +44,7 @@ export interface QuestionContext {
 export type QuestionHandler = (question: Question, context: QuestionContext) =>
 	QuestionReply | QuestionAnswer | Promise<QuestionReply | QuestionAnswer>;
 
-export interface NativeCockpitClientOptions {
+export interface CockpitClientOptions {
 	/** Shown in the daemon's log, in other clients' `brick_busy` and in questions: say where this client runs. */
 	readonly name: string;
 	readonly kind: ClientKind;
@@ -105,7 +105,7 @@ function toReply(answer: QuestionReply | QuestionAnswer | undefined): QuestionRe
 	return answer.remember === undefined ? { answer: answer.answer } : { answer: answer.answer, remember: answer.remember };
 }
 
-export class NativeCockpitClient {
+export class CockpitClient {
 	private connection!: NativeDaemonConnection;
 	private disposed = false;
 	private brickList: ContractBrick[] = [];
@@ -139,11 +139,11 @@ export class NativeCockpitClient {
 	/** The daemon went and could not be reached again. */
 	readonly onLost = (listener: Listener<Error>): Disposable => this.lost.on(listener);
 
-	private constructor(private readonly options: NativeCockpitClientOptions) {}
+	private constructor(private readonly options: CockpitClientOptions) {}
 
 	/** Connects, starting or replacing the daemon as needed; a start failure is a `DaemonStartError`. */
-	static async connect(options: NativeCockpitClientOptions, onNotice?: Listener<string>): Promise<NativeCockpitClient> {
-		const client = new NativeCockpitClient(options);
+	static async connect(options: CockpitClientOptions, onNotice?: Listener<string>): Promise<CockpitClient> {
+		const client = new CockpitClient(options);
 		if (onNotice) { client.onNotice(onNotice); }
 		try {
 			await client.open(0);

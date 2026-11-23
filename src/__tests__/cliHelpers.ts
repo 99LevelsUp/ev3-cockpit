@@ -8,62 +8,20 @@
  */
 
 import { spawn } from 'node:child_process';
-import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { CockpitClient } from '../client';
-import { NativeCockpitClient } from '../client/nativeClient';
+import { CockpitClient } from '../client/nativeClient';
 import { RunOptions, run } from '../cli/main';
 import type { CliIo } from '../cli/output';
-import { NativeTestChannel, REPO, TestDaemon, nativeTestChannel, testDaemon } from './clientDaemonHelpers';
+import { NativeTestChannel, REPO, nativeTestChannel } from './clientDaemonHelpers';
 
 export const CLI = path.join(REPO, 'out', 'cli', 'main.js');
-
-function mockBrick(id: string, peers: string[]): Record<string, unknown> {
-	return {
-		id, displayName: id, firmwareVersion: 'V1.10E', battery: { level: 80, voltage: 7.5 },
-		motorPorts: [], sensorPorts: [], bluetoothPeers: peers,
-		filesystem: [{ path: '/home/root/lms2012/prjs/Demo/Demo.rbf', content: '' }],
-	};
-}
-
-export interface CliWorld {
-	readonly daemon: TestDaemon;
-	/** A client of the test's own that keeps the daemon running. */
-	readonly observer: CockpitClient;
-	readonly env: NodeJS.ProcessEnv;
-	done(): Promise<void>;
-}
-
-export async function cliWorld(home: string): Promise<CliWorld> {
-	const workspace = fs.mkdtempSync(path.join(home, 'ws-'));
-	fs.mkdirSync(path.join(workspace, '.vscode'));
-	fs.writeFileSync(path.join(workspace, '.vscode', 'ev3-cockpit-mock.json'), JSON.stringify({
-		transport: 'mock',
-		bricks: [mockBrick('CCC', ['HOSTA', 'HOSTB']), mockBrick('BBB', ['HOSTA'])],
-	}));
-	const base = testDaemon(home, '0.0.1', 1000);
-	const daemon = { ...base, launchArgs: [...base.launchArgs, '--mock-workspace', workspace] };
-	const observer = await CockpitClient.connect({
-		name: 'test observer', kind: 'vscode', version: '0.0.1', paths: daemon.paths, launch: daemon.launch, launchArgs: daemon.launchArgs,
-	});
-	const env = { ...process.env, EV3_COCKPIT_CHANNEL: daemon.channel };
-	return {
-		daemon, observer, env,
-		done: async () => {
-			for (const brick of await observer.request('bricks/list', {})) {
-				if (brick.connected) { await observer.request('bricks/disconnect', { brick: brick.brickId, forEveryone: true }).catch(() => undefined); }
-			}
-			observer.dispose();
-		},
-	};
-}
 
 export interface NativeCliWorld {
 	readonly channel: NativeTestChannel;
 	/** A VS Code-kind client of the test's own that keeps the native daemon running. */
-	readonly observer: NativeCockpitClient;
+	readonly observer: CockpitClient;
 	/** The environment for `ev3` as its own process: the test channel and the home whose state root holds it. */
 	readonly env: NodeJS.ProcessEnv;
 	done(): Promise<void>;
@@ -76,7 +34,7 @@ export interface NativeCliWorld {
  */
 export async function nativeCliWorld(home: string, scenario = 'usb-connect-commands-aaa'): Promise<NativeCliWorld> {
 	const channel = nativeTestChannel(home);
-	const observer = await NativeCockpitClient.connect(channel.client('vscode', 'development', { name: 'test observer', scenario }));
+	const observer = await CockpitClient.connect(channel.client('vscode', 'development', { name: 'test observer', scenario }));
 	observer.onQuestion(() => 'keep');
 	return {
 		channel, observer,

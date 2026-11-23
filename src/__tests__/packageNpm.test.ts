@@ -119,7 +119,7 @@ describe('npm packages', () => {
 		const client = read(path.join(staged.client, 'package.json'));
 		assert.ok(client.main && fs.existsSync(path.join(staged.client, client.main)), 'main');
 		assert.ok(client.types && fs.existsSync(path.join(staged.client, client.types)), 'types');
-		assert.ok(fs.existsSync(path.join(staged.client, 'contract', 'index.d.ts')), 'the contract, typed');
+		assert.ok(fs.existsSync(path.join(staged.client, 'contract', 'generated', 'index.d.ts')), 'the contract, typed');
 		const declared = { ...client.dependencies, ...client.optionalDependencies, ...client.peerDependencies };
 		for (const native of packaging.NATIVE_MODULES) { assert.ok(!(native in declared), `declares ${native}`); }
 		// What its code requires, not only what its manifest says.

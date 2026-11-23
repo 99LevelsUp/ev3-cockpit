@@ -16,7 +16,7 @@ import { NativeChannelHost, openNativeChannel, readChannelRecord } from '../clie
 import { createEndpoint } from '../client/connection';
 import { KEY_READ_ATTEMPTS, KeyUnreadableError, NativeClientIdentity, connectNativeDaemon, readNativeKey } from '../client/hello';
 import { NativeChannelFiles, nativeChannelFiles, nativeStateRoot } from '../client/locate';
-import { clientProof, daemonProof } from '../contract/hello';
+import { clientProof, daemonProof } from '../client/proofs';
 import { CONTRACT_VERSION } from '../contract/generated';
 import type { HelloAccepted, HelloStart } from '../contract/generated';
 import { duplexPair } from './duplexPair';
