@@ -9,6 +9,7 @@
 //! - [`launch`]: the verified copy of a daemon binary and its start.
 
 pub mod client;
+pub mod cockpit;
 pub mod connect;
 pub mod endpoint;
 pub mod ensure;
@@ -17,6 +18,7 @@ pub mod events;
 pub mod launch;
 
 pub use client::{Client, ClientOptions, Launch};
+pub use cockpit::{Cockpit, CockpitEvent, CockpitOptions, CockpitPrograms};
 pub use ev3_channel::paths::Paths;
 pub use events::{Events, ProgramStates};
 

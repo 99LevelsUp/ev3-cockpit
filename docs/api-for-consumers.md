@@ -452,9 +452,14 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
 - Rust 1.100.0 (the repository's `rust-toolchain.toml`), edition 2024, tokio 1 with `rt`, `net`,
   `io-util`, `sync`, `time` and `macros`; no transport is linked. The static C runtime this
   repository sets in `daemon/.cargo/config.toml` does not reach a consumer: set it in your own.
-- The reconnect after a daemon replacement, with the client's own bricks connected again and its
-  subscriptions renewed, follows (as the TypeScript client has it); until then, a Rust client
-  connects again itself and subscribes again.
+- **Outliving the daemon:** `Cockpit` (with `CockpitOptions`, owned) is the client an add-on
+  keeps for a long time, as the TypeScript `CockpitClient`: when the connection closes it
+  connects again by itself, starting the daemon its `Launch` names; the bricks it connected
+  without a hold are connected again and every `subscribe_programs` is renewed, its reader getting
+  the fresh state first. `events()` carries `CockpitEvent::Notification`, `Reconnected` and `Lost`
+  (no daemon came back; the next request tries again). A write cut by the daemon going fails with
+  `outcome_unknown` and is never sent again. `Client` stays the short-lived connection `ev3` uses,
+  which never reconnects; its `events()` and `ProgramStates` end with `None` when it closes.
 
 ## Start failures
 

@@ -284,3 +284,166 @@ async fn a_program_subscription_hears_the_state_now_and_every_change_in_order() 
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A replay daemon on `paths`' channel, started by the test (not by a client), killed on drop.
+struct ReplayDaemon(std::process::Child);
+
+impl ReplayDaemon {
+    fn start(paths: &Paths, scenario: &str) -> Option<Self> {
+        let binary = daemon()?;
+        let child = std::process::Command::new(binary)
+            .args([
+                "--channel",
+                paths.channel.as_deref().expect("a test channel"),
+            ])
+            .arg("--state-root")
+            .arg(&paths.root)
+            .args(["--mode", "replay", "--fixtures"])
+            .arg(fixture(scenario))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the daemon starts");
+        let daemon = Self(child);
+        // Serving once its channel record names it: a killed daemon leaves its record behind.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let ours = std::fs::read_to_string(&paths.record)
+                .ok()
+                .and_then(|text| ev3_channel::record::parse_record(&text))
+                .is_some_and(|r| u64::from(r.pid) == u64::from(daemon.0.id()));
+            if ours {
+                return Some(daemon);
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the replay daemon did not come up"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for ReplayDaemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cockpit_connects_again_after_its_daemon_went_and_holds_its_own_brick_again() {
+    let root = std::env::temp_dir().join(format!(
+        "ev3c-again-{}",
+        ev3_channel::hex(&ev3_channel::random_bytes::<6>())
+    ));
+    let paths = Paths::new(&root, Some("again"));
+    let scenario = "service/usb-info-storage-listing-ccc";
+    let Some(first) = ReplayDaemon::start(&paths, scenario) else {
+        return;
+    };
+    let cockpit = ev3_client::Cockpit::connect(ev3_client::CockpitOptions {
+        name: "EVƎ C test".into(),
+        kind: "addon",
+        version: "1.0.0".into(),
+        build_kind: "release".into(),
+        daemon: Launch::Nothing,
+        paths: paths.clone(),
+        daemon_args: Vec::new(),
+        asker: None,
+        notice: std::sync::Arc::new(|_: &str| {}),
+    })
+    .await
+    .expect("connected");
+    let holders = |list: &serde_json::Value| -> Vec<String> {
+        list["bricks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["name"] == "CCC")
+            .flat_map(|b| b["holders"].as_array().cloned().unwrap_or_default())
+            .filter_map(|h| h["client"].as_str().map(str::to_owned))
+            .collect()
+    };
+    cockpit
+        .request("bricks/list", json!({ "waitForDiscovery": true }))
+        .await
+        .expect("list");
+    cockpit
+        .request("bricks/connect", json!({ "brick": "CCC" }))
+        .await
+        .expect("connect");
+    let listed = cockpit
+        .request("bricks/list", json!({}))
+        .await
+        .expect("list");
+    assert_eq!(holders(&listed), ["EVƎ C test"], "{listed}");
+
+    // The daemon goes; a new one comes. Nothing passes from one to the next.
+    let mut events = cockpit.events();
+    drop(first);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _second = ReplayDaemon::start(&paths, scenario).expect("again");
+    let reconnected = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            match events.recv().await {
+                Ok(ev3_client::CockpitEvent::Reconnected(_)) => return true,
+                // Tried before the new daemon was up: the next request connects again.
+                Ok(ev3_client::CockpitEvent::Lost(_)) => {
+                    if cockpit.request("bricks/list", json!({})).await.is_ok() {
+                        return true;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+    })
+    .await;
+    assert_eq!(reconnected, Ok(true), "not connected again");
+    let listed = cockpit
+        .request("bricks/list", json!({}))
+        .await
+        .expect("list");
+    assert_eq!(holders(&listed), ["EVƎ C test"], "{listed}");
+    cockpit.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_readers_events_end_when_the_daemon_goes() {
+    let root = std::env::temp_dir().join(format!(
+        "ev3c-ends-{}",
+        ev3_channel::hex(&ev3_channel::random_bytes::<6>())
+    ));
+    let paths = Paths::new(&root, Some("ends"));
+    let Some(daemon) = ReplayDaemon::start(&paths, "service/usb-info-storage-listing-ccc") else {
+        return;
+    };
+    let notice = |_: &str| {};
+    let client = Client::connect(ClientOptions {
+        name: "EVƎ C test".into(),
+        kind: "addon",
+        version: "1.0.0",
+        build_kind: "release",
+        daemon: Launch::Nothing,
+        paths: &paths,
+        daemon_args: Vec::new(),
+        asker: None,
+        notice: &notice,
+    })
+    .await
+    .expect("connected");
+    let mut events = client.events();
+    drop(daemon);
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while events.next().await.is_some() {}
+    })
+    .await;
+    assert!(
+        ended.is_ok(),
+        "the reader still waits on a closed connection"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

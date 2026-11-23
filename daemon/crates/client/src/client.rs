@@ -45,7 +45,7 @@ pub struct ClientOptions<'a> {
 }
 
 /// Which daemon a client starts when none runs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Launch {
     /// The daemon this client carries, or why it carries none (`ev3`); a missing one is an error
     /// only when no daemon runs.
@@ -159,7 +159,7 @@ impl Client {
 
     /// The daemon's notifications to this client from now on, typed (see [`Events`]).
     pub fn events(&self) -> crate::Events {
-        crate::Events::new(self.endpoint.notifications())
+        crate::Events::new(&self.endpoint)
     }
 
     /// Follows `brick`'s program: the state now, then every change in order (see

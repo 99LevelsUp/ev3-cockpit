@@ -14,15 +14,24 @@ use tokio::task::JoinHandle;
 
 use crate::endpoint::Endpoint;
 
+/// Resolves when the connection closed. The notification channel stays open while the client
+/// lives, so a reader watches this beside it.
+type Closed = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
 /// Every notification the daemon sends this client, typed.
 pub struct Events {
     heard: broadcast::Receiver<(String, Value)>,
+    closed: Closed,
     skipped: u64,
 }
 
 impl Events {
-    pub(crate) fn new(heard: broadcast::Receiver<(String, Value)>) -> Self {
-        Self { heard, skipped: 0 }
+    pub(crate) fn new(endpoint: &Endpoint) -> Self {
+        Self {
+            heard: endpoint.notifications(),
+            closed: Box::pin(endpoint.closed()),
+            skipped: 0,
+        }
     }
 
     /// The next notification; `None` once the connection closed. A notification this version of
@@ -32,7 +41,11 @@ impl Events {
     /// sets it right.
     pub async fn next(&mut self) -> Option<Notification> {
         loop {
-            match self.heard.recv().await {
+            let heard = tokio::select! {
+                heard = self.heard.recv() => heard,
+                () = &mut self.closed => return None,
+            };
+            match heard {
                 Ok((method, params)) => {
                     if let Some(Ok(notification)) = Notification::parse(&method, params) {
                         return Some(notification);
@@ -78,11 +91,17 @@ impl ProgramStates {
             })?;
         let id = subscribed.subscription_id.clone();
         let (sender, changes) = mpsc::unbounded_channel();
+        let closed = endpoint.closed();
         let forward = tokio::spawn({
             let id = id.clone();
             async move {
+                tokio::pin!(closed);
                 loop {
-                    match heard.recv().await {
+                    let next = tokio::select! {
+                        next = heard.recv() => next,
+                        () = &mut closed => return,
+                    };
+                    match next {
                         Ok((method, params)) if method == "programs/stateChanged" => {
                             let Ok(changed) = serde_json::from_value::<ProgramStateChanged>(params)
                             else {
