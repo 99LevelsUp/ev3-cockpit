@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use ev3_channel::paths::{Paths, default_state_root, valid_channel_name};
 
 use crate::error::{CliError, Failure, Result};
-use crate::launch::{LaunchSpec, manifest_launch};
+use ev3_client::launch::{LaunchSpec, manifest_launch};
 
 /// This binary's version: the repository's `package.json` version at build time.
 pub const VERSION: &str = env!("EV3_COCKPIT_VERSION");
@@ -30,9 +30,9 @@ pub fn is_development() -> bool {
 }
 
 /// The directory `ev3` runs from.
-fn own_dir() -> Result<PathBuf> {
+fn own_dir() -> ev3_client::Result<PathBuf> {
     let exe = std::env::current_exe().map_err(|error| {
-        CliError::start(
+        ev3_client::ClientError::start(
             Failure::MissingBinary,
             format!("ev3 cannot tell where it runs from ({error})."),
         )
@@ -41,7 +41,7 @@ fn own_dir() -> Result<PathBuf> {
 }
 
 /// The daemon this installation carries.
-pub fn daemon() -> Result<LaunchSpec> {
+pub fn daemon() -> ev3_client::Result<LaunchSpec> {
     let hint = if is_development() {
         "Build it with npm run daemon:build."
     } else {

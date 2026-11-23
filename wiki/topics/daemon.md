@@ -38,7 +38,7 @@ The protocol is in `docs/protocol.md`, the channel in `docs/channel.md`; add-on 
 - `migrate.rs`: takes over the ledger and settings of the TypeScript daemon it replaced, and removes that daemon's leftovers;
 - `log.rs`: the log, rotated by size.
 
-**`daemon/crates/channel/`** is what the daemon and the native `ev3` share: state root, key, `channel.json`, framing.
+**`daemon/crates/channel/`** is what the daemon and the native `ev3` share: state root, key, `channel.json`, framing. **`daemon/crates/client/`** (`ev3-client`) is the native client on top of it, which `ev3`, `ev3 mcp` and Rust add-ons use (`docs/api-for-consumers.md`).
 
 **`src/client/`** is the TypeScript client library (`CockpitClient`, `nativeClient.ts`). It:
 

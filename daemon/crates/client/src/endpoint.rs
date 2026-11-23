@@ -22,7 +22,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_util::codec::Framed;
 
-use crate::error::{CliError, Result};
+use crate::error::{ClientError, Result};
 
 /// A connected pipe or socket.
 pub trait Duplex: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -32,7 +32,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Duplex for T {}
 pub type RequestHandler =
     Arc<dyn Fn(String, Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
 
-type Answer = std::result::Result<Value, CliError>;
+type Answer = std::result::Result<Value, ClientError>;
 type ProgressHandler = Box<dyn Fn(Value) + Send>;
 
 struct Shared {
@@ -117,7 +117,7 @@ impl Endpoint {
                 .drain()
                 .collect();
             for (_, answer) in waiting {
-                let _ = answer.send(Err(CliError::unavailable(
+                let _ = answer.send(Err(ClientError::unavailable(
                     "The connection closed before the answer came.",
                 )));
             }
@@ -189,7 +189,7 @@ impl Endpoint {
         on_progress: Option<ProgressHandler>,
     ) -> Result<Value> {
         if self.is_closed() {
-            return Err(CliError::unavailable(
+            return Err(ClientError::unavailable(
                 "The connection to the cockpit daemon is closed.",
             ));
         }
@@ -221,12 +221,12 @@ impl Endpoint {
         let message = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if self.out.send(message).is_err() {
             guard.done = true;
-            return Err(CliError::unavailable(
+            return Err(ClientError::unavailable(
                 "The connection to the cockpit daemon is closed.",
             ));
         }
         let answer = answer_rx.await.unwrap_or_else(|_| {
-            Err(CliError::unavailable(
+            Err(ClientError::unavailable(
                 "The connection closed before the answer came.",
             ))
         });
@@ -370,19 +370,19 @@ fn take(message: &mut Value, key: &str) -> Value {
 }
 
 /// A wire error as this side reads it: the contract code from `data.code`.
-fn wire_error(error: &Value) -> CliError {
+fn wire_error(error: &Value) -> ClientError {
     let message = error
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("The cockpit daemon refused the request.")
         .to_owned();
     match error.get("data") {
-        Some(data) if data.get("code").and_then(Value::as_str).is_some() => CliError::Contract {
+        Some(data) if data.get("code").and_then(Value::as_str).is_some() => ClientError::Contract {
             code: data["code"].as_str().unwrap_or_default().to_owned(),
             message,
             data: data.clone(),
         },
-        _ => CliError::contract("invalid_request", message),
+        _ => ClientError::contract("invalid_request", message),
     }
 }
 

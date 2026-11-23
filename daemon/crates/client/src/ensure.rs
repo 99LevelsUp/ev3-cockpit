@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::connect::{Connected, DaemonIdentity, Identity, connect, open_channel};
 use crate::endpoint::{Endpoint, RequestHandler};
-use crate::error::{CliError, DAEMON_UNAVAILABLE, Failure, Result};
+use crate::error::{ClientError, DAEMON_UNAVAILABLE, Failure, Result};
 use crate::launch::{self, LaunchSpec};
 
 /// How long starting a daemon, or waiting for one to end, may take.
@@ -41,6 +41,9 @@ pub struct Options<'a> {
     pub paths: &'a Paths,
     /// This client may ask a daemon to exit (only `ev3` itself).
     pub may_replace: bool,
+    /// More arguments for a daemon this client starts, after the channel's: a test runs it in
+    /// replay of a recording (`--mode replay --fixtures <dir>`).
+    pub daemon_args: Vec<String>,
     pub on_request: Option<RequestHandler>,
     /// Told what the user should know: a development daemon runs, an exit request was refused.
     pub notice: &'a (dyn Fn(&str) + Sync),
@@ -60,8 +63,8 @@ fn speaks_our_contract(daemon: &DaemonIdentity) -> bool {
 
 /// A daemon not reachable yet (no answer on its channel so far), as opposed to one that cannot be
 /// started at all.
-fn not_reachable_yet(error: &CliError) -> bool {
-    error.code() == Some(DAEMON_UNAVAILABLE) && !matches!(error, CliError::Start { .. })
+fn not_reachable_yet(error: &ClientError) -> bool {
+    error.code() == Some(DAEMON_UNAVAILABLE) && !matches!(error, ClientError::Start { .. })
 }
 
 fn describe(daemon: &DaemonIdentity) -> String {
@@ -133,7 +136,7 @@ pub async fn ask_to_exit(endpoint: &Endpoint, timeout: Duration) -> Value {
 /// above say.
 pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
     let paths = options.paths;
-    let args: Vec<String> = match &paths.channel {
+    let mut args: Vec<String> = match &paths.channel {
         Some(channel) => vec![
             "--channel".into(),
             channel.clone(),
@@ -142,6 +145,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
         ],
         None => Vec::new(),
     };
+    args.extend(options.daemon_args.iter().cloned());
     let find = |until: Instant| async move {
         loop {
             match connect(paths, &options.identity, options.on_request.clone()).await {
@@ -159,7 +163,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
             Some(connection) => connection,
             None => {
                 let Some(own) = &options.daemon else {
-                    return Err(CliError::start(
+                    return Err(ClientError::start(
                         Failure::MissingBinary,
                         "No cockpit daemon runs, and this client carries none to start.",
                     ));
@@ -193,7 +197,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
             }
             Decision::Stop(reason) => {
                 connection.endpoint.close();
-                return Err(CliError::start(Failure::ContractMismatch, reason));
+                return Err(ClientError::start(Failure::ContractMismatch, reason));
             }
             Decision::Replace => {
                 let answer = ask_to_exit(&connection.endpoint, EXIT_ANSWER).await;
@@ -212,14 +216,14 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
                     return Ok(finish(connection, options, started));
                 }
                 connection.endpoint.close();
-                return Err(CliError::start(
+                return Err(ClientError::start(
                     Failure::ContractMismatch,
                     contract_stop(&connection.daemon, &reason),
                 ));
             }
         }
     }
-    Err(CliError::start(
+    Err(ClientError::start(
         Failure::Failed,
         "The cockpit daemon kept changing while this client connected; try again.",
     ))
@@ -258,7 +262,7 @@ async fn wait_gone(paths: &Paths) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err(CliError::start(
+    Err(ClientError::start(
         Failure::LockHeld,
         format!(
             "The cockpit daemon was asked to exit but still held its channel after {} s.",
@@ -285,7 +289,7 @@ async fn start(
     let paths = options.paths;
     // A daemon this process starts would run elevated too, and refuse.
     if ev3_channel::security::is_elevated().unwrap_or(false) {
-        return Err(CliError::start(Failure::NameHeld, elevated_message()));
+        return Err(ClientError::start(Failure::NameHeld, elevated_message()));
     }
     let until = Instant::now() + READINESS;
     let log = paths.log.clone();
@@ -298,7 +302,7 @@ async fn start(
             let failure = launch::classify(&ended, &binary, &log);
             if !matches!(
                 failure,
-                CliError::Start {
+                ClientError::Start {
                     failure: Failure::LockHeld,
                     ..
                 }
@@ -311,7 +315,7 @@ async fn start(
                 child = launch::spawn(&binary, args, &paths.root);
                 lock_held_since = None;
             } else if Instant::now() >= until {
-                return Err(CliError::start(
+                return Err(ClientError::start(
                     Failure::LockHeld,
                     format!(
                         "Another cockpit daemon held this channel's lock and did not become reachable within {} s; try again.",
@@ -330,7 +334,7 @@ async fn start(
             Err(error) => return Err(error),
         }
         if Instant::now() >= until {
-            return Err(CliError::start(
+            return Err(ClientError::start(
                 Failure::Failed,
                 format!(
                     "The cockpit daemon did not answer within {} s.",

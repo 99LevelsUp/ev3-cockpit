@@ -13,9 +13,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-use crate::endpoint::Endpoint;
 use crate::error::{CliError, Result};
 use crate::output::js_number;
+use ev3_client::endpoint::Endpoint;
 
 /// How often rows are read while a reading or a watch runs.
 pub const ON_DEMAND_INTERVAL_MS: u64 = 1000;
@@ -331,8 +331,8 @@ pub fn row_line(row: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::Duplex;
     use ev3_channel::codec::JsonRpcCodec;
+    use ev3_client::endpoint::Duplex;
     use futures_util::{SinkExt, StreamExt};
     use std::sync::{Arc, Mutex};
     use tokio_util::codec::Framed;
@@ -520,8 +520,8 @@ mod tests {
         .await
         .expect("the watch ends on its own");
         assert_eq!(
-            watched.expect_err("the daemon went").code(),
-            Some("daemon_unavailable")
+            watched.expect_err("the daemon went").json()["code"],
+            "daemon_unavailable"
         );
         assert_eq!(heard, 2, "the snapshot and the update");
     }

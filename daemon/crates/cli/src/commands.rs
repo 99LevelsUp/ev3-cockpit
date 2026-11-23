@@ -9,12 +9,13 @@ use std::time::Duration;
 use ev3_channel::paths::Paths;
 use serde_json::{Value, json};
 
-use crate::client::{Client, ClientOptions};
 use crate::confirm;
-use crate::ensure::{EXIT_ANSWER, ask_to_exit};
 use crate::error::{CliError, Result, exit};
+use crate::install;
 use crate::output::{Outcome, array, js_string, say, strings, table, text};
 use crate::telemetry;
+use ev3_client::client::{Client, ClientOptions};
+use ev3_client::ensure::{EXIT_ANSWER, ask_to_exit};
 
 /// A command as help lists it.
 pub struct Spec {
@@ -240,7 +241,11 @@ impl Ctx {
             let client = Client::connect(ClientOptions {
                 name: self.name.clone(),
                 kind: "cli",
+                version: install::VERSION,
+                build_kind: install::BUILD_KIND,
+                daemon: ev3_client::Launch::Carried(install::daemon()),
                 paths: &self.paths,
+                daemon_args: Vec::new(),
                 asker: confirm::can_ask(self.json)
                     .then(|| confirm::terminal_asker(self.name.clone())),
                 notice: &notice,
@@ -361,7 +366,7 @@ impl Ctx {
         let request = client.request("bricks/connect", params);
         tokio::pin!(request);
         tokio::select! {
-            result = &mut request => return result,
+            result = &mut request => return Ok(result?),
             () = tokio::time::sleep(SLOW_CONNECT) => {}
         }
         if !json {
@@ -369,7 +374,7 @@ impl Ctx {
                 "Connecting {named}; over Bluetooth this can take up to a minute before it succeeds or fails."
             );
         }
-        request.await
+        Ok(request.await?)
     }
 
     /// The brick a stop reaches: a connected brick is stopped as it is, never signed in again;

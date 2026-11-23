@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 ev3-channel = { path = "../channel" }
+ev3-client = { path = "../client" }
 ev3-contract = { path = "../contract" }
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "sink"] }
 serde_json = "1.0.154"

@@ -1,0 +1,35 @@
+[package]
+name = "ev3-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A native client of the cockpit daemon: find or start the user's daemon, the hello, requests and
+# notifications. `ev3` and `ev3 mcp` are built on it, and add-ons such as EVƎ C depend on it by git.
+# It links no transport and needs tokio's runtime and networking only.
+
+[dependencies]
+ev3-channel = { path = "../channel" }
+ev3-contract = { path = "../contract" }
+futures-util = { version = "0.3.34", default-features = false, features = ["std", "sink"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+tokio = { version = "1.54.1", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "process", "time"] }
+
+[lints]
+workspace = true

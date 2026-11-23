@@ -401,6 +401,53 @@ cockpit reports is the launcher's slot, not the native process it started.
 
 `CockpitClient.connect` takes `buildKind` too (`release` by default for an add-on).
 
+## The Rust client, `ev3-client`
+
+A Rust add-on (EVƎ C's backend) uses the crate `ev3-client` from this repository
+(`daemon/crates/client`), the client `ev3` and `ev3 mcp` are built on. It is not on crates.io:
+depend on it by git at a pinned rev, and take the contract from it so the two never differ.
+
+```toml
+ev3-client = { git = "https://github.com/99LevelsUp/ev3-cockpit", rev = "<rev>" }
+```
+
+```rust
+use ev3_client::{Client, ClientOptions, Launch, method, user_paths};
+
+let paths = user_paths(None)?;                // the user's daemon; Some("name") for a test channel
+let client = Client::connect(ClientOptions {
+    name: "EVƎ C (terminal)".into(),
+    kind: "addon",
+    version: "1.4.0",
+    build_kind: "release",
+    daemon: Launch::Installed,                // start what the installed cockpit recorded
+    paths: &paths,
+    daemon_args: Vec::new(),                  // a test passes --mode replay --fixtures <dir>
+    asker: None,                              // answers the daemon's questions; None keeps them
+    notice: &|text| eprintln!("{text}"),
+}).await?;
+let bricks = client.call::<method::BricksList>(params).await?;   // typed, from ev3-contract
+```
+
+- **Requests:** `call::<M>` for every request of the method table (`ev3_client::method`), typed by
+  `ev3-contract`; `request(&str, Value)` for untyped ones. Dropping a request's future sends
+  `$/cancelRequest`.
+- **Errors:** one `ClientError` (`Clone`, `Send + Sync`): `Contract { code, message, data }` with
+  `error_code()` and `error_data()` as the contract's `ErrorCode` and `ErrorData`, a code this
+  version does not know left as its string; `Start { failure, message }` for the
+  [start failures](#start-failures) (`failure()`); `Other`.
+- **Starting the daemon:** `Launch::Installed` reads [`install.json`](#installjson) as the
+  TypeScript client does; `Launch::Nothing` works only with a running daemon. With nothing to
+  start, `connect` fails with `missing_binary`.
+- **Bricks:** `bricks()` answers the list, asked for once and then kept current by
+  `bricks/changed`.
+- `ev3_client::CONTRACT_VERSION` and `ev3_client::contract` re-export `ev3-contract`.
+- Rust 1.100.0 (the repository's `rust-toolchain.toml`), edition 2024, tokio 1 with `rt`, `net`,
+  `io-util`, `sync`, `time` and `macros`; no transport is linked. The static C runtime this
+  repository sets in `daemon/.cargo/config.toml` does not reach a consumer: set it in your own.
+- Subscriptions with renewal and the reconnect after a daemon replacement follow (as the
+  TypeScript client has them); until then, a Rust client connects again itself.
+
 ## Start failures
 
 `connect` rejects with a `DaemonStartError`. Its `code` is `daemon_unavailable`, so code-based
