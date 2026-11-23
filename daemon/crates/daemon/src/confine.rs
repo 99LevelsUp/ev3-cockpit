@@ -53,12 +53,26 @@ pub fn resolve(path: &Path) -> Result<PathBuf, ResolveError> {
                 }
                 return Ok(out);
             }
-            Err(_) => {
-                if std::fs::symlink_metadata(&existing).is_ok() {
-                    return Err(ResolveError(format!(
-                        "{} is a link whose target does not exist.",
-                        existing.display()
-                    )));
+            Err(error) => {
+                match std::fs::symlink_metadata(&existing) {
+                    Ok(_) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Err(ResolveError(format!(
+                            "{} is a link whose target does not exist.",
+                            existing.display()
+                        )));
+                    }
+                    // Only a part both calls say is not there is missing yet. Any other failure
+                    // (a folder that cannot be entered, a file where a folder should be) hides
+                    // what lies below, so the path is not resolved.
+                    Err(gone)
+                        if error.kind() == std::io::ErrorKind::NotFound
+                            && gone.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => {
+                        return Err(ResolveError(format!(
+                            "{} cannot be resolved ({error}).",
+                            existing.display()
+                        )));
+                    }
                 }
                 match existing.components().next_back() {
                     Some(Component::Normal(name)) => {
@@ -647,6 +661,35 @@ mod tests {
         #[cfg(unix)]
         std::fs::remove_file(base.join("dangling")).expect("remove link");
         std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// A folder this process may not enter hides whether what lies below it exists: that is not a
+    /// part missing yet, and a root through it is not resolved (a link below could lead anywhere).
+    #[cfg(unix)]
+    #[test]
+    fn a_root_behind_a_folder_that_cannot_be_entered_is_not_resolved() {
+        use std::os::unix::fs::PermissionsExt;
+        // root may enter any folder, so the case cannot be made there.
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipped: root enters every folder");
+            return;
+        }
+        let base = temp_dir();
+        let closed = base.join("closed");
+        std::fs::create_dir_all(closed.join("inside")).expect("folders");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).expect("close");
+        let resolved = resolve(&closed.join("inside").join("native"));
+        let built = Confinement::new([closed.join("inside").join("native")]);
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700))
+            .expect("open again");
+        std::fs::remove_dir_all(&base).expect("clean");
+        let error = resolved.expect_err("not resolved behind a closed folder");
+        assert!(error.0.contains("cannot be resolved"), "{}", error.0);
+        assert!(
+            built.is_err(),
+            "a root behind a closed folder stops the start"
+        );
     }
 
     #[test]
