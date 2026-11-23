@@ -1035,6 +1035,61 @@ mod tests {
         std::fs::remove_dir_all(base).expect("clean");
     }
 
+    /// A named file opens without waiting, so a pipe cannot hold the open before its handle is
+    /// checked; once checked it waits again, as a file opened plainly does.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_file_opens_without_waiting_and_waits_again_once_checked() {
+        use std::os::fd::AsRawFd;
+        let nonblocking = |file: &std::fs::File| {
+            // SAFETY: F_GETFL reads the flags of a descriptor open for the borrow of `file`.
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            assert_ne!(flags, -1, "F_GETFL");
+            flags & libc::O_NONBLOCK != 0
+        };
+        let base = temp_dir();
+        let pipe = base.join("pipe");
+        make_fifo(&pipe);
+        // Opened plainly for reading, a pipe with no writer holds the open for ever.
+        let opened = without_waiting({
+            let pipe = pipe.clone();
+            move || file_options().read(true).open(&pipe)
+        })
+        .expect("the pipe opened");
+        assert!(nonblocking(&opened));
+        drop(opened);
+        let regular = base.join("a.txt");
+        std::fs::write(&regular, b"x").expect("file");
+        let file = file_options().read(true).open(&regular).expect("opened");
+        assert!(nonblocking(&file));
+        wait_again(&file).expect("waits again");
+        assert!(!nonblocking(&file));
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// The search that refuses a file with several names finds a special file of the cockpit's
+    /// own by a name outside, deep in its folders, and nothing for a pipe of someone else's.
+    #[cfg(unix)]
+    #[test]
+    fn the_search_finds_a_special_file_of_the_cockpits_own_by_another_name() {
+        let base = temp_dir();
+        let state = base.join("state");
+        let deep = state.join("channels").join("dev");
+        std::fs::create_dir_all(&deep).expect("deep");
+        make_fifo(&deep.join("pipe"));
+        let alias = base.join("alias");
+        std::fs::hard_link(deep.join("pipe"), &alias).expect("a second name");
+        let mut budget = SEARCH_BUDGET;
+        let ours = identity_at(&alias).expect("identity");
+        assert_eq!(search(&state, ours, &mut budget), Search::Found);
+        let theirs = base.join("theirs");
+        make_fifo(&theirs);
+        let mut budget = SEARCH_BUDGET;
+        let other = identity_at(&theirs).expect("identity");
+        assert_eq!(search(&state, other, &mut budget), Search::NotFound);
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
     #[cfg(windows)]
     #[test]
     fn letters_compare_without_case_on_windows() {
