@@ -1,0 +1,2980 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Transport": {
+      "type": "string",
+      "enum": [
+        "usb",
+        "bt",
+        "tcp"
+      ]
+    },
+    "ContractChannel": {
+      "description": "One way a brick is reachable, and how it is doing.",
+      "type": "object",
+      "required": [
+        "transport",
+        "state"
+      ],
+      "properties": {
+        "transport": {
+          "$ref": "#/definitions/Transport"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "available",
+            "connected",
+            "lost"
+          ]
+        }
+      }
+    },
+    "BrickHolder": {
+      "description": "Why a brick stays connected: who holds it.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "client",
+            "hold",
+            "remembered"
+          ],
+          "description": "A connected client, the hold ev3 connect leaves, or the long-lived clients together for remembered bricks."
+        },
+        "client": {
+          "type": "string",
+          "description": "The client's name for client; absent otherwise."
+        }
+      }
+    },
+    "ContractBrick": {
+      "description": "One brick as every client sees it.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "name",
+        "nameConfirmed",
+        "connected",
+        "paired",
+        "channels",
+        "holders"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nameConfirmed": {
+          "type": "boolean",
+          "description": "The brick itself reported the name, rather than a cache or a fallback."
+        },
+        "connected": {
+          "type": "boolean"
+        },
+        "paired": {
+          "type": "boolean",
+          "description": "Paired with this computer over Bluetooth."
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContractChannel"
+          }
+        },
+        "holders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BrickHolder"
+          }
+        },
+        "reconnecting": {
+          "type": "boolean",
+          "description": "Reconnecting after a daemon restart; operations wait for it."
+        }
+      }
+    },
+    "BrickInfo": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "name"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "firmwareVersion": {
+          "type": "string"
+        },
+        "osVersion": {
+          "type": "string"
+        }
+      }
+    },
+    "StorageUsage": {
+      "type": "object",
+      "required": [
+        "totalKb",
+        "freeKb"
+      ],
+      "properties": {
+        "totalKb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "freeKb": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "PairingOutcome": {
+      "description": "How a pairing ended. cancelled: the person or the client cancelled it, on the brick or here; a client shows no error for it.",
+      "type": "string",
+      "enum": [
+        "paired",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "PairingResult": {
+      "description": "The end of a pairing, whoever started it.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "outcome"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/PairingOutcome"
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it failed, ready to show; absent when it paired."
+        },
+        "status": {
+          "type": "string",
+          "description": "The operating system's own pairing status, for the log."
+        }
+      }
+    },
+    "PairingProgress": {
+      "description": "One step of a running pairing.",
+      "oneOf": [
+        {
+          "description": "Looking for the brick.",
+          "type": "object",
+          "required": [
+            "phase"
+          ],
+          "properties": {
+            "phase": {
+              "const": "searching"
+            }
+          }
+        },
+        {
+          "description": "The first inquiry window missed the brick and another one is starting.",
+          "type": "object",
+          "required": [
+            "phase",
+            "window"
+          ],
+          "properties": {
+            "phase": {
+              "const": "inquiryRetry"
+            },
+            "window": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "description": "The brick was found. When it is not paired yet, the person confirms on the brick's display and accepts PIN 1234: the moment to tell them.",
+          "type": "object",
+          "required": [
+            "phase",
+            "name",
+            "alreadyPaired"
+          ],
+          "properties": {
+            "phase": {
+              "const": "found"
+            },
+            "name": {
+              "type": "string"
+            },
+            "alreadyPaired": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "description": "The brick is asking for the PIN now.",
+          "type": "object",
+          "required": [
+            "phase"
+          ],
+          "properties": {
+            "phase": {
+              "const": "pairingRequested"
+            }
+          }
+        }
+      ]
+    },
+    "HelloStart": {
+      "x-stableCore": true,
+      "description": "The client's first message on a connection: a fresh nonce and who it is. Nothing else may be sent before the hello finishes.",
+      "type": "object",
+      "required": [
+        "clientNonce",
+        "clientName",
+        "clientKind",
+        "version",
+        "contractVersion",
+        "buildKind"
+      ],
+      "properties": {
+        "clientNonce": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 256,
+          "description": "A fresh random value: 32 to 256 hex digits, lowercase. The daemon closes the connection on any other."
+        },
+        "clientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "1 to 200 characters; the daemon closes the connection on any other. Where the client runs, as people read it in the daemon's log, in a busy brick's message and in a question: \"EVƎ C (VS Code)\", \"ev3 c run (terminal)\"."
+        },
+        "clientKind": {
+          "type": "string",
+          "x-readAs": "ClientKind",
+          "x-unknownReadsAs": "mcp",
+          "description": "Who the client is, one of ClientKind. A kind the daemon does not know reads as mcp, the least privileged: it is never asked a person's question and cannot ask the daemon to exit."
+        },
+        "version": {
+          "type": "string",
+          "description": "The client's package version."
+        },
+        "contractVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The contract version the client was built with."
+        },
+        "buildKind": {
+          "type": "string",
+          "x-readAs": "BuildKind",
+          "x-unknownReadsAs": "release",
+          "description": "One of BuildKind. A build kind the daemon does not know reads as release, so it never counts as a development build that replaces a release daemon."
+        }
+      },
+      "additionalProperties": true
+    },
+    "HelloChallenge": {
+      "x-stableCore": true,
+      "description": "The daemon's answer to hello/start: its own nonce and its proof over both nonces. A client that cannot verify the proof is talking to something else and closes the connection.",
+      "type": "object",
+      "required": [
+        "daemonNonce",
+        "daemonProof"
+      ],
+      "properties": {
+        "daemonNonce": {
+          "type": "string",
+          "description": "A fresh random value, lowercase hex."
+        },
+        "daemonProof": {
+          "type": "string",
+          "description": "HMAC-SHA256 with the user's key over \"daemon\\n<clientNonce>\\n<daemonNonce>\", lowercase hex."
+        }
+      },
+      "additionalProperties": true
+    },
+    "HelloFinish": {
+      "x-stableCore": true,
+      "description": "The client's proof. The daemon accepts the connection, or closes it.",
+      "type": "object",
+      "required": [
+        "clientProof"
+      ],
+      "properties": {
+        "clientProof": {
+          "type": "string",
+          "description": "HMAC-SHA256 with the user's key over \"client\\n<clientNonce>\\n<daemonNonce>\", lowercase hex."
+        }
+      },
+      "additionalProperties": true
+    },
+    "HelloAccepted": {
+      "x-stableCore": true,
+      "description": "Who the daemon is, once both sides have proved they hold the user's key. A client whose contract version differs says so and stops instead of misbehaving.",
+      "type": "object",
+      "required": [
+        "version",
+        "contractVersion",
+        "buildKind",
+        "buildId",
+        "mode",
+        "pid",
+        "instanceId"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "The daemon's version."
+        },
+        "contractVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "buildKind": {
+          "type": "string",
+          "x-readAs": "BuildKind",
+          "x-unknownReadsAs": "release",
+          "description": "One of BuildKind; a build kind the client does not know reads as release."
+        },
+        "buildId": {
+          "type": "string",
+          "description": "SHA-256 of the daemon's own executable, lowercase hex, computed when it started."
+        },
+        "mode": {
+          "type": "string",
+          "x-readAs": "DaemonMode",
+          "x-unknownReadsAs": "hardware",
+          "description": "One of DaemonMode; a mode the client does not know reads as hardware, since the daemon may then touch real bricks."
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "instanceId": {
+          "type": "string",
+          "description": "Unique to this daemon process."
+        },
+        "state": {
+          "type": "string",
+          "x-readAs": "DaemonState",
+          "x-unknownReadsAs": "serving",
+          "description": "One of DaemonState. Absent, or a state the client does not know, reads as serving."
+        },
+        "transports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Transports the daemon could load, for a client to notice a degraded one."
+        }
+      },
+      "additionalProperties": true
+    },
+    "DaemonExitParams": {
+      "x-stableCore": true,
+      "description": "Ask the daemon to end. The daemon judges the request from the asking client's hello: a newer release client, or a development client meeting a release daemon, replaces it once no write is in progress. Any other request is a restart, which runs only after a person said yes.",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": true
+    },
+    "DaemonExitResult": {
+      "x-stableCore": true,
+      "type": "object",
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "description": "The daemon ends as soon as no write is in progress."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why it refused, ready to show."
+        }
+      },
+      "additionalProperties": true
+    },
+    "ChannelRecord": {
+      "x-stableCore": true,
+      "x-file": "channel.json",
+      "description": "channel.json, which only the daemon holding the single-instance lock writes and removes on a clean exit. A client connects only to the path recorded here and never computes it itself.",
+      "type": "object",
+      "required": [
+        "path",
+        "pid"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The full named pipe path on Windows, the full unix socket path on Linux."
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The daemon's process id."
+        }
+      },
+      "additionalProperties": true
+    },
+    "ClientKind": {
+      "description": "Who a connection is. vscode and cli have a person at them, so the daemon puts its questions to them. An add-on is addon in every environment (its VS Code extension and its own ev3 subcommand alike); an MCP server is mcp. The hello carries it as a plain string, so a kind added later never breaks an older daemon's hello.",
+      "type": "string",
+      "enum": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ]
+    },
+    "BuildKind": {
+      "description": "release for a published build, development for one built from the repository. Fixed when the binary or package is built; nothing at run time changes it.",
+      "type": "string",
+      "enum": [
+        "release",
+        "development"
+      ]
+    },
+    "DaemonMode": {
+      "description": "hardware talks to real bricks; replay serves recorded exchanges on a test channel.",
+      "type": "string",
+      "enum": [
+        "hardware",
+        "replay"
+      ]
+    },
+    "DaemonState": {
+      "description": "serving; or exiting: the daemon is about to end, so wait, then connect again.",
+      "type": "string",
+      "enum": [
+        "serving",
+        "exiting"
+      ]
+    },
+    "ClientInfo": {
+      "description": "A connected client, as its hello named it.",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "version",
+        "buildKind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ClientKind"
+        },
+        "version": {
+          "type": "string"
+        },
+        "buildKind": {
+          "$ref": "#/definitions/BuildKind"
+        }
+      }
+    },
+    "ClientStatus": {
+      "description": "A connected client as daemon/status names it: who its hello said it is, and the brick it shows.",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "version",
+        "buildKind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ClientKind"
+        },
+        "version": {
+          "type": "string"
+        },
+        "buildKind": {
+          "$ref": "#/definitions/BuildKind"
+        },
+        "shows": {
+          "type": "string",
+          "description": "The id of the brick this client shows in the foreground (its last telemetry/foreground); absent when it shows none."
+        }
+      }
+    },
+    "ShowsChanged": {
+      "description": "Every connected client, after a client's shown brick changed.",
+      "type": "object",
+      "required": [
+        "clients"
+      ],
+      "properties": {
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ClientStatus"
+          }
+        }
+      }
+    },
+    "BrickStatus": {
+      "description": "Holders and the write lease of one brick, for ev3 daemon status.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "name",
+        "holders"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "holders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BrickHolder"
+          }
+        },
+        "leaseHolder": {
+          "type": "string",
+          "description": "The client holding the write lease, if any."
+        },
+        "reconnecting": {
+          "type": "boolean",
+          "description": "Held across a daemon restart and not connected again yet."
+        }
+      }
+    },
+    "DaemonStatus": {
+      "type": "object",
+      "required": [
+        "version",
+        "contractVersion",
+        "buildKind",
+        "buildId",
+        "mode",
+        "pid",
+        "channel",
+        "startedAt",
+        "clients",
+        "bricks",
+        "logPath"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "contractVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "buildKind": {
+          "$ref": "#/definitions/BuildKind"
+        },
+        "buildId": {
+          "type": "string",
+          "description": "SHA-256 of the daemon's executable, lowercase hex."
+        },
+        "mode": {
+          "$ref": "#/definitions/DaemonMode"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "channel": {
+          "type": "string",
+          "description": "The pipe or socket path the daemon listens on."
+        },
+        "startedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Milliseconds since the Unix epoch."
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ClientStatus"
+          }
+        },
+        "bricks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BrickStatus"
+          }
+        },
+        "logPath": {
+          "type": "string"
+        }
+      }
+    },
+    "LaunchSpec": {
+      "x-file": "install.json",
+      "description": "How to start the daemon: the binary a client carries, and install.json, where the VS Code extension and the ev3 command record the installed cockpit so an add-on can start its daemon. No script interpreter is involved.",
+      "type": "object",
+      "required": [
+        "binary",
+        "sha256",
+        "version",
+        "buildKind"
+      ],
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Absolute path of the daemon executable."
+        },
+        "sha256": {
+          "type": "string",
+          "description": "The executable's SHA-256 as shipped in its package, lowercase hex. A client starts only a copy whose hash matches."
+        },
+        "version": {
+          "type": "string"
+        },
+        "buildKind": {
+          "$ref": "#/definitions/BuildKind"
+        }
+      }
+    },
+    "ErrorFamily": {
+      "description": "Which family an error belongs to; the JSON-RPC error's numeric code names the family, as the method table gives it.",
+      "type": "string",
+      "enum": [
+        "brick",
+        "lease",
+        "person",
+        "daemon",
+        "cancelled",
+        "request",
+        "internal"
+      ]
+    },
+    "ErrorCode": {
+      "description": "Every code a client may see in an error's data.code. The method table says what each means and which family it belongs to.",
+      "type": "string",
+      "enum": [
+        "transport_failed",
+        "connection_failed",
+        "timeout",
+        "protocol_failed",
+        "invalid_brick_key",
+        "session_failed",
+        "heartbeat_failed",
+        "already_connected",
+        "not_connected",
+        "no_provider",
+        "invalid_transition",
+        "channel_changed",
+        "connection_abandoned",
+        "queue_unavailable",
+        "consumer_failed",
+        "subscription_failed",
+        "program_running",
+        "program_not_found",
+        "mode_conflict",
+        "access_denied",
+        "brick_ambiguous",
+        "brick_not_found",
+        "brick_unreachable",
+        "link_lost",
+        "backend_unavailable",
+        "device_permission",
+        "brick_busy",
+        "needs_person",
+        "daemon_unavailable",
+        "outcome_unknown",
+        "replay_unmatched",
+        "cancelled",
+        "invalid_request",
+        "internal"
+      ]
+    },
+    "BrickCandidate": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "name"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ErrorData": {
+      "description": "What data carries on every contract error. A client decides on code; the message says the rest.",
+      "type": "object",
+      "required": [
+        "code",
+        "family"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/ErrorCode"
+        },
+        "family": {
+          "$ref": "#/definitions/ErrorFamily"
+        },
+        "holder": {
+          "type": "string",
+          "description": "For brick_busy: who holds the lease."
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BrickCandidate"
+          },
+          "description": "For brick_ambiguous: the bricks the name matched."
+        },
+        "command": {
+          "type": "string",
+          "description": "For needs_person and refusals an agent cannot act on: the command a person should run."
+        }
+      }
+    },
+    "Requester": {
+      "description": "The client whose request made the daemon ask, as its hello named it.",
+      "type": "object",
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ClientKind"
+        }
+      }
+    },
+    "Question": {
+      "description": "A question the daemon puts to a client with a person at it (vscode or cli). Every question carries questionId, the text ready to show, optional detail lines, and timeoutMs, after which it counts as unanswered and the operation is refused. A question about an operation a client asked for names that client.",
+      "oneOf": [
+        {
+          "description": "Forget a brick: unpair it on this computer and on the brick.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs",
+            "requester",
+            "brickId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "forget"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requester": {
+              "$ref": "#/definitions/Requester"
+            },
+            "brickId": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Clear a brick's Bluetooth list. details lists the entries a clearing would remove.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs",
+            "requester",
+            "brickId",
+            "includesThisComputer"
+          ],
+          "properties": {
+            "kind": {
+              "const": "clearBluetoothList"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requester": {
+              "$ref": "#/definitions/Requester"
+            },
+            "brickId": {
+              "type": "string"
+            },
+            "thisComputer": {
+              "type": "string",
+              "description": "This computer's Bluetooth name, when known."
+            },
+            "includesThisComputer": {
+              "type": "boolean",
+              "description": "This computer's own entry is among those removed, so the Bluetooth pairing ends too."
+            }
+          }
+        },
+        {
+          "description": "Release transfer slots a broken transfer left taken on a brick. details lists the slots.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs",
+            "requester",
+            "brickId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "sweep"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requester": {
+              "$ref": "#/definitions/Requester"
+            },
+            "brickId": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Change a dangerous setting, such as switching access to full.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs",
+            "requester",
+            "key",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "setting"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requester": {
+              "$ref": "#/definitions/Requester"
+            },
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/SettingScalar"
+            }
+          }
+        },
+        {
+          "description": "Restart the daemon: an exit request that is not a replacement by a newer client.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs",
+            "requester"
+          ],
+          "properties": {
+            "kind": {
+              "const": "restart"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requester": {
+              "$ref": "#/definitions/Requester"
+            }
+          }
+        },
+        {
+          "description": "The daemon cannot use Bluetooth until the person grants access (on Linux, membership in the Bluetooth group); asked by the daemon itself.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "bluetoothAccess"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "description": "Whether to check Bluetooth access again after the person changed something; asked by the daemon itself.",
+          "type": "object",
+          "required": [
+            "kind",
+            "questionId",
+            "text",
+            "timeoutMs"
+          ],
+          "properties": {
+            "kind": {
+              "const": "bluetoothCheckAgain"
+            },
+            "questionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "details": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "QuestionAnswer": {
+      "description": "keep leaves things as they are: what a client without a person always answers.",
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "keep"
+      ]
+    },
+    "QuestionReply": {
+      "type": "object",
+      "required": [
+        "answer"
+      ],
+      "properties": {
+        "answer": {
+          "$ref": "#/definitions/QuestionAnswer"
+        },
+        "remember": {
+          "type": "boolean",
+          "description": "Apply this yes or no to the same question about this client's own later requests, for as long as its connection lasts. Kept only when the question was about this client's own request; it never answers a question another client's request raises."
+        }
+      }
+    },
+    "FsEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "directory",
+            "unknown"
+          ]
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "md5": {
+          "type": "string",
+          "description": "Lowercase hex, files only."
+        }
+      }
+    },
+    "FileSize": {
+      "type": "object",
+      "required": [
+        "kilobytes",
+        "files"
+      ],
+      "properties": {
+        "kilobytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Kilobytes, rounded up, as the firmware reports them."
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Files the total covers; zero for a plain file."
+        }
+      }
+    },
+    "RemoveReport": {
+      "description": "What a recursive removal could not delete.",
+      "type": "object",
+      "required": [
+        "leftBehind"
+      ],
+      "properties": {
+        "leftBehind": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "TransferProgress": {
+      "description": "What a file request reports through $/progress, with the token the request carried.",
+      "type": "object",
+      "required": [
+        "transferred"
+      ],
+      "properties": {
+        "transferred": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "DeployFile": {
+      "description": "One file of a deployment: from a local path the daemon reads, or small inline content.",
+      "type": "object",
+      "required": [
+        "remotePath"
+      ],
+      "properties": {
+        "remotePath": {
+          "type": "string",
+          "description": "Absolute path on the brick."
+        },
+        "localPath": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "description": "Base64, at most 4 KiB once decoded."
+        },
+        "skipIfSameMd5": {
+          "type": "boolean",
+          "description": "Skip the upload when the brick already holds a file with the same MD5."
+        }
+      }
+    },
+    "StartOutcome": {
+      "description": "How a start ended. started: the brick reported the program running. not_seen_running: the start was confirmed but the program was not seen running; it may have ended at once. uncertain: the reply to the start was lost; do not start again, read the program's state first.",
+      "type": "string",
+      "enum": [
+        "started",
+        "not_seen_running",
+        "uncertain"
+      ]
+    },
+    "DeployResult": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "outcome",
+        "runSeq",
+        "uploaded",
+        "skipped"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/StartOutcome"
+        },
+        "runSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This start's number on the brick: the daemon counts every start it is asked for per brick, a refused one included, so numbers may skip. The count is kept in the daemon's state directory, so a daemon that replaces another counts on. A state with a lower runSeq is about an earlier run; with replace, the old program's end may still arrive under the new number."
+        },
+        "uploaded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files that were uploaded."
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files skipped because the brick held the same content."
+        }
+      }
+    },
+    "ProgramState": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "running",
+        "runSeq"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "runSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The number of the last start sent to this brick, by this daemon or one it replaced (0 before any)."
+        },
+        "stoppedBy": {
+          "type": "string",
+          "description": "The client that stopped it, when a stop ended it."
+        }
+      }
+    },
+    "ShellResult": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "status"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        }
+      }
+    },
+    "EmptyParams": {
+      "type": "object",
+      "properties": {}
+    },
+    "BrickParams": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string"
+        }
+      }
+    },
+    "LogNoticeParams": {
+      "type": "object",
+      "required": [
+        "level",
+        "text"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "BricksListParams": {
+      "type": "object",
+      "properties": {
+        "waitForDiscovery": {
+          "type": "boolean"
+        }
+      }
+    },
+    "BrickList": {
+      "type": "object",
+      "required": [
+        "bricks"
+      ],
+      "properties": {
+        "bricks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContractBrick"
+          }
+        }
+      }
+    },
+    "BricksConnectParams": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "hold": {
+          "type": "boolean",
+          "description": "Keep the brick connected past this client, as ev3 connect does."
+        }
+      }
+    },
+    "BricksDisconnectParams": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "forEveryone": {
+          "type": "boolean",
+          "description": "Sign the brick out whoever holds it."
+        },
+        "releaseHold": {
+          "type": "boolean",
+          "description": "Drop the hold ev3 connect left."
+        }
+      }
+    },
+    "BricksDisconnectResult": {
+      "type": "object",
+      "required": [
+        "stillHeldBy"
+      ],
+      "properties": {
+        "stillHeldBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ForgetResult": {
+      "type": "object",
+      "required": [
+        "forgotten",
+        "lines"
+      ],
+      "properties": {
+        "forgotten": {
+          "type": "boolean"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The report as lines ready to show."
+        },
+        "report": {
+          "$ref": "#/definitions/ForgetReport"
+        }
+      }
+    },
+    "ClearListResult": {
+      "type": "object",
+      "required": [
+        "removed",
+        "kept"
+      ],
+      "properties": {
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kept": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "report": {
+          "$ref": "#/definitions/ClearListReport"
+        }
+      }
+    },
+    "PathParams": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "FsListing": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FsEntry"
+          }
+        }
+      }
+    },
+    "FileExists": {
+      "type": "object",
+      "required": [
+        "exists"
+      ],
+      "properties": {
+        "exists": {
+          "type": "boolean"
+        }
+      }
+    },
+    "FilesReadParams": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "toLocalPath": {
+          "type": "string",
+          "description": "A local path the daemon writes the file to."
+        },
+        "inline": {
+          "type": "boolean",
+          "description": "Answer with the content as base64; at most 64 KiB, a larger file is refused."
+        }
+      }
+    },
+    "FilesReadResult": {
+      "type": "object",
+      "required": [
+        "bytes"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "handle": {
+          "type": "string",
+          "description": "A transfer handle the client drains with transfer/read, when neither toLocalPath nor inline was given."
+        },
+        "content": {
+          "type": "string",
+          "description": "Base64, for inline."
+        }
+      }
+    },
+    "FilesWriteParams": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "fromLocalPath": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string",
+          "description": "A filled transfer handle."
+        },
+        "content": {
+          "type": "string",
+          "description": "Base64, at most 4 KiB once decoded."
+        }
+      }
+    },
+    "FilesWriteResult": {
+      "type": "object",
+      "required": [
+        "bytes"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "FilesRemoveParams": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "FilesRemovePathsParams": {
+      "type": "object",
+      "required": [
+        "paths"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "FilesMoveParams": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      }
+    },
+    "TransferBeginParams": {
+      "type": "object",
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TransferBeginResult": {
+      "type": "object",
+      "required": [
+        "handle",
+        "chunkBytes"
+      ],
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "chunkBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "TransferWriteParams": {
+      "type": "object",
+      "required": [
+        "handle",
+        "data"
+      ],
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64."
+        }
+      }
+    },
+    "TransferHandleParams": {
+      "type": "object",
+      "required": [
+        "handle"
+      ],
+      "properties": {
+        "handle": {
+          "type": "string"
+        }
+      }
+    },
+    "TransferChunk": {
+      "type": "object",
+      "required": [
+        "data",
+        "done"
+      ],
+      "properties": {
+        "data": {
+          "type": "string",
+          "description": "Base64."
+        },
+        "done": {
+          "type": "boolean",
+          "description": "Set with the last chunk."
+        }
+      }
+    },
+    "DeployParams": {
+      "type": "object",
+      "required": [
+        "files",
+        "runPath"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DeployFile"
+          }
+        },
+        "runPath": {
+          "type": "string"
+        }
+      }
+    },
+    "ProgramsRunParams": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "replace": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ProgramsStatusParams": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "waitMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Answer once the state changes within this time, or with the state then."
+        }
+      }
+    },
+    "ProgramSubscription": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "state"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ProgramState"
+        }
+      }
+    },
+    "ShellRunParams": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        }
+      }
+    },
+    "SettingList": {
+      "type": "object",
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SettingValue"
+          }
+        }
+      }
+    },
+    "SettingsSetParams": {
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The setting's key, or its CLI key."
+        },
+        "value": {
+          "$ref": "#/definitions/SettingScalar"
+        }
+      }
+    },
+    "AccessModeState": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/AccessMode"
+        }
+      }
+    },
+    "TelemetryRowList": {
+      "type": "object",
+      "required": [
+        "rows"
+      ],
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TelemetryRowInfo"
+          }
+        }
+      }
+    },
+    "TelemetrySubscribeParams": {
+      "type": "object",
+      "required": [
+        "request"
+      ],
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/TelemetryRequest"
+        }
+      }
+    },
+    "TelemetrySubscription": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "brickId",
+        "grant",
+        "snapshot"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "brickId": {
+          "type": "string"
+        },
+        "grant": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/TelemetryRate"
+          },
+          "description": "The rate each row got, by row id."
+        },
+        "snapshot": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TelemetryValue"
+          }
+        }
+      }
+    },
+    "TelemetryForegroundParams": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string",
+          "description": "The brick whose telemetry this client shows in the foreground; absent for none."
+        }
+      }
+    },
+    "ChainSubscription": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "chain"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "chain": {
+          "$ref": "#/definitions/ContractChain"
+        }
+      }
+    },
+    "SubscriptionParams": {
+      "type": "object",
+      "required": [
+        "subscriptionId"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        }
+      }
+    },
+    "BrickIdPayload": {
+      "type": "object",
+      "required": [
+        "brickId"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        }
+      }
+    },
+    "PairingEvent": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "progress"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "progress": {
+          "$ref": "#/definitions/PairingProgress"
+        }
+      }
+    },
+    "OneSidedRepairNotice": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "message",
+        "repair"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string",
+          "description": "What happened, ready to show."
+        },
+        "repair": {
+          "$ref": "#/definitions/OneSidedRepair"
+        }
+      }
+    },
+    "ProgramStateChanged": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "state"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ProgramState"
+        }
+      }
+    },
+    "ChainChanged": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "chain"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "chain": {
+          "$ref": "#/definitions/ContractChain"
+        }
+      }
+    },
+    "SettingChanged": {
+      "type": "object",
+      "required": [
+        "setting"
+      ],
+      "properties": {
+        "setting": {
+          "$ref": "#/definitions/SettingValue"
+        }
+      }
+    },
+    "QuestionWithdrawn": {
+      "type": "object",
+      "required": [
+        "questionId"
+      ],
+      "properties": {
+        "questionId": {
+          "type": "string"
+        }
+      }
+    },
+    "PairingRemoval": {
+      "description": "One channel's operating-system pairing. Only channels whose provider can forget get one, so a brick known over USB alone has none.",
+      "oneOf": [
+        {
+          "description": "Removed, or already gone, which counts as removed.",
+          "type": "object",
+          "required": [
+            "status",
+            "channel"
+          ],
+          "properties": {
+            "status": {
+              "const": "removed"
+            },
+            "channel": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "The provider refused; reason carries the operating system's own words.",
+          "type": "object",
+          "required": [
+            "status",
+            "channel",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "refused"
+            },
+            "channel": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "BrickSideSkip": {
+      "description": "Why nothing was removed from the brick's list. radio-name-unknown: this computer's Bluetooth name is unknown, and it is the only key to its entry. not-reachable: no channel to the brick was connected, and none could be opened. list-unreadable: the brick's list could not be read. no-match: the list holds no entry named exactly as this computer; the report's peers has the names. error: something else failed; detail has the error, and the other parts still ran.",
+      "type": "string",
+      "enum": [
+        "radio-name-unknown",
+        "not-reachable",
+        "list-unreadable",
+        "no-match",
+        "error"
+      ]
+    },
+    "BrickSideOutcome": {
+      "description": "This computer's entry on the brick's own Bluetooth list. Only a list read back afterwards proves anything: the firmware's removal handler sets no status, so its reply says only that the brick answered.",
+      "oneOf": [
+        {
+          "description": "The list read back afterwards holds one entry of that name fewer. The firmware removes only the first entry whose name matches, so a brick that held the name twice still holds it once: remaining counts those left, and is absent when none is.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over"
+          ],
+          "properties": {
+            "status": {
+              "const": "confirmed"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "description": "Sent, and nothing shows whether it took: the removal cut the Bluetooth link it went over before any reply, the reply timed out, or the list could not be read back. detail is the error that ended it.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "sent"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "The list read back holds as many entries of that name as before (the firmware runs a removal only while its Bluetooth is on and idle), or the brick rejected the command.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Nothing was removed from the brick's list.",
+          "type": "object",
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "skipped"
+            },
+            "reason": {
+              "$ref": "#/definitions/BrickSideSkip"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "MemoryOutcome": {
+      "description": "The cockpit's own memory of the brick: the list, discovery, Bluetooth presence.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "cleared"
+            }
+          }
+        },
+        {
+          "description": "A layer failed to forget; the others still did.",
+          "type": "object",
+          "required": [
+            "status",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "ForgetResidue": {
+      "description": "A record of a forgotten brick that outlives the forget. Each provider names its own (a registry key, a BlueZ path), so a client never needs to know which operating system it came from.",
+      "type": "object",
+      "required": [
+        "location",
+        "reason"
+      ],
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "Where the record is, exactly enough for a user to find it."
+        },
+        "reason": {
+          "type": "string",
+          "description": "One line on why it stays: who owns it, or what ends it."
+        }
+      }
+    },
+    "ForgetReport": {
+      "description": "What forgetting a brick did. A forget runs every part even when one fails, and each part reports its own outcome.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "brickSide",
+        "pairing",
+        "memory",
+        "residue"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "brickSide": {
+          "$ref": "#/definitions/BrickSideOutcome"
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The names on the brick's Bluetooth list as read before any removal, untrimmed; absent when the list was not read."
+        },
+        "pairing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PairingRemoval"
+          }
+        },
+        "memory": {
+          "$ref": "#/definitions/MemoryOutcome"
+        },
+        "residue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ForgetResidue"
+          }
+        }
+      }
+    },
+    "ClearedEntry": {
+      "description": "How one entry of the brick's list ended when the list was cleared, one per entry read, in the list's order. Entries are told apart only by name.",
+      "oneOf": [
+        {
+          "description": "The list read back after its removal held one entry of that name fewer.",
+          "type": "object",
+          "required": [
+            "status",
+            "name"
+          ],
+          "properties": {
+            "status": {
+              "const": "confirmed"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Sent, and nothing shows whether it took: the link it went over was lost, or the list could not be read back. detail is the error that ended it.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "sent"
+            },
+            "name": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Still on the brick: the list read back still holds it, the brick rejected it, or it was never sent.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "name": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Its name is empty or blank, and a removal is addressed only by name; the firmware reads an empty one as the first entry with a name, so none is sent.",
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "not-removable"
+            },
+            "name": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "blank-name"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ClearSkip": {
+      "description": "Why nothing was removed from the brick's list. not-reachable: no channel to the brick was connected, and none could be opened. list-unreadable: the list could not be read. nothing-to-remove: the list was empty, or held only entries without a name. radio-name-unknown: only Bluetooth reaches the brick, this computer's Bluetooth name is unknown, and the list does not mark exactly one entry connected, so nothing tells which entry holds the link. link-entry-unknown: only Bluetooth reaches the brick, no entry carries this computer's Bluetooth name, and the list does not mark exactly one entry connected. duplicate-link-entry: only Bluetooth reaches the brick, and the name of this computer's entry is held more than once, so removing it could cut the link before the other copy is sent.",
+      "type": "string",
+      "enum": [
+        "not-reachable",
+        "list-unreadable",
+        "nothing-to-remove",
+        "radio-name-unknown",
+        "link-entry-unknown",
+        "duplicate-link-entry"
+      ]
+    },
+    "ClearPairingSkip": {
+      "description": "Why this computer's pairing with the brick was left alone. radio-name-unknown: this computer's Bluetooth name is unknown and no entry marked connected stood in for it. not-on-brick: no entry on the brick carried this computer's exact Bluetooth name. not-removed: this computer's entry was on the brick and was not removed. not-paired: this computer's entry went, and the operating system did not list the brick as paired.",
+      "type": "string",
+      "enum": [
+        "radio-name-unknown",
+        "not-on-brick",
+        "not-removed",
+        "not-paired"
+      ]
+    },
+    "ClearListReport": {
+      "description": "What clearing a brick's Bluetooth list did: the same family as ForgetReport.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "paired",
+        "entries",
+        "pairing",
+        "residue"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "over": {
+          "type": "string",
+          "description": "The channel the list was read and changed over; absent when none was reached."
+        },
+        "thisComputer": {
+          "type": "string",
+          "description": "This computer's Bluetooth name, the key to its own entry; absent when unknown."
+        },
+        "paired": {
+          "type": "boolean",
+          "description": "Whether this computer was paired with the brick over Bluetooth when the clear began."
+        },
+        "skipped": {
+          "description": "Set when nothing was removed, with why.",
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "properties": {
+            "reason": {
+              "$ref": "#/definitions/ClearSkip"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The names on the brick's list as read before any removal, untrimmed; absent when not read."
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ClearedEntry"
+          }
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The names on the brick's list as last read back after the removals, less the one whose removal counts as sent; absent when the clear stopped before removing anything."
+        },
+        "pairing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PairingRemoval"
+          }
+        },
+        "pairingLeft": {
+          "$ref": "#/definitions/ClearPairingSkip"
+        },
+        "memory": {
+          "$ref": "#/definitions/MemoryOutcome"
+        },
+        "residue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ForgetResidue"
+          }
+        }
+      }
+    },
+    "RepairRemoval": {
+      "description": "The half of a one-sided pairing the cockpit removed: the operating system's pairing (removed, refused), or this computer's entry on the brick (confirmed, sent, failed).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "channel"
+          ],
+          "properties": {
+            "status": {
+              "const": "removed"
+            },
+            "channel": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "channel",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "refused"
+            },
+            "channel": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over"
+          ],
+          "properties": {
+            "status": {
+              "const": "confirmed"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "sent"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "over",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "failed"
+            },
+            "name": {
+              "type": "string"
+            },
+            "over": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "OneSidedRepair": {
+      "description": "A pairing found broken on one side over USB or TCP, and what the cockpit did about it. When the half was removed, the pairing that follows reports through bricks/pairingStarted and bricks/pairingDone.",
+      "type": "object",
+      "required": [
+        "brickId",
+        "found",
+        "others"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "found": {
+          "type": "string",
+          "enum": [
+            "computer-only",
+            "brick-only"
+          ],
+          "description": "computer-only: this computer has the brick paired, and the brick's list lacks this computer's name. brick-only: the brick lists this computer, and this computer does not have it paired."
+        },
+        "removal": {
+          "$ref": "#/definitions/RepairRemoval"
+        },
+        "others": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The brick's other named entries, which clearing the brick's Bluetooth list removes with the rest."
+        },
+        "repeated": {
+          "type": "boolean",
+          "description": "Found again after a repair since the last connect: reported, and nothing done. removal is then absent."
+        }
+      }
+    },
+    "Settings": {
+      "x-file": "settings.json",
+      "type": "object",
+      "properties": {
+        "accessMode": {
+          "x-cliKey": "access-mode",
+          "x-dangerous": true,
+          "x-stored": false,
+          "type": "string",
+          "enum": [
+            "safe",
+            "full"
+          ],
+          "default": "safe",
+          "description": "What clients may do on a brick. safe: write, delete and run only in the projects folder and on the SD card, read everywhere. full: change any file and run shell commands. full lasts until the daemon ends."
+        },
+        "rememberBricks": {
+          "x-cliKey": "remember-bricks",
+          "x-dangerous": false,
+          "type": "string",
+          "enum": [
+            "wait",
+            "auto"
+          ],
+          "default": "wait",
+          "description": "Bricks that were connected when the cockpit last ended: wait connects them only on Connect; auto connects them as soon as they are seen."
+        },
+        "telemetry.staleFactor": {
+          "x-cliKey": "telemetry.stale-factor",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "A value is stale once no newer reading has come for this many of its own reading intervals."
+        },
+        "telemetry.staleTimeoutMs": {
+          "x-cliKey": "telemetry.stale-timeout-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 0,
+          "default": 10000,
+          "description": "How long a stale value is still shown, marked, before it is dropped, in milliseconds."
+        },
+        "telemetry.throttle.enabled": {
+          "x-cliKey": "telemetry.throttle.enabled",
+          "x-dangerous": false,
+          "type": "boolean",
+          "default": true,
+          "description": "Slow a brick's telemetry while it answers slowly, and speed it back up when it recovers."
+        },
+        "telemetry.throttle.windowSize": {
+          "x-cliKey": "telemetry.throttle.window-size",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 5,
+          "default": 20,
+          "description": "Telemetry frames per window; the slowest 5 % of a window decides whether to slow down."
+        },
+        "telemetry.throttle.tailFactor": {
+          "x-cliKey": "telemetry.throttle.tail-factor",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "How many times the link's usual round trip a window's p95 may reach before slowing down."
+        },
+        "telemetry.throttle.step": {
+          "x-cliKey": "telemetry.throttle.step",
+          "x-dangerous": false,
+          "type": "number",
+          "exclusiveMinimum": 1,
+          "default": 1.5,
+          "description": "How much one step slows the telemetry tick down, or speeds it back up."
+        },
+        "telemetry.throttle.maxSlowdown": {
+          "x-cliKey": "telemetry.throttle.max-slowdown",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 4,
+          "description": "The most the telemetry tick is slowed, as a multiple of its planned tick."
+        },
+        "telemetry.throttle.calmWindows": {
+          "x-cliKey": "telemetry.throttle.calm-windows",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Windows in a row within the limit before the telemetry speeds up a step."
+        },
+        "telemetry.programRunningTickMs": {
+          "x-cliKey": "telemetry.program-running-tick-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 0,
+          "default": 200,
+          "description": "While a program runs, its brick's telemetry is read no more often than this, in milliseconds; 0 turns it off."
+        },
+        "transfer.tcpPacketBytes": {
+          "x-cliKey": "transfer.tcp-packet-bytes",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65535,
+          "default": 1024,
+          "description": "Largest packet a file transfer sends over Wi-Fi. The stock firmware takes 1024; a larger packet on it can corrupt a file when the link drops."
+        },
+        "transfer.btPacketBytes": {
+          "x-cliKey": "transfer.bt-packet-bytes",
+          "x-dangerous": false,
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 65535,
+          "default": 1024,
+          "description": "Largest packet a file transfer sends over Bluetooth. The stock firmware takes 1024; a larger packet on it can corrupt a file when the link drops."
+        },
+        "programs.statusIntervalMs": {
+          "x-cliKey": "programs.status-interval-ms",
+          "x-dangerous": false,
+          "type": "number",
+          "minimum": 1,
+          "default": 1000,
+          "description": "How often a followed program's state is read, in milliseconds."
+        }
+      }
+    },
+    "AccessMode": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "full"
+      ]
+    },
+    "SettingScalar": {
+      "description": "A setting's value.",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ]
+    },
+    "SettingType": {
+      "type": "string",
+      "enum": [
+        "boolean",
+        "number",
+        "integer",
+        "string"
+      ]
+    },
+    "SettingSpec": {
+      "description": "One setting with its rules, as the Settings definition gives them.",
+      "type": "object",
+      "required": [
+        "key",
+        "cliKey",
+        "type",
+        "default",
+        "description",
+        "dangerous",
+        "stored"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "cliKey": {
+          "type": "string",
+          "description": "The key as ev3 config spells it."
+        },
+        "type": {
+          "$ref": "#/definitions/SettingType"
+        },
+        "default": {
+          "$ref": "#/definitions/SettingScalar"
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "exclusiveMinimum": {
+          "type": "number",
+          "description": "Values must be greater than this."
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "dangerous": {
+          "type": "boolean",
+          "description": "Changing it runs only after a person said yes."
+        },
+        "stored": {
+          "type": "boolean",
+          "description": "Written to the settings file; false when it lasts only as long as the daemon."
+        }
+      }
+    },
+    "SettingValue": {
+      "type": "object",
+      "required": [
+        "spec",
+        "value"
+      ],
+      "properties": {
+        "spec": {
+          "$ref": "#/definitions/SettingSpec"
+        },
+        "value": {
+          "$ref": "#/definitions/SettingScalar"
+        }
+      }
+    },
+    "TelemetryRowInfo": {
+      "description": "A telemetry row a client can subscribe to.",
+      "type": "object",
+      "required": [
+        "id",
+        "tier"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "port": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TelemetryRequest": {
+      "type": "object",
+      "required": [
+        "rows",
+        "intervalMs"
+      ],
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intervalMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "Sensor port modes, by port: {\"1\": 2}."
+        }
+      }
+    },
+    "TelemetryRate": {
+      "description": "How often a row is read.",
+      "oneOf": [
+        {
+          "description": "Every ms milliseconds.",
+          "type": "object",
+          "required": [
+            "kind",
+            "ms"
+          ],
+          "properties": {
+            "kind": {
+              "const": "interval"
+            },
+            "ms": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "description": "Read once; the value does not change while the brick is connected.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "once"
+            }
+          }
+        }
+      ]
+    },
+    "TelemetryValue": {
+      "type": "object",
+      "required": [
+        "rowId",
+        "value",
+        "sampledAt",
+        "stale"
+      ],
+      "properties": {
+        "rowId": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "number",
+            "string",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sampledAt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Milliseconds since the Unix epoch."
+        },
+        "effectiveRate": {
+          "$ref": "#/definitions/TelemetryRate"
+        },
+        "stale": {
+          "type": "boolean"
+        }
+      }
+    },
+    "TelemetryUpdate": {
+      "type": "object",
+      "required": [
+        "subscriptionId",
+        "brickId",
+        "kind",
+        "values",
+        "removed"
+      ],
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "brickId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "snapshot",
+            "change",
+            "ended"
+          ],
+          "description": "A fresh snapshot follows every subscribe and every reconnect to a new daemon."
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TelemetryValue"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ChainMember": {
+      "type": "object",
+      "required": [
+        "layer",
+        "capabilities"
+      ],
+      "properties": {
+        "layer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capabilities": {
+          "type": "object",
+          "required": [
+            "sensors",
+            "motorTypes",
+            "motorReadout",
+            "files",
+            "programs",
+            "name"
+          ],
+          "properties": {
+            "sensors": {
+              "type": "boolean"
+            },
+            "motorTypes": {
+              "type": "boolean"
+            },
+            "motorReadout": {
+              "type": "boolean"
+            },
+            "files": {
+              "type": "boolean"
+            },
+            "programs": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "ContractChain": {
+      "type": "object",
+      "required": [
+        "brickId",
+        "read",
+        "stale",
+        "members"
+      ],
+      "properties": {
+        "brickId": {
+          "type": "string"
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ChainMember"
+          }
+        }
+      }
+    }
+  }
+}

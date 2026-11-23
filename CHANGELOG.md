@@ -10,6 +10,32 @@ Minor and major versions are bumped manually for significant milestones.
 
 ## [Unreleased]
 
+## [0.3.0-preview.1] — 2026-11-23
+
+A preview for early testers. Not on the VS Code Marketplace or npm: install the VSIX or the npm
+packages attached to the GitHub pre-release. The hardware sign-off (U16) is still to come.
+
+### Added
+- One native daemon per user, `ev3-cockpitd` (Rust), holds the bricks for every client: their
+  connections over USB, Bluetooth and TCP, presence, telemetry, programs, files and settings.
+  It needs no Node runtime.
+- `ev3`, a native command for a shell, scripts and agents (`ev3 help`), and `ev3 mcp`, which
+  serves the cockpit's tools to an agent over MCP. The npm package `ev3-cockpit` installs it
+  through a launcher and the platform package `@ev3-cockpit/<platform>`.
+- `@ev3-cockpit/client`, the client library add-ons such as EVƎ C use; the contract is generated
+  from the JSON Schema in `contract/`.
+- `daemon/status` names the brick each client shows; `daemon/showsChanged` tells every client.
+- Platforms: Windows and Linux on x64 and arm64 (VSIX and npm), and 32-bit x86 (npm only; VS Code
+  has no 32-bit build).
+
+### Changed
+- The VS Code extension is a client of the daemon; two windows share one brick.
+- A program run's `runSeq` survives a daemon replacement.
+
+### Removed
+- The Node daemon, the TypeScript core, the C# Bluetooth pairing helper and macOS support (to come
+  back on the Rust daemon).
+
 ## [0.0.1] — 2026-04-04
 
 ### Added
