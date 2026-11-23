@@ -566,7 +566,7 @@ impl Server {
                 let result = client
                     .request("bricks/disconnect", json!({ "brick": brick }))
                     .await?;
-                if let Some(known) = client.brick(&brick)
+                if let Some(known) = client.brick(&brick).await.ok().flatten()
                     && let Some(id) = known.get("brickId").and_then(Value::as_str)
                 {
                     self.my_bricks.lock().expect("bricks").remove(id);

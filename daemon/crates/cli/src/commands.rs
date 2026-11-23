@@ -327,7 +327,7 @@ impl Ctx {
             self.client().await?;
             return Ok((None, "the brick".into()));
         };
-        if let Some(known) = self.client().await?.brick(&reference)
+        if let Some(known) = self.client().await?.brick(&reference).await?
             && known.get("connected").and_then(Value::as_bool) == Some(true)
         {
             return Ok((
@@ -566,7 +566,7 @@ async fn pair(ctx: &mut Ctx) -> Result<Outcome> {
     let reference = ctx.required_brick("the brick to pair")?;
     let json = ctx.json;
     let client = ctx.client().await?;
-    if client.brick(&reference).is_none() {
+    if client.brick(&reference).await?.is_none() {
         if !json {
             eprintln!("Looking for {reference} over Bluetooth; keep it on and visible.");
         }

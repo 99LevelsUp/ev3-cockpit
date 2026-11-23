@@ -189,7 +189,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
                 if let Some(text) = notice {
                     (options.notice)(&text);
                 }
-                return Ok(finish(connection, options));
+                return Ok(finish(connection, options, started));
             }
             Decision::Stop(reason) => {
                 connection.endpoint.close();
@@ -209,7 +209,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
                     .to_owned();
                 (options.notice)(&reason);
                 if speaks_our_contract(&connection.daemon) {
-                    return Ok(finish(connection, options));
+                    return Ok(finish(connection, options, started));
                 }
                 connection.endpoint.close();
                 return Err(CliError::start(
@@ -225,14 +225,18 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
     ))
 }
 
-fn finish(connection: Connected, options: &Options<'_>) -> Connected {
-    let root = &options.paths.root;
-    let own = options.daemon.as_ref().map(|d| d.sha256.as_str());
-    let keep: Vec<&str> = own
-        .into_iter()
-        .chain(Some(connection.daemon.build_id.as_str()))
-        .collect();
-    launch::remove_old_copies(root, &keep);
+/// The connection this client works with. A client that started the daemon removes the verified
+/// copies no daemon needs any more: copies pile up only when a daemon is replaced, and a
+/// replacement always ends in a start, so a command reaching a running daemon skips the walk.
+fn finish(connection: Connected, options: &Options<'_>, started: bool) -> Connected {
+    if started {
+        let own = options.daemon.as_ref().map(|d| d.sha256.as_str());
+        let keep: Vec<&str> = own
+            .into_iter()
+            .chain(Some(connection.daemon.build_id.as_str()))
+            .collect();
+        launch::remove_old_copies(&options.paths.root, &keep);
+    }
     // The installed cockpit records its daemon for add-ons; a development build is not the
     // installed one.
     if let Some(own) = &options.daemon
