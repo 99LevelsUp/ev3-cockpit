@@ -60,7 +60,9 @@ impl Daemon {
             .stderr(Stdio::null());
         home.apply(&mut command, channel);
         let child = command.spawn().expect("the daemon starts");
-        // It is serving once its channel record exists.
+        // It is serving once its channel record names it. A daemon killed before it leaves its
+        // record behind, so the record existing is not enough: until the new one writes its own,
+        // a client finds no daemon and would try to start one itself.
         let record = if channel.is_empty() {
             home.state_root().join("channel.json")
         } else {
@@ -69,11 +71,17 @@ impl Daemon {
                 .join(channel)
                 .join("channel.json")
         };
+        let ours = || {
+            std::fs::read_to_string(&record)
+                .ok()
+                .and_then(|text| ev3_channel::record::parse_record(&text))
+                .is_some_and(|r| u64::from(r.pid) == u64::from(child.id()))
+        };
         let until = Instant::now() + Duration::from_secs(20);
-        while !record.exists() && Instant::now() < until {
+        while !ours() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(record.exists(), "the replay daemon did not come up");
+        assert!(ours(), "the replay daemon did not come up");
         Some(Self(child))
     }
 

@@ -601,11 +601,18 @@ mod tests {
         // inherited, `(I)(F)`; on GitHub's runner the same single entry shows as `(F)`, so the
         // check is on whose entry it is and what it grants, not on that mark.
         assert_eq!(entries.len(), 1, "one entry, the user's: {text}");
-        let user = std::env::var("USERNAME").expect("USERNAME");
+        // Who this process runs as, as icacls names it (DOMAIN\user), not USERNAME, which a
+        // process started for another user may have inherited.
+        let whoami = std::process::Command::new("whoami")
+            .output()
+            .expect("whoami runs");
+        let user = String::from_utf8_lossy(&whoami.stdout)
+            .trim()
+            .to_lowercase();
         let entry = entries[0].to_lowercase();
         assert!(
-            entry.contains(&format!("\\{}:", user.to_lowercase())) && entry.contains("(f)"),
-            "the user's full access alone: {text}"
+            entry.contains(&format!("{user}:")) && entry.contains("(f)"),
+            "the user's full access alone ({user}): {text}"
         );
         std::fs::remove_dir_all(parent).expect("clean");
     }

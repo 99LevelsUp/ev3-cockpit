@@ -131,7 +131,7 @@ jobs:
           # profile folders at the user's own profile, which the first logon creates.
           $profile = 'C:\Users\ev3ci'
           $environment = @{
-            USERPROFILE = $profile; HOME = $profile
+            USERPROFILE = $profile; HOME = $profile; USERNAME = 'ev3ci'
             APPDATA = "$profile\AppData\Roaming"; LOCALAPPDATA = "$profile\AppData\Local"
             TEMP = "$profile\AppData\Local\Temp"; TMP = "$profile\AppData\Local\Temp"
           }
