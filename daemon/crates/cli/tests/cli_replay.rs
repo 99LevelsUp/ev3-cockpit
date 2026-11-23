@@ -246,6 +246,34 @@ fn a_hold_lasts_past_ev3_connect_shows_in_status_and_ends_with_disconnect() {
 }
 
 #[test]
+fn a_command_uses_a_connected_brick_as_it_is_without_connecting_it_again() {
+    let home = Home::new("asis");
+    let Some(_daemon) = Daemon::start(&home, "service/usb-info-storage-listing-ccc") else {
+        return;
+    };
+    home.ev3(&["--json", "connect", "CCC"]).expect(0);
+    // The one connected brick when none is named, then the brick by its name.
+    assert_eq!(
+        home.ev3(&["--json", "info"]).expect(0).json()["name"],
+        "CCC"
+    );
+    home.ev3(&["--json", "storage", "CCC"]).expect(0);
+    // Connecting a connected brick again makes the daemon join every channel it has not
+    // connected and wait for them; the log says who connected a brick.
+    let log = std::fs::read_to_string(home.paths().log).expect("the daemon's log");
+    let again: Vec<&str> = log
+        .lines()
+        .filter(|l| {
+            (l.contains("[ev3 info") || l.contains("[ev3 storage")) && l.contains("] Connected 0")
+        })
+        .collect();
+    assert!(
+        again.is_empty(),
+        "a command connected the brick again: {again:?}"
+    );
+    home.ev3(&["--json", "disconnect", "CCC"]).expect(0);
+}
+#[test]
 fn settings_are_named_by_either_spelling_and_a_wrong_key_or_value_is_a_usage_error() {
     let home = Home::new("config");
     let Some(_daemon) = Daemon::start(&home, "link/usb-connect-commands-aaa") else {

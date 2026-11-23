@@ -304,7 +304,36 @@ impl Ctx {
 
     /// Connects the brick for this command alone, unless it is connected already; with none
     /// named, the one connected brick. Answers `(brickId, name)`.
+    ///
+    /// A brick connected already is used as it is. Asking the daemon to connect it again is what
+    /// a person does to bring its lost channels back: the daemon joins every channel the brick has
+    /// not connected, the paired Bluetooth one included, and waits for them. Done before every
+    /// command it made each one wait for that Bluetooth attempt, about 40 s for a brick held over
+    /// TCP with its Bluetooth off (U16, 23.11.2026).
     async fn connected_brick(&mut self, reference: Option<String>) -> Result<(String, String)> {
+        let connected =
+            |brick: &Value| brick.get("connected").and_then(Value::as_bool) == Some(true);
+        let known = match &reference {
+            Some(r) => self.client().await?.brick(r).await?.filter(connected),
+            None => {
+                let list = self
+                    .client()
+                    .await?
+                    .request("bricks/list", json!({}))
+                    .await?;
+                let mut on = array(&list, "bricks").into_iter().filter(connected);
+                match (on.next(), on.next()) {
+                    (Some(only), None) => Some(only),
+                    _ => None,
+                }
+            }
+        };
+        if let Some(brick) = known {
+            return Ok((
+                text(&brick, "brickId").to_owned(),
+                text(&brick, "name").to_owned(),
+            ));
+        }
         let params = match reference {
             Some(r) => json!({ "brick": r }),
             None => json!({}),
