@@ -97,10 +97,10 @@ update finishes without a "file in use" error; the daemon keeps running from its
 | Check | HOSTA | HOSTB | RPi5 |
 |---|---|---|---|
 | F2 USB | passed, AAA, BBB, CCC (23.11.) | | passed, CCC, from the pre-release npm packages (23.11.) |
-| F2 Bluetooth | passed, BBB and CCC with Wi-Fi off (23.11.) | | passed, CCC (23.11.) |
+| F2 Bluetooth | passed, BBB and CCC with Wi-Fi off (23.11.) | passed, CCC, paired without sudo or the bluetooth group (23.11.) | passed, CCC (23.11.) |
 | F2 TCP (AAA) | works in one connection; per-command runs fail, see findings (23.11.) | | |
 | pairing, forget, list clearing | passed, CCC (23.11.) | | pairing passed, CCC, without the bluetooth group (23.11.) |
-| `ev3 mcp` agent | | | |
+| `ev3 mcp` agent | passed, BBB over USB: 16 tool calls and a refused path outside the root (23.11.) | | |
 | deploy-brick-off recorded | done, CCC (23.11.) | — | — |
 | cable-pull recorded | done, CCC (23.11.) | — | — |
 | F1, `api-check`, VS Code update | deferred with VS Code | — | — |
