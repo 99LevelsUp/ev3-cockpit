@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod questions;
 pub mod resolver;
 pub mod rpc;
+pub mod runs;
 pub mod server;
 pub mod settings;
 pub mod state;

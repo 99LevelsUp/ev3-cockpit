@@ -88,6 +88,8 @@ pub struct Paths {
     pub held: PathBuf,
     /// `ledger.json`: what cut transfers left owed on each brick.
     pub ledger: PathBuf,
+    /// `runs.json`: the last `runSeq` of each brick, so the next daemon counts on.
+    pub runs: PathBuf,
     /// Linux and macOS: the directory the socket lives in.
     #[cfg(unix)]
     pub socket_dir: PathBuf,
@@ -110,6 +112,7 @@ impl Paths {
             log: dir.join("daemon.log"),
             held: dir.join("held.json"),
             ledger: dir.join("ledger.json"),
+            runs: dir.join("runs.json"),
             #[cfg(unix)]
             socket_dir: socket_dir(root),
             dir,
@@ -141,6 +144,7 @@ mod tests {
         assert_eq!(user.key, test.key);
         assert_eq!(test.lock, test.dir.join("daemon.lock"));
         assert_eq!(test.record, test.dir.join("channel.json"));
+        assert_eq!(test.runs, test.dir.join("runs.json"));
     }
 
     #[test]

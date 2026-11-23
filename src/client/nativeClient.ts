@@ -93,7 +93,7 @@ class Emitter<T> {
 const NOTIFICATIONS: readonly NotificationName[] = [
 	'bricks/changed', 'bricks/reconnected', 'bricks/pairingStarted', 'bricks/pairingEvent', 'bricks/pairingDone',
 	'bricks/oneSidedRepair', 'programs/stateChanged', 'telemetry/update', 'chain/changed', 'settings/changed',
-	'settings/accessModeChanged', 'question/withdrawn',
+	'settings/accessModeChanged', 'question/withdrawn', 'daemon/showsChanged',
 ];
 
 const ANSWERS: readonly QuestionAnswer[] = ['yes', 'no', 'keep'];

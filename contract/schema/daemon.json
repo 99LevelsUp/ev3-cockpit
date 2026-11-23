@@ -34,6 +34,26 @@
         "buildKind": { "$ref": "#/definitions/BuildKind" }
       }
     },
+    "ClientStatus": {
+      "description": "A connected client as daemon/status names it: who its hello said it is, and the brick it shows.",
+      "type": "object",
+      "required": ["name", "kind", "version", "buildKind"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "$ref": "#/definitions/ClientKind" },
+        "version": { "type": "string" },
+        "buildKind": { "$ref": "#/definitions/BuildKind" },
+        "shows": { "type": "string", "description": "The id of the brick this client shows in the foreground (its last telemetry/foreground); absent when it shows none." }
+      }
+    },
+    "ShowsChanged": {
+      "description": "Every connected client, after a client's shown brick changed.",
+      "type": "object",
+      "required": ["clients"],
+      "properties": {
+        "clients": { "type": "array", "items": { "$ref": "#/definitions/ClientStatus" } }
+      }
+    },
     "BrickStatus": {
       "description": "Holders and the write lease of one brick, for ev3 daemon status.",
       "type": "object",
@@ -58,7 +78,7 @@
         "pid": { "type": "integer", "minimum": 0 },
         "channel": { "type": "string", "description": "The pipe or socket path the daemon listens on." },
         "startedAt": { "type": "integer", "minimum": 0, "description": "Milliseconds since the Unix epoch." },
-        "clients": { "type": "array", "items": { "$ref": "#/definitions/ClientInfo" } },
+        "clients": { "type": "array", "items": { "$ref": "#/definitions/ClientStatus" } },
         "bricks": { "type": "array", "items": { "$ref": "#/definitions/BrickStatus" } },
         "logPath": { "type": "string" }
       }

@@ -27,6 +27,7 @@ The protocol is in `docs/protocol.md`, the channel in `docs/channel.md`; add-on 
 - `methods.rs`: the daemon's own methods (status, exit, log, settings);
 - `surface/`: every brick method over the runtime (`runtime.rs` builds the runtime the channel and mode allow);
 - `holders.rs`: who holds each brick, and `held.json`;
+- `runs.rs`: each brick's last `runSeq`, kept in `runs.json` so a replacing daemon counts on;
 - `leases.rs`: one writer per brick per request;
 - `questions.rs`: questions for a person, put only to a VS Code window or a terminal;
 - `access.rs`: the access mode, `safe` or `full`;

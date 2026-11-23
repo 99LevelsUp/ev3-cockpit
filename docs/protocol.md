@@ -30,6 +30,7 @@ explains it. How a client finds the daemon, the key, the lock, the framing, the 
 | `settings.json` | settings that differ from their defaults |
 | `held.json` | the bricks held with `ev3 connect`, which the next daemon connects again |
 | `ledger.json` | unsettled transfers per brick, settled before that brick's next transfer |
+| `runs.json` | each brick's last `runSeq`, so the next daemon counts on |
 
 ## Messages
 
@@ -77,7 +78,7 @@ lease, whether it needs a person and which client kinds may call it.
 Notifications: `bricks/changed`, `bricks/reconnected`, `bricks/pairingStarted`,
 `bricks/pairingEvent`, `bricks/pairingDone`, `bricks/oneSidedRepair`, `programs/stateChanged`,
 `telemetry/update`, `chain/changed`, `settings/changed`, `settings/accessModeChanged`,
-`question/withdrawn`. The daemon's one request to a client is `question/ask`.
+`question/withdrawn`, `daemon/showsChanged`. The daemon's one request to a client is `question/ask`.
 
 **Naming a brick.** A request names its brick by id or by name; case does not matter.
 
@@ -128,8 +129,9 @@ start outcome is one of:
 - `uncertain`: the program may have started. Do not start it again; check its state first.
 
 `runSeq` counts the starts on each brick. Program states carry it, and `stoppedBy` when a stop ended
-the program. A new daemon starts counting at 0 again (keeping it across a replacement is open,
-native daemon plan U17).
+the program. The daemon writes each brick's last number to `runs.json` before it sends the start,
+so a daemon that replaces it counts on. A missing `runs.json` counts from 0; a damaged one is moved
+aside, said in the log, and counting starts from 0.
 
 ## Questions for a person
 
@@ -166,6 +168,12 @@ snapshot first, then changes) and `chain/changed`. `subscriptions/cancel` ends o
 
 Connecting a brick starts no telemetry: the daemon reads a brick for a client that shows it
 (`telemetry/foreground`) or while a subscription asks for rows.
+
+**Which brick a client shows.** `daemon/status` names it per client: each entry of `clients` has
+`shows`, the id of the brick that client last made foreground, and no `shows` when it shows none.
+When that changes for any client (it shows another brick or none, or its connection closes while it
+shows one), every client hears `daemon/showsChanged`, which carries every connected client the way
+`daemon/status` lists them. Sending the same brick again changes nothing and is not announced.
 
 When the daemon is replaced or restarted, the client library connects again and reconnects the
 bricks it connected. It then subscribes again, each subscription with a fresh snapshot first, and

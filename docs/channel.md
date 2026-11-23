@@ -29,10 +29,12 @@ its directory. The key is in the root and is shared by every channel.
 | `channel.json` | channel directory | where the pipe or socket is |
 | `settings.json` | channel directory | stored settings |
 | `held.json` | channel directory | the bricks held with `ev3 connect`, which the next daemon connects again |
+| `ledger.json` | channel directory | unsettled transfers per brick |
+| `runs.json` | channel directory | each brick's last `runSeq`, so the next daemon counts on |
 | `daemon.log`, `.1`, `.2` | channel directory | the log, rotated at 5 MB, three files kept |
 
-`key`, `daemon.lock`, `channel.json`, `settings.json` and the temporary files they are written
-through are readable and writable by the user alone from the moment they exist. On Windows that
+`key`, `daemon.lock`, `channel.json`, `settings.json`, `held.json`, `runs.json` and the temporary
+files they are written through are readable and writable by the user alone from the moment they exist. On Windows that
 is a protected DACL with a single entry, the user's SID with full access
 (`D:P(A;;GA;;;<user SID>)`); on Linux and macOS mode `0600`. On Linux and macOS the directories the
 daemon creates get mode `0700` and the log `0600`. On Windows the directories and the log inherit

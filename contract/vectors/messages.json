@@ -16,7 +16,7 @@
       "result": {
         "version": "0.3.0", "contractVersion": 2, "buildKind": "release", "buildId": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "mode": "hardware", "pid": 4242,
         "channel": "\\\\.\\pipe\\ev3-cockpit-0f1e2d3c4b5a6978", "startedAt": 1764000000000,
-        "clients": [{ "name": "ev3 status (terminal)", "kind": "cli", "version": "0.3.0", "buildKind": "release" }],
+        "clients": [{ "name": "ev3 status (terminal)", "kind": "cli", "version": "0.3.0", "buildKind": "release" }, { "name": "VS Code (robot-project)", "kind": "vscode", "version": "0.3.0", "buildKind": "release", "shows": "001653f00a0a" }],
         "bricks": [{ "brickId": "001653f00a0a", "name": "AAA", "holders": [{ "kind": "client", "client": "EVƎ Cockpit (VS Code)" }], "leaseHolder": "EVƎ Cockpit (VS Code)", "reconnecting": false }],
         "logPath": "/home/user/.local/state/ev3-cockpit/native/logs/daemon.log"
       }
@@ -237,7 +237,8 @@
     "chain/changed": { "subscriptionId": "s-3", "chain": { "brickId": "001653f00a0a", "read": true, "stale": false, "members": [] } },
     "settings/changed": { "setting": { "spec": { "key": "telemetry.throttle.enabled", "cliKey": "telemetry.throttle.enabled", "type": "boolean", "default": true, "description": "Slow a brick's telemetry while it answers slowly.", "dangerous": false, "stored": true }, "value": false } },
     "settings/accessModeChanged": { "mode": "full" },
-    "question/withdrawn": { "questionId": "q-1" }
+    "question/withdrawn": { "questionId": "q-1" },
+    "daemon/showsChanged": { "clients": [{ "name": "VS Code (robot-project)", "kind": "vscode", "version": "0.3.0", "buildKind": "release", "shows": "001653f00a0a" }, { "name": "EVƎ C (VS Code)", "kind": "addon", "version": "7.0.0", "buildKind": "release" }] }
   },
   "clientRequests": {
     "question/ask": {

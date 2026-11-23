@@ -39,12 +39,7 @@ impl Daemon {
             build_id: identity.build_id.clone(),
             build_kind: identity.build_kind,
             channel: identity.channel_path.clone(),
-            clients: self
-                .shared
-                .clients()
-                .iter()
-                .map(|client| client.info.clone())
-                .collect(),
+            clients: self.surface.client_status(),
             contract_version: std::num::NonZeroU64::new(u64::from(CONTRACT_VERSION))
                 .expect("the contract version is at least 1"),
             log_path: self.shared.log.path().display().to_string(),

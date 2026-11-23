@@ -1,13 +1,14 @@
 //! Telemetry and the daisy chain: subscriptions with a snapshot first, each client's foreground
-//! brick, and the chain as the read model sees it.
+//! brick (the brick it shows, which `daemon/status` names and `daemon/showsChanged` announces), and
+//! the chain as the read model sees it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 
 use ev3_contract::{
-    ChainChanged, ChainSubscription, ContractChain, ContractError, Notification,
-    TelemetryForegroundParams, TelemetryRate, TelemetryRowList, TelemetrySubscribeParams,
-    TelemetrySubscription, TelemetryUpdateKind, TelemetryValue,
+    ChainChanged, ChainSubscription, ClientStatus, ContractChain, ContractError, Notification,
+    ShowsChanged, TelemetryForegroundParams, TelemetryRate, TelemetryRowList,
+    TelemetrySubscribeParams, TelemetrySubscription, TelemetryUpdateKind, TelemetryValue,
 };
 use ev3_runtime::{ClaimRequest, DeliveryTarget, RowRate, chain_of};
 
@@ -172,17 +173,49 @@ impl Surface {
         cx: &RequestContext,
         params: TelemetryForegroundParams,
     ) -> Result<(), ContractError> {
-        match params.brick {
-            None => {
-                self.lock().foreground.remove(&cx.client.id);
-            }
+        let changed = match params.brick {
+            None => self.lock().foreground.remove(&cx.client.id).is_some(),
             Some(brick) => {
                 let brick_id = self.brick_of(cx, Some(&brick)).await?;
-                self.lock().foreground.insert(cx.client.id, brick_id);
+                let before = self
+                    .lock()
+                    .foreground
+                    .insert(cx.client.id, brick_id.clone());
+                before.as_deref() != Some(brick_id.as_str())
             }
-        }
+        };
         self.apply_foreground();
+        if changed {
+            self.shows_changed();
+        }
         Ok(())
+    }
+
+    /// Every connected client as `daemon/status` names it, with the brick each shows.
+    pub fn client_status(&self) -> Vec<ClientStatus> {
+        let foreground = self.lock().foreground.clone();
+        self.shared
+            .clients()
+            .iter()
+            .map(|client| ClientStatus {
+                name: client.info.name.clone(),
+                kind: client.info.kind,
+                version: client.info.version.clone(),
+                build_kind: client.info.build_kind,
+                shows: foreground.get(&client.id).cloned(),
+            })
+            .collect()
+    }
+
+    /// Tells every client that the brick a client shows changed. The list is read and sent under
+    /// one lock, so two changes close together reach every client in the order of their lists and
+    /// the last list a client hears is the current one.
+    pub(super) fn shows_changed(&self) {
+        let _order = self.shows_order.lock().expect("shows lock");
+        self.shared
+            .broadcast(&Notification::DaemonShowsChanged(ShowsChanged {
+                clients: self.client_status(),
+            }));
     }
 
     /// Reads every brick a client shows in the foreground.
