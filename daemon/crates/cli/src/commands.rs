@@ -365,7 +365,7 @@ impl Ctx {
         let request = client.request("bricks/connect", params);
         tokio::pin!(request);
         tokio::select! {
-            result = &mut request => return result,
+            result = &mut request => return Ok(result?),
             () = tokio::time::sleep(SLOW_CONNECT) => {}
         }
         if !json {
@@ -373,7 +373,7 @@ impl Ctx {
                 "Connecting {named}; over Bluetooth this can take up to a minute before it succeeds or fails."
             );
         }
-        request.await
+        Ok(request.await?)
     }
 
     /// The brick a stop reaches: a connected brick is stopped as it is, never signed in again;
