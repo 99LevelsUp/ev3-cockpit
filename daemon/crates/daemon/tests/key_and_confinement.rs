@@ -103,7 +103,9 @@ fn a_protected_directory_that_cannot_be_resolved_stops_the_start() {
         &[],
         &[(variable, platform.to_str().expect("text"))],
     );
-    let status = common::wait_exit(&mut child, std::time::Duration::from_secs(10));
+    // Generous: before it gets this far the daemon hashes its own executable, which is slow for
+    // a test binary run from another system's disk.
+    let status = common::wait_exit(&mut child, std::time::Duration::from_secs(30));
     if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
