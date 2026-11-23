@@ -83,8 +83,9 @@ graph TD
     SRV --> ADD[Add-ons, e.g. EVƎ C]
 ```
 
-The daemon is a native Rust binary (the Cargo workspace in `daemon/`) for Windows x64, Linux x64 and
-Linux arm64; it needs no Node runtime. The VS Code extension and the client library are TypeScript,
+The daemon is a native Rust binary (the Cargo workspace in `daemon/`) for Windows and Linux on x64,
+arm64 and 32-bit x86; it needs no Node runtime. VS Code has no 32-bit build, so 32-bit x86 gets the
+`ev3` command from npm only. The VS Code extension and the client library are TypeScript,
 and both sides are generated from one contract, the JSON Schema in `contract/`. macOS is not
 supported yet.
 

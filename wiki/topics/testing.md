@@ -34,7 +34,7 @@ Two suites, one per language. The Rust tests cover the daemon, its runtime, tran
 - `npm run smoke:daemon` — a daemon build serving a recorded brick through the client library
 - `npm run test:pw:smoke` — Playwright (placeholder until the panel)
 
-CI (`.github/workflows/`): `ci.yml` builds the development daemon and runs `test:ci`; `native-daemon.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test` on Windows x64, Linux x64 and Linux arm64, then a release build, the VSIX with its smoke on a recording, the npm packages and the build attestation.
+CI (`.github/workflows/`): `ci.yml` builds the development daemon and runs `test:ci`; `native-daemon.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test` on Windows and Linux for x64, arm64 and 32-bit x86 (built on the x64 runners), with the Windows tests run a second time as a standard user because the runner is elevated; then a release build, the VSIX (not for 32-bit x86) with its smoke on a recording, the npm packages and the build attestation.
 
 ## Key Decisions [coverage: medium — 3 sources]
 

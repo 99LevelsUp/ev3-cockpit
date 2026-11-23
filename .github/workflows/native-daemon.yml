@@ -1,6 +1,8 @@
-# The native daemon `ev3-cockpitd` on each platform a release ships for, built where it runs:
-# Windows x64 on windows-latest, Linux x64 and arm64 on Ubuntu 22.04 (glibc 2.35, so the binaries
-# run on Debian 12 and Raspberry Pi OS).
+# The native daemon `ev3-cockpitd` and `ev3` on each platform a release ships for: Windows x64 and
+# 32-bit x86 on windows-latest, Windows arm64 on windows-11-arm, Linux x64, 32-bit x86 and arm64 on
+# Ubuntu 22.04 (glibc 2.35, so the binaries run on Debian 12 and Raspberry Pi OS). 32-bit x86 is
+# built on the x64 runners for its own target and its tests run there; it ships npm packages only,
+# since VS Code has no 32-bit build.
 #
 # - rust: the daemon's gate on each platform: format, clippy with warnings as errors, all tests.
 # - package: the release build (EV3_COCKPIT_RELEASE_BUILD=1, the only builds marked as release),
@@ -36,13 +38,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `cross` names the Rust target where the runner builds for another processor: 32-bit x86
+        # runs on the x64 runners, so its tests run there too.
         include:
           - target: win32-x64
             runner: windows-latest
+          - target: win32-arm64
+            runner: windows-11-arm
+          - target: win32-ia32
+            runner: windows-latest
+            cross: i686-pc-windows-msvc
           - target: linux-x64
             runner: ubuntu-22.04
           - target: linux-arm64
             runner: ubuntu-22.04-arm
+          - target: linux-ia32
+            runner: ubuntu-22.04
+            cross: i686-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     defaults:
@@ -53,9 +65,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install rustup (Windows arm64)
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $init = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile $init
+            & $init -y --default-toolchain none --profile minimal
+            Add-Content $env:GITHUB_PATH (Join-Path $env:USERPROFILE '.cargo\bin')
+          }
+
       - name: Setup Rust
         # The release rust-toolchain.toml names, with its components; rustup is on every runner.
         run: rustup toolchain install
+
+      - name: Build for another processor
+        if: matrix.cross
+        shell: bash
+        run: |
+          rustup target add ${{ matrix.cross }}
+          echo "CARGO_BUILD_TARGET=${{ matrix.cross }}" >> "$GITHUB_ENV"
+          # 32-bit Linux links and compiles the vendored libusb with gcc -m32.
+          if [ "${{ matrix.target }}" = linux-ia32 ]; then
+            sudo apt-get update -q && sudo apt-get install -y -q gcc-multilib
+          fi
 
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
@@ -126,13 +160,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `vsix`: VS Code ships for the platform; 32-bit x86 gets its npm package only.
         include:
           - target: win32-x64
             runner: windows-latest
+            vsix: true
+          - target: win32-arm64
+            runner: windows-11-arm
+            vsix: true
+          - target: win32-ia32
+            runner: windows-latest
+            cross: i686-pc-windows-msvc
           - target: linux-x64
             runner: ubuntu-22.04
+            vsix: true
           - target: linux-arm64
             runner: ubuntu-22.04-arm
+            vsix: true
+          - target: linux-ia32
+            runner: ubuntu-22.04
+            cross: i686-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
@@ -156,9 +203,36 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Install rustup (Windows arm64)
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $init = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile $init
+            & $init -y --default-toolchain none --profile minimal
+            Add-Content $env:GITHUB_PATH (Join-Path $env:USERPROFILE '.cargo\bin')
+          }
+
       - name: Setup Rust
         # The release rust-toolchain.toml names, with its components; rustup is on every runner.
         run: rustup toolchain install
+
+      - name: Where the build goes
+        # A build for another processor lands in daemon/target/<triple>/release.
+        run: |
+          if [ -n "${{ matrix.cross }}" ]; then
+            rustup target add ${{ matrix.cross }}
+            echo "CARGO_BUILD_TARGET=${{ matrix.cross }}" >> "$GITHUB_ENV"
+            echo "DAEMON_DIR=daemon/target/${{ matrix.cross }}/release" >> "$GITHUB_ENV"
+            echo "MANIFEST_TARGET=--target ${{ matrix.cross }}" >> "$GITHUB_ENV"
+          else
+            echo "DAEMON_DIR=daemon/target/release" >> "$GITHUB_ENV"
+          fi
+          if [ "${{ matrix.target }}" = linux-ia32 ]; then
+            sudo apt-get update -q && sudo apt-get install -y -q gcc-multilib
+          fi
+
       - name: Cache the build
         uses: Swatinem/rust-cache@v2
         with:
@@ -173,22 +247,27 @@ jobs:
         run: cargo build --release --locked -p ev3-cockpitd -p ev3-cli
 
       - name: Write its manifest
-        run: node scripts/daemon-manifest.mts --profile release
+        run: node scripts/daemon-manifest.mts --profile release $MANIFEST_TARGET
 
       - name: Compile the client library the smoke uses
         run: npm run compile
 
       - name: Package the VSIX
-        run: node scripts/package-vsix.mts ${{ matrix.target }} --daemon-dir daemon/target/release
+        if: matrix.vsix
+        run: node scripts/package-vsix.mts ${{ matrix.target }} --daemon-dir "$DAEMON_DIR"
 
-      - name: The VSIX's daemon serves a recorded brick
+      - name: The packaged daemon serves a recorded brick
         # Not on Windows: GitHub's Windows runner is elevated, and the daemon never runs elevated.
-        if: matrix.target != 'win32-x64'
-        run: node scripts/daemon-smoke.mts --daemon-dir .vsix-staging/${{ matrix.target }}
+        # The VSIX's own copy where one ships, else the build the npm package carries.
+        if: runner.os != 'Windows'
+        run: |
+          dir=".vsix-staging/${{ matrix.target }}"
+          [ "${{ matrix.vsix }}" = true ] || dir="$DAEMON_DIR"
+          node scripts/daemon-smoke.mts --daemon-dir "$dir"
 
       - name: Stage and pack the npm platform package
         run: |
-          node scripts/package-npm.mts --platform ${{ matrix.target }} --daemon-dir daemon/target/release
+          node scripts/package-npm.mts --platform ${{ matrix.target }} --daemon-dir "$DAEMON_DIR"
           npm pack ./dist/npm/${{ matrix.target }} --pack-destination dist/npm
 
       - name: The packaged ev3 runs and is this version
@@ -211,8 +290,8 @@ jobs:
       - name: SHA-256 of the daemon and ev3
         id: daemon
         run: |
-          binary=daemon/target/release/$(node -p "require('./scripts/packaging.mts').daemonBinary('${{ matrix.target }}')")
-          cli=daemon/target/release/$(node -p "require('./scripts/packaging.mts').cliBinary('${{ matrix.target }}')")
+          binary=$DAEMON_DIR/$(node -p "require('./scripts/packaging.mts').daemonBinary('${{ matrix.target }}')")
+          cli=$DAEMON_DIR/$(node -p "require('./scripts/packaging.mts').cliBinary('${{ matrix.target }}')")
           sum=$(sha256sum "$binary" | cut -d' ' -f1)
           cli_sum=$(sha256sum "$cli" | cut -d' ' -f1)
           echo "$sum  ev3-cockpitd-${{ matrix.target }}" > "ev3-cockpitd-${{ matrix.target }}.sha256"
@@ -229,7 +308,7 @@ jobs:
           subject-path: |
             ${{ steps.daemon.outputs.binary }}
             ${{ steps.daemon.outputs.cli }}
-            dist-vsix/*.vsix
+            ${{ matrix.vsix && 'dist-vsix/*.vsix' || '' }}
             dist/npm/*.tgz
 
       - name: Upload the packages

@@ -227,7 +227,7 @@ describe('npm packages', () => {
 			const missing = nativeEv3('linux', 'x64', resolverFor(launcher));
 			assert.ok('problem' in missing && /@ev3-cockpit\/linux-x64 is not installed: install ev3-cockpit again, without --no-optional/.test(missing.problem), JSON.stringify(missing));
 			const none = nativeEv3('darwin', 'arm64', resolverFor(launcher));
-			assert.ok('problem' in none && /no ev3 for darwin-arm64; it ships for win32-x64, linux-x64, linux-arm64/.test(none.problem), JSON.stringify(none));
+			assert.ok('problem' in none && /no ev3 for darwin-arm64; it ships for win32-x64, win32-arm64, win32-ia32, linux-x64, linux-arm64, linux-ia32/.test(none.problem), JSON.stringify(none));
 		});
 
 		it('ends with exit code 8 and says why when this computer has no ev3 installed', () => {

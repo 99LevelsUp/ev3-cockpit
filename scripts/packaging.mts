@@ -17,11 +17,14 @@ import { builtinModules } from 'node:module';
 /** A platform a release ships for. */
 export interface Target {
 	readonly os: 'win32' | 'linux';
-	readonly cpu: 'x64' | 'arm64';
+	/** Node's name for the processor (`process.arch`), which npm's `cpu` field uses too. */
+	readonly cpu: 'x64' | 'arm64' | 'ia32';
 	/** The Rust target its daemon is built for. */
 	readonly triple: string;
 	/** Whether its packages carry the udev rules. */
 	readonly udevRule: boolean;
+	/** Whether a VSIX ships for it: VS Code has no 32-bit builds, so 32-bit x86 gets npm only. */
+	readonly vsix: boolean;
 }
 
 /**
@@ -29,10 +32,16 @@ export interface Target {
  * binaries are built against glibc 2.35, so they run on Debian 12 and Raspberry Pi OS.
  */
 export const TARGETS: Readonly<Record<string, Target>> = {
-	'win32-x64': { os: 'win32', cpu: 'x64', triple: 'x86_64-pc-windows-msvc', udevRule: false },
-	'linux-x64': { os: 'linux', cpu: 'x64', triple: 'x86_64-unknown-linux-gnu', udevRule: true },
-	'linux-arm64': { os: 'linux', cpu: 'arm64', triple: 'aarch64-unknown-linux-gnu', udevRule: true },
+	'win32-x64': { os: 'win32', cpu: 'x64', triple: 'x86_64-pc-windows-msvc', udevRule: false, vsix: true },
+	'win32-arm64': { os: 'win32', cpu: 'arm64', triple: 'aarch64-pc-windows-msvc', udevRule: false, vsix: true },
+	'win32-ia32': { os: 'win32', cpu: 'ia32', triple: 'i686-pc-windows-msvc', udevRule: false, vsix: false },
+	'linux-x64': { os: 'linux', cpu: 'x64', triple: 'x86_64-unknown-linux-gnu', udevRule: true, vsix: true },
+	'linux-arm64': { os: 'linux', cpu: 'arm64', triple: 'aarch64-unknown-linux-gnu', udevRule: true, vsix: true },
+	'linux-ia32': { os: 'linux', cpu: 'ia32', triple: 'i686-unknown-linux-gnu', udevRule: true, vsix: false },
 };
+
+/** The platforms a VSIX ships for. */
+export const VSIX_TARGETS: readonly string[] = Object.keys(TARGETS).filter((target) => TARGETS[target].vsix);
 
 /** The file beside the daemon that records its SHA-256, version and build kind (`DAEMON_MANIFEST` of the client). */
 export const DAEMON_MANIFEST = 'ev3-cockpitd.manifest.json';

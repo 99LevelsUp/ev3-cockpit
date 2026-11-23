@@ -22,7 +22,8 @@ import * as zlib from 'node:zlib';
 interface ZipEntry { name: string; unix: boolean; mode: number; data(): Buffer }
 interface Checked { missing: string[]; unexpected: string[]; problems: string[] }
 interface Packaging {
-	TARGETS: Record<string, { os: string; cpu: string; triple: string; udevRule: boolean }>;
+	TARGETS: Record<string, { os: string; cpu: string; triple: string; udevRule: boolean; vsix: boolean }>;
+	VSIX_TARGETS: readonly string[];
 	DAEMON_MANIFEST: string;
 	NATIVE_MODULES: string[];
 	UDEV_RULES: string[];
@@ -124,10 +125,17 @@ function rustConstant(file: string, name: string): string {
 }
 
 describe('Platform VSIX packaging', () => {
-	it('ships Windows x64, Linux x64 and Linux arm64, each with the daemon built for its Rust target', () => {
-		assert.deepEqual(Object.keys(packaging.TARGETS).sort(), ['linux-arm64', 'linux-x64', 'win32-x64']);
+	it('ships Windows and Linux on x64, arm64 and 32-bit x86, each with the daemon built for its Rust target', () => {
+		assert.deepEqual(Object.keys(packaging.TARGETS).sort(),
+			['linux-arm64', 'linux-ia32', 'linux-x64', 'win32-arm64', 'win32-ia32', 'win32-x64']);
 		assert.deepEqual(Object.values(packaging.TARGETS).map((t) => t.triple).sort(),
-			['aarch64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+			['aarch64-pc-windows-msvc', 'aarch64-unknown-linux-gnu', 'i686-pc-windows-msvc', 'i686-unknown-linux-gnu',
+				'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
+		for (const [target, t] of Object.entries(packaging.TARGETS)) {
+			assert.equal(target, `${t.os}-${t.cpu}`, 'the name is Node\'s platform and arch');
+		}
+		// VS Code has no 32-bit build: 32-bit x86 ships its npm package only.
+		assert.deepEqual([...packaging.VSIX_TARGETS].sort(), ['linux-arm64', 'linux-x64', 'win32-arm64', 'win32-x64']);
 		assert.equal(packaging.daemonBinary('win32-x64'), 'ev3-cockpitd.exe');
 		assert.equal(packaging.daemonBinary('linux-arm64'), 'ev3-cockpitd');
 	});
@@ -148,7 +156,7 @@ describe('Platform VSIX packaging', () => {
 	});
 
 	it('passes a VSIX that holds the extension, its daemon and manifest, and nothing else', () => {
-		for (const target of Object.keys(packaging.TARGETS)) {
+		for (const target of packaging.VSIX_TARGETS) {
 			assert.deepEqual(check(target, vsixFiles(target)), OK, target);
 		}
 	});
