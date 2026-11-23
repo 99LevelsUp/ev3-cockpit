@@ -263,6 +263,16 @@ The contract exposes:
 
 The session lifecycle stays under the daemon's control: no client opens a brick itself.
 
+### Add-ons extend `ev3` and `ev3 mcp`
+
+An add-on (EVƎ C is the first) registers its commands and tools with the cockpit instead of
+shipping an entry point of its own. `ev3 <name>` runs the add-on `ev3-<name>` found on PATH; in
+the same way the one MCP server, `ev3 mcp`, offers the tools of every installed add-on beside its
+own, so a user adds one MCP server to an agent for the cockpit and all its add-ons (owner,
+23.11.2026). Tool names stay unique, a missing or broken add-on costs only its own tools, and the
+agent's roots and the confinement rules reach an add-on's tools as they reach the cockpit's.
+Tracked in issue #2.
+
 ## 10. Filesystem
 
 The filesystem is designed as a service for API consumers, not as a GUI feature.
