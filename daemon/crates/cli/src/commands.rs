@@ -9,12 +9,13 @@ use std::time::Duration;
 use ev3_channel::paths::Paths;
 use serde_json::{Value, json};
 
-use crate::client::{Client, ClientOptions};
 use crate::confirm;
-use crate::ensure::{EXIT_ANSWER, ask_to_exit};
 use crate::error::{CliError, Result, exit};
+use crate::install;
 use crate::output::{Outcome, array, js_string, say, strings, table, text};
 use crate::telemetry;
+use ev3_client::client::{Client, ClientOptions};
+use ev3_client::ensure::{EXIT_ANSWER, ask_to_exit};
 
 /// A command as help lists it.
 pub struct Spec {
@@ -240,6 +241,9 @@ impl Ctx {
             let client = Client::connect(ClientOptions {
                 name: self.name.clone(),
                 kind: "cli",
+                version: install::VERSION,
+                build_kind: install::BUILD_KIND,
+                daemon: install::daemon(),
                 paths: &self.paths,
                 asker: confirm::can_ask(self.json)
                     .then(|| confirm::terminal_asker(self.name.clone())),

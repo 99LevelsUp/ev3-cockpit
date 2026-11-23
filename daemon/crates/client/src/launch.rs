@@ -26,7 +26,7 @@ use ev3_channel::daemon_exit;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::error::{CliError, Failure, Result};
+use crate::error::{ClientError, Failure, Result};
 
 /// The file beside the binary that records its SHA-256, version and build kind.
 pub const DAEMON_MANIFEST: &str = "ev3-cockpitd.manifest.json";
@@ -70,10 +70,10 @@ pub fn manifest_launch(dir: &Path, hint: &str) -> Result<LaunchSpec> {
                 file.display()
             )
         };
-        CliError::start(Failure::MissingBinary, message)
+        ClientError::start(Failure::MissingBinary, message)
     })?;
     let invalid = || {
-        CliError::start(
+        ClientError::start(
             Failure::MissingBinary,
             format!(
                 "The cockpit daemon's manifest {} is not valid. {hint}",
@@ -104,7 +104,7 @@ pub fn manifest_launch(dir: &Path, hint: &str) -> Result<LaunchSpec> {
         build_kind: build_kind.to_owned(),
     };
     if !launch.binary.exists() {
-        return Err(CliError::start(
+        return Err(ClientError::start(
             Failure::MissingBinary,
             format!(
                 "The cockpit daemon {} is missing. {hint}",
@@ -127,8 +127,8 @@ pub fn hash_file(file: &Path) -> io::Result<Option<String>> {
     Ok(Some(ev3_channel::hex(&hasher.finalize())))
 }
 
-fn not_private(dir: &Path, why: &str) -> CliError {
-    CliError::start(
+fn not_private(dir: &Path, why: &str) -> ClientError {
+    ClientError::start(
         Failure::NotPrivate,
         format!(
             "The folder of the cockpit daemon's verified copies {} {why}; the daemon was not started from it.",
@@ -205,7 +205,7 @@ fn replace_refused(error: &io::Error) -> bool {
 /// `launch.sha256`, else copied again. Refuses a binary whose copy does not match.
 pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> {
     if !is_sha256(&launch.sha256) {
-        return Err(CliError::start(
+        return Err(ClientError::start(
             Failure::ShaMismatch,
             format!(
                 "The SHA-256 recorded for the cockpit daemon {} is not valid; it was not started.",
@@ -214,7 +214,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
         ));
     }
     ev3_channel::fsutil::create_private_dir_all(state_root).map_err(|error| {
-        CliError::start(
+        ClientError::start(
             Failure::Failed,
             format!(
                 "The cockpit's state folder {} cannot be made ({error}).",
@@ -234,7 +234,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
             return Ok(target);
         }
         if !launch.binary.exists() {
-            return Err(CliError::start(
+            return Err(ClientError::start(
                 Failure::MissingBinary,
                 format!("The cockpit daemon {} is missing.", launch.binary.display()),
             ));
@@ -248,7 +248,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
                 if replace_refused(&error) {
                     return Ok(false);
                 }
-                return Err(CliError::Other(format!(
+                return Err(ClientError::Other(format!(
                     "The cockpit daemon could not be copied ({error})."
                 )));
             }
@@ -262,7 +262,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
                 } else {
                     "Reinstall EVƎ Cockpit."
                 };
-                return Err(CliError::start(
+                return Err(ClientError::start(
                     Failure::ShaMismatch,
                     format!(
                         "The cockpit daemon {} does not match the SHA-256 its package recorded: it is {copied}, the package says {}. It was not started. {hint}",
@@ -275,7 +275,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
             match std::fs::rename(&temp, &target) {
                 Ok(()) => Ok(true),
                 Err(error) if replace_refused(&error) => Ok(false),
-                Err(error) => Err(CliError::Other(format!(
+                Err(error) => Err(ClientError::Other(format!(
                     "The verified copy of the cockpit daemon could not be placed ({error})."
                 ))),
             }
@@ -286,7 +286,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
             return Ok(target);
         }
     }
-    Err(CliError::start(
+    Err(ClientError::start(
         Failure::Failed,
         format!(
             "The verified copy of the cockpit daemon could not be placed in {}.",
@@ -544,9 +544,9 @@ fn log_tail(file: &Path) -> String {
 }
 
 /// Why a started daemon ended before it answered.
-pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
+pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> ClientError {
     let blocked = || {
-        CliError::start(
+        ClientError::start(
             Failure::SmartAppControl,
             format!(
                 "Windows Smart App Control blocked the EVƎ Cockpit daemon ({}). Smart App Control lets only signed or well-known apps run, and the cockpit's daemon is not signed yet, so the cockpit cannot run on this computer while Smart App Control is on.",
@@ -565,7 +565,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
     }
     match ended {
         Ended::Exit(Some(daemon_exit::LOCK_HELD)) => {
-            return CliError::start(
+            return ClientError::start(
                 Failure::LockHeld,
                 format!(
                     "Another cockpit daemon holds this channel's lock while it starts or ends; {} stopped.",
@@ -574,7 +574,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
             );
         }
         Ended::Exit(Some(daemon_exit::REFUSED)) => {
-            return CliError::start(
+            return ClientError::start(
                 Failure::NameHeld,
                 format!(
                     "The cockpit daemon refused to run: its pipe or socket name may be held by someone else, or it was started with administrator or root rights.{}",
@@ -596,7 +596,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
         Ended::Exit(Some(code)) => format!("it exited with code {code}"),
         Ended::Exit(None) => "it ended on a signal".to_owned(),
     };
-    CliError::start(
+    ClientError::start(
         Failure::Failed,
         format!(
             "The cockpit daemon could not start: {how}.{}",
@@ -642,7 +642,7 @@ mod tests {
             assert!(
                 matches!(
                     error,
-                    CliError::Start {
+                    ClientError::Start {
                         failure: Failure::MissingBinary,
                         ..
                     }
@@ -684,7 +684,7 @@ mod tests {
         assert!(
             matches!(
                 error,
-                CliError::Start {
+                ClientError::Start {
                     failure: Failure::ShaMismatch,
                     ..
                 }
@@ -699,7 +699,7 @@ mod tests {
         let log = Path::new("no-such-log");
         let bin = Path::new("ev3-cockpitd");
         let failure = |ended| match classify(&ended, bin, log) {
-            CliError::Start { failure, .. } => failure,
+            ClientError::Start { failure, .. } => failure,
             other => panic!("{other:?}"),
         };
         assert_eq!(failure(Ended::Exit(Some(2))), Failure::LockHeld);

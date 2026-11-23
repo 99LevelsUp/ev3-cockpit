@@ -10,16 +10,11 @@
 //! found on PATH.
 
 mod addons;
-mod client;
 mod clock;
 mod commands;
 mod confirm;
-mod connect;
-mod endpoint;
-mod ensure;
 mod error;
 mod install;
-mod launch;
 mod mcp;
 mod output;
 mod telemetry;

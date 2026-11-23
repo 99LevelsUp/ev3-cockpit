@@ -32,11 +32,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
 
-use crate::client::{Client, ClientOptions};
 use crate::error::{CliError, DAEMON_UNAVAILABLE, Failure};
 use crate::install;
 use crate::output::{js_string, strings};
 use crate::telemetry;
+use ev3_client::client::{Client, ClientOptions};
 
 /// The tools as the TypeScript server listed them.
 const TOOLS_JSON: &str = include_str!("mcp_tools.json");
@@ -303,11 +303,15 @@ impl Server {
         let connected = Client::connect(ClientOptions {
             name,
             kind: "mcp",
+            version: install::VERSION,
+            build_kind: install::BUILD_KIND,
+            daemon: install::daemon(),
             paths: &self.paths,
             asker: None,
             notice: &notice,
         })
-        .await;
+        .await
+        .map_err(CliError::from);
         for text in notices.into_inner().expect("notices") {
             self.notice(text);
         }
@@ -996,7 +1000,7 @@ impl Server {
     ) -> Result<Value, CliError> {
         let client = self.client().await?;
         let Some(token) = progress else {
-            return client.request(method, params).await;
+            return Ok(client.request(method, params).await?);
         };
         let out = self.out.clone();
         client
@@ -1009,6 +1013,7 @@ impl Server {
                 let _ = out.send(json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": params }));
             }))
             .await
+            .map_err(CliError::from)
     }
 }
 

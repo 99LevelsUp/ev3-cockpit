@@ -2,7 +2,7 @@
 //! daemon's questions for a person.
 //!
 //! `ev3` never reconnects by itself: a command is short, and a restart reconnects on purpose.
-//! `ev3 mcp` connects again on the next tool call after its daemon went (see `mcp.rs`).
+//! `ev3 mcp` connects again on the next tool call after its daemon went (see its `mcp.rs`).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -15,8 +15,8 @@ use tokio::sync::broadcast;
 use crate::connect::{DaemonIdentity, Identity};
 use crate::endpoint::{Endpoint, RequestHandler};
 use crate::ensure::{self, Options};
-use crate::error::{CliError, DAEMON_UNAVAILABLE, Result};
-use crate::install;
+use crate::error::{ClientError, DAEMON_UNAVAILABLE, Result};
+use crate::launch::LaunchSpec;
 
 /// Answers a question for a person: the question, and a receiver of withdrawn question ids.
 pub type Asker = Arc<
@@ -28,8 +28,14 @@ pub type Asker = Arc<
 pub struct ClientOptions<'a> {
     /// Shown in the daemon's log, in other clients' `brick_busy` and in questions.
     pub name: String,
-    /// `cli` or `mcp`.
+    /// `cli`, `mcp` or `addon`; only `cli` may ask a daemon to exit for its own.
     pub kind: &'static str,
+    /// This client's version and build kind (`release` or `development`), as its hello says.
+    pub version: &'a str,
+    pub build_kind: &'a str,
+    /// The daemon this client carries, or why it carries none: a missing one is an error only
+    /// when no daemon runs.
+    pub daemon: Result<LaunchSpec>,
     pub paths: &'a Paths,
     /// Who answers the daemon's questions; without one every answer is `keep` (unanswered).
     pub asker: Option<Asker>,
@@ -62,7 +68,7 @@ impl Client {
                 })
             })
         };
-        let daemon = install::daemon();
+        let daemon = options.daemon;
         // Only `ev3` itself carries a daemon it would replace another with; a missing one is an
         // error only when no daemon runs.
         let carried = daemon.as_ref().ok().cloned();
@@ -70,8 +76,8 @@ impl Client {
             identity: Identity {
                 name: options.name,
                 kind: options.kind.into(),
-                version: install::VERSION.into(),
-                build_kind: install::BUILD_KIND.into(),
+                version: options.version.into(),
+                build_kind: options.build_kind.into(),
             },
             daemon: carried,
             paths: options.paths,
@@ -82,7 +88,9 @@ impl Client {
         .await
         .map_err(|error| match (&error, daemon) {
             // No daemon ran and none could be started: say why this one is missing.
-            (CliError::Start { .. }, Err(missing)) if error.message().contains("carries none") => {
+            (ClientError::Start { .. }, Err(missing))
+                if error.message().contains("carries none") =>
+            {
                 missing
             }
             _ => error,
@@ -218,7 +226,7 @@ fn leased_outcome(method: &str, result: Result<Value>) -> Result<Value> {
             if error.code() == Some(DAEMON_UNAVAILABLE)
                 && ev3_contract::method_info(method).is_some_and(|m| m.leased) =>
         {
-            Err(CliError::contract(
+            Err(ClientError::contract(
                 "outcome_unknown",
                 format!(
                     "The cockpit daemon went while {method} ran, so whether it finished is not known. It was not retried."
@@ -253,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_leased_write_cut_off_is_reported_as_unknown() {
-        let cut = || Err(CliError::unavailable("gone"));
+        let cut = || Err(ClientError::unavailable("gone"));
         assert_eq!(
             leased_outcome("files/write", cut())
                 .expect_err("cut")

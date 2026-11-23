@@ -2,42 +2,7 @@
 
 use serde_json::{Value, json};
 
-/// Why a client could not start or use the daemon; every client tells them apart the same way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Failure {
-    /// No daemon to start: nothing carried, the file gone, no manifest.
-    MissingBinary,
-    /// The binary does not match the SHA-256 its manifest recorded.
-    ShaMismatch,
-    /// The folder of the verified copies is not the user's alone.
-    NotPrivate,
-    /// Windows Smart App Control blocked the unsigned binary.
-    SmartAppControl,
-    /// The daemon refused to run (exit code 3).
-    NameHeld,
-    /// Another daemon held the channel's lock and none became reachable.
-    LockHeld,
-    /// The running daemon speaks another contract and could not be replaced.
-    ContractMismatch,
-    /// Anything else.
-    Failed,
-}
-
-impl Failure {
-    /// The name `--json` and the MCP results carry.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::MissingBinary => "missing_binary",
-            Self::ShaMismatch => "sha_mismatch",
-            Self::NotPrivate => "not_private",
-            Self::SmartAppControl => "smart_app_control",
-            Self::NameHeld => "name_held",
-            Self::LockHeld => "lock_held",
-            Self::ContractMismatch => "contract_mismatch",
-            Self::Failed => "failed",
-        }
-    }
-}
+pub use ev3_client::error::{DAEMON_UNAVAILABLE, Failure};
 
 /// The exit codes; `ev3 help` lists them.
 pub mod exit {
@@ -52,9 +17,6 @@ pub mod exit {
     pub const DAEMON_NOT_STARTABLE: u8 = 8;
     pub const CONTRACT_MISMATCH: u8 = 9;
 }
-
-/// The contract code of an unreachable daemon.
-pub const DAEMON_UNAVAILABLE: &str = "daemon_unavailable";
 
 /// A failure of `ev3`.
 #[derive(Debug, Clone)]
@@ -115,15 +77,6 @@ impl CliError {
         }
     }
 
-    /// The contract code, where there is one.
-    pub fn code(&self) -> Option<&str> {
-        match self {
-            Self::Contract { code, .. } => Some(code),
-            Self::Start { .. } => Some(DAEMON_UNAVAILABLE),
-            _ => None,
-        }
-    }
-
     /// The exit code a script reads.
     pub fn exit_code(&self) -> u8 {
         match self {
@@ -176,6 +129,24 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// A failure of the client library keeps its kind: a contract error, a start failure or another.
+impl From<ev3_client::ClientError> for CliError {
+    fn from(error: ev3_client::ClientError) -> Self {
+        match error {
+            ev3_client::ClientError::Contract {
+                code,
+                message,
+                data,
+            } => Self::Contract {
+                code,
+                message,
+                data,
+            },
+            ev3_client::ClientError::Start { failure, message } => Self::Start { failure, message },
+            ev3_client::ClientError::Other(message) => Self::Other(message),
+        }
+    }
+}
 pub type Result<T> = std::result::Result<T, CliError>;
 
 #[cfg(test)]

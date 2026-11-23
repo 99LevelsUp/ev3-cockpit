@@ -162,6 +162,22 @@ name = "ev3-cli"
 version = "0.0.0"
 dependencies = [
  "ev3-channel",
+ "ev3-client",
+ "ev3-contract",
+ "futures-util",
+ "libc",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "windows-sys",
+]
+
+[[package]]
+name = "ev3-client"
+version = "0.0.0"
+dependencies = [
+ "ev3-channel",
  "ev3-contract",
  "futures-util",
  "libc",

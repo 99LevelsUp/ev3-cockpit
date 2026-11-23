@@ -15,7 +15,7 @@ use ev3_contract::{CONTRACT_VERSION, HELLO_FINISH, HELLO_START};
 use serde_json::{Value, json};
 
 use crate::endpoint::{Duplex, Endpoint, RequestHandler};
-use crate::error::{CliError, Result};
+use crate::error::{ClientError, Result};
 
 /// How long finding, opening and the hello may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -56,7 +56,7 @@ fn read_text(file: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(file) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(CliError::unavailable(format!(
+        Err(error) => Err(ClientError::unavailable(format!(
             "The cockpit daemon's channel record {} cannot be read ({error}).",
             file.display()
         ))),
@@ -108,14 +108,14 @@ mod platform {
                 if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
                     || error.kind() == std::io::ErrorKind::PermissionDenied => {}
             Err(error) => {
-                return Err(CliError::unavailable(format!(
+                return Err(ClientError::unavailable(format!(
                     "The cockpit daemon's lock {} cannot be checked ({error}).",
                     paths.lock.display()
                 )));
             }
         }
         let Some(record) = record else {
-            return Err(CliError::unavailable(format!(
+            return Err(ClientError::unavailable(format!(
                 "A cockpit daemon runs, but its channel record {} cannot be read.",
                 paths.record.display()
             )));
@@ -129,7 +129,7 @@ mod platform {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
                 Err(error) => {
-                    return Err(CliError::unavailable(format!(
+                    return Err(ClientError::unavailable(format!(
                         "The cockpit daemon (pid {}) runs but is not answering on {} ({error}).",
                         record.pid, record.path
                     )));
@@ -159,7 +159,7 @@ mod platform {
     fn check_socket_dir(socket: &str) -> Result<()> {
         let dir = Path::new(socket).parent().unwrap_or(Path::new("/"));
         match ev3_channel::fsutil::unix_dir_problem(dir) {
-            Some(why) => Err(CliError::unavailable(format!(
+            Some(why) => Err(ClientError::unavailable(format!(
                 "The cockpit daemon's socket directory {} {why}; the client did not connect.",
                 dir.display()
             ))),
@@ -188,7 +188,7 @@ mod platform {
                 delete_stale(&paths.record, text);
                 Ok(None)
             }
-            Err(error) => Err(CliError::unavailable(format!(
+            Err(error) => Err(ClientError::unavailable(format!(
                 "The cockpit daemon (pid {}) is not answering on {} ({error}).",
                 record.pid, record.path
             ))),
@@ -228,7 +228,7 @@ pub async fn hello(endpoint: &Endpoint, key: &[u8], client: &Identity) -> Result
             .is_some_and(|given| proofs_match(&expected, given))
     {
         endpoint.close();
-        return Err(CliError::unavailable(
+        return Err(ClientError::unavailable(
             "The process on the cockpit channel could not prove it is your cockpit daemon; nothing was sent to it.",
         ));
     }
@@ -243,7 +243,7 @@ pub async fn hello(endpoint: &Endpoint, key: &[u8], client: &Identity) -> Result
         accepted.get("contractVersion").and_then(Value::as_u64),
     ) else {
         endpoint.close();
-        return Err(CliError::unavailable(
+        return Err(ClientError::unavailable(
             "The cockpit daemon did not say which version it is; the connection was closed.",
         ));
     };
@@ -272,7 +272,7 @@ pub async fn connect(
         let Some((stream, record)) = open_channel(paths).await? else {
             return Ok(None);
         };
-        let key = read_key(&paths.key).map_err(|error| CliError::unavailable(error.0))?;
+        let key = read_key(&paths.key).map_err(|error| ClientError::unavailable(error.0))?;
         let endpoint = Endpoint::new(stream, on_request);
         match hello(&endpoint, &key, client).await {
             Ok(daemon) => Ok(Some(Connected {
@@ -288,7 +288,7 @@ pub async fn connect(
     };
     match tokio::time::timeout(CONNECT_TIMEOUT, attempt).await {
         Ok(result) => result,
-        Err(_) => Err(CliError::unavailable(format!(
+        Err(_) => Err(ClientError::unavailable(format!(
             "The cockpit daemon did not finish the hello within {} ms; the connection was closed.",
             CONNECT_TIMEOUT.as_millis()
         ))),
