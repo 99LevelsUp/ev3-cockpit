@@ -157,6 +157,17 @@ impl Client {
         leased_outcome(method, result)
     }
 
+    /// The daemon's notifications to this client from now on, typed (see [`Events`]).
+    pub fn events(&self) -> crate::Events {
+        crate::Events::new(self.endpoint.notifications())
+    }
+
+    /// Follows `brick`'s program: the state now, then every change in order (see
+    /// [`crate::ProgramStates`]). Dropping it cancels the subscription.
+    pub async fn subscribe_programs(&self, brick: &str) -> Result<crate::ProgramStates> {
+        crate::ProgramStates::subscribe(&self.endpoint, brick).await
+    }
+
     /// A typed request: `client.call::<method::BricksList>(params)`. The answer is decoded into the
     /// method's result type; one that does not decode is an `internal` error naming the method.
     pub async fn call<M: ev3_contract::Method>(&self, params: M::Params) -> Result<M::Result> {

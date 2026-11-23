@@ -13,10 +13,12 @@ pub mod connect;
 pub mod endpoint;
 pub mod ensure;
 pub mod error;
+pub mod events;
 pub mod launch;
 
 pub use client::{Client, ClientOptions, Launch};
 pub use ev3_channel::paths::Paths;
+pub use events::{Events, ProgramStates};
 
 /// The files of the user's channel, or of the test channel `channel` names, under the user's
 /// state root: what a client passes as [`ClientOptions::paths`].

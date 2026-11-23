@@ -441,12 +441,20 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
   start, `connect` fails with `missing_binary`.
 - **Bricks:** `bricks()` answers the list, asked for once and then kept current by
   `bricks/changed`.
+- **Notifications:** `events()` reads every notification from then on as the contract's
+  `Notification` (`BricksChanged`, `DaemonShowsChanged`, `ProgramsStateChanged`, …), in the order
+  the daemon sent them; a reader that falls behind by thousands loses the oldest and counts them
+  in `skipped()`.
+- **A program's state:** `subscribe_programs(brick)` answers a `ProgramStates` with `state`, the
+  state when it was made, and `next()` for every change, in order, for that subscription alone;
+  a change the daemon sends before its answer is not lost. Dropping it cancels the subscription.
 - `ev3_client::CONTRACT_VERSION` and `ev3_client::contract` re-export `ev3-contract`.
 - Rust 1.100.0 (the repository's `rust-toolchain.toml`), edition 2024, tokio 1 with `rt`, `net`,
   `io-util`, `sync`, `time` and `macros`; no transport is linked. The static C runtime this
   repository sets in `daemon/.cargo/config.toml` does not reach a consumer: set it in your own.
-- Subscriptions with renewal and the reconnect after a daemon replacement follow (as the
-  TypeScript client has them); until then, a Rust client connects again itself.
+- The reconnect after a daemon replacement, with the client's own bricks connected again and its
+  subscriptions renewed, follows (as the TypeScript client has it); until then, a Rust client
+  connects again itself and subscribes again.
 
 ## Start failures
 
