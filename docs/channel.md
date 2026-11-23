@@ -314,7 +314,9 @@ it carries no daemon of its own.
 Every file method that takes a local path a client names, to read from or to write to, runs it
 through one check. The daemon refuses a path that resolves, through links and junctions, into the
 cockpit's own state root (the platform's and a test's), the directory of its executable, or its
-socket directory, whoever the client is.
+socket directory, whoever the client is. Those directories are resolved the same way when the
+daemon starts; when it cannot find or resolve one of them, it does not start (exit code 1)
+rather than serve with that directory unprotected.
 
 - A relative path is refused.
 - A path that does not exist yet resolves through its deepest existing ancestor.

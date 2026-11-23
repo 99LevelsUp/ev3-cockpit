@@ -306,13 +306,23 @@ fn inside(path: &Path, root: &Path) -> bool {
 }
 
 impl Confinement {
-    /// Confinement to everything outside `roots`, each resolved the way a client path is.
-    pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Self {
+    /// Confinement to everything outside `roots`, each resolved the way a client path is. A root
+    /// that cannot be resolved is an error, not a root left out: the daemon then does not start,
+    /// rather than serve with that directory unprotected.
+    pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Result<Self, ResolveError> {
         let roots = roots
             .into_iter()
-            .filter_map(|root| resolve(&root).ok())
-            .collect();
-        Self { roots }
+            .map(|root| {
+                resolve(&root).map_err(|ResolveError(why)| {
+                    ResolveError(format!(
+                        "The daemon cannot resolve {}, one of the cockpit's own directories it \
+                         keeps client paths out of: {why}",
+                        root.display()
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { roots })
     }
 
     /// The directories no path may resolve into.
@@ -473,7 +483,7 @@ mod tests {
         std::fs::create_dir_all(&state).expect("state");
         std::fs::create_dir_all(&other).expect("other");
         std::fs::write(state.join("key"), b"k").expect("key");
-        let confinement = Confinement::new([state.clone()]);
+        let confinement = Confinement::new([state.clone()]).expect("roots");
         for named in [
             state.clone(),
             state.join("key"),
@@ -500,9 +510,30 @@ mod tests {
     }
 
     #[test]
+    fn a_root_that_cannot_be_resolved_is_an_error_not_a_root_left_out() {
+        let base = temp_dir();
+        let error = Confinement::new([base.join("state"), PathBuf::from("relative")])
+            .expect_err("a relative root");
+        assert!(error.0.contains("relative"), "{}", error.0);
+        link_folder(&base.join("nowhere"), &base.join("dangling"));
+        let error = Confinement::new([base.join("dangling").join("native")])
+            .expect_err("a root through a link to nowhere");
+        assert!(error.0.contains("dangling"), "{}", error.0);
+        // A root that does not exist yet resolves through its deepest existing ancestor, as on a
+        // machine where the cockpit never ran.
+        let fresh = Confinement::new([base.join("fresh").join("native")]).expect("a fresh root");
+        assert_eq!(fresh.roots().len(), 1);
+        #[cfg(windows)]
+        std::fs::remove_dir(base.join("dangling")).expect("remove junction");
+        #[cfg(unix)]
+        std::fs::remove_file(base.join("dangling")).expect("remove link");
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    #[test]
     fn a_relative_path_or_climbing_out_of_a_missing_folder_is_refused() {
         let base = temp_dir();
-        let confinement = Confinement::new([base.join("state")]);
+        let confinement = Confinement::new([base.join("state")]).expect("roots");
         let error = confinement
             .check(Path::new("relative.txt"))
             .expect_err("relative");
@@ -544,7 +575,7 @@ mod tests {
     #[test]
     fn a_confined_file_is_written_and_read_through_its_handle() {
         let base = temp_dir();
-        let confinement = Confinement::new([base.join("state")]);
+        let confinement = Confinement::new([base.join("state")]).expect("roots");
         let named = base.join("out.bin");
         let resolved = confinement.check(&named).expect("outside");
         confinement
@@ -565,7 +596,7 @@ mod tests {
         std::fs::create_dir_all(&state).expect("state");
         std::fs::create_dir_all(&out).expect("out");
         std::fs::write(state.join("key"), b"secret").expect("key");
-        let confinement = Confinement::new([state.clone()]);
+        let confinement = Confinement::new([state.clone()]).expect("roots");
         let named = out.join("key");
         let resolved = confinement
             .check(&named)
@@ -599,7 +630,7 @@ mod tests {
         let out = base.join("out");
         std::fs::create_dir_all(&state).expect("state");
         std::fs::create_dir_all(&out).expect("out");
-        let confinement = Confinement::new([state.clone()]);
+        let confinement = Confinement::new([state.clone()]).expect("roots");
         let named = out.join("new.bin");
         let resolved = confinement.check(&named).expect("outside when checked");
         std::fs::remove_dir(&out).expect("remove out");
@@ -629,7 +660,7 @@ mod tests {
         std::fs::write(state.join("key"), b"secret").expect("key");
         let named = base.join("innocent.txt");
         std::fs::hard_link(state.join("key"), &named).expect("hard link");
-        let confinement = Confinement::new([state.clone()]);
+        let confinement = Confinement::new([state.clone()]).expect("roots");
         let resolved = confinement.check(&named).expect("its letters are outside");
 
         let read = confinement
@@ -708,7 +739,7 @@ mod tests {
         let base = temp_dir();
         let state = base.join("State");
         std::fs::create_dir_all(&state).expect("state");
-        let confinement = Confinement::new([state.clone()]);
+        let confinement = Confinement::new([state.clone()]).expect("roots");
         let shouted = PathBuf::from(state.to_string_lossy().to_uppercase()).join("x");
         assert!(confinement.check(&shouted).is_err());
         std::fs::remove_dir_all(base).expect("clean");
