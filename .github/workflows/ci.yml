@@ -1,6 +1,7 @@
 # The TypeScript gate: the extension, the ev3 command, the MCP server and the client library.
 # The unit and VS Code host tests start the development build of the native daemon in replay of
-# recorded bricks, so the job builds it first. The daemon's own gate, its release builds and the
+# recorded bricks, so the job builds it first; the runner is elevated, so the unit tests run a second
+# time as a standard user, where the daemon starts. The daemon's own gate, its release builds and the
 # packages are in native-daemon.yml.
 name: CI
 
@@ -9,6 +10,7 @@ on:
     branches:
       - master
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,7 +31,8 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # The release rust-toolchain.toml names, with its components; rustup is on every runner.
+        run: rustup toolchain install
 
       - name: Cache the daemon's build
         uses: Swatinem/rust-cache@v2
@@ -48,3 +51,39 @@ jobs:
 
       - name: Compile, lint, contract freshness, unit and host tests
         run: npm run test:ci
+
+      - name: Unit tests as a standard user
+        # The runner is elevated, so test:ci skipped every test that starts the daemon. They run
+        # again here under a throwaway standard user; none may report itself skipped for that.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chars = [char[]]'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+          $password = -join (1..24 | ForEach-Object { $chars | Get-Random }) + '!a1'
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name ev3ci -Password $secure -AccountNeverExpires -PasswordNeverExpires | Out-Null
+          $credential = [pscredential]::new("$env:COMPUTERNAME\ev3ci", $secure)
+          $out = Join-Path $env:RUNNER_TEMP 'standard-user'
+          New-Item -ItemType Directory $out | Out-Null
+          icacls $out /grant 'ev3ci:(OI)(CI)M' | Out-Null
+          icacls $env:GITHUB_WORKSPACE /grant 'ev3ci:(OI)(CI)RX' /T /Q | Out-Null
+          # A child started with -Credential inherits this process's environment: point its
+          # profile folders at the user's own profile, which the first logon creates.
+          $profile = 'C:\Users\ev3ci'
+          $environment = @{
+            USERPROFILE = $profile; HOME = $profile; USERNAME = 'ev3ci'
+            APPDATA = "$profile\AppData\Roaming"; LOCALAPPDATA = "$profile\AppData\Local"
+            TEMP = "$profile\AppData\Local\Temp"; TMP = "$profile\AppData\Local\Temp"
+          }
+          Start-Process -FilePath cmd.exe -ArgumentList '/c', 'mkdir "%TEMP%" 2>nul & exit 0' `
+            -Credential $credential -LoadUserProfile -Environment $environment -Wait -WindowStyle Hidden
+          if (-not (Test-Path $environment.TEMP)) { throw "the standard user's profile was not created" }
+          $log = Join-Path $out 'unit.out.txt'
+          $err = Join-Path $out 'unit.err.txt'
+          $process = Start-Process -FilePath (Get-Command node).Source -ArgumentList 'scripts/run-unit-tests.mts' `
+            -Credential $credential -LoadUserProfile -Environment $environment -WorkingDirectory $env:GITHUB_WORKSPACE `
+            -Wait -PassThru -RedirectStandardOutput $log -RedirectStandardError $err
+          $text = (Get-Content $log, $err -Raw -ErrorAction SilentlyContinue) -join "`n"
+          $text -split "`n" | Select-String -Pattern '^ℹ (tests|pass|fail|skipped)|^not ok|✖' | ForEach-Object Line
+          if ($process.ExitCode -ne 0) { $text; throw "the unit tests failed as a standard user (exit $($process.ExitCode))" }
+          if ($text -match 'refuses to run so') { $text; throw 'a test still skipped itself for elevation' }

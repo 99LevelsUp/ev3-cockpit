@@ -387,9 +387,18 @@ mod tests {
         use windows_sys::Win32::Devices::Bluetooth::{
             BLUETOOTH_DEVICE_INFO, BLUETOOTH_DEVICE_SEARCH_PARAMS, BLUETOOTH_RADIO_INFO,
         };
-        // LLP64 with 8-byte pointers, x64 and arm64.
+        // As the SDK headers lay them out: the search parameters end in a radio handle, a pointer
+        // (8 bytes on x64 and arm64, 4 on x86); the other two hold no pointer.
+        let search = if cfg!(target_pointer_width = "64") {
+            40
+        } else {
+            32
+        };
         assert_eq!(std::mem::size_of::<BLUETOOTH_DEVICE_INFO>(), 560);
-        assert_eq!(std::mem::size_of::<BLUETOOTH_DEVICE_SEARCH_PARAMS>(), 40);
+        assert_eq!(
+            std::mem::size_of::<BLUETOOTH_DEVICE_SEARCH_PARAMS>(),
+            search
+        );
         assert_eq!(std::mem::size_of::<BLUETOOTH_RADIO_INFO>(), 520);
     }
 }

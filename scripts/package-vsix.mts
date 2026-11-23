@@ -28,7 +28,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { TARGETS, DAEMON_MANIFEST, SHIPPED_FILES_FOR, daemonBinary, readZip, checkVsix } from './packaging.mts';
+import { TARGETS, VSIX_TARGETS, DAEMON_MANIFEST, SHIPPED_FILES_FOR, daemonBinary, readZip, checkVsix } from './packaging.mts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const STAGING = path.join(REPO, '.vsix-staging');
@@ -49,7 +49,7 @@ function run(command: string, args: readonly string[], cwd: string): void {
 /** This machine's target, or undefined when no release ships for it. */
 function hostTarget(): string | undefined {
 	const target = `${process.platform}-${process.arch}`;
-	return TARGETS[target] ? target : undefined;
+	return VSIX_TARGETS.includes(target) ? target : undefined;
 }
 
 /** Where cargo puts a release build of the daemon for a target. */
@@ -119,10 +119,11 @@ function main(): void {
 	if (at >= 0 && !daemonDir) { throw new Error('--daemon-dir needs a folder.'); }
 	const targets = args.filter((arg, i) => !arg.startsWith('--') && (at < 0 || i !== at + 1));
 	for (const target of targets) {
-		if (!TARGETS[target]) { throw new Error(`Unknown target ${target}; known: ${Object.keys(TARGETS).join(', ')}.`); }
+		if (!TARGETS[target]) { throw new Error(`Unknown target ${target}; known: ${VSIX_TARGETS.join(', ')}.`); }
+		if (!TARGETS[target].vsix) { throw new Error(`No VSIX ships for ${target}: VS Code has no build for it; its npm package carries ev3. VSIX targets: ${VSIX_TARGETS.join(', ')}.`); }
 	}
 	const chosen = targets.length ? targets : [hostTarget()];
-	if (!chosen[0]) { throw new Error(`No release ships for ${process.platform}-${process.arch}; name a target: ${Object.keys(TARGETS).join(', ')}.`); }
+	if (!chosen[0]) { throw new Error(`No VSIX ships for ${process.platform}-${process.arch}; name a target: ${VSIX_TARGETS.join(', ')}.`); }
 	if (daemonDir && chosen.length > 1) { throw new Error('--daemon-dir holds one platform\'s daemon; name one target.'); }
 	if (!skipBuild) { run(process.execPath, [path.join(REPO, 'scripts', 'bundle.mts'), 'extension'], REPO); }
 	const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as Manifest;

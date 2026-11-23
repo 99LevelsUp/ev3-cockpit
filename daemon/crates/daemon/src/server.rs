@@ -597,10 +597,22 @@ mod tests {
             .expect("icacls runs");
         let text = String::from_utf8_lossy(&acl.stdout).to_string();
         let entries: Vec<&str> = text.lines().filter(|l| l.contains(":(")).collect();
+        // A file made inside gets the user's entry and nothing else. Locally icacls marks it
+        // inherited, `(I)(F)`; on GitHub's runner the same single entry shows as `(F)`, so the
+        // check is on whose entry it is and what it grants, not on that mark.
         assert_eq!(entries.len(), 1, "one entry, the user's: {text}");
+        // Who this process runs as, as icacls names it (DOMAIN\user), not USERNAME, which a
+        // process started for another user may have inherited.
+        let whoami = std::process::Command::new("whoami")
+            .output()
+            .expect("whoami runs");
+        let user = String::from_utf8_lossy(&whoami.stdout)
+            .trim()
+            .to_lowercase();
+        let entry = entries[0].to_lowercase();
         assert!(
-            entries[0].contains("(I)(F)"),
-            "inherited full access: {text}"
+            entry.contains(&format!("{user}:")) && entry.contains("(f)"),
+            "the user's full access alone ({user}): {text}"
         );
         std::fs::remove_dir_all(parent).expect("clean");
     }

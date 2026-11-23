@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 
 /** The platforms a release ships `ev3` for; `scripts/packaging.mts` (`TARGETS`) builds the same. */
-export const PLATFORMS: readonly string[] = ['win32-x64', 'linux-x64', 'linux-arm64'];
+export const PLATFORMS: readonly string[] = ['win32-x64', 'win32-arm64', 'win32-ia32', 'linux-x64', 'linux-arm64', 'linux-ia32'];
 
 /** The exit code `ev3` gives when it cannot start the cockpit daemon (here: no `ev3` to start). */
 const NOT_STARTABLE = 8;

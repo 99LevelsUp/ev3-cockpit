@@ -42,13 +42,28 @@ impl Pe {
         let pe = self.u32(0x3c) as usize;
         assert_eq!(&self.bytes[pe..pe + 4], b"PE\0\0");
         let optional = pe + 24;
-        assert_eq!(self.u16(optional), 0x20b, "a 64-bit image");
+        // PE32+ (0x20b) for 64-bit targets, PE32 (0x10b) for 32-bit x86.
+        let expected = if cfg!(target_pointer_width = "64") {
+            0x20b
+        } else {
+            0x10b
+        };
+        assert_eq!(
+            self.u16(optional),
+            expected,
+            "an image of this target's width"
+        );
         optional
+    }
+
+    fn wide(&self) -> bool {
+        self.u16(self.optional_header()) == 0x20b
     }
 
     /// The (RVA, size) of data directory `index`.
     fn directory(&self, index: usize) -> (u32, u32) {
-        let at = self.optional_header() + 112 + index * 8;
+        let first = if self.wide() { 112 } else { 96 };
+        let at = self.optional_header() + first + index * 8;
         (self.u32(at), self.u32(at + 4))
     }
 
@@ -73,11 +88,13 @@ impl Pe {
         let (rva, _) = self.directory(10);
         assert_ne!(rva, 0, "the image has a load configuration");
         let config = self.file_offset(rva);
+        // IMAGE_LOAD_CONFIG_DIRECTORY64 keeps it at 78, the 32-bit one at 54.
+        let at = if self.wide() { 78 } else { 54 };
         assert!(
-            self.u32(config) >= 80,
+            self.u32(config) as usize >= at + 2,
             "the load configuration includes DependentLoadFlags"
         );
-        config + 78
+        config + at
     }
 
     fn imports(&self) -> Vec<String> {

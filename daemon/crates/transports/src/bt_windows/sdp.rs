@@ -160,8 +160,13 @@ mod tests {
 
     #[test]
     fn the_query_structure_has_the_size_winsock_expects() {
-        // sizeof(WSAQUERYSETW) on 64-bit Windows.
-        assert_eq!(std::mem::size_of::<WsaQuerySetW>(), 120);
+        // sizeof(WSAQUERYSETW): 120 with 8-byte pointers (x64, arm64), 60 with 4-byte ones (x86).
+        let expected = if cfg!(target_pointer_width = "64") {
+            120
+        } else {
+            60
+        };
+        assert_eq!(std::mem::size_of::<WsaQuerySetW>(), expected);
     }
 
     #[test]

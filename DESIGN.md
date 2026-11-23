@@ -1567,8 +1567,9 @@ start with `docs/api-for-consumers.md`.
 ### 10.1 One Daemon, Many Clients
 
 One daemon per user holds the bricks: their connections, presence, telemetry, programs, files,
-the transfer ledger and the settings. It is a native binary for Windows x64, Linux x64 and Linux
-arm64 that needs no Node runtime, shipped in the VSIX and npm packages. Every client goes through
+the transfer ledger and the settings. It is a native binary for Windows and Linux on x64, arm64 and
+32-bit x86 that needs no Node runtime, shipped in the VSIX (not for 32-bit x86, which VS Code does
+not build for) and npm packages. Every client goes through
 it:
 
 - the VS Code extension, one client per window;

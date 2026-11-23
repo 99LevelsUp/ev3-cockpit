@@ -1,5 +1,8 @@
 //! `dispatch` routes every request of the method table to its trait method with typed
 //! parameters, returns the typed result as JSON, and refuses what the table does not allow.
+//!
+//! Not named dispatch.rs: Windows takes a 32-bit program whose name holds `patch`, `setup`,
+//! `install` or `update` for an installer and asks to elevate it, so that test never ran on x86.
 
 mod common;
 
