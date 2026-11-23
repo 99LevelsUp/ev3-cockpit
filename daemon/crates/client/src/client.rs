@@ -45,7 +45,7 @@ pub struct ClientOptions<'a> {
 }
 
 /// Which daemon a client starts when none runs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Launch {
     /// The daemon this client carries, or why it carries none (`ev3`); a missing one is an error
     /// only when no daemon runs.
@@ -155,6 +155,17 @@ impl Client {
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         let result = self.endpoint.request(method, params).await;
         leased_outcome(method, result)
+    }
+
+    /// The daemon's notifications to this client from now on, typed (see [`Events`]).
+    pub fn events(&self) -> crate::Events {
+        crate::Events::new(&self.endpoint)
+    }
+
+    /// Follows `brick`'s program: the state now, then every change in order (see
+    /// [`crate::ProgramStates`]). Dropping it cancels the subscription.
+    pub async fn subscribe_programs(&self, brick: &str) -> Result<crate::ProgramStates> {
+        crate::ProgramStates::subscribe(&self.endpoint, brick).await
     }
 
     /// A typed request: `client.call::<method::BricksList>(params)`. The answer is decoded into the

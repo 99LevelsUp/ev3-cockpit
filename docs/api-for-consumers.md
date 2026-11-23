@@ -441,12 +441,25 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
   start, `connect` fails with `missing_binary`.
 - **Bricks:** `bricks()` answers the list, asked for once and then kept current by
   `bricks/changed`.
+- **Notifications:** `events()` reads every notification from then on as the contract's
+  `Notification` (`BricksChanged`, `DaemonShowsChanged`, `ProgramsStateChanged`, …), in the order
+  the daemon sent them; a reader that falls behind by thousands loses the oldest and counts them
+  in `skipped()`.
+- **A program's state:** `subscribe_programs(brick)` answers a `ProgramStates` with `state`, the
+  state when it was made, and `next()` for every change, in order, for that subscription alone;
+  a change the daemon sends before its answer is not lost. Dropping it cancels the subscription.
 - `ev3_client::CONTRACT_VERSION` and `ev3_client::contract` re-export `ev3-contract`.
 - Rust 1.100.0 (the repository's `rust-toolchain.toml`), edition 2024, tokio 1 with `rt`, `net`,
   `io-util`, `sync`, `time` and `macros`; no transport is linked. The static C runtime this
   repository sets in `daemon/.cargo/config.toml` does not reach a consumer: set it in your own.
-- Subscriptions with renewal and the reconnect after a daemon replacement follow (as the
-  TypeScript client has them); until then, a Rust client connects again itself.
+- **Outliving the daemon:** `Cockpit` (with `CockpitOptions`, owned) is the client an add-on
+  keeps for a long time, as the TypeScript `CockpitClient`: when the connection closes it
+  connects again by itself, starting the daemon its `Launch` names; the bricks it connected
+  without a hold are connected again and every `subscribe_programs` is renewed, its reader getting
+  the fresh state first. `events()` carries `CockpitEvent::Notification`, `Reconnected` and `Lost`
+  (no daemon came back; the next request tries again). A write cut by the daemon going fails with
+  `outcome_unknown` and is never sent again. `Client` stays the short-lived connection `ev3` uses,
+  which never reconnects; its `events()` and `ProgramStates` end with `None` when it closes.
 
 ## Start failures
 
