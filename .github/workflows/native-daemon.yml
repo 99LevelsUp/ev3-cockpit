@@ -93,12 +93,23 @@ jobs:
           New-Item -ItemType Directory $out | Out-Null
           icacls $out /grant 'ev3ci:(OI)(CI)M' | Out-Null
           icacls $env:GITHUB_WORKSPACE /grant 'ev3ci:(OI)(CI)RX' /T /Q | Out-Null
+          # A child started with -Credential inherits this process's environment: point its
+          # profile folders at the user's own profile, which the first logon creates.
+          $profile = 'C:\Users\ev3ci'
+          $environment = @{
+            USERPROFILE = $profile; HOME = $profile
+            APPDATA = "$profile\AppData\Roaming"; LOCALAPPDATA = "$profile\AppData\Local"
+            TEMP = "$profile\AppData\Local\Temp"; TMP = "$profile\AppData\Local\Temp"
+          }
+          Start-Process -FilePath cmd.exe -ArgumentList '/c', 'mkdir "%TEMP%" 2>nul & exit 0' `
+            -Credential $credential -LoadUserProfile -Environment $environment -Wait -WindowStyle Hidden
+          if (-not (Test-Path $environment.TEMP)) { throw "the standard user's profile was not created" }
           $failed = @()
           foreach ($test in $built) {
             $name = "$($test.target.name)-$(($test.target.kind) -join ',')"
             $log = Join-Path $out "$name.out.txt"
             $err = Join-Path $out "$name.err.txt"
-            $process = Start-Process -FilePath $test.executable -Credential $credential -LoadUserProfile `
+            $process = Start-Process -FilePath $test.executable -Credential $credential -LoadUserProfile -Environment $environment `
               -WorkingDirectory (Split-Path $test.manifest_path) -Wait -PassThru `
               -RedirectStandardOutput $log -RedirectStandardError $err
             $text = (Get-Content $log, $err -Raw -ErrorAction SilentlyContinue) -join "`n"
