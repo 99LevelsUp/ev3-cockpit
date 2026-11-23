@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, SystemTime};
 
+use ev3_channel::daemon_exit;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -136,36 +137,23 @@ fn not_private(dir: &Path, why: &str) -> CliError {
 
 /// Refuses a copy directory anyone but the user could put a file in.
 pub fn check_private_dir(dir: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(dir)
-        .map_err(|error| not_private(dir, &format!("cannot be checked ({error})")))?;
-    if !meta.is_dir() || meta.file_type().is_symlink() {
-        return Err(not_private(dir, "is not a plain folder"));
+    #[cfg(unix)]
+    if let Some(why) = ev3_channel::fsutil::unix_dir_problem(dir) {
+        return Err(not_private(dir, &why));
     }
     #[cfg(windows)]
     {
+        let meta = std::fs::symlink_metadata(dir)
+            .map_err(|error| not_private(dir, &format!("cannot be checked ({error})")))?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(not_private(dir, "is not a plain directory"));
+        }
         let others = ev3_channel::fsutil::windows::others_with_access(dir)
             .map_err(|error| not_private(dir, &format!("cannot be checked ({error})")))?;
         if !others.is_empty() {
             return Err(not_private(
                 dir,
                 &format!("can be reached by others ({})", others.join(", ")),
-            ));
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // SAFETY: geteuid has no preconditions.
-        if meta.uid() != unsafe { libc::geteuid() } {
-            return Err(not_private(dir, "belongs to another user"));
-        }
-        if meta.mode() & 0o077 != 0 {
-            return Err(not_private(
-                dir,
-                &format!(
-                    "can be opened by other users (mode {:o})",
-                    meta.mode() & 0o777
-                ),
             ));
         }
     }
@@ -511,11 +499,6 @@ mod windows_std {
 
 /// The Windows error a code-integrity policy raises when it blocks an executable.
 const ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION: i32 = 4551;
-const LOCK_HELD: i32 = 2;
-const REFUSED: i32 = 3;
-/// Every exit code the daemon documents; a process that exited with one of them ran.
-#[cfg(windows)]
-const DAEMON_EXIT_CODES: [i32; 5] = [0, 1, LOCK_HELD, REFUSED, 64];
 
 /// Windows: `VerifiedAndReputablePolicyState` (0 off, 1 on, 2 evaluation), if readable.
 #[cfg(windows)]
@@ -575,7 +558,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
         return blocked();
     }
     match ended {
-        Ended::Exit(Some(LOCK_HELD)) => {
+        Ended::Exit(Some(daemon_exit::LOCK_HELD)) => {
             return CliError::start(
                 Failure::LockHeld,
                 format!(
@@ -584,7 +567,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
                 ),
             );
         }
-        Ended::Exit(Some(REFUSED)) => {
+        Ended::Exit(Some(daemon_exit::REFUSED)) => {
             return CliError::start(
                 Failure::NameHeld,
                 format!(
@@ -597,7 +580,7 @@ pub fn classify(ended: &Ended, binary: &Path, log: &Path) -> CliError {
     }
     #[cfg(windows)]
     {
-        let ran = matches!(ended, Ended::Exit(Some(code)) if DAEMON_EXIT_CODES.contains(code));
+        let ran = matches!(ended, Ended::Exit(Some(code)) if daemon_exit::ALL.contains(code));
         if !ran && matches!(smart_app_control_policy(), Some(1 | 2)) {
             return blocked();
         }

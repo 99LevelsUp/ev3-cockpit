@@ -42,26 +42,7 @@ pub const WRITE_WAIT: Duration = Duration::from_secs(60);
 /// How often the wait looks again.
 const WRITE_CHECK: Duration = Duration::from_millis(100);
 
-/// Compares dotted versions numerically, as the cockpit's clients do: the first three parts split
-/// at `.`, `+` and `-`, each read by its leading digits (none reads as 0), missing parts as 0.
-/// A pre-release or build suffix after the third part is ignored.
-pub fn compare_versions(a: &str, b: &str) -> Ordering {
-    version_parts(a).cmp(&version_parts(b))
-}
-
-fn version_parts(version: &str) -> [u64; 3] {
-    let mut parts = [0; 3];
-    for (slot, part) in parts.iter_mut().zip(version.split(['.', '+', '-'])) {
-        *slot = part
-            .trim_start()
-            .bytes()
-            .take_while(u8::is_ascii_digit)
-            .fold(0u64, |n, digit| {
-                n.saturating_mul(10).saturating_add(u64::from(digit - b'0'))
-            });
-    }
-    parts
-}
+pub use ev3_channel::version::compare_versions;
 
 /// What an exit request is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,30 +180,6 @@ mod tests {
 
     use serde_json::{Value, json};
     use tokio::sync::mpsc::UnboundedReceiver;
-
-    #[test]
-    fn versions_compare_numerically_like_the_clients_do() {
-        // The client's own vectors.
-        assert_eq!(compare_versions("0.2.10", "0.2.9"), Ordering::Greater);
-        assert_eq!(compare_versions("1.0.0", "1.0.0"), Ordering::Equal);
-        assert_eq!(compare_versions("0.2.6", "0.2.5"), Ordering::Greater);
-        assert_eq!(compare_versions("0.2.4", "0.2.5"), Ordering::Less);
-        // Its reading: three parts, leading digits, a missing part or one without digits is 0.
-        assert_eq!(compare_versions("1.2", "1.2.0"), Ordering::Equal);
-        assert_eq!(compare_versions("1.2.3-beta.1", "1.2.3"), Ordering::Equal);
-        assert_eq!(compare_versions("1.2.3.9", "1.2.3"), Ordering::Equal);
-        assert_eq!(
-            compare_versions("1.10.0+build", "1.9.99"),
-            Ordering::Greater
-        );
-        assert_eq!(compare_versions("2rc.0.0", "2.0.0"), Ordering::Equal);
-        assert_eq!(compare_versions("garbage", "0.0.0"), Ordering::Equal);
-        assert_eq!(compare_versions("", "0.0.1"), Ordering::Less);
-        assert_eq!(
-            compare_versions("99999999999999999999999.0.0", "1.0.0"),
-            Ordering::Greater
-        );
-    }
 
     #[test]
     fn a_release_daemon_is_replaced_only_by_a_newer_release_client_or_a_development_one() {

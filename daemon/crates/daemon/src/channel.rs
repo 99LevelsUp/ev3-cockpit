@@ -161,51 +161,19 @@ mod windows {
 /// macOS.
 pub const MAX_SOCKET_PATH: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
-/// What the socket directory check looks at.
-#[derive(Debug, Clone, Copy)]
-pub struct DirFacts {
-    pub is_dir: bool,
-    pub is_symlink: bool,
-    pub owner: u32,
-    pub mode: u32,
-}
-
-/// What is wrong with a socket directory, for user `me`; `None` when only `me` can reach it.
-pub fn private_dir_problem(dir: &Path, facts: DirFacts, me: u32) -> Option<String> {
-    if facts.is_symlink || !facts.is_dir {
-        return Some(format!(
-            "{} is not a plain directory; the daemon will not put its socket there.",
-            dir.display()
-        ));
-    }
-    if facts.owner != me {
-        return Some(format!(
-            "{} belongs to another user; the daemon will not put its socket there.",
-            dir.display()
-        ));
-    }
-    if facts.mode & 0o077 != 0 {
-        return Some(format!(
-            "{} can be opened by other users (mode {:o}); the daemon will not put its socket there.",
-            dir.display(),
-            facts.mode & 0o777
-        ));
-    }
-    None
-}
-
 #[cfg(unix)]
 pub use unix::Listener;
 
 #[cfg(unix)]
 mod unix {
     use std::io;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
     use tokio::net::UnixListener;
 
-    use super::{BindError, DirFacts, Duplex, MAX_SOCKET_PATH, private_dir_problem};
+    use super::{BindError, Duplex, MAX_SOCKET_PATH};
+    use crate::fsutil::{dir_facts, private_dir_problem};
 
     /// The daemon's socket.
     pub struct Listener {
@@ -274,17 +242,14 @@ mod unix {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(BindError::Io(error)),
         }
-        let meta = std::fs::symlink_metadata(dir).map_err(BindError::Io)?;
-        let facts = DirFacts {
-            is_dir: meta.file_type().is_dir(),
-            is_symlink: meta.file_type().is_symlink(),
-            owner: meta.uid(),
-            mode: meta.mode(),
-        };
+        let facts = dir_facts(dir).map_err(BindError::Io)?;
         // SAFETY: geteuid has no preconditions.
         let me = unsafe { libc::geteuid() };
-        match private_dir_problem(dir, facts, me) {
-            Some(problem) => Err(BindError::Refused(problem)),
+        match private_dir_problem(facts, me) {
+            Some(problem) => Err(BindError::Refused(format!(
+                "{} {problem}; the daemon will not put its socket there.",
+                dir.display()
+            ))),
             None => Ok(()),
         }
     }
@@ -345,40 +310,6 @@ mod tests {
             record_text(path, pid),
             first["file"].as_str().expect("file")
         );
-    }
-
-    #[test]
-    fn a_socket_directory_others_can_reach_is_refused() {
-        let dir = Path::new("/run/user/1000/ev3-cockpit");
-        let private = DirFacts {
-            is_dir: true,
-            is_symlink: false,
-            owner: 1000,
-            mode: 0o40700,
-        };
-        assert_eq!(private_dir_problem(dir, private, 1000), None);
-        let foreign = DirFacts {
-            owner: 0,
-            ..private
-        };
-        assert!(
-            private_dir_problem(dir, foreign, 1000)
-                .expect("foreign")
-                .contains("another user")
-        );
-        for mode in [0o40750, 0o40705, 0o40777] {
-            let open = DirFacts { mode, ..private };
-            assert!(
-                private_dir_problem(dir, open, 1000)
-                    .expect("open")
-                    .contains("other users")
-            );
-        }
-        let link = DirFacts {
-            is_symlink: true,
-            ..private
-        };
-        assert!(private_dir_problem(dir, link, 1000).is_some());
     }
 
     /// A fresh directory under the system temp directory, removed on drop.

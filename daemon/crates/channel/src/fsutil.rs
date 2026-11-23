@@ -180,6 +180,59 @@ fn section<'a>(sddl: &'a str, tag: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+/// What a folder's metadata says about who can reach it, on Linux and macOS.
+#[derive(Debug, Clone, Copy)]
+pub struct DirFacts {
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub owner: u32,
+    pub mode: u32,
+}
+
+/// Why a folder is not user `me`'s alone, worded to follow its path ("belongs to another user");
+/// `None` when only `me` can reach it: a plain directory, owned by `me`, with no permission bit
+/// for the group or others. The daemon's socket directory and `ev3`'s folder of verified daemon
+/// copies are both held to it, by the daemon and by every client.
+pub fn private_dir_problem(facts: DirFacts, me: u32) -> Option<String> {
+    if facts.is_symlink || !facts.is_dir {
+        return Some("is not a plain directory".into());
+    }
+    if facts.owner != me {
+        return Some("belongs to another user".into());
+    }
+    if facts.mode & 0o077 != 0 {
+        return Some(format!(
+            "can be opened by other users (mode {:o})",
+            facts.mode & 0o777
+        ));
+    }
+    None
+}
+
+/// Linux and macOS: the facts of `dir` itself (a link is not followed).
+#[cfg(unix)]
+pub fn dir_facts(dir: &Path) -> io::Result<DirFacts> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir)?;
+    Ok(DirFacts {
+        is_dir: meta.file_type().is_dir(),
+        is_symlink: meta.file_type().is_symlink(),
+        owner: meta.uid(),
+        mode: meta.mode(),
+    })
+}
+
+/// Linux and macOS: why `dir` is not the current user's alone, or why it cannot be checked;
+/// `None` when it is the user's alone.
+#[cfg(unix)]
+pub fn unix_dir_problem(dir: &Path) -> Option<String> {
+    match dir_facts(dir) {
+        // SAFETY: geteuid has no preconditions.
+        Ok(facts) => private_dir_problem(facts, unsafe { libc::geteuid() }),
+        Err(error) => Some(format!("cannot be checked ({error})")),
+    }
+}
+
 #[cfg(windows)]
 pub mod windows {
     //! The Windows side: the owner-only security descriptor and file creation with it.
@@ -425,6 +478,57 @@ pub mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_directory_others_can_reach_is_not_private() {
+        let private = DirFacts {
+            is_dir: true,
+            is_symlink: false,
+            owner: 1000,
+            mode: 0o40700,
+        };
+        assert_eq!(private_dir_problem(private, 1000), None);
+        let foreign = DirFacts {
+            owner: 0,
+            ..private
+        };
+        assert_eq!(
+            private_dir_problem(foreign, 1000).as_deref(),
+            Some("belongs to another user")
+        );
+        for mode in [0o40750, 0o40705, 0o40777] {
+            let open = DirFacts { mode, ..private };
+            assert!(
+                private_dir_problem(open, 1000)
+                    .expect("open")
+                    .contains("other users")
+            );
+        }
+        let link = DirFacts {
+            is_symlink: true,
+            ..private
+        };
+        assert_eq!(
+            private_dir_problem(link, 1000).as_deref(),
+            Some("is not a plain directory")
+        );
+        let file = DirFacts {
+            is_dir: false,
+            ..private
+        };
+        assert!(private_dir_problem(file, 1000).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_is_not_there_cannot_be_checked() {
+        let gone = temp_dir().join("gone");
+        assert!(
+            unix_dir_problem(&gone)
+                .expect("a problem")
+                .starts_with("cannot be checked")
+        );
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

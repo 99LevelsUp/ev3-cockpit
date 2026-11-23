@@ -30,3 +30,29 @@ pub fn daemon_proof(key: &[u8], client_nonce: &str, daemon_nonce: &str) -> Strin
 pub fn client_proof(key: &[u8], client_nonce: &str, daemon_nonce: &str) -> String {
     proof(key, "client", client_nonce, daemon_nonce)
 }
+
+/// Whether a proof received equals the one expected, compared in time that does not depend on
+/// where they differ.
+pub fn proofs_match(expected: &str, received: &str) -> bool {
+    let (a, b) = (expected.as_bytes(), received.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proofs_compare_whole() {
+        assert!(proofs_match("abcd", "abcd"));
+        assert!(!proofs_match("abcd", "abce"));
+        assert!(!proofs_match("abcd", "abc"));
+        assert!(!proofs_match("abcd", ""));
+    }
+
+    #[test]
+    fn the_two_sides_proofs_differ_for_the_same_nonces() {
+        let key = [3u8; 32];
+        assert_ne!(daemon_proof(&key, "a", "b"), client_proof(&key, "a", "b"));
+    }
+}
