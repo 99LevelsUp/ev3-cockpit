@@ -39,7 +39,9 @@ pub struct ClientOptions<'a> {
 pub struct Client {
     pub endpoint: Endpoint,
     pub daemon: DaemonIdentity,
-    bricks: Arc<Mutex<Vec<Value>>>,
+    /// The bricks as last heard: `None` until a command first looks one up (most never do), then
+    /// kept current by `bricks/changed`.
+    bricks: Arc<Mutex<Option<Vec<Value>>>>,
 }
 
 impl Client {
@@ -86,7 +88,7 @@ impl Client {
             _ => error,
         })?;
         let endpoint = connected.endpoint;
-        let bricks = Arc::new(Mutex::new(Vec::new()));
+        let bricks = Arc::new(Mutex::new(None));
         let mut heard = endpoint.notifications();
         let listen_bricks = Arc::clone(&bricks);
         tokio::spawn(async move {
@@ -94,7 +96,7 @@ impl Client {
                 match method.as_str() {
                     "bricks/changed" => {
                         if let Some(list) = params.get("bricks").and_then(Value::as_array) {
-                            *listen_bricks.lock().expect("bricks") = list.clone();
+                            *listen_bricks.lock().expect("bricks") = Some(list.clone());
                         }
                     }
                     "question/withdrawn" => {
@@ -106,16 +108,11 @@ impl Client {
                 }
             }
         });
-        let client = Self {
+        Ok(Self {
             endpoint,
             daemon: connected.daemon,
             bricks,
-        };
-        let list = client.request("bricks/list", json!({})).await?;
-        if let Some(list) = list.get("bricks").and_then(Value::as_array) {
-            *client.bricks.lock().expect("bricks") = list.clone();
-        }
-        Ok(client)
+        })
     }
 
     /// A request. A write cut off by the daemon going may or may not have happened; it is never
@@ -139,10 +136,21 @@ impl Client {
         leased_outcome(method, result)
     }
 
-    /// A brick as last heard, by its id or its name.
-    pub fn brick(&self, reference: &str) -> Option<Value> {
+    /// A brick as last heard, by its id or its name; the list is asked for the first time a
+    /// command looks a brick up.
+    pub async fn brick(&self, reference: &str) -> Result<Option<Value>> {
+        if self.bricks.lock().expect("bricks").is_none() {
+            let list = self.request("bricks/list", json!({})).await?;
+            let list = list
+                .get("bricks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // A bricks/changed heard meanwhile is newer than this answer: it stays.
+            self.bricks.lock().expect("bricks").get_or_insert(list);
+        }
         let bricks = self.bricks.lock().expect("bricks");
-        find_brick(&bricks, reference).cloned()
+        Ok(find_brick(bricks.as_deref().unwrap_or_default(), reference).cloned())
     }
 
     /// Makes sure the daemon knows the brick `reference` names: when it does not yet (a brick
@@ -153,14 +161,14 @@ impl Client {
         reference: &str,
         wait: std::time::Duration,
     ) -> Result<bool> {
-        if self.brick(reference).is_some() {
+        if self.brick(reference).await?.is_some() {
             return Ok(true);
         }
         let mut heard = self.endpoint.notifications();
         self.request("bricks/inquiry", json!({})).await?;
         let found = tokio::time::timeout(wait, async {
             loop {
-                if self.brick(reference).is_some() {
+                if self.brick(reference).await.ok().flatten().is_some() {
                     return true;
                 }
                 match heard.recv().await {
@@ -180,7 +188,7 @@ impl Client {
             }
         })
         .await;
-        Ok(found.unwrap_or(false) || self.brick(reference).is_some())
+        Ok(found.unwrap_or(false) || self.brick(reference).await?.is_some())
     }
 
     /// Closes the connection the way the daemon expects: everything it sent is read first.

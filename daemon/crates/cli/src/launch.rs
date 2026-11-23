@@ -6,12 +6,14 @@
 //!   the user's that nobody else can open, on Windows one whose access list lets in nobody but the
 //!   user, SYSTEM and the Administrators. The directories this client creates get an owner-only
 //!   access list.
-//! - The copy is hashed, not the source. A copy that verifies is reused; one that does not is
-//!   replaced. A binary whose copy does not match the SHA-256 its manifest recorded is refused.
+//! - The copy is hashed, not the source, once: a fresh copy is hashed as its temporary file and
+//!   not again after the rename. A copy that verifies is reused; one that does not is replaced. A
+//!   binary whose copy does not match the SHA-256 its manifest recorded is refused.
 //! - The installed file is never started, so it is never locked: an update and a rebuild work
 //!   while a daemon runs. The copy starts detached, with the state root as its working directory.
-//! - Clients remove the copies other than their own and the running daemon's, skipping locked ones
-//!   and ones used in the last minutes, which another client may be about to start.
+//! - A client that started a daemon removes the copies other than its own and the running
+//!   daemon's, skipping locked ones and ones used in the last minutes, which another client may be
+//!   about to start.
 //! - On Windows a start that fails (a spawn error, or an exit with a code the daemon never uses) is
 //!   read as Smart App Control when the code-integrity policy reports it on or in evaluation.
 
@@ -269,6 +271,7 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
                     ),
                 ));
             }
+            // Verified as the temporary file; the rename keeps its content, so it is not hashed again.
             match std::fs::rename(&temp, &target) {
                 Ok(()) => Ok(true),
                 Err(error) if replace_refused(&error) => Ok(false),
@@ -278,7 +281,10 @@ pub fn verified_copy(launch: &LaunchSpec, state_root: &Path) -> Result<PathBuf> 
             }
         })();
         let _ = std::fs::remove_file(&temp);
-        placed?;
+        if placed? {
+            mark_in_use(&dir);
+            return Ok(target);
+        }
     }
     Err(CliError::start(
         Failure::Failed,
