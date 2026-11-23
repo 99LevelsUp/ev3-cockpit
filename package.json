@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.581",
+  "version": "0.2.582",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -103,7 +103,6 @@
     "prepare": "node scripts/install-hooks.mts"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.4.0",
     "@playwright/test": "^1.49.0",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.95.0",
@@ -117,8 +116,6 @@
     "typescript": "^5.5.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.4.0",
-    "vscode-jsonrpc": "10.0.0",
-    "zod": "4.6.7"
+    "vscode-jsonrpc": "10.0.0"
   }
 }

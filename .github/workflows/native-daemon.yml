@@ -122,9 +122,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build the daemon, a release build
+      - name: Build the daemon and ev3, a release build
         working-directory: daemon
-        run: cargo build --release --locked -p ev3-cockpitd
+        run: cargo build --release --locked -p ev3-cockpitd -p ev3-cli
 
       - name: Write its manifest
         run: node scripts/daemon-manifest.mts --profile release
@@ -145,6 +145,15 @@ jobs:
           node scripts/package-npm.mts --platform ${{ matrix.target }} --daemon-dir daemon/target/release
           npm pack ./dist/npm/${{ matrix.target }} --pack-destination dist/npm
 
+      - name: The packaged ev3 runs and is this version
+        # --version starts no daemon, so it runs on the elevated Windows runner too.
+        run: |
+          ev3="./dist/npm/${{ matrix.target }}/$(node -p "require('./scripts/packaging.mts').cliBinary('${{ matrix.target }}')")"
+          printed=$("$ev3" --version)
+          expected=$(node -p "require('./package.json').version")
+          echo "$ev3 --version: $printed"
+          test "$printed" = "$expected"
+
       - name: Stage and pack the client and cockpit npm packages
         # The same on every platform: packed once, on Linux.
         if: matrix.target == 'linux-x64'
@@ -153,14 +162,19 @@ jobs:
           node scripts/package-npm.mts --skip-build
           npm pack ./dist/npm/client ./dist/npm/cockpit --pack-destination dist/npm
 
-      - name: SHA-256 of the daemon
+      - name: SHA-256 of the daemon and ev3
         id: daemon
         run: |
           binary=daemon/target/release/$(node -p "require('./scripts/packaging.mts').daemonBinary('${{ matrix.target }}')")
+          cli=daemon/target/release/$(node -p "require('./scripts/packaging.mts').cliBinary('${{ matrix.target }}')")
           sum=$(sha256sum "$binary" | cut -d' ' -f1)
+          cli_sum=$(sha256sum "$cli" | cut -d' ' -f1)
           echo "$sum  ev3-cockpitd-${{ matrix.target }}" > "ev3-cockpitd-${{ matrix.target }}.sha256"
+          echo "$cli_sum  ev3-${{ matrix.target }}" >> "ev3-cockpitd-${{ matrix.target }}.sha256"
           echo "binary=$binary" >> "$GITHUB_OUTPUT"
+          echo "cli=$cli" >> "$GITHUB_OUTPUT"
           echo "- \`ev3-cockpitd\` ${{ matrix.target }}: \`$sum\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`ev3\` ${{ matrix.target }}: \`$cli_sum\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attest the build provenance
         if: github.event_name != 'pull_request'
@@ -168,6 +182,7 @@ jobs:
         with:
           subject-path: |
             ${{ steps.daemon.outputs.binary }}
+            ${{ steps.daemon.outputs.cli }}
             dist-vsix/*.vsix
             dist/npm/*.tgz
 

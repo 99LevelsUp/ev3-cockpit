@@ -39,8 +39,7 @@ ev3 daemon restart | log
 add-on's own commands run as `ev3 <name>` (the `ev3-<name>` program on the PATH).
 
 **For an AI agent**, `ev3 mcp` is an MCP server over stdio with tools for bricks, files,
-programs, telemetry and settings (the npm package still carries it as `ev3-cockpit-mcp`, the
-TypeScript server, until the native `ev3` is packaged there).
+programs, telemetry and settings: point the agent at the command `ev3` with the argument `mcp`.
 
 Connecting a brick from a terminal or an agent does not start telemetry: the daemon reads a brick
 only for VS Code's panel showing it, or while `ev3 telemetry` or the `read_telemetry` tool runs. Forgetting a brick, clearing its Bluetooth list and switching to `full` run

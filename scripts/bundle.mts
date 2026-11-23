@@ -1,15 +1,15 @@
 /**
- * The cockpit's bundles: the extension, the `ev3` command and the MCP server. The daemon is the
- * native binary `ev3-cockpitd`, built by cargo, not a bundle.
+ * The cockpit's bundles: the extension and the npm package's `ev3` launcher. The daemon and the
+ * `ev3` command are native binaries built by cargo, not bundles.
  *
- *   node scripts/bundle.mts                     all three into out/
+ *   node scripts/bundle.mts                     both into out/
  *   node scripts/bundle.mts --sourcemap         with source maps, for development (F5)
- *   node scripts/bundle.mts cli mcp             only these
+ *   node scripts/bundle.mts ev3                 only this one
  *   node scripts/bundle.mts api-check           the API check add-on, into scripts/api-check/
  *
- * Installed, the extension finds the daemon and its manifest in its own folder; the command and
- * the MCP server find them in the npm platform package for this computer (`installation`). Every
- * bundle inlines everything but VS Code's API, so neither package needs a dependency at run time.
+ * Installed, the extension finds the daemon and its manifest in its own folder; the launcher starts
+ * the native `ev3` of the npm platform package for this computer, which finds the daemon beside it.
+ * Every bundle inlines everything but VS Code's API, so neither package needs a dependency at run time.
  * The Node native modules of the old daemon stay external, so an import of one that crept back
  * shows as a `require` the packaging checks refuse, instead of being inlined without its binary.
  *
@@ -41,8 +41,7 @@ export interface BundleSpec {
 /** Each bundle: its entry in the sources, its file in the output folder, and whether a shell runs it. */
 export const BUNDLES: Readonly<Record<string, BundleSpec>> = {
 	extension: { entry: 'src/vscode/extension.ts', file: 'extension.js', executable: false },
-	cli: { entry: 'src/cli/main.ts', file: 'cli.js', executable: true },
-	mcp: { entry: 'src/mcp/main.ts', file: 'mcp.js', executable: true },
+	ev3: { entry: 'src/npm/ev3.ts', file: 'ev3.js', executable: true },
 	'api-check': { entry: 'scripts/api-check/extension.ts', file: 'extension.js', executable: false, fixedOut: 'scripts/api-check' },
 };
 
@@ -55,7 +54,7 @@ export interface BundleOptions {
 	readonly sourcemap?: boolean;
 }
 
-/** Builds the named bundles (all three by default) into `outDir` (out/ by default). */
+/** Builds the named bundles (both by default) into `outDir` (out/ by default). */
 export function bundle({ names = DEFAULT_NAMES, outDir = path.join(REPO, 'out'), sourcemap = false }: BundleOptions = {}): void {
 	const esbuild = require('esbuild') as typeof import('esbuild');
 	for (const name of names) {

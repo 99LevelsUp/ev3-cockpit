@@ -43,6 +43,11 @@ export function daemonBinary(target: string): string {
 	return TARGETS[target].os === 'win32' ? 'ev3-cockpitd.exe' : 'ev3-cockpitd';
 }
 
+/** The native `ev3` command's file name on a target; it lies beside the daemon it starts. */
+export function cliBinary(target: string): string {
+	return TARGETS[target].os === 'win32' ? 'ev3.exe' : 'ev3';
+}
+
 /**
  * The Node native modules the old Node daemon loaded. Nothing packaged carries or requires them
  * any more: the bundles still leave them external, so an import of one that crept back shows as a
@@ -53,7 +58,7 @@ export const NATIVE_MODULES: readonly string[] = ['usb', 'node-hid', 'serialport
 /**
  * The extension's own files, relative to the repository. The daemon and its manifest lie in the
  * extension's root, the folder an installed extension reads them from (`context.extensionPath`).
- * The `ev3` command and the MCP server ship in the npm package, not here.
+ * The native `ev3` command (with `ev3 mcp`) ships in the npm packages, not here.
  */
 export const SHIPPED_FILES: readonly string[] = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
 

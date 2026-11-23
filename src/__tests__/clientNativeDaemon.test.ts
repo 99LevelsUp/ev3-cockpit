@@ -20,7 +20,6 @@ import {
 	DaemonStartError, LaunchHost, SpawnedDaemon, daemonBinaryName, installedNativeLaunch, systemLaunchHost,
 } from '../client/nativeLaunch';
 import type { DaemonStatus, Question } from '../contract/generated';
-import { nativeCliWorld } from './cliHelpers';
 import { NATIVE_DAEMON_VERSION, NativeTestChannel, nativeBinaryMissing, nativeLaunch, nativeTestChannel, sleep } from './clientDaemonHelpers';
 
 const homes: string[] = [];
@@ -239,20 +238,6 @@ describe('the client library and the native daemon', { skip: nativeBinaryMissing
 		const channel = testChannel();
 		await assert.rejects(connect(channel.client('vscode', 'development', { daemon: { ...nativeLaunch('development'), sha256: '0'.repeat(64) } })),
 			(error: unknown) => error instanceof DaemonStartError && error.failure === 'sha_mismatch' && error.code === 'daemon_unavailable');
-	});
-
-	it('the command tests\' world: an observer keeps a replay daemon on a test channel the environment names', async () => {
-		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-native-cli-'));
-		homes.push(home);
-		const world = await nativeCliWorld(home);
-		try {
-			assert.equal(world.observer.daemon.mode, 'replay');
-			assert.equal(world.env.EV3_COCKPIT_CHANNEL, world.channel.channel);
-			assert.equal(fs.existsSync(world.channel.files.channelFile), true);
-		} finally {
-			await world.done();
-		}
-		assert.equal(fs.existsSync(world.channel.files.channelFile), false, 'done stops the daemon');
 	});
 
 	it('reports the version the daemon build carries', () => {

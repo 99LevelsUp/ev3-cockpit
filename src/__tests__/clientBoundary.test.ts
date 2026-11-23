@@ -1,7 +1,7 @@
 /**
  * The client library and the contract run without VS Code.
  *
- * Add-ons, the `ev3` command and MCP servers load src/client and src/contract in plain Node, so they
+ * Add-ons and other Node programs load src/client and src/contract in plain Node, so they
  * may depend neither on the `vscode` module nor on anything under src/vscode. The lint rule for them
  * says the same; this test also catches what lint cannot see once the code is compiled, and proves
  * the library loads in a process with no `vscode` at all.

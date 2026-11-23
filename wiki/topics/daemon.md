@@ -11,8 +11,8 @@ status: active
 One daemon per user, the native binary `ev3-cockpitd`, holds the bricks: their connections, presence, telemetry, programs, files, the transfer ledger and the settings. Every client reaches the bricks through it, so two programs never pull at one brick:
 
 - the VS Code extension (one client per window);
-- the `ev3` command (native, `daemon/crates/cli`; the TypeScript one in `src/cli/` still ships in the npm package);
-- the MCP server (`ev3 mcp`; the TypeScript `ev3-cockpit-mcp` in `src/mcp/`);
+- the `ev3` command (native, `daemon/crates/cli`; the npm package `ev3-cockpit` installs it through a launcher, `src/npm/ev3.ts`);
+- the MCP server (`ev3 mcp`, part of the native `ev3`);
 - add-ons such as EVƎ C.
 
 The protocol is in `docs/protocol.md`, the channel in `docs/channel.md`; add-on authors start with `docs/api-for-consumers.md`.

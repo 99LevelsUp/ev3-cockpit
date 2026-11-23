@@ -55,7 +55,7 @@ TypeScript under `src/`:
 
 - `src/contract/` — the generated contract (`generated/`) and the wire error codes (`errors.ts`)
 - `src/client/` — the client library `@ev3-cockpit/client`: finds the user's daemon or starts a verified copy of it, proves the key, keeps state, renews subscriptions
-- `src/cli/` — the TypeScript `ev3` command; `src/mcp/` — the TypeScript MCP server `ev3-cockpit-mcp`. Both still ship in the npm package until the native `ev3` and `ev3 mcp` are packaged there.
+- `src/npm/ev3.ts` — the npm package's `ev3` launcher: starts the native `ev3` of the platform package npm installed (`@ev3-cockpit/<platform>`, which carries `ev3` and the daemon side by side) there.
 - `src/vscode/` — the extension: the entry point `src/vscode/extension.ts` (a client of the daemon), the bridge its commands run on (`daemonBridge.ts`), its event emitter (`events.ts`), the `ui/` flows, and the extension-host tests in `integration/`
 - `src/persistence/` — globalState adapter (placeholder)
 - `src/test/` — test utilities: the `vscode` stub and the shared emitter scenarios

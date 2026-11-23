@@ -1573,7 +1573,7 @@ it:
 
 - the VS Code extension, one client per window;
 - the `ev3` command, for a shell, scripts and agents;
-- the MCP server, `ev3 mcp` (the npm package still carries the TypeScript `ev3-cockpit-mcp`);
+- the MCP server, `ev3 mcp`, a subcommand of the native `ev3`;
 - add-ons such as EVƎ C, through the client library `@ev3-cockpit/client`.
 
 The first client starts a verified copy of the daemon binary; it ends 10 s after its last client
