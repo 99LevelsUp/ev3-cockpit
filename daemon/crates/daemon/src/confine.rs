@@ -8,13 +8,16 @@
 //!
 //! What it checks: the file a path finally reaches, through links and junctions, does not lie in
 //! those directories, by its resolved path and again by its open handle's final path, so a link
-//! made between the check of the letters and the open is caught too; and a regular file with
-//! more than one name is not one of theirs. What it does not cover: protection from another
+//! made between the check of the letters and the open is caught too; a regular file with more
+//! than one name is not one of theirs; and only regular files are read or written: a device, a
+//! pipe or a socket is refused by its type before the open and again by the open handle's, and
+//! the open never waits for the other end of a pipe. The directories themselves must resolve when
+//! the daemon starts, or it does not start. What it does not cover: protection from another
 //! process of the same user that swaps folders while the daemon is opening a file (that process
 //! can reach the cockpit's directories itself: the trust boundary is the user account, see
 //! `docs/channel.md`), links inside those directories that lead back out, other namespaces for
-//! the same volume (a local share), alternate data streams and special files. A guardrail for
-//! clients that name a path, not a sandbox.
+//! the same volume (a local share) and alternate data streams. A guardrail for clients that name
+//! a path, not a sandbox.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -247,6 +250,85 @@ fn open_folder(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
+/// How a file a client named is opened: without waiting and without taking a terminal. A pipe
+/// would otherwise hold the open until something opens its other end, before the check that
+/// refuses it could run on the handle.
+#[cfg(unix)]
+fn file_options() -> std::fs::OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    options
+}
+
+/// How a file a client named is opened.
+#[cfg(windows)]
+fn file_options() -> std::fs::OpenOptions {
+    std::fs::OpenOptions::new()
+}
+
+/// Makes a file opened by [`file_options`] wait on reads and writes again, as a file opened
+/// plainly does.
+#[cfg(unix)]
+fn wait_again(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    // SAFETY: F_GETFL and F_SETFL read and set the status flags of a descriptor that is open for
+    // the borrow of `file`.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: as above.
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Makes a file opened by [`file_options`] wait again (nothing to undo on Windows).
+#[cfg(windows)]
+fn wait_again(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Whether an open file is a regular file. Devices, pipes and sockets are not: reading one may
+/// wait for ever or take data meant for another program, and writing one may drive a device.
+#[cfg(unix)]
+fn is_regular(file: &std::fs::File) -> std::io::Result<bool> {
+    Ok(file.metadata()?.file_type().is_file())
+}
+
+/// Whether an open file is a regular file (see the Linux and macOS variant): a file on a disk, not
+/// a folder.
+#[cfg(windows)]
+fn is_regular(file: &std::fs::File) -> std::io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+    // SAFETY: the handle is open for the borrow of `file`.
+    if unsafe { GetFileType(file.as_raw_handle()) } != FILE_TYPE_DISK {
+        return Ok(false);
+    }
+    Ok(file.metadata()?.file_type().is_file())
+}
+
+/// The refusal of a path that names something other than a regular file.
+fn not_regular(named: &Path) -> ContractError {
+    ContractError::new(
+        ErrorCode::InvalidRequest,
+        format!(
+            "The daemon does not read or write {}: it is not a regular file but a folder, a \
+             device, a pipe or a socket.",
+            named.display()
+        ),
+    )
+}
+
+/// Refuses a path that names something other than a regular file, before anything opens it.
+fn refuse_special(named: &Path, resolved: &Path) -> Result<(), ContractError> {
+    match std::fs::metadata(resolved) {
+        Ok(meta) if !meta.is_file() => Err(not_regular(named)),
+        _ => Ok(()),
+    }
+}
+
 /// What a search of the cockpit's directories for a file found.
 #[derive(Debug, PartialEq, Eq)]
 enum Search {
@@ -285,7 +367,8 @@ fn search(dir: &Path, identity: FileIdentity, budget: &mut usize) -> Search {
                 Search::Unsure => unsure = true,
                 Search::NotFound => {}
             }
-        } else if kind.is_file() {
+        } else if !kind.is_symlink() {
+            // A regular file or a special one (a pipe can have a second name too).
             match identity_at(&entry.path()) {
                 Ok(other) if other == identity => return Search::Found,
                 Ok(_) => {}
@@ -364,6 +447,14 @@ impl Confinement {
             )
         })?;
         self.check_resolved(path, &resolved)?;
+        // A special file is refused before anything is sent to a brick; reading and writing
+        // refuse it again by the open handle.
+        if let Ok(meta) = std::fs::metadata(&resolved)
+            && !meta.is_file()
+            && !meta.is_dir()
+        {
+            return Err(not_regular(path));
+        }
         Ok(resolved)
     }
 
@@ -378,9 +469,14 @@ impl Confinement {
                 format!("{} could not be read ({error}).", named.display()),
             )
         };
-        let mut file = std::fs::File::open(resolved).map_err(unreadable)?;
+        refuse_special(named, resolved)?;
+        let mut file = file_options()
+            .read(true)
+            .open(resolved)
+            .map_err(unreadable)?;
         self.check_handle(named, &file)
             .map_err(|e| e.or_io(unreadable))?;
+        wait_again(&file).map_err(unreadable)?;
         let mut data = Vec::new();
         file.read_to_end(&mut data).map_err(unreadable)?;
         Ok(data)
@@ -398,20 +494,17 @@ impl Confinement {
                 format!("{} could not be written ({error}).", named.display()),
             )
         };
+        refuse_special(named, resolved)?;
         if std::fs::symlink_metadata(resolved).is_err()
             && let Some(folder) = resolved.parent()
         {
             let folder = open_folder(folder).map_err(unwritable)?;
             self.check_resolved(named, &final_path(&folder).map_err(unwritable)?)?;
         }
-        let (mut file, created) = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(resolved)
-        {
+        let (mut file, created) = match file_options().write(true).create_new(true).open(resolved) {
             Ok(file) => (file, true),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
-                std::fs::OpenOptions::new()
+                file_options()
                     .write(true)
                     .open(resolved)
                     .map_err(unwritable)?,
@@ -428,15 +521,20 @@ impl Confinement {
             }
             return Err(refusal.or_io(unwritable));
         }
+        wait_again(&file).map_err(unwritable)?;
         file.set_len(0).map_err(unwritable)?;
         file.write_all(data).map_err(unwritable)?;
         file.flush().map_err(unwritable)
     }
 
-    /// Refuses an opened file that lies in the cockpit's own directories: by the handle's final
-    /// path, and, for a file with more than one name, by its identity, since a hard link outside
-    /// reaches the same file under a path no check would refuse.
+    /// Refuses an opened file that is not a regular file, or that lies in the cockpit's own
+    /// directories: by the handle's final path, and, for a file with more than one name, by its
+    /// identity, since a hard link outside reaches the same file under a path no check would
+    /// refuse.
     fn check_handle(&self, named: &Path, file: &std::fs::File) -> Result<(), HandleRefusal> {
+        if !is_regular(file).map_err(HandleRefusal::Io)? {
+            return Err(HandleRefusal::Refused(not_regular(named)));
+        }
         let path = final_path(file).map_err(HandleRefusal::Io)?;
         self.check_resolved(named, &path)
             .map_err(HandleRefusal::Refused)?;
@@ -802,6 +900,90 @@ mod tests {
         deny_listing(&drop, false);
         written.expect("written without listing the folder");
         assert_eq!(std::fs::read(&named).expect("the new file"), b"dropped");
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// The system's null device, a special file every system has.
+    fn null_device() -> &'static Path {
+        Path::new(if cfg!(windows) {
+            r"\\.\NUL"
+        } else {
+            "/dev/null"
+        })
+    }
+
+    #[test]
+    fn an_open_special_file_is_refused_by_its_handle() {
+        let base = temp_dir();
+        let confinement = Confinement::new([base.join("state")]).expect("roots");
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(null_device())
+            .expect("the null device");
+        match confinement.check_handle(null_device(), &file) {
+            Err(HandleRefusal::Refused(error)) => {
+                assert_eq!(error.data.code, ErrorCode::InvalidRequest);
+                assert!(error.message.contains("regular file"), "{}", error.message);
+            }
+            Err(HandleRefusal::Io(error)) => panic!("not refused, the system failed: {error}"),
+            Ok(()) => panic!("the null device passed"),
+        }
+        drop(file);
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// Runs `work` on a thread of its own and gives its result, or fails when it waits longer
+    /// than a few seconds (on a pipe nobody opens the other end of).
+    #[cfg(unix)]
+    fn without_waiting<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(work());
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("returned without waiting for the other end of a pipe")
+    }
+
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let text = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path");
+        // SAFETY: `text` is a terminated path that lives across the call.
+        assert_eq!(unsafe { libc::mkfifo(text.as_ptr(), 0o600) }, 0, "mkfifo");
+    }
+
+    /// Special files are neither read nor written, a FIFO of the cockpit's own with a second name
+    /// outside included, and refusing one never waits for the other end of a pipe.
+    #[cfg(unix)]
+    #[test]
+    fn special_files_are_neither_read_nor_written() {
+        let base = temp_dir();
+        let state = base.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let confinement = Confinement::new([state.clone()]).expect("roots");
+        let pipe = base.join("pipe");
+        make_fifo(&pipe);
+        make_fifo(&state.join("pipe"));
+        let alias = base.join("alias");
+        std::fs::hard_link(state.join("pipe"), &alias).expect("a second name");
+        for named in [null_device().to_path_buf(), pipe, alias] {
+            let error = confinement.check(&named).expect_err("checked");
+            assert_eq!(error.data.code, ErrorCode::InvalidRequest, "{error:?}");
+            let resolved = std::fs::canonicalize(&named).expect("resolved");
+            let confinement = confinement.clone();
+            let (read, write) = without_waiting(move || {
+                (
+                    confinement.read(&named, &resolved),
+                    confinement.write(&named, &resolved, b"x"),
+                )
+            });
+            for refused in [read.map(|_| ()), write] {
+                let error = refused.expect_err("refused");
+                assert!(error.message.contains("regular file"), "{}", error.message);
+            }
+        }
         std::fs::remove_dir_all(base).expect("clean");
     }
 
