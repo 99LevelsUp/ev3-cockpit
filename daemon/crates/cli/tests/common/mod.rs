@@ -13,13 +13,15 @@ pub fn ev3() -> PathBuf {
         return built;
     }
     let exe = std::env::current_exe().expect("test path");
-    // The build path may be another OS's: its last part, by either separator, is the name.
+    // The build path may be another OS's: its last part, by either separator, is the name. The
+    // binary lies next to or above the test, by cargo's build layout (since 1.100 the tests sit
+    // under target/<profile>/build/<crate>/<hash>/).
     let built = built.to_string_lossy().into_owned();
     let name = built.rsplit(['/', '\\']).next().expect("name");
-    exe.parent()
-        .and_then(Path::parent)
-        .expect("target dir")
-        .join(name)
+    exe.ancestors()
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// The daemon cargo built beside `ev3`, when it was built and would run for this process: never
