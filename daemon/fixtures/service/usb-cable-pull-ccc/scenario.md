@@ -1,4 +1,4 @@
-# cable-pull on CCC over USB (owner-run, not recorded yet)
+# cable-pull on CCC over USB (owner-run, recorded 23.11.2026)
 
 Reconnect after a pulled USB cable, through the daemon's surface, with the daemon recording only
 its USB provider. `scripts/cable-pull-probe.mts` drives it; `recording.jsonl` goes into this
@@ -29,3 +29,8 @@ directory once the owner has run it and the recording passed the identifier sear
 - **Expected:** the loss reported within a few seconds of the pull, `bricks/reconnected` within a
   few seconds of the plug, and telemetry updates again after it. The run exits 1 and says which
   step it waited for in vain otherwise.
+
+**Recorded 23.11.2026 on HOSTA** (Windows, development build 0.3.1-preview.1): the daemon reported the USB
+channel lost 2.6 s after the instruction (the person's reaction included) and had CCC connected
+again 2.2 s after the instruction to plug it back; telemetry carried on (6 updates in the 3 s after,
+at 500 ms). The identifier search found only the placeholder addresses.

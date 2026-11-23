@@ -1,4 +1,4 @@
-# deploy-brick-off on CCC over USB (owner-run, not recorded yet)
+# deploy-brick-off on CCC over USB (owner-run, recorded 23.11.2026)
 
 Deploy-and-run with the battery pulled out of the brick while its program runs. `scripts/hardware-scenario.mts`
 drives it and refuses to start without `--owner-present`; `recording.jsonl` goes into this
@@ -23,3 +23,7 @@ directory once the owner has run it and the recording passed the identifier sear
   ```
   node scripts/hardware-scenario.mts deploy-brick-off --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb --owner-present
   ```
+
+**Recorded 23.11.2026 on HOSTA** (Windows, development build 0.3.1-preview.1): the program started
+(runSeq 1), and the daemon reported CCC's USB channel no longer connected 4.0 s after the beep (the
+person's reaction included). The identifier search found only the placeholder addresses.
