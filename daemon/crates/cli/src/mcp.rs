@@ -305,7 +305,7 @@ impl Server {
             kind: "mcp",
             version: install::VERSION,
             build_kind: install::BUILD_KIND,
-            daemon: install::daemon(),
+            daemon: ev3_client::Launch::Carried(install::daemon()),
             paths: &self.paths,
             asker: None,
             notice: &notice,

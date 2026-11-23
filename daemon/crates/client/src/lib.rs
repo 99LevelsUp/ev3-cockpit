@@ -15,5 +15,19 @@ pub mod ensure;
 pub mod error;
 pub mod launch;
 
-pub use client::{Client, ClientOptions};
+pub use client::{Client, ClientOptions, Launch};
+pub use ev3_channel::paths::Paths;
+
+/// The files of the user's channel, or of the test channel `channel` names, under the user's
+/// state root: what a client passes as [`ClientOptions::paths`].
+pub fn user_paths(channel: Option<&str>) -> Result<Paths> {
+    let root = ev3_channel::paths::default_state_root()
+        .map_err(|message| ClientError::start(Failure::Failed, message))?;
+    Ok(Paths::new(&root, channel))
+}
 pub use error::{ClientError, DAEMON_UNAVAILABLE, Failure, Result};
+
+/// The contract this client speaks, its types and method markers: take the contract from here,
+/// so it never differs from the client's.
+pub use ev3_contract as contract;
+pub use ev3_contract::{CONTRACT_VERSION, Method, method};

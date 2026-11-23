@@ -243,7 +243,7 @@ impl Ctx {
                 kind: "cli",
                 version: install::VERSION,
                 build_kind: install::BUILD_KIND,
-                daemon: install::daemon(),
+                daemon: ev3_client::Launch::Carried(install::daemon()),
                 paths: &self.paths,
                 asker: confirm::can_ask(self.json)
                     .then(|| confirm::terminal_asker(self.name.clone())),

@@ -115,6 +115,37 @@ pub fn manifest_launch(dir: &Path, hint: &str) -> Result<LaunchSpec> {
     Ok(launch)
 }
 
+/// Where a channel keeps its install record: the daemon the installed cockpit recorded, which an
+/// add-on starts.
+pub fn install_file(channel_dir: &Path) -> PathBuf {
+    channel_dir.join("install.json")
+}
+
+/// The installed cockpit's daemon, as its `ev3` command or VS Code extension recorded it in
+/// `install.json`; `None` when nothing usable is recorded or the binary is gone. The record is
+/// read as the TypeScript client reads it: an absolute binary path, a SHA-256, a version and a
+/// build kind. The copy that starts is checked against the SHA-256 as any launch's is.
+pub fn installed_launch(channel_dir: &Path) -> Option<LaunchSpec> {
+    let text = std::fs::read_to_string(install_file(channel_dir)).ok()?;
+    let record: Value = serde_json::from_str(&text).ok()?;
+    let field = |key: &str| record.get(key).and_then(Value::as_str);
+    let binary = PathBuf::from(field("binary")?);
+    let sha256 = field("sha256")?;
+    let version = field("version")?;
+    let build_kind = field("buildKind")?;
+    let usable = binary.is_absolute()
+        && is_sha256(sha256)
+        && !version.is_empty()
+        && matches!(build_kind, "release" | "development")
+        && binary.exists();
+    usable.then(|| LaunchSpec {
+        binary,
+        sha256: sha256.to_owned(),
+        version: version.to_owned(),
+        build_kind: build_kind.to_owned(),
+    })
+}
+
 /// The SHA-256 of a file, lowercase hex, or `None` when it is not there.
 pub fn hash_file(file: &Path) -> io::Result<Option<String>> {
     let mut handle = match std::fs::File::open(file) {
@@ -616,6 +647,41 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir
+    }
+
+    #[test]
+    fn an_add_on_reads_the_installed_daemon_from_install_json_as_written() {
+        let channel = temp_dir();
+        assert_eq!(installed_launch(&channel), None, "nothing recorded");
+        let binary = channel.join(DAEMON_BINARY);
+        std::fs::write(&binary, b"daemon").expect("binary");
+        let launch = LaunchSpec {
+            binary: binary.clone(),
+            sha256: "a".repeat(64),
+            version: "1.2.3".into(),
+            build_kind: "release".into(),
+        };
+        record_install(&channel, &launch);
+        assert_eq!(installed_launch(&channel), Some(launch.clone()));
+        // A record with a relative path, a bad hash or an unknown build kind is not used.
+        for (key, bad) in [
+            ("binary", json!("ev3-cockpitd")),
+            ("sha256", json!("abc")),
+            ("buildKind", json!("nightly")),
+            ("version", json!("")),
+        ] {
+            let mut record: Value =
+                serde_json::from_str(&std::fs::read_to_string(install_file(&channel)).unwrap())
+                    .unwrap();
+            record[key] = bad;
+            std::fs::write(install_file(&channel), record.to_string()).expect("record");
+            assert_eq!(installed_launch(&channel), None, "{key}");
+        }
+        // Nor one whose binary is gone.
+        record_install(&channel, &launch);
+        std::fs::remove_file(&binary).expect("remove");
+        assert_eq!(installed_launch(&channel), None, "binary gone");
+        std::fs::remove_dir_all(channel).expect("clean");
     }
 
     fn manifest(dir: &Path, binary: &str, sha: &str) {

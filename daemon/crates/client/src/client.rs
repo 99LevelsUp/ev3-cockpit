@@ -15,8 +15,9 @@ use tokio::sync::broadcast;
 use crate::connect::{DaemonIdentity, Identity};
 use crate::endpoint::{Endpoint, RequestHandler};
 use crate::ensure::{self, Options};
+use crate::error::Failure;
 use crate::error::{ClientError, DAEMON_UNAVAILABLE, Result};
-use crate::launch::LaunchSpec;
+use crate::launch::{LaunchSpec, installed_launch};
 
 /// Answers a question for a person: the question, and a receiver of withdrawn question ids.
 pub type Asker = Arc<
@@ -33,13 +34,24 @@ pub struct ClientOptions<'a> {
     /// This client's version and build kind (`release` or `development`), as its hello says.
     pub version: &'a str,
     pub build_kind: &'a str,
-    /// The daemon this client carries, or why it carries none: a missing one is an error only
-    /// when no daemon runs.
-    pub daemon: Result<LaunchSpec>,
+    /// Which daemon this client starts when none runs.
+    pub daemon: Launch,
     pub paths: &'a Paths,
     /// Who answers the daemon's questions; without one every answer is `keep` (unanswered).
     pub asker: Option<Asker>,
     pub notice: &'a (dyn Fn(&str) + Sync),
+}
+
+/// Which daemon a client starts when none runs.
+#[derive(Debug)]
+pub enum Launch {
+    /// The daemon this client carries, or why it carries none (`ev3`); a missing one is an error
+    /// only when no daemon runs.
+    Carried(Result<LaunchSpec>),
+    /// The daemon the installed cockpit recorded in `install.json`: what an add-on starts.
+    Installed,
+    /// None: the client works only with a daemon that runs.
+    Nothing,
 }
 
 pub struct Client {
@@ -68,7 +80,19 @@ impl Client {
                 })
             })
         };
-        let daemon = options.daemon;
+        let daemon = match options.daemon {
+            Launch::Carried(daemon) => daemon,
+            Launch::Installed => installed_launch(&options.paths.dir).ok_or_else(|| {
+                ClientError::start(
+                    Failure::MissingBinary,
+                    "No cockpit daemon runs and EVƎ Cockpit has not recorded one to start: install EVƎ Cockpit, or run its ev3 command once.",
+                )
+            }),
+            Launch::Nothing => Err(ClientError::start(
+                Failure::MissingBinary,
+                "No cockpit daemon runs, and this client starts none.",
+            )),
+        };
         // Only `ev3` itself carries a daemon it would replace another with; a missing one is an
         // error only when no daemon runs.
         let carried = daemon.as_ref().ok().cloned();
@@ -128,6 +152,27 @@ impl Client {
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         let result = self.endpoint.request(method, params).await;
         leased_outcome(method, result)
+    }
+
+    /// A typed request: `client.call::<method::BricksList>(params)`. The answer is decoded into the
+    /// method's result type; one that does not decode is an `internal` error naming the method.
+    pub async fn call<M: ev3_contract::Method>(&self, params: M::Params) -> Result<M::Result> {
+        let params = serde_json::to_value(&params).map_err(|error| {
+            ClientError::contract(
+                "invalid_request",
+                format!("The parameters of {} do not encode ({error}).", M::NAME),
+            )
+        })?;
+        let answer = self.request(M::NAME, params).await?;
+        serde_json::from_value(answer).map_err(|error| {
+            ClientError::contract(
+                "internal",
+                format!(
+                    "The daemon's answer to {} does not decode ({error}).",
+                    M::NAME
+                ),
+            )
+        })
     }
 
     /// A request whose progress goes to `on_progress`.

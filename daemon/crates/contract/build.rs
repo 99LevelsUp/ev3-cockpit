@@ -219,6 +219,23 @@ fn methods(table: &Value, definitions: &Map<String, Value>) -> String {
     }
     out.push_str("        }\n    };\n}\n\n");
 
+    // The client's side: one marker per request, for typed calls.
+    out.push_str("/// A request as a client sends it: its name and the types it carries. Each request has a marker in [`method`], so a client calls `client.call::<method::BricksList>(params)`.\npub trait Method {\n    /// The JSON-RPC method name.\n    const NAME: &'static str;\n    /// What the request carries.\n    type Params: ::serde::Serialize + Send + Sync;\n    /// What the daemon answers.\n    type Result: ::serde::de::DeserializeOwned + Send;\n}\n\n/// One marker per request of the method table; see [`Method`].\npub mod method {\n");
+    for (name, entry) in requests {
+        let marker = pascal(name);
+        doc(&mut out, "    ", text(entry, "doc"));
+        let _ = writeln!(
+            out,
+            "    pub struct {marker};\n    impl super::Method for {marker} {{\n        const NAME: &'static str = {name:?};\n        type Params = super::{};\n        type Result = {};\n    }}\n",
+            entry["params"].as_str().expect("params"),
+            match result_type(entry).as_str() {
+                "()" => "()".to_owned(),
+                other => format!("super::{other}"),
+            }
+        );
+    }
+    out.push_str("}\n\n");
+
     // Notifications.
     let notifications = object(&table["notifications"], "notifications");
     out.push_str("/// Every notification the daemon sends.\n#[derive(Clone, Debug)]\npub enum Notification {\n");

@@ -107,6 +107,30 @@ impl ClientError {
         }
     }
 
+    /// The contract's error code, typed; `None` for a code this version of the contract does not
+    /// know (it stays readable through [`ClientError::code`]) and for an error that is not one.
+    pub fn error_code(&self) -> Option<ev3_contract::ErrorCode> {
+        serde_json::from_value(Value::String(self.code()?.to_owned())).ok()
+    }
+
+    /// The contract's error data, typed (`holder`, `candidates`, `command` where the daemon sent
+    /// them); `None` for an error that is not a contract error.
+    pub fn error_data(&self) -> Option<ev3_contract::ErrorData> {
+        match self {
+            Self::Contract { data, .. } => serde_json::from_value(data.clone()).ok(),
+            Self::Start { .. } => serde_json::from_value(self.json()).ok(),
+            Self::Other(_) => None,
+        }
+    }
+
+    /// Why the daemon could not be started or used, for a start failure.
+    pub fn failure(&self) -> Option<Failure> {
+        match self {
+            Self::Start { failure, .. } => Some(*failure),
+            _ => None,
+        }
+    }
+
     /// The contract code, where there is one; a start failure is `daemon_unavailable`.
     pub fn code(&self) -> Option<&str> {
         match self {
