@@ -74,6 +74,42 @@ jobs:
         # tests that start it say they are skipped. Every failure shows, not only the first crate's.
         run: cargo test --locked --workspace --no-fail-fast
 
+      - name: Tests as a standard user (Windows)
+        # The step above skips every test that starts the daemon, because the runner is elevated.
+        # Here the test binaries it built run again under a throwaway standard user, which is not
+        # elevated, so the pipe, its access list and the daemon's start are tested on Windows too.
+        # No test may report itself skipped for elevation.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $built = cargo test --locked --workspace --no-run --message-format=json 2>$null |
+            ConvertFrom-Json | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable }
+          $chars = [char[]]'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+          $password = -join (1..24 | ForEach-Object { $chars | Get-Random }) + '!a1'
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name ev3ci -Password $secure -AccountNeverExpires -PasswordNeverExpires | Out-Null
+          $credential = [pscredential]::new("$env:COMPUTERNAME\ev3ci", $secure)
+          $out = Join-Path $env:RUNNER_TEMP 'standard-user'
+          New-Item -ItemType Directory $out | Out-Null
+          icacls $out /grant 'ev3ci:(OI)(CI)M' | Out-Null
+          icacls $env:GITHUB_WORKSPACE /grant 'ev3ci:(OI)(CI)RX' /T /Q | Out-Null
+          $failed = @()
+          foreach ($test in $built) {
+            $name = "$($test.target.name)-$(($test.target.kind) -join ',')"
+            $log = Join-Path $out "$name.out.txt"
+            $err = Join-Path $out "$name.err.txt"
+            $process = Start-Process -FilePath $test.executable -Credential $credential -LoadUserProfile `
+              -WorkingDirectory (Split-Path $test.manifest_path) -Wait -PassThru `
+              -RedirectStandardOutput $log -RedirectStandardError $err
+            $text = (Get-Content $log, $err -Raw -ErrorAction SilentlyContinue) -join "`n"
+            $summary = ($text -split "`n" | Select-String '^test result' | Select-Object -Last 1)
+            "{0,-32} exit {1}  {2}" -f $name, $process.ExitCode, $summary
+            if ($process.ExitCode -ne 0) { $failed += $name; $text }
+            elseif ($text -match 'runs elevated') { $failed += "$name (skipped for elevation)"; $text }
+          }
+          if ($failed) { throw "Failed as a standard user: $($failed -join ', ')" }
+
   package:
     name: Release build, packages and smoke (${{ matrix.target }})
     needs: rust
