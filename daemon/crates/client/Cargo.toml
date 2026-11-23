@@ -29,7 +29,7 @@ windows-sys = { version = "0.61.2", features = [
 libc = "0.2.191"
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["rt", "macros", "process", "time"] }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "process", "time"] }
 
 [lints]
 workspace = true

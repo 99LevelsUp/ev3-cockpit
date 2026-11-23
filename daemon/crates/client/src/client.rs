@@ -37,6 +37,8 @@ pub struct ClientOptions<'a> {
     /// Which daemon this client starts when none runs.
     pub daemon: Launch,
     pub paths: &'a Paths,
+    /// More arguments for a daemon this client starts; empty outside tests.
+    pub daemon_args: Vec<String>,
     /// Who answers the daemon's questions; without one every answer is `keep` (unanswered).
     pub asker: Option<Asker>,
     pub notice: &'a (dyn Fn(&str) + Sync),
@@ -106,6 +108,7 @@ impl Client {
             daemon: carried,
             paths: options.paths,
             may_replace: options.kind == "cli",
+            daemon_args: options.daemon_args,
             on_request: Some(on_request),
             notice: options.notice,
         })
@@ -189,9 +192,9 @@ impl Client {
         leased_outcome(method, result)
     }
 
-    /// A brick as last heard, by its id or its name; the list is asked for the first time a
-    /// command looks a brick up.
-    pub async fn brick(&self, reference: &str) -> Result<Option<Value>> {
+    /// Asks for the brick list the first time anything needs it; from then on `bricks/changed`
+    /// keeps it current.
+    async fn known_bricks(&self) -> Result<()> {
         if self.bricks.lock().expect("bricks").is_none() {
             let list = self.request("bricks/list", json!({})).await?;
             let list = list
@@ -202,10 +205,28 @@ impl Client {
             // A bricks/changed heard meanwhile is newer than this answer: it stays.
             self.bricks.lock().expect("bricks").get_or_insert(list);
         }
+        Ok(())
+    }
+
+    /// The bricks as last heard, typed: asked for once, then kept current by `bricks/changed`, so
+    /// a client that reads them often costs the daemon one request.
+    pub async fn bricks(&self) -> Result<Vec<ev3_contract::ContractBrick>> {
+        self.known_bricks().await?;
+        let bricks = self.bricks.lock().expect("bricks");
+        Ok(bricks
+            .iter()
+            .flatten()
+            .filter_map(|brick| serde_json::from_value(brick.clone()).ok())
+            .collect())
+    }
+
+    /// A brick as last heard, by its id or its name; the list is asked for the first time a
+    /// command looks a brick up.
+    pub async fn brick(&self, reference: &str) -> Result<Option<Value>> {
+        self.known_bricks().await?;
         let bricks = self.bricks.lock().expect("bricks");
         Ok(find_brick(bricks.as_deref().unwrap_or_default(), reference).cloned())
     }
-
     /// Makes sure the daemon knows the brick `reference` names: when it does not yet (a brick
     /// never paired, or one this computer forgot), looks for Bluetooth bricks and waits up to
     /// `wait` for it to be heard. Answers whether it is known now.

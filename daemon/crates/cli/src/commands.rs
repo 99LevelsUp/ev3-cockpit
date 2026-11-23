@@ -245,6 +245,7 @@ impl Ctx {
                 build_kind: install::BUILD_KIND,
                 daemon: ev3_client::Launch::Carried(install::daemon()),
                 paths: &self.paths,
+                daemon_args: Vec::new(),
                 asker: confirm::can_ask(self.json)
                     .then(|| confirm::terminal_asker(self.name.clone())),
                 notice: &notice,

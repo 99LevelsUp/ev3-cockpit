@@ -41,6 +41,9 @@ pub struct Options<'a> {
     pub paths: &'a Paths,
     /// This client may ask a daemon to exit (only `ev3` itself).
     pub may_replace: bool,
+    /// More arguments for a daemon this client starts, after the channel's: a test runs it in
+    /// replay of a recording (`--mode replay --fixtures <dir>`).
+    pub daemon_args: Vec<String>,
     pub on_request: Option<RequestHandler>,
     /// Told what the user should know: a development daemon runs, an exit request was refused.
     pub notice: &'a (dyn Fn(&str) + Sync),
@@ -133,7 +136,7 @@ pub async fn ask_to_exit(endpoint: &Endpoint, timeout: Duration) -> Value {
 /// above say.
 pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
     let paths = options.paths;
-    let args: Vec<String> = match &paths.channel {
+    let mut args: Vec<String> = match &paths.channel {
         Some(channel) => vec![
             "--channel".into(),
             channel.clone(),
@@ -142,6 +145,7 @@ pub async fn ensure(options: &Options<'_>) -> Result<Connected> {
         ],
         None => Vec::new(),
     };
+    args.extend(options.daemon_args.iter().cloned());
     let find = |until: Instant| async move {
         loop {
             match connect(paths, &options.identity, options.on_request.clone()).await {

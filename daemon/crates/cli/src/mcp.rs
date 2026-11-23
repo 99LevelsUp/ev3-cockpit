@@ -307,6 +307,7 @@ impl Server {
             build_kind: install::BUILD_KIND,
             daemon: ev3_client::Launch::Carried(install::daemon()),
             paths: &self.paths,
+            daemon_args: Vec::new(),
             asker: None,
             notice: &notice,
         })
