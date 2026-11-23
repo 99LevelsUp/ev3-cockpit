@@ -374,7 +374,7 @@ docs/channel.md           channel, key and directory spec
 | U23 | Telemetry | `daemon/crates/runtime/telemetry` | U20 |
 | U12 | Daemon surface | `daemon/crates/daemon/surface` | U3, U21, U22, U23 |
 | U13 | Lifecycle and replacement | `daemon/crates/daemon/lifecycle` | U12 |
-| U26 | Service recordings | `daemon/fixtures/service/`, `scripts/hardware-scenario.js` | U13 |
+| U26 | Service recordings | `daemon/fixtures/service/`, `scripts/hardware-scenario.mts` | U13 |
 | U14 | Client library | `src/client/` | U26 |
 | U24 | VS Code extension | `src/vscode/` | U14 |
 | U25 | CLI and MCP | `src/cli/`, `src/mcp/` | U14 |
@@ -584,7 +584,7 @@ docs/channel.md           channel, key and directory spec
 - **Goal:** fixtures of the services and the surface, recorded through the Rust daemon.
 - **Requirements:** R21, R24; KTD7.
 - **Dependencies:** U13.
-- **Files:** `daemon/fixtures/service/*`, `scripts/hardware-scenario.js`, `scripts/cable-pull-probe.js`.
+- **Files:** `daemon/fixtures/service/*`, `scripts/hardware-scenario.mts`, `scripts/cable-pull-probe.mts` (`.js` until U28 rewrote them).
 - **Approach:** extend the hardware scripts to drive the Rust daemon through its surface with `--record`: reconnect after a pulled cable, a file round trip and a cut upload, deploy-and-run including the brick switched off, a telemetry minute, and the inputs the client tests use (published per KTD7).
 - **Execution note:** owner-run as U18, after confirming no Node daemon or probe process runs on the host.
 - **Test expectation:** these fixtures become the strict-replay tests of U10, U11, U22 and U23 and the matched-replay substrate of U14, U24 and U25.
@@ -816,13 +816,17 @@ docs/channel.md           channel, key and directory spec
 - **Goal:** the parity sign-off on real hardware.
 - **Requirements:** R18, R21, Success Criteria; KTD11.
 - **Dependencies:** U15.
-- **Files:** `daemon/fixtures/*` (re-recorded where the runtime changed), `scripts/hardware-matrix.js`, `scripts/core-smoke.js`, `scripts/api-check/`.
+- **Files:** `daemon/fixtures/service/*` (re-recorded where the runtime changed), `scripts/hardware-scenario.mts`, `scripts/cable-pull-probe.mts`, `scripts/api-check/`; the round's runbook `docs/plans/2026-11-23-u16-hardware-round.md`.
+- **Rewritten 23.11.2026 after U17.** `scripts/hardware-matrix.js` and `scripts/core-smoke.js` drove the TypeScript core and left with it; the Node daemon is gone, so the loan round (a development daemon borrowing bricks) and "the daemon ends with VS Code" no longer apply. The rounds below use what exists now: VS Code, the native `ev3` (its `ev3 mcp` for an agent), the `api-check` add-on and the recording scripts.
 - **Approach:**
-  1. Precondition: no Node daemon or probe process runs on HOSTA, HOSTD or the RPi5.
-  2. Run the IMPLEMENTATION_PLAN 4.10.2 rounds F1 and F2, `core-smoke` and `api-check` against the Rust daemon on all three hosts and transports.
-  3. Re-record fixtures that the later units made stale.
-  4. Tick the parity checklist; every failure case of today's tests has a fixture or a Rust test.
-- **Execution note:** the owner runs the rounds; the agent gives one instruction at a time and reads the daemon log itself.
+  1. Precondition: no other `ev3-cockpitd` and no probe process runs on the host (checked by command line, not by name alone).
+  2. Round F1 — VS Code: connect, files, deploy-and-run, telemetry, pairing and forget over USB, Bluetooth and TCP from the extension.
+  3. Round F2 — `ev3` from PowerShell and Git Bash on HOSTA and from a shell on HOSTD and the RPi5 (the same five groups), and `ev3 mcp` serving an agent against CCC while VS Code is open.
+  4. `api-check` (an add-on with `kind: 'addon'`, `scripts/api-check/`) on one brick per transport on HOSTA.
+  5. Recordings: `usb-deploy-brick-off-ccc` (never recorded; the battery comes out while the program runs) and `usb-cable-pull-ccc` (re-recorded; the earlier recording was lost); each passes the identifier search before it enters the repository.
+  6. A VS Code update on Windows while the daemon runs.
+  7. Tick the parity checklist in the runbook; every failure case of today's tests has a fixture or a Rust test.
+- **Execution note:** the owner runs the rounds; the agent gives one instruction at a time, says beforehand what to watch or measure, beeps before a brick action and reads the daemon log itself (`ev3 daemon log` names it).
 - **Test expectation:** none -- this unit is verified on hardware.
 - **Verification:** every Success Criterion holds on all three hosts and all three transports.
 

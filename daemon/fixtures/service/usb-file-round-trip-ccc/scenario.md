@@ -28,7 +28,7 @@ A file round trip through the daemon's file methods over USB: find CCC as in
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js file-round-trip --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
+  node scripts/hardware-scenario.mts file-round-trip --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same

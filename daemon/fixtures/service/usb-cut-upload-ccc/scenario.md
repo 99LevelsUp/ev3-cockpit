@@ -34,7 +34,7 @@ Find CCC, `bricks/connect`, `files/exists` of `/home/root/lms2012/prjs/CockpitFi
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js cut-upload --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
+  node scripts/hardware-scenario.mts cut-upload --daemon ./ev3-cockpitd --brick CCC --out ./out --transport usb
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it matched; the same

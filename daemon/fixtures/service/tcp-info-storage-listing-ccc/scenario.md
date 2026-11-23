@@ -19,7 +19,7 @@ it was recorded; no exchange carries it.
   directory must not exist yet):
 
   ```
-  node hardware-scenario.js info-storage-listing --daemon ./ev3-cockpitd --brick CCC --out ./out --transport tcp
+  node scripts/hardware-scenario.mts info-storage-listing --daemon ./ev3-cockpitd --brick CCC --out ./out --transport tcp
   ```
 
 - **Replay:** `cargo test -p ev3-cockpitd --test service_fixtures` replays it strictly; the same

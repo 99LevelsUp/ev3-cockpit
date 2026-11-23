@@ -23,7 +23,7 @@ directory once the owner has run it and the recording passed the identifier sear
   recording directory must not exist yet):
 
   ```
-  node cable-pull-probe.js --daemon ./ev3-cockpitd --brick CCC --out ./out
+  node scripts/cable-pull-probe.mts --daemon ./ev3-cockpitd --brick CCC --out ./out
   ```
 
 - **Expected:** the loss reported within a few seconds of the pull, `bricks/reconnected` within a

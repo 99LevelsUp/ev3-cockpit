@@ -561,23 +561,30 @@ async function telemetryMinute(c: ScenarioContext): Promise<void> {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
-/** Owner-run: the brick switched off while its program runs. */
+/**
+ * Owner-run: the brick loses power while its program runs. The battery comes out rather than the
+ * brick being switched off from its menu, so the link ends without a goodbye, as in a real loss.
+ * The daemon keeps a brick signed in through a lost link (it reconnects when the brick comes back),
+ * so the scenario listens for the channel on its transport, not for `connected`: the channel turns
+ * `lost`, or leaves the list.
+ */
 async function deployBrickOff(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
 	const { states, subscription } = await subscribePrograms(c);
 	const lost = c.client.until((m) => m.method === 'bricks/changed'
-		&& !(m.params?.bricks ?? []).some((b) => b.name === c.brick && b.connected), 60_000);
+		&& (m.params?.bricks ?? []).some((b) => b.name.toLowerCase() === c.brick.toLowerCase()
+			&& !(b.channels ?? []).some((ch) => ch.transport === c.transport && ch.state === 'connected')), 60_000);
 	await c.call('programs/deployAndRun', {
 		brick: c.brick,
 		files: [{ remotePath: `${DIR}/Wait.rbf`, content: WAIT_RBF }],
 		runPath: `${DIR}/Wait.rbf`,
 	});
 	beep();
-	say('>>> SWITCH THE BRICK OFF NOW (press its dark grey back button, then the centre button)');
+	say('>>> PULL THE BRICK\'S BATTERY NOW (VYTÁHNI BATERII)');
 	const event = await lost;
-	say(event ? `heard: ${event.method}` : 'the brick was not heard leaving within 60 s');
+	say(event ? `heard: ${event.method}, the ${c.transport} channel is no longer connected` : `the ${c.transport} channel was not heard leaving within 60 s`);
 	c.results.statesHeard = states.length;
 	c.results.leftHeard = Boolean(event);
 	await c.call('subscriptions/cancel', { subscriptionId: subscription.subscriptionId }).catch(() => {});
@@ -628,8 +635,8 @@ const SCENARIOS: Record<string, Scenario> = {
 		},
 	},
 	'deploy-brick-off': {
-		summary: 'Deploy and run the eight-second program, and switch the brick off while it runs.',
-		needsOwner: 'switch the brick off within eight seconds of the beep',
+		summary: 'Deploy and run the eight-second program, and pull the brick\'s battery while it runs.',
+		needsOwner: 'pull the brick\'s battery within eight seconds of the beep',
 		run: deployBrickOff,
 	},
 };
