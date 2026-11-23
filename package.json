@@ -2,7 +2,7 @@
   "name": "ev3-cockpit",
   "displayName": "EVƎ Cockpit",
   "description": "VS Code extension for EV3 brick discovery, connection, and monitoring",
-  "version": "0.2.579",
+  "version": "0.2.580",
   "publisher": "99LevelsUp",
   "license": "MIT",
   "repository": {
@@ -12,6 +12,13 @@
   "engines": {
     "vscode": "^1.95.0",
     "node": ">=20.0.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.18.0",
+      "onFail": "warn"
+    }
   },
   "categories": [
     "Other"
@@ -71,29 +78,29 @@
     ]
   },
   "scripts": {
-    "compile": "tsc",
-    "lint": "eslint src --ext .ts",
-    "contract:generate": "node scripts/generate-contract.cjs",
-    "contract:check": "node scripts/generate-contract.cjs --check",
-    "contract:snapshot": "node scripts/generate-contract.cjs --snapshot",
-    "build:dev": "node scripts/bundle.cjs --sourcemap",
+    "compile": "tsc && node scripts/bundle.mts api-check",
+    "lint": "eslint src --ext .ts && tsc -p tsconfig.scripts.json",
+    "contract:generate": "node scripts/generate-contract.mts",
+    "contract:check": "node scripts/generate-contract.mts --check",
+    "contract:snapshot": "node scripts/generate-contract.mts --snapshot",
+    "build:dev": "node scripts/bundle.mts --sourcemap",
     "package": "npm run bundle",
-    "bundle": "node scripts/bundle.cjs",
-    "test:unit": "node scripts/run-unit-tests.cjs",
+    "bundle": "node scripts/bundle.mts",
+    "test:unit": "node scripts/run-unit-tests.mts",
     "test-smoke": "npm run test:unit",
-    "test:host": "npm run bundle && node scripts/runTests.js",
+    "test:host": "npm run bundle && node scripts/runTests.mts",
     "test:ci": "npm run compile && npm run lint && npm run contract:check && npm run test:unit && npm run test:host",
     "test:ci:release": "npm run test:ci && npm run package",
     "test:pw:smoke": "playwright test tests/smoke.spec.ts",
-    "package:vsix": "node scripts/package-vsix.cjs",
-    "package:npm": "node scripts/package-npm.cjs",
-    "smoke:daemon": "node scripts/daemon-smoke.cjs",
-    "daemon:build": "cd daemon && cargo build -p ev3-cockpitd -p ev3-cli && cd .. && node scripts/daemon-manifest.cjs",
-    "daemon:build:release": "cd daemon && cargo build --release -p ev3-cockpitd -p ev3-cli && cd .. && node scripts/daemon-manifest.cjs --profile release",
-    "daemon:manifest": "node scripts/daemon-manifest.cjs",
+    "package:vsix": "node scripts/package-vsix.mts",
+    "package:npm": "node scripts/package-npm.mts",
+    "smoke:daemon": "node scripts/daemon-smoke.mts",
+    "daemon:build": "cd daemon && cargo build -p ev3-cockpitd -p ev3-cli && cd .. && node scripts/daemon-manifest.mts",
+    "daemon:build:release": "cd daemon && cargo build --release -p ev3-cockpitd -p ev3-cli && cd .. && node scripts/daemon-manifest.mts --profile release",
+    "daemon:manifest": "node scripts/daemon-manifest.mts",
     "watch": "tsc --watch",
     "watch:bundle": "esbuild src/vscode/extension.ts --bundle --platform=node --target=node20 --external:vscode --external:node-hid --external:serialport --external:koffi --external:usb --outfile=out/extension.js --sourcemap --watch",
-    "prepare": "node scripts/install-hooks.cjs"
+    "prepare": "node scripts/install-hooks.mts"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",

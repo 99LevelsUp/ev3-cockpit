@@ -1,5 +1,5 @@
 /**
- * The generated contract (`scripts/generate-contract.cjs`, `src/contract/generated/`).
+ * The generated contract (`scripts/generate-contract.mts`, `src/contract/generated/`).
  *
  * One language-neutral schema in `contract/` produces the TypeScript and the Rust contract. These
  * tests check the TypeScript side and the generator's gate: the committed files are current, every
@@ -37,7 +37,7 @@ interface Generator {
 
 const ROOT = path.join(__dirname, '..', '..');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const generator = require(path.join(ROOT, 'scripts', 'generate-contract.cjs')) as Generator;
+const generator = require(path.join(ROOT, 'scripts', 'generate-contract.mts')) as Generator;
 
 type Json = Record<string, unknown>;
 const readJson = (file: string): Json => JSON.parse(fs.readFileSync(file, 'utf8')) as Json;

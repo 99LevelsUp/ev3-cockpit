@@ -1,12 +1,12 @@
 /**
  * Stages the npm packages; it never publishes.
  *
- *   node scripts/package-npm.cjs                                 compile and bundle, then stage the
+ *   node scripts/package-npm.mts                                 compile and bundle, then stage the
  *                                                                client and cockpit packages into dist/npm/
- *   node scripts/package-npm.cjs --skip-build                    stage from what out/ already holds
- *   node scripts/package-npm.cjs --platform <target> [--daemon-dir <dir>]
+ *   node scripts/package-npm.mts --skip-build                    stage from what out/ already holds
+ *   node scripts/package-npm.mts --platform <target> [--daemon-dir <dir>]
  *                                                                stage that platform's daemon package
- *   node scripts/package-npm.cjs --out <dir>                     somewhere else than dist/npm/
+ *   node scripts/package-npm.mts --out <dir>                     somewhere else than dist/npm/
  *
  * - `dist/npm/client/` is `@ev3-cockpit/client`: the contract and the client library, compiled from
  *   src/contract and src/client (`npm run compile`) with their types, and only the files the
@@ -19,32 +19,42 @@
  *   manifest, with `os` and `cpu` so npm installs only the one for the computer it lands on (the
  *   pattern esbuild ships its binaries with). The command finds it at run time and says what to
  *   do when it is missing (`platformDaemonDir`). Its daemon comes from `--daemon-dir`, by default
- *   where `package-vsix.cjs` takes it from, and is checked like a VSIX's: the manifest records its
+ *   where `package-vsix.mts` takes it from, and is checked like a VSIX's: the manifest records its
  *   SHA-256, the package's version and a release build, and on Linux it is executable. A Linux
  *   platform package is packed (`npm pack`) on Linux, where the mode survives.
  *
  * All take their version from the root package.json, the one the pre-commit hook bumps.
  */
-'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
-const { bundle } = require('./bundle.cjs');
-const { TARGETS, DAEMON_MANIFEST, NATIVE_MODULES, UDEV_RULES, daemonBinary, daemonProblems, requiredModules } = require('./packaging.cjs');
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { bundle } from './bundle.mts';
+import { TARGETS, DAEMON_MANIFEST, NATIVE_MODULES, UDEV_RULES, daemonBinary, daemonProblems, requiredModules } from './packaging.mts';
 
-const REPO = path.resolve(__dirname, '..');
-const CLIENT_NAME = '@ev3-cockpit/client';
-const COCKPIT_NAME = 'ev3-cockpit';
+export { requiredModules };
+
+const REPO = path.resolve(import.meta.dirname, '..');
+export const CLIENT_NAME = '@ev3-cockpit/client';
+export const COCKPIT_NAME = 'ev3-cockpit';
 /** The bundles the cockpit package carries, all in its out/ folder. */
-const COCKPIT_BUNDLES = ['cli', 'mcp'];
+export const COCKPIT_BUNDLES: readonly string[] = ['cli', 'mcp'];
+
+/** The root package.json, as far as the staging reads it. */
+export interface RootManifest {
+	readonly version: string;
+	readonly license: string;
+	readonly repository: unknown;
+	readonly engines: { readonly node: string };
+	readonly dependencies?: Readonly<Record<string, string>>;
+}
 
 /** The npm package carrying a platform's daemon (`DAEMON_PACKAGES` of src/cli/installation.ts). */
-function platformPackageName(target) {
+export function platformPackageName(target: string): string {
 	return `@ev3-cockpit/${target}`;
 }
 
-function filesUnder(dir, suffix) {
+function filesUnder(dir: string, suffix: string): string[] {
 	return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
 		const full = path.join(dir, entry.name);
 		if (entry.isDirectory()) { return filesUnder(full, suffix); }
@@ -52,12 +62,12 @@ function filesUnder(dir, suffix) {
 	});
 }
 
-function writeManifest(dir, manifest) {
+function writeManifest(dir: string, manifest: Record<string, unknown>): void {
 	fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(manifest, null, '\t')}\n`);
 }
 
 /** What the packages share with the root package. */
-function common(root) {
+function common(root: RootManifest): Record<string, unknown> {
 	return {
 		version: root.version,
 		license: root.license,
@@ -71,12 +81,11 @@ function common(root) {
  * without their extension (`client/index`, `contract/errors`, …): what its code requires and what
  * its types import, followed from `client/index`.
  */
-function clientClosure(compiled) {
-	const found = new Set();
+function clientClosure(compiled: string): string[] {
+	const found = new Set<string>();
 	const queue = ['client/index'];
 	const specifiers = /(?:require\(|from |import\()\s*["'](\.{1,2}\/[^"']*|\.{1,2})["']/g;
-	while (queue.length) {
-		const rel = queue.pop();
+	for (let rel = queue.pop(); rel !== undefined; rel = queue.pop()) {
 		if (found.has(rel)) { continue; }
 		const js = path.join(compiled, `${rel}.js`);
 		if (!fs.existsSync(js)) { throw new Error(`${js} is missing; compile first (npm run compile).`); }
@@ -99,7 +108,7 @@ function clientClosure(compiled) {
  * them from src/contract and src/client (into `compiled`, out/ by default), and only what the
  * library's entry reaches.
  */
-function stageClient(out, root, compiled = path.join(REPO, 'out')) {
+export function stageClient(out: string, root: RootManifest, compiled = path.join(REPO, 'out')): string {
 	const dir = path.join(out, 'client');
 	fs.rmSync(dir, { recursive: true, force: true });
 	for (const rel of clientClosure(compiled)) {
@@ -135,7 +144,7 @@ function stageClient(out, root, compiled = path.join(REPO, 'out')) {
 }
 
 /** `ev3-cockpit`: the two bundles, the udev rules, and the platform packages as optional dependencies. */
-function stageCockpit(out, root, { bundles }) {
+export function stageCockpit(out: string, root: RootManifest, { bundles }: { readonly bundles: string }): string {
 	const dir = path.join(out, 'cockpit');
 	fs.rmSync(dir, { recursive: true, force: true });
 	fs.mkdirSync(path.join(dir, 'out'), { recursive: true });
@@ -172,7 +181,8 @@ function stageCockpit(out, root, { bundles }) {
  * `@ev3-cockpit/<target>`: the daemon from `daemonDir` and its manifest, checked before it is
  * staged. `checkMode` says whether the file system shows Unix permissions (not on Windows).
  */
-function stagePlatform(out, root, target, { daemonDir, checkMode = process.platform !== 'win32' }) {
+export function stagePlatform(out: string, root: RootManifest, target: string,
+	{ daemonDir, checkMode = process.platform !== 'win32' }: { readonly daemonDir: string; readonly checkMode?: boolean }): string {
 	if (!TARGETS[target]) { throw new Error(`Unknown target ${target}; known: ${Object.keys(TARGETS).join(', ')}.`); }
 	const binary = daemonBinary(target);
 	for (const file of [binary, DAEMON_MANIFEST]) {
@@ -206,24 +216,30 @@ function stagePlatform(out, root, target, { daemonDir, checkMode = process.platf
 }
 
 /** Stages the client and cockpit packages into `out`. */
-function stageNpm({ out, bundles }) {
-	const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+export function stageNpm({ out, bundles }: { readonly out: string; readonly bundles: string }): { client: string; cockpit: string; version: string } {
+	const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as RootManifest;
 	const client = stageClient(out, root);
 	const cockpit = stageCockpit(out, root, { bundles });
 	return { client, cockpit, version: root.version };
 }
 
-module.exports = {
-	CLIENT_NAME, COCKPIT_NAME, COCKPIT_BUNDLES, platformPackageName, requiredModules,
-	stageClient, stageCockpit, stagePlatform, stageNpm,
-};
+/** Whether this file is the script node was started with, rather than a module another one loads. */
+function startedDirectly(): boolean {
+	const entry = process.argv[1];
+	try {
+		return entry !== undefined && fs.realpathSync.native(entry) === fs.realpathSync.native(import.meta.filename);
+	} catch {
+		return false;
+	}
+}
 
-if (require.main === module) {
+if (startedDirectly()) {
 	try {
 		const args = process.argv.slice(2);
-		const option = (name) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
-		const out = option('--out') ? path.resolve(option('--out')) : path.join(REPO, 'dist', 'npm');
-		const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+		const option = (name: string): string | undefined => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
+		const outOption = option('--out');
+		const out = outOption ? path.resolve(outOption) : path.join(REPO, 'dist', 'npm');
+		const root = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as RootManifest;
 		const platform = option('--platform');
 		if (platform) {
 			if (!TARGETS[platform]) { throw new Error(`Unknown target ${platform}; known: ${Object.keys(TARGETS).join(', ')}.`); }

@@ -1,18 +1,26 @@
 /**
  * Preload script for unit tests. Registers the vscode stub module
  * so that require('vscode') resolves without the real extension host.
+ *
+ * Loaded with `node --require`, so it stays synchronous: no top-level await anywhere it reaches.
  */
-'use strict';
 
-const Module = require('module');
-const path = require('path');
+import Module, { createRequire } from 'node:module';
+import * as path from 'node:path';
 
-const vscodeStub = require(path.join(__dirname, '..', 'src', 'test', 'vscodeStub.cjs'));
+const require = createRequire(import.meta.url);
+const stubPath = path.join(import.meta.dirname, '..', 'src', 'test', 'vscodeStub.mts');
 
-const originalResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, parent, isMain, options) {
+/** The part of Node's CommonJS loader this preload reaches into; Node does not type it. */
+type Resolve = (request: string, parent: unknown, isMain: boolean, options: unknown) => string;
+const loader = Module as unknown as { _resolveFilename: Resolve };
+
+require(stubPath);
+
+const originalResolve = loader._resolveFilename;
+loader._resolveFilename = function (this: unknown, request, parent, isMain, options) {
 	if (request === 'vscode') {
-		return path.join(__dirname, '..', 'src', 'test', 'vscodeStub.cjs');
+		return stubPath;
 	}
 	return originalResolve.call(this, request, parent, isMain, options);
 };
@@ -24,7 +32,7 @@ Module._resolveFilename = function (request, parent, isMain, options) {
 // The root `after` hook releases it, so a file still exits once its tests are done. Only in a test
 // file's own process: the preload runs in the runner that spawns them too, which it would hold open.
 if (process.env.NODE_TEST_CONTEXT) {
-	const { after, afterEach } = require('node:test');
+	const { after, afterEach } = require('node:test') as typeof import('node:test');
 	const keepAlive = setInterval(() => {}, 1 << 30);
 	after(() => clearInterval(keepAlive));
 
@@ -32,8 +40,8 @@ if (process.env.NODE_TEST_CONTEXT) {
 	// in production it goes to the console. Here it fails the running test instead, so an assertion
 	// inside a listener still guards its test. A test that expects a listener to throw installs its
 	// own handler for the duration.
-	const listenerErrors = [];
-	const { setListenerErrorHandler } = require(path.join(__dirname, '..', 'out', 'vscode', 'events'));
+	const listenerErrors: unknown[] = [];
+	const { setListenerErrorHandler } = require(path.join(import.meta.dirname, '..', 'out', 'vscode', 'events')) as typeof import('../src/vscode/events.ts');
 	setListenerErrorHandler((error) => listenerErrors.push(error));
 	afterEach(() => {
 		const errors = listenerErrors.splice(0);

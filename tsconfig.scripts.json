@@ -1,0 +1,26 @@
+{
+  "//": "The repository's tooling: scripts/*.mts run as TypeScript straight from Node (22.18 or later strips the types itself), so nothing is emitted; this only type-checks them, in npm run lint. scripts/api-check/extension.ts is bundled by scripts/bundle.mts. They take their types from src/, which tsconfig.json compiles as CommonJS with parameter properties and value-style type imports, so verbatimModuleSyntax and erasableSyntaxOnly would fail on src/; the scripts keep to erasable syntax and import types with import type, which every run of them checks.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022"],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/**/*.mts",
+    "scripts/api-check/extension.ts",
+    "src/test/vscodeStub.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "out"
+  ]
+}

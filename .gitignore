@@ -34,11 +34,14 @@ CLAUDE.md
 /playwright/.cache/
 /playwright/.auth/
 
-# Platform VSIX builds (scripts/package-vsix.cjs): the staging folders and the packages.
+# Platform VSIX builds (scripts/package-vsix.mts): the staging folders and the packages.
 /.vsix-staging/
 /dist-vsix/
 
-# The npm packages scripts/package-npm.cjs stages (never published from here).
+# The npm packages scripts/package-npm.mts stages (never published from here).
 /dist/
 
 /daemon/target/
+
+# The API check add-on as VS Code loads it: scripts/bundle.mts builds it from extension.ts.
+/scripts/api-check/extension.js

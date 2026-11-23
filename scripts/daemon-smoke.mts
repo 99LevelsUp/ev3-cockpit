@@ -1,12 +1,12 @@
 /**
  * Starts a native daemon as an installed client would and checks that it serves a recorded brick.
  *
- *   node scripts/daemon-smoke.cjs                                   the development build
+ *   node scripts/daemon-smoke.mts                                   the development build
  *                                                                   (npm run daemon:build)
- *   node scripts/daemon-smoke.cjs --daemon-dir .vsix-staging/linux-x64
+ *   node scripts/daemon-smoke.mts --daemon-dir .vsix-staging/linux-x64
  *                                                                   the daemon a staged VSIX or npm
  *                                                                   platform package carries
- *   node scripts/daemon-smoke.cjs --scenario <name>                 another recording of daemon/fixtures/link
+ *   node scripts/daemon-smoke.mts --scenario <name>                 another recording of daemon/fixtures/link
  *
  * It needs the compiled client library (`npm run compile`). The client takes the daemon from the
  * folder's manifest (`packagedDaemon`), so it copies the binary into a private folder, checks the
@@ -18,48 +18,54 @@
  * records and the client's contract version; it connects AAA from the recording, and its status
  * lists it. The daemon is stopped at the end.
  */
-'use strict';
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createRequire } from 'node:module';
+import type { CockpitClient } from '../src/client/index.ts';
 
-const REPO = path.resolve(__dirname, '..');
+/** The compiled client library: loaded from out/ at run time, typed from its sources. */
+type ClientLibrary = typeof import('../src/client/index.ts');
+type ChannelModule = typeof import('../src/client/channel.ts');
+
+const require = createRequire(import.meta.url);
+const REPO = path.resolve(import.meta.dirname, '..');
 const BUDGET_MS = 30_000;
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-function option(args, name) {
+function option(args: readonly string[], name: string): string | undefined {
 	const at = args.indexOf(name);
 	return at >= 0 ? args[at + 1] : undefined;
 }
 
-function check(condition, message) {
+function check(condition: unknown, message: string): asserts condition {
 	if (!condition) { throw new Error(message); }
 }
 
-async function main() {
+async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	const compiled = path.join(REPO, 'out', 'client', 'index.js');
 	check(fs.existsSync(compiled), `${compiled} is missing; compile first (npm run compile).`);
-	const client = require(compiled);
-	const { readChannelRecord } = require(path.join(REPO, 'out', 'client', 'channel.js'));
+	const client = require(compiled) as ClientLibrary;
+	const { readChannelRecord } = require(path.join(REPO, 'out', 'client', 'channel.js')) as ChannelModule;
 
 	const daemonDir = option(args, '--daemon-dir');
 	const launch = daemonDir ? client.packagedDaemon(path.resolve(daemonDir)) : client.developmentDaemon(REPO);
 	const scenario = option(args, '--scenario') ?? 'usb-connect-commands-aaa';
 	const fixtures = path.join(REPO, 'daemon', 'fixtures', 'link', scenario);
 	check(fs.existsSync(fixtures), `${fixtures} is missing.`);
-	const version = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version;
+	const version = (JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { version: string }).version;
 	check(launch.version === version, `The manifest of ${launch.binary} records version ${launch.version}; package.json is ${version}.`);
 
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ev3-smoke-'));
 	const stateRoot = client.nativeStateRoot({ env: { LOCALAPPDATA: home, XDG_STATE_HOME: home }, homedir: home });
 	const channel = `smoke-${process.pid}`;
 	const files = client.nativeChannelFiles(stateRoot, channel);
-	let cockpit;
+	let cockpit: CockpitClient | undefined;
 	try {
-		cockpit = await client.NativeCockpitClient.connect({
+		cockpit = await client.CockpitClient.connect({
 			name: 'daemon smoke', kind: 'cli', version, buildKind: launch.buildKind, daemon: launch,
 			channel, stateRoot, daemonArgs: ['--mode', 'replay', '--fixtures', fixtures], reconnect: false,
 		});
@@ -67,8 +73,8 @@ async function main() {
 		check(daemon.version === version, `The daemon reports version ${daemon.version}; package.json is ${version}.`);
 		check(daemon.buildKind === launch.buildKind, `The daemon reports a ${daemon.buildKind} build; its manifest records ${launch.buildKind}.`);
 		check(daemon.buildId === launch.sha256, `The daemon's build id is ${daemon.buildId}; its manifest records SHA-256 ${launch.sha256}.`);
-		check(daemon.contractVersion === client.nativeContract.CONTRACT_VERSION,
-			`The daemon speaks contract ${daemon.contractVersion}; the client ${client.nativeContract.CONTRACT_VERSION}.`);
+		check(daemon.contractVersion === client.CONTRACT_VERSION,
+			`The daemon speaks contract ${daemon.contractVersion}; the client ${client.CONTRACT_VERSION}.`);
 		check(daemon.mode === 'replay', `The daemon runs in ${daemon.mode} mode, not replay.`);
 
 		// By its id: before it connects, a brick may carry its USB descriptor's name, not its own.
@@ -94,7 +100,7 @@ async function main() {
 		if (cockpit) { cockpit.dispose(); }
 		const until = Date.now() + 5_000;
 		while (Date.now() < until) {
-			let pid;
+			let pid: number | undefined;
 			try { pid = readChannelRecord(fs.readFileSync(files.channelFile, 'utf8'))?.pid; } catch { /* none */ }
 			if (pid === undefined) { break; }
 			try { process.kill(pid); } catch { /* gone */ }
@@ -107,7 +113,7 @@ async function main() {
 
 const timer = setTimeout(() => { console.error(`The smoke did not finish within ${BUDGET_MS / 1000} s.`); process.exit(1); }, BUDGET_MS * 2);
 timer.unref();
-main().catch((error) => {
+main().catch((error: unknown) => {
 	console.error(error instanceof Error ? error.message : String(error));
 	process.exitCode = 1;
 });

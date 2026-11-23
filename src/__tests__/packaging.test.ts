@@ -1,5 +1,5 @@
 /**
- * Platform VSIX packaging: the rules of `scripts/packaging.cjs`.
+ * Platform VSIX packaging: the rules of `scripts/packaging.mts`.
  *
  * Each platform's VSIX carries the native daemon built for it and the manifest recording its
  * SHA-256, version and build kind; the client refuses a daemon whose hash does not match, so a VSIX
@@ -8,7 +8,7 @@
  * deny-list once shipped review scratch, notes and a junction to the firmware sources).
  *
  * The zips here are written by the test, so the checks run the same on every system; the VSIXes
- * themselves are built and checked by `scripts/package-vsix.cjs` with the same rules.
+ * themselves are built and checked by `scripts/package-vsix.mts` with the same rules.
  */
 
 import assert from 'node:assert/strict';
@@ -35,8 +35,8 @@ interface Packaging {
 }
 const REPO = path.join(__dirname, '..', '..');
 /* eslint-disable @typescript-eslint/no-var-requires */
-const packaging = require(path.join(REPO, 'scripts', 'packaging.cjs')) as Packaging;
-const { bundle } = require(path.join(REPO, 'scripts', 'bundle.cjs')) as { bundle(options: { names: string[]; outDir: string }): void };
+const packaging = require(path.join(REPO, 'scripts', 'packaging.mts')) as Packaging;
+const { bundle } = require(path.join(REPO, 'scripts', 'bundle.mts')) as { bundle(options: { names: string[]; outDir: string }): void };
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const VERSION = '1.2.3';

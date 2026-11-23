@@ -1,5 +1,5 @@
 //! The service recordings (`daemon/fixtures/service`) replayed strictly through the daemon: each
-//! test makes the surface calls `scripts/hardware-scenario.js` made when the scenario was recorded
+//! test makes the surface calls `scripts/hardware-scenario.mts` made when the scenario was recorded
 //! through the daemon on a real brick, checks the answers against what the brick said then (each
 //! fixture's `scenario.md`), and ends the daemon the way the script did. A strict replay fails a
 //! call that differs from the recorded one, and the daemon exits with code 1 when a recorded call

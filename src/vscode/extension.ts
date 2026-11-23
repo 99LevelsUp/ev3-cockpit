@@ -35,7 +35,7 @@ const TEST_HOST_SCENARIO = 'usb-connect-commands-aaa';
 
 /**
  * The directory of an installed extension that holds the daemon binary and its manifest: its root,
- * where the platform VSIX carries both (scripts/package-vsix.cjs).
+ * where the platform VSIX carries both (scripts/package-vsix.mts).
  */
 function packagedDaemonDir(context: vscode.ExtensionContext): string {
 	return context.extensionPath;

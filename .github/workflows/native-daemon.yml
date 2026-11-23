@@ -94,7 +94,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      # Read by the daemon's build.rs (the build kind) and by daemon-manifest.cjs; every other build
+      # Read by the daemon's build.rs (the build kind) and by daemon-manifest.mts; every other build
       # in CI is a development build.
       EV3_COCKPIT_RELEASE_BUILD: '1'
     defaults:
@@ -107,7 +107,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Setup Rust
@@ -127,22 +127,22 @@ jobs:
         run: cargo build --release --locked -p ev3-cockpitd
 
       - name: Write its manifest
-        run: node scripts/daemon-manifest.cjs --profile release
+        run: node scripts/daemon-manifest.mts --profile release
 
       - name: Compile the client library the smoke uses
         run: npm run compile
 
       - name: Package the VSIX
-        run: node scripts/package-vsix.cjs ${{ matrix.target }} --daemon-dir daemon/target/release
+        run: node scripts/package-vsix.mts ${{ matrix.target }} --daemon-dir daemon/target/release
 
       - name: The VSIX's daemon serves a recorded brick
         # Not on Windows: GitHub's Windows runner is elevated, and the daemon never runs elevated.
         if: matrix.target != 'win32-x64'
-        run: node scripts/daemon-smoke.cjs --daemon-dir .vsix-staging/${{ matrix.target }}
+        run: node scripts/daemon-smoke.mts --daemon-dir .vsix-staging/${{ matrix.target }}
 
       - name: Stage and pack the npm platform package
         run: |
-          node scripts/package-npm.cjs --platform ${{ matrix.target }} --daemon-dir daemon/target/release
+          node scripts/package-npm.mts --platform ${{ matrix.target }} --daemon-dir daemon/target/release
           npm pack ./dist/npm/${{ matrix.target }} --pack-destination dist/npm
 
       - name: Stage and pack the client and cockpit npm packages
@@ -150,13 +150,13 @@ jobs:
         if: matrix.target == 'linux-x64'
         run: |
           npm run bundle
-          node scripts/package-npm.cjs --skip-build
+          node scripts/package-npm.mts --skip-build
           npm pack ./dist/npm/client ./dist/npm/cockpit --pack-destination dist/npm
 
       - name: SHA-256 of the daemon
         id: daemon
         run: |
-          binary=daemon/target/release/$(node -p "require('./scripts/packaging.cjs').daemonBinary('${{ matrix.target }}')")
+          binary=daemon/target/release/$(node -p "require('./scripts/packaging.mts').daemonBinary('${{ matrix.target }}')")
           sum=$(sha256sum "$binary" | cut -d' ' -f1)
           echo "$sum  ev3-cockpitd-${{ matrix.target }}" > "ev3-cockpitd-${{ matrix.target }}.sha256"
           echo "binary=$binary" >> "$GITHUB_OUTPUT"
@@ -193,7 +193,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies

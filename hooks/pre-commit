@@ -6,5 +6,5 @@ case "${GIT_REFLOG_ACTION:-commit}" in
         exit 0
         ;;
 esac
-node scripts/bump-version.cjs || exit 1
+node scripts/bump-version.mts || exit 1
 git add package.json

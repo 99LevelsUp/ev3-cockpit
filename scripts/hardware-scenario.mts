@@ -2,10 +2,10 @@
  * Drives the native daemon `ev3-cockpitd` through its surface, the way a client does, to record a
  * service scenario of a real brick or to replay one.
  *
- *   node scripts/hardware-scenario.js --list
- *   node scripts/hardware-scenario.js <scenario> --daemon <ev3-cockpitd> --brick <NAME>
+ *   node scripts/hardware-scenario.mts --list
+ *   node scripts/hardware-scenario.mts <scenario> --daemon <ev3-cockpitd> --brick <NAME>
  *        --out <dir> [--transport usb|bt|tcp] [--state-root <dir>] [--owner-present]
- *   node scripts/hardware-scenario.js <scenario> --daemon <ev3-cockpitd> --brick <NAME>
+ *   node scripts/hardware-scenario.mts <scenario> --daemon <ev3-cockpitd> --brick <NAME>
  *        --replay <fixture dir> [--strict] [--state-root <dir>]
  *
  * Recording starts the daemon on a private test channel in record mode: `--mode record
@@ -24,18 +24,22 @@
  * restart question this client answers yes; the daemon then checks the recording is complete (or
  * that a strict replay made every recorded call) and exits 0, or 1 when not.
  *
- * Standalone: Node 20 and nothing else, so it runs on a recording host that has only Node. Nothing
- * it prints names a brick's address or a network address: those are masked before printing.
+ * Standalone: Node 22.18 or later (it runs as TypeScript, which such a Node strips itself) and
+ * nothing else, so it runs on a recording host that has only Node; its imports of the contract are
+ * types only and vanish when it runs. Nothing it prints names a brick's address or a network
+ * address: those are masked before printing.
  */
 
-'use strict';
-
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
-const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+import * as fs from 'node:fs';
+import * as net from 'node:net';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import type {
+	ChannelRecord, HelloMethods, MethodName, Methods, NotificationName, Notifications, ProgramState,
+} from '../src/contract/generated/index.ts';
 
 // ── Inputs the scenarios use (published in each fixture's scenario.md) ──────────
 
@@ -82,32 +86,71 @@ const TELEMETRY_MS = 60_000;
 /** The interval the telemetry scenario asks for. */
 const TELEMETRY_INTERVAL_MS = 1000;
 /** Who this client says it is. The daemon tests that replay a fixture say the same. */
-const CLIENT = { kind: 'cli', name: 'hardware scenario', version: '0.0.1', buildKind: 'development' };
+const CLIENT = { kind: 'cli', name: 'hardware scenario', version: '0.0.1', buildKind: 'development' } as const;
 
-const text = (bytes) => LINE.repeat(Math.ceil(bytes / LINE.length)).slice(0, bytes);
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const text = (bytes: number): string => LINE.repeat(Math.ceil(bytes / LINE.length)).slice(0, bytes);
+export const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ── The contract as this client speaks it ──────────────────────────────────────
+
+/** Every request this client sends: the hello and the methods. */
+type Calls = Methods & HelloMethods;
+export type CallName = keyof Calls;
+export type CallParams<M extends CallName> = Calls[M]['params'];
+export type CallResult<M extends CallName> = Calls[M]['result'];
+
+/** A notification the daemon sent, by its method. */
+export type Notification = { [N in NotificationName]: { jsonrpc?: string; method: N; params: Notifications[N] } }[NotificationName];
+
+/** A failed call: the daemon's message, with the contract's error code and data. */
+export type CallError = Error & { code?: string; data?: { code?: string } & Record<string, unknown> };
+
+/** A message as it arrives: a response, a request of the daemon's (a question) or a notification. */
+interface Incoming {
+	jsonrpc?: string;
+	id?: number;
+	method?: string;
+	params?: { kind?: string } & Record<string, unknown>;
+	result?: unknown;
+	error?: { message: string; data?: { code?: string } & Record<string, unknown> };
+}
+
+interface Pending {
+	resolve: (result: unknown) => void;
+	reject: (error: Error) => void;
+	method: string;
+}
 
 // ── Output that names no address ────────────────────────────────────────────────
 
 const started = Date.now();
 /** Hardware addresses in any spelling and dotted quads, masked. */
-function mask(value) {
+export function mask(value: unknown): string {
 	return String(value)
 		.replace(/\b[0-9A-Fa-f]{2}(?:[:_-]?[0-9A-Fa-f]{2}){5}\b/g, '<id>')
 		.replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<ip>');
 }
-function say(line) {
+export function say(line: string): void {
 	process.stdout.write(`${((Date.now() - started) / 1000).toFixed(1).padStart(6)} s  ${mask(line)}\n`);
 }
-const brief = (value) => {
-	const json = JSON.stringify(value);
+export const brief = (value: unknown): string => {
+	const json = JSON.stringify(value) as string | undefined;
 	return json === undefined ? 'nothing' : json.length > 240 ? `${json.slice(0, 240)}...` : json;
 };
 
 // ── The channel: framing and the hello (docs/channel.md) ───────────────────────
 
-class Client {
-	constructor(socket, key) {
+export class Client {
+	readonly socket: net.Socket;
+	readonly key: Buffer;
+	buffer: Buffer;
+	nextId: number;
+	pending: Map<number, Pending>;
+	listeners: ((message: Notification) => void)[];
+	questions: { kind: string | undefined; answer: string }[];
+	closed: boolean;
+
+	constructor(socket: net.Socket, key: Buffer) {
 		this.socket = socket;
 		this.key = key;
 		this.buffer = Buffer.alloc(0);
@@ -116,7 +159,7 @@ class Client {
 		this.listeners = [];
 		this.questions = [];
 		this.closed = false;
-		socket.on('data', (chunk) => this.receive(chunk));
+		socket.on('data', (chunk: Buffer) => this.receive(chunk));
 		socket.on('close', () => {
 			this.closed = true;
 			for (const { reject } of this.pending.values()) { reject(new Error('the daemon closed the connection')); }
@@ -125,7 +168,7 @@ class Client {
 		socket.on('error', () => {});
 	}
 
-	static open(channelPath, key) {
+	static open(channelPath: string, key: Buffer): Promise<Client> {
 		return new Promise((resolve, reject) => {
 			const socket = net.connect(channelPath);
 			socket.once('connect', () => resolve(new Client(socket, key)));
@@ -133,13 +176,13 @@ class Client {
 		});
 	}
 
-	send(message) {
+	send(message: object): void {
 		const body = Buffer.from(JSON.stringify(message), 'utf8');
 		this.socket.write(`Content-Length: ${body.length}\r\n\r\n`);
 		this.socket.write(body);
 	}
 
-	receive(chunk) {
+	receive(chunk: Buffer): void {
 		this.buffer = Buffer.concat([this.buffer, chunk]);
 		for (;;) {
 			const end = this.buffer.indexOf('\r\n\r\n');
@@ -147,18 +190,18 @@ class Client {
 			const match = /content-length:\s*(\d+)/i.exec(this.buffer.subarray(0, end).toString('utf8'));
 			const length = Number(match?.[1] ?? 0);
 			if (this.buffer.length < end + 4 + length) { return; }
-			const message = JSON.parse(this.buffer.subarray(end + 4, end + 4 + length).toString('utf8'));
+			const message = JSON.parse(this.buffer.subarray(end + 4, end + 4 + length).toString('utf8')) as Incoming;
 			this.buffer = this.buffer.subarray(end + 4 + length);
 			this.dispatch(message);
 		}
 	}
 
-	dispatch(message) {
-		if (message.method === undefined && this.pending.has(message.id)) {
-			const call = this.pending.get(message.id);
-			this.pending.delete(message.id);
+	dispatch(message: Incoming): void {
+		const call = message.id === undefined ? undefined : this.pending.get(message.id);
+		if (message.method === undefined && call) {
+			this.pending.delete(message.id as number);
 			if (message.error) {
-				const error = new Error(`${call.method}: ${message.error.message}`);
+				const error: CallError = new Error(`${call.method}: ${message.error.message}`);
 				error.code = message.error.data?.code;
 				error.data = message.error.data;
 				call.reject(error);
@@ -174,29 +217,30 @@ class Client {
 			this.send({ jsonrpc: '2.0', id: message.id, result: { answer } });
 			return;
 		}
-		for (const listener of this.listeners) { listener(message); }
+		// Neither a response nor a question: a notification, as the contract types it.
+		for (const listener of this.listeners) { listener(message as unknown as Notification); }
 	}
 
 	/** The restart question `daemon/exit` raises is the one this client says yes to. */
-	answerFor(params) {
+	answerFor(params: { kind?: string } | undefined): 'yes' | 'no' {
 		return params?.kind === 'restart' ? 'yes' : 'no';
 	}
 
-	call(method, params = {}, { progress } = {}) {
+	call<M extends CallName>(method: M, params: CallParams<M> = {} as CallParams<M>, { progress }: { progress?: string } = {}): Promise<CallResult<M>> {
 		const id = this.nextId++;
 		const sent = progress ? { ...params, __progressToken: progress } : params;
 		this.send({ jsonrpc: '2.0', id, method, params: sent });
-		return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject, method }));
+		return new Promise((resolve, reject) => this.pending.set(id, { resolve: resolve as (result: unknown) => void, reject, method }));
 	}
 
 	/** Resolves with the first notification `wanted` accepts, or undefined after `ms`. */
-	until(wanted, ms) {
+	until(wanted: (message: Notification) => boolean, ms: number): Promise<Notification | undefined> {
 		return new Promise((resolve) => {
-			const listener = (message) => {
+			const listener = (message: Notification): void => {
 				if (wanted(message)) { done(message); }
 			};
 			const timer = setTimeout(() => done(undefined), ms);
-			const done = (message) => {
+			const done = (message: Notification | undefined): void => {
 				clearTimeout(timer);
 				this.listeners = this.listeners.filter((l) => l !== listener);
 				resolve(message);
@@ -205,16 +249,16 @@ class Client {
 		});
 	}
 
-	on(listener) {
+	on(listener: (message: Notification) => void): () => void {
 		this.listeners.push(listener);
 		return () => { this.listeners = this.listeners.filter((l) => l !== listener); };
 	}
 
-	hmac(label, a, b) {
+	hmac(label: string, a: string, b: string): string {
 		return crypto.createHmac('sha256', this.key).update(`${label}\n${a}\n${b}`).digest('hex');
 	}
 
-	async hello(contractVersion) {
+	async hello(contractVersion: number): Promise<CallResult<'hello/finish'>> {
 		const clientNonce = crypto.randomBytes(16).toString('hex');
 		const start = await this.call('hello/start', {
 			clientNonce, clientName: CLIENT.name, clientKind: CLIENT.kind, version: CLIENT.version,
@@ -226,11 +270,28 @@ class Client {
 		return this.call('hello/finish', { clientProof: this.hmac('client', clientNonce, start.daemonNonce) });
 	}
 
-	close() { this.socket.end(); }
+	close(): void { this.socket.end(); }
+}
+
+/** How a daemon process ended. */
+export interface Exit {
+	code: number | null;
+	signal: NodeJS.Signals | null;
+}
+
+/** A daemon started on the private test channel. */
+export interface Daemon {
+	child: ChildProcess;
+	record: ChannelRecord;
+	key: Buffer;
+	exited: Promise<Exit>;
+	stderr(): string;
+	/** The contract version it speaks, once the first hello told. */
+	contractVersion?: number;
 }
 
 /** A client past the hello, on the contract version the daemon speaks. */
-async function connectClient(daemon) {
+export async function connectClient(daemon: Daemon): Promise<{ client: Client; hello: CallResult<'hello/finish'> }> {
 	let client = await Client.open(daemon.record.path, daemon.key);
 	let hello = await client.hello(daemon.contractVersion ?? 2);
 	if (daemon.contractVersion === undefined) {
@@ -248,21 +309,21 @@ async function connectClient(daemon) {
 
 const CHANNEL = 'scenario';
 
-async function startDaemon(binary, stateRoot, extra) {
+export async function startDaemon(binary: string, stateRoot: string, extra: readonly string[]): Promise<Daemon> {
 	const child = spawn(binary, ['--channel', CHANNEL, '--state-root', stateRoot, ...extra], {
 		stdio: ['ignore', 'ignore', 'pipe'],
 	});
 	let stderr = '';
-	child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
-	const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+	child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+	const exited = new Promise<Exit>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
 	const recordFile = path.join(stateRoot, 'channels', CHANNEL, 'channel.json');
 	const deadline = Date.now() + 30_000;
-	let gone;
-	exited.then((outcome) => { gone = outcome; });
+	let gone: Exit | undefined;
+	void exited.then((outcome) => { gone = outcome; });
 	while (Date.now() < deadline) {
 		if (gone) { throw new Error(`the daemon exited at once (${gone.code ?? gone.signal}): ${mask(stderr.trim())}`); }
 		try {
-			const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+			const record = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as ChannelRecord;
 			if (record.pid === child.pid) {
 				return { child, record, key: fs.readFileSync(path.join(stateRoot, 'key')), exited, stderr: () => stderr };
 			}
@@ -274,7 +335,7 @@ async function startDaemon(binary, stateRoot, extra) {
 }
 
 /** Ends the daemon the way the tests do: `daemon/exit`, the restart question answered yes. */
-async function endDaemon(daemon, client) {
+export async function endDaemon(daemon: Daemon, client: Client): Promise<Exit> {
 	const answer = await client.call('daemon/exit', {});
 	say(`daemon/exit: ${brief(answer)}`);
 	const outcome = await Promise.race([daemon.exited, wait(60_000).then(() => undefined)]);
@@ -287,19 +348,34 @@ async function endDaemon(daemon, client) {
 
 // ── Scenario steps ──────────────────────────────────────────────────────────────
 
+/** What a scenario runs with: the daemon, this client on it, the brick and transport, and what it found. */
+export interface ScenarioContext {
+	daemon: Daemon;
+	client: Client;
+	brick: string;
+	transport: string;
+	replaying?: boolean;
+	results: Record<string, unknown>;
+	/** A call, logged with its outcome. */
+	call<M extends CallName>(method: M, params: CallParams<M>): Promise<CallResult<M>>;
+}
+
+/** The transports a listed brick shows a channel on. */
+type ListedBrick = CallResult<'bricks/list'>['bricks'][number];
+
 /**
  * Waits for the first discovery round, then until the brick is listed on the transport with its
  * name confirmed. The daemon confirms a name with a probe of its own as the brick is first
  * discovered; connecting only after it keeps the probe's exchanges ahead of the session's on
  * every run, which a strict replay needs.
  */
-async function findBrick(c) {
+export async function findBrick(c: ScenarioContext): Promise<ListedBrick> {
 	await c.call('bricks/list', { waitForDiscovery: true });
 	const deadline = Date.now() + 40_000;
 	const unconfirmedUntil = Date.now() + 10_000;
 	for (;;) {
 		const { bricks } = await c.client.call('bricks/list', {});
-		const on = (b) => (b.channels ?? []).map((ch) => ch.transport);
+		const on = (b: ListedBrick): string[] => (b.channels ?? []).map((ch) => ch.transport);
 		const brick = bricks.find((b) => b.name.toLowerCase() === c.brick.toLowerCase());
 		if (brick && on(brick).includes(c.transport) && (brick.nameConfirmed || Date.now() > unconfirmedUntil)) {
 			say(`listed ${brick.name} on ${on(brick).join(', ')}`);
@@ -317,7 +393,7 @@ async function findBrick(c) {
  * Waits until the brick's channel on the transport is available again: a link lost under a running
  * call can take the channel with it until discovery lists the brick again.
  */
-async function untilAvailable(c) {
+export async function untilAvailable(c: ScenarioContext): Promise<void> {
 	const deadline = Date.now() + 15_000;
 	for (;;) {
 		const { bricks } = await c.client.call('bricks/list', {});
@@ -329,7 +405,7 @@ async function untilAvailable(c) {
 }
 
 /** Makes sure the scenario's folder is not there yet, so every run sends the same requests. */
-async function expectNoFolder(c) {
+async function expectNoFolder(c: ScenarioContext): Promise<void> {
 	const { exists } = await c.call('files/exists', { brick: c.brick, path: DIR });
 	if (exists) {
 		throw new Error(`${DIR} is already on the brick, left by an earlier run; remove it first `
@@ -338,7 +414,7 @@ async function expectNoFolder(c) {
 }
 
 /** Uploads `bytes` into a transfer handle. */
-async function fillTransfer(c, bytes) {
+async function fillTransfer(c: ScenarioContext, bytes: number): Promise<string> {
 	const content = Buffer.from(text(bytes), 'utf8');
 	const { handle, chunkBytes } = await c.call('transfer/begin', { size: content.length });
 	const step = Math.min(TRANSFER_CHUNK, chunkBytes);
@@ -348,7 +424,7 @@ async function fillTransfer(c, bytes) {
 	return handle;
 }
 
-async function infoStorageListing(c) {
+async function infoStorageListing(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await c.call('bricks/info', { brick: c.brick });
@@ -358,7 +434,7 @@ async function infoStorageListing(c) {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
-async function fileRoundTrip(c) {
+async function fileRoundTrip(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
@@ -367,7 +443,7 @@ async function fileRoundTrip(c) {
 	await c.call('files/write', { brick: c.brick, path: `${DIR}/notes.txt`, content: Buffer.from(note).toString('base64') });
 	await c.call('files/size', { brick: c.brick, path: `${DIR}/notes.txt` });
 	const back = await c.call('files/read', { brick: c.brick, path: `${DIR}/notes.txt`, inline: true });
-	const same = Buffer.from(back.content, 'base64').toString('utf8') === note;
+	const same = Buffer.from(back.content as string, 'base64').toString('utf8') === note;
 	c.results.readBackMatches = same;
 	if (!same) { throw new Error('the file read back differs from the one written'); }
 	await c.call('files/move', { brick: c.brick, from: `${DIR}/notes.txt`, to: `${DIR}/moved.txt` });
@@ -382,7 +458,7 @@ async function fileRoundTrip(c) {
  * session under the running write, as a pulled cable would, with no person needed. The write
  * fails; the brick is connected again and what the cut left is listed and removed.
  */
-async function cutUpload(c) {
+async function cutUpload(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
@@ -400,9 +476,10 @@ async function cutUpload(c) {
 		const written = await writing;
 		throw new Error(`the upload finished despite the cut (${brief(written)})`);
 	} catch (error) {
-		if (!error.code) { throw error; }
-		c.results.cutError = error.code;
-		say(`files/write failed: ${error.code}: ${error.message}`);
+		const failed = error as CallError;
+		if (!failed.code) { throw error; }
+		c.results.cutError = failed.code;
+		say(`files/write failed: ${failed.code}: ${failed.message}`);
 	}
 	other.close();
 	await untilAvailable(c);
@@ -413,14 +490,14 @@ async function cutUpload(c) {
 }
 
 /** Subscribes to program states and returns the states heard. */
-async function subscribePrograms(c) {
-	const states = [];
+async function subscribePrograms(c: ScenarioContext): Promise<{ states: Notifications['programs/stateChanged'][]; subscription: CallResult<'programs/subscribe'> }> {
+	const states: Notifications['programs/stateChanged'][] = [];
 	c.client.on((m) => { if (m.method === 'programs/stateChanged') { states.push(m.params); } });
 	const subscription = await c.call('programs/subscribe', { brick: c.brick });
 	return { states, subscription };
 }
 
-async function untilStopped(c, states, ms) {
+async function untilStopped(c: ScenarioContext, states: readonly { state?: ProgramState }[], ms: number): Promise<boolean> {
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		if (states.some((s) => s.state?.running === false)) { return true; }
@@ -429,7 +506,7 @@ async function untilStopped(c, states, ms) {
 	return false;
 }
 
-async function deployAndRun(c) {
+async function deployAndRun(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
@@ -448,7 +525,7 @@ async function deployAndRun(c) {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
-async function programs(c) {
+async function programs(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
@@ -466,12 +543,12 @@ async function programs(c) {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
-async function telemetryMinute(c) {
+async function telemetryMinute(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	const { rows } = await c.call('telemetry/rows', {});
 	const wanted = rows.map((r) => r.id).filter((id) => /battery|program/i.test(id));
-	const updates = [];
+	const updates: Notifications['telemetry/update'][] = [];
 	c.client.on((m) => { if (m.method === 'telemetry/update') { updates.push(m.params); } });
 	const subscription = await c.call('telemetry/subscribe', {
 		brick: c.brick, request: { rows: wanted, intervalMs: TELEMETRY_INTERVAL_MS },
@@ -485,7 +562,7 @@ async function telemetryMinute(c) {
 }
 
 /** Owner-run: the brick switched off while its program runs. */
-async function deployBrickOff(c) {
+async function deployBrickOff(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
 	await expectNoFolder(c);
@@ -507,9 +584,16 @@ async function deployBrickOff(c) {
 	await c.call('bricks/disconnect', { brick: c.brick }).catch(() => {});
 }
 
-function beep() { process.stdout.write('\u0007'); }
+export function beep(): void { process.stdout.write('\u0007'); }
 
-const SCENARIOS = {
+interface Scenario {
+	summary: string;
+	/** What the owner must do while it runs; such a scenario records only with --owner-present. */
+	needsOwner?: string;
+	run(c: ScenarioContext): Promise<void>;
+}
+
+const SCENARIOS: Record<string, Scenario> = {
 	'info-storage-listing': {
 		summary: 'Connect, ask info and storage, list the firmware folder, check the projects folder exists, disconnect.',
 		run: infoStorageListing,
@@ -552,12 +636,26 @@ const SCENARIOS = {
 
 // ── The run ─────────────────────────────────────────────────────────────────────
 
-function parseArgs(argv) {
-	const args = { flags: new Set() };
+/** The command line: the scenario, the options with a value, and the flags. */
+interface Args {
+	flags: Set<string>;
+	scenario?: string;
+	daemon?: string;
+	brick?: string;
+	out?: string;
+	transport?: string;
+	'state-root'?: string;
+	replay?: string;
+}
+
+type ValueOption = 'daemon' | 'brick' | 'out' | 'transport' | 'state-root' | 'replay';
+
+function parseArgs(argv: readonly string[]): Args {
+	const args: Args = { flags: new Set() };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (['--daemon', '--brick', '--out', '--transport', '--state-root', '--replay'].includes(arg)) {
-			args[arg.slice(2)] = argv[++i];
+			args[arg.slice(2) as ValueOption] = argv[++i];
 		} else if (arg.startsWith('--')) {
 			args.flags.add(arg.slice(2));
 		} else if (!args.scenario) {
@@ -569,13 +667,13 @@ function parseArgs(argv) {
 	return args;
 }
 
-const USAGE = 'usage: node scripts/hardware-scenario.js --list\n'
-	+ '       node scripts/hardware-scenario.js <scenario> --daemon <ev3-cockpitd> --brick <NAME> --out <dir> '
+const USAGE = 'usage: node scripts/hardware-scenario.mts --list\n'
+	+ '       node scripts/hardware-scenario.mts <scenario> --daemon <ev3-cockpitd> --brick <NAME> --out <dir> '
 	+ '[--transport usb|bt|tcp] [--state-root <dir>] [--owner-present]\n'
-	+ '       node scripts/hardware-scenario.js <scenario> --daemon <ev3-cockpitd> --brick <NAME> --replay <fixture dir> '
+	+ '       node scripts/hardware-scenario.mts <scenario> --daemon <ev3-cockpitd> --brick <NAME> --replay <fixture dir> '
 	+ '[--strict] [--state-root <dir>]';
 
-async function main() {
+async function main(): Promise<number> {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.flags.has('list')) {
 		for (const [name, s] of Object.entries(SCENARIOS)) {
@@ -583,7 +681,7 @@ async function main() {
 		}
 		return 0;
 	}
-	const scenario = SCENARIOS[args.scenario];
+	const scenario = args.scenario === undefined ? undefined : SCENARIOS[args.scenario] as Scenario | undefined;
 	if (!scenario || !args.daemon || !args.brick || (!args.out === !args.replay)) {
 		process.stderr.write(`${USAGE}\n`);
 		return 64;
@@ -600,13 +698,13 @@ async function main() {
 	const stateRoot = fs.mkdtempSync(path.join(stateParent, 'run-'));
 	const daemonArgs = args.replay
 		? ['--mode', 'replay', '--fixtures', path.resolve(args.replay), ...(args.flags.has('strict') ? ['--replay', 'strict'] : [])]
-		: ['--mode', 'record', '--record-dir', path.resolve(args.out, name), '--transports', transport];
+		: ['--mode', 'record', '--record-dir', path.resolve(args.out as string, name), '--transports', transport];
 
 	say(`${args.scenario} on ${args.brick} over ${transport}, ${args.replay ? `replaying ${path.basename(args.replay)}${args.flags.has('strict') ? ' strictly' : ''}` : `recording ${name}`}`);
 	const daemon = await startDaemon(path.resolve(args.daemon), stateRoot, daemonArgs);
 	const { client, hello } = await connectClient(daemon);
 	say(`hello: daemon ${hello.version}, contract ${hello.contractVersion}, ${hello.buildKind}, ${hello.mode}`);
-	const c = {
+	const c: ScenarioContext = {
 		daemon, client, brick: args.brick, transport, replaying: Boolean(args.replay), results: {},
 		async call(method, params) {
 			try {
@@ -614,12 +712,13 @@ async function main() {
 				say(`${method} ${brief(params)} -> ${brief(result)}`);
 				return result;
 			} catch (error) {
-				say(`${method} ${brief(params)} -> ERROR ${error.code ?? ''} ${error.message}`);
+				const failed = error as CallError;
+				say(`${method} ${brief(params)} -> ERROR ${failed.code ?? ''} ${failed.message}`);
 				throw error;
 			}
 		},
 	};
-	let failure;
+	let failure: Error | undefined;
 	if (scenario.needsOwner && !args.replay) {
 		beep();
 		say(`${args.scenario}: ${scenario.needsOwner}. Starting in 5 s.`);
@@ -628,9 +727,9 @@ async function main() {
 	try {
 		await scenario.run(c);
 	} catch (error) {
-		failure = error;
+		failure = error as Error;
 	}
-	const outcome = await endDaemon(daemon, client).catch((error) => ({ error }));
+	const outcome: Exit & { error?: undefined } | { error: Error } = await endDaemon(daemon, client).catch((error: unknown) => ({ error: error as Error }));
 	client.close();
 	say(`results: ${brief(c.results)}`);
 	if (failure) { say(`FAILED: ${failure.message}`); }
@@ -639,20 +738,26 @@ async function main() {
 	if (stderr) { say(`daemon said: ${stderr}`); }
 	say(`daemon exited with ${outcome.code ?? outcome.signal}`);
 	if (!args.replay && outcome.code === 0) {
-		const file = path.join(path.resolve(args.out, name), 'recording.jsonl');
+		const file = path.join(path.resolve(args.out as string, name), 'recording.jsonl');
 		const recorded = fs.readFileSync(file, 'utf8');
 		say(`recorded ${recorded.split('\n').filter(Boolean).length} lines, ${recorded.length} bytes into ${file}`);
 	}
 	return failure || outcome.code !== 0 ? 1 : 0;
 }
 
-module.exports = {
-	Client, connectClient, startDaemon, endDaemon, findBrick, untilAvailable, say, mask, brief, wait, beep,
-};
+/** Whether this file is the script node was started with, rather than a module another one loads. */
+function startedDirectly(): boolean {
+	const entry = process.argv[1];
+	try {
+		return entry !== undefined && fs.realpathSync.native(entry) === fs.realpathSync.native(import.meta.filename);
+	} catch {
+		return false;
+	}
+}
 
-if (require.main === module) {
-	main().then((code) => process.exit(code), (error) => {
-		process.stderr.write(`${mask(error?.stack ?? error)}\n`);
+if (startedDirectly()) {
+	main().then((code) => process.exit(code), (error: unknown) => {
+		process.stderr.write(`${mask((error as Error | undefined)?.stack ?? error)}\n`);
 		process.exit(1);
 	});
 }

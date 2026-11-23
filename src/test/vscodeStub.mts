@@ -2,11 +2,21 @@
  * Minimal vscode module stub for unit tests running outside the extension host.
  *
  * Provides just enough of the vscode API surface to satisfy imports from
- * events/, contracts/, and runtime/ modules.
+ * events/, contracts/, and runtime/ modules. `scripts/test-setup.mts` resolves `vscode` to this
+ * file; Node runs it as TypeScript, and the compiled tests reach it through `require`.
  */
-'use strict';
 
-class EventEmitter {
+interface Disposed {
+	dispose(): void;
+}
+
+type Listener<T> = (data: T) => void;
+
+export class EventEmitter<T = unknown> {
+	_listeners: Listener<T>[];
+	_disposed: boolean;
+	readonly event: (listener: Listener<T>) => Disposed;
+
 	constructor() {
 		this._listeners = [];
 		this._disposed = false;
@@ -22,34 +32,34 @@ class EventEmitter {
 		};
 	}
 
-	fire(data) {
+	fire(data: T): void {
 		if (this._disposed) { return; }
 		for (const listener of [...this._listeners]) {
 			listener(data);
 		}
 	}
 
-	dispose() {
+	dispose(): void {
 		this._disposed = true;
 		this._listeners.length = 0;
 	}
 }
 
-class Disposable {
-	constructor(callOnDispose) {
+export class Disposable {
+	_callOnDispose: (() => void) | undefined;
+
+	constructor(callOnDispose?: () => void) {
 		this._callOnDispose = callOnDispose;
 	}
-	static from(...disposables) {
+	static from(...disposables: Disposed[]): Disposable {
 		return new Disposable(() => {
 			for (const d of disposables) { d.dispose(); }
 		});
 	}
-	dispose() {
+	dispose(): void {
 		if (this._callOnDispose) {
 			this._callOnDispose();
 			this._callOnDispose = undefined;
 		}
 	}
 }
-
-module.exports = { EventEmitter, Disposable };

@@ -1,4 +1,3 @@
-'use strict';
 /**
  * Writes the manifest of a build of the native daemon beside its binary,
  * `ev3-cockpitd.manifest.json`: the binary's file name, its SHA-256, its version and its build
@@ -11,31 +10,31 @@
  * - The build kind is release only when EV3_COCKPIT_RELEASE_BUILD=1, the variable the daemon's own
  *   build reads; run both steps in the same environment.
  *
- * usage: node scripts/daemon-manifest.cjs [--profile debug|release] [--target <triple>]
+ * usage: node scripts/daemon-manifest.mts [--profile debug|release] [--target <triple>]
  */
 
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 const MANIFEST = 'ev3-cockpitd.manifest.json';
-const root = path.join(__dirname, '..');
-const USAGE = 'usage: node scripts/daemon-manifest.cjs [--profile debug|release] [--target <triple>]';
+const root = path.join(import.meta.dirname, '..');
+const USAGE = 'usage: node scripts/daemon-manifest.mts [--profile debug|release] [--target <triple>]';
 
-function fail(message) {
+function fail(message: string): never {
 	process.stderr.write(`daemon-manifest: ${message}\n`);
 	process.exit(1);
 }
 
 /** The daemon's file name for a target triple, or for this machine without one. */
-function binaryName(triple) {
+function binaryName(triple: string | undefined): string {
 	const windows = triple ? triple.includes('-windows-') : process.platform === 'win32';
 	return windows ? 'ev3-cockpitd.exe' : 'ev3-cockpitd';
 }
 
 const args = process.argv.slice(2);
 let profile = 'debug';
-let triple;
+let triple: string | undefined;
 for (let i = 0; i < args.length; i++) {
 	if (args[i] === '--profile' && (args[i + 1] === 'debug' || args[i + 1] === 'release')) {
 		profile = args[++i];
@@ -53,7 +52,7 @@ const binary = binaryName(triple);
 const file = path.join(dir, binary);
 if (!fs.existsSync(file)) { fail(`${file} is missing; build it with cargo build -p ev3-cockpitd in daemon/ first.`); }
 
-const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const version: unknown = (JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { version?: unknown }).version;
 if (typeof version !== 'string' || version.length === 0) { fail('package.json has no version.'); }
 
 const manifest = {

@@ -5,7 +5,7 @@
  * `run()` export. Anything thrown here fails the run; resolving passes it.
  *
  * These tests need the real `vscode` API, so they cannot live in `src/__tests__/`
- * — that suite runs under a stub (see `src/test/vscodeStub.cjs`).
+ * — that suite runs under a stub (see `src/test/vscodeStub.mts`).
  */
 
 import * as assert from 'assert/strict';

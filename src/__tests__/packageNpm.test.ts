@@ -1,5 +1,5 @@
 /**
- * The npm packages: `scripts/package-npm.cjs` stages `@ev3-cockpit/client`, `ev3-cockpit` and one
+ * The npm packages: `scripts/package-npm.mts` stages `@ev3-cockpit/client`, `ev3-cockpit` and one
  * `@ev3-cockpit/<platform>` package per platform, all at the root version. The client carries no
  * native module; the cockpit carries the `ev3` command and the MCP server and takes the platform
  * packages as optional dependencies, of which npm installs the one whose `os` and `cpu` match;
@@ -44,9 +44,9 @@ interface Manifest {
 
 const REPO = path.join(__dirname, '..', '..');
 /* eslint-disable @typescript-eslint/no-var-requires */
-const npm = require(path.join(REPO, 'scripts', 'package-npm.cjs')) as PackageNpm;
-const { bundle } = require(path.join(REPO, 'scripts', 'bundle.cjs')) as { bundle(options: { names: string[]; outDir: string }): void };
-const packaging = require(path.join(REPO, 'scripts', 'packaging.cjs')) as {
+const npm = require(path.join(REPO, 'scripts', 'package-npm.mts')) as PackageNpm;
+const { bundle } = require(path.join(REPO, 'scripts', 'bundle.mts')) as { bundle(options: { names: string[]; outDir: string }): void };
+const packaging = require(path.join(REPO, 'scripts', 'packaging.mts')) as {
 	TARGETS: Record<string, { os: string; cpu: string }>; NATIVE_MODULES: string[]; UDEV_RULES: string[]; DAEMON_MANIFEST: string;
 	daemonBinary(target: string): string;
 };

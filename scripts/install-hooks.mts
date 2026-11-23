@@ -5,16 +5,15 @@
 // file pointing at the main repository, whose hooks the worktree shares, and `npm ci` there
 // failed on this script. Outside a git repository there is nothing to install into; that is
 // said, not failed, so installing the package does not break.
-'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
-const root = path.resolve(__dirname, '..');
+const root = path.resolve(import.meta.dirname, '..');
 const srcDir = path.join(root, 'hooks');
 
-let dstDir;
+let dstDir: string;
 try {
     const out = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd: root, encoding: 'utf8' }).trim();
     dstDir = path.resolve(root, out);

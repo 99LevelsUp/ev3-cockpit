@@ -1,6 +1,6 @@
 /**
- * The rules of the platform packages, kept apart from the builds in `package-vsix.cjs` and
- * `package-npm.cjs` so they can be tested (`src/__tests__/packaging.test.ts`).
+ * The rules of the platform packages, kept apart from the builds in `package-vsix.mts` and
+ * `package-npm.mts` so they can be tested (`src/__tests__/packaging.test.ts`).
  *
  * Each platform's VSIX carries the native daemon `ev3-cockpitd` built for it, with the manifest
  * that records its SHA-256, version and build kind; the extension starts a verified copy of it and
@@ -9,28 +9,37 @@
  * scratch, notes, logs and a junction to the firmware sources, and a VSIX without its binaries
  * installed cleanly and then could not reach a brick.
  */
-'use strict';
 
-const crypto = require('crypto');
-const zlib = require('zlib');
-const { builtinModules } = require('module');
+import * as crypto from 'node:crypto';
+import * as zlib from 'node:zlib';
+import { builtinModules } from 'node:module';
+
+/** A platform a release ships for. */
+export interface Target {
+	readonly os: 'win32' | 'linux';
+	readonly cpu: 'x64' | 'arm64';
+	/** The Rust target its daemon is built for. */
+	readonly triple: string;
+	/** Whether its packages carry the udev rules. */
+	readonly udevRule: boolean;
+}
 
 /**
  * The platforms a release ships for, each with the Rust target its daemon is built for. Linux
  * binaries are built against glibc 2.35, so they run on Debian 12 and Raspberry Pi OS.
  */
-const TARGETS = {
+export const TARGETS: Readonly<Record<string, Target>> = {
 	'win32-x64': { os: 'win32', cpu: 'x64', triple: 'x86_64-pc-windows-msvc', udevRule: false },
 	'linux-x64': { os: 'linux', cpu: 'x64', triple: 'x86_64-unknown-linux-gnu', udevRule: true },
 	'linux-arm64': { os: 'linux', cpu: 'arm64', triple: 'aarch64-unknown-linux-gnu', udevRule: true },
 };
 
 /** The file beside the daemon that records its SHA-256, version and build kind (`DAEMON_MANIFEST` of the client). */
-const DAEMON_MANIFEST = 'ev3-cockpitd.manifest.json';
+export const DAEMON_MANIFEST = 'ev3-cockpitd.manifest.json';
 const DAEMON_NAMES = ['ev3-cockpitd', 'ev3-cockpitd.exe'];
 
 /** The daemon's file name on a target. */
-function daemonBinary(target) {
+export function daemonBinary(target: string): string {
 	return TARGETS[target].os === 'win32' ? 'ev3-cockpitd.exe' : 'ev3-cockpitd';
 }
 
@@ -39,14 +48,14 @@ function daemonBinary(target) {
  * any more: the bundles still leave them external, so an import of one that crept back shows as a
  * `require` the checks here refuse, instead of being inlined without its binary.
  */
-const NATIVE_MODULES = ['usb', 'node-hid', 'serialport', 'koffi'];
+export const NATIVE_MODULES: readonly string[] = ['usb', 'node-hid', 'serialport', 'koffi'];
 
 /**
  * The extension's own files, relative to the repository. The daemon and its manifest lie in the
  * extension's root, the folder an installed extension reads them from (`context.extensionPath`).
  * The `ev3` command and the MCP server ship in the npm package, not here.
  */
-const SHIPPED_FILES = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
+export const SHIPPED_FILES: readonly string[] = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'out/extension.js'];
 
 /**
  * The udev rule a Linux user installs once for USB; the daemon's permission message names it at
@@ -58,10 +67,10 @@ const UDEV_RULE = 'native/linux/70-lego-ev3.rules';
  * message about such an adapter names it.
  */
 const BT_RESTART_RULE = 'native/linux/71-ev3-cockpit-bluetooth-restart.rules';
-const UDEV_RULES = [UDEV_RULE, BT_RESTART_RULE];
+export const UDEV_RULES: readonly string[] = [UDEV_RULE, BT_RESTART_RULE];
 
 /** The repository files a target's VSIX carries, besides the daemon. */
-function SHIPPED_FILES_FOR(target) {
+export function SHIPPED_FILES_FOR(target: string): string[] {
 	return TARGETS[target].udevRule ? [...SHIPPED_FILES, ...UDEV_RULES] : [...SHIPPED_FILES];
 }
 
@@ -70,8 +79,8 @@ function SHIPPED_FILES_FOR(target) {
  * modules and relative files. A `require("…")` inside a string is code another library generates
  * (ajv in the MCP bundle), not a call, and does not count.
  */
-function requiredModules(source) {
-	const found = new Set();
+export function requiredModules(source: string): string[] {
+	const found = new Set<string>();
 	const call = /(?<![\w$.'"`])(?:__)?require\(\s*["']([^"']+)["']\s*\)/g;
 	for (let match = call.exec(source); match; match = call.exec(source)) {
 		const id = match[1];
@@ -82,14 +91,22 @@ function requiredModules(source) {
 	return [...found].sort();
 }
 
-const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
+const sha256 = (data: Buffer): string => crypto.createHash('sha256').update(data).digest('hex');
+
+/** An entry of a zip: its name, whether a Unix system made it, its Unix mode, and its contents on demand. */
+export interface ZipEntry {
+	readonly name: string;
+	readonly unix: boolean;
+	readonly mode: number;
+	data(): Buffer;
+}
 
 /**
  * The entries of a zip, read from its central directory: each with its name, whether a Unix system
  * made it, its Unix mode (what an extractor gives the file on Linux), and its contents on demand.
  * A VSIX is a zip.
  */
-function readZip(zip) {
+export function readZip(zip: Uint8Array): ZipEntry[] {
 	const view = Buffer.from(zip.buffer, zip.byteOffset, zip.byteLength);
 	let end = -1;
 	for (let at = view.length - 22; at >= 0; at -= 1) {
@@ -98,7 +115,7 @@ function readZip(zip) {
 	if (end < 0) { throw new Error('Not a zip: no end of central directory.'); }
 	const count = view.readUInt16LE(end + 10);
 	let at = view.readUInt32LE(end + 16);
-	const entries = [];
+	const entries: ZipEntry[] = [];
 	for (let i = 0; i < count; i += 1) {
 		if (view.readUInt32LE(at) !== 0x02014b50) { throw new Error(`Not a zip: a broken central directory at ${at}.`); }
 		const madeBy = view.readUInt16LE(at + 4) >> 8;
@@ -114,7 +131,7 @@ function readZip(zip) {
 			name,
 			unix: madeBy === 3,
 			mode: madeBy === 3 ? external >>> 16 : 0,
-			data() {
+			data(): Buffer {
 				if (compressedSize === 0xffffffff || local === 0xffffffff) { throw new Error(`${name}: zip64 entries are not read.`); }
 				if (view.readUInt32LE(local) !== 0x04034b50) { throw new Error(`${name}: a broken local header at ${local}.`); }
 				const start = local + 30 + view.readUInt16LE(local + 26) + view.readUInt16LE(local + 28);
@@ -130,18 +147,18 @@ function readZip(zip) {
 }
 
 /** The names in a zip. */
-function listZipEntries(zip) {
+export function listZipEntries(zip: Uint8Array): string[] {
 	return readZip(zip).map((entry) => entry.name);
 }
 
 /** The repository files a VSIX may carry, lowercased as vsce may rename them, relative to `extension/`. */
-function allowedFiles(target) {
+function allowedFiles(target: string): Set<string> {
 	return new Set(['package.json', 'readme.md', 'changelog.md', 'license', 'license.txt', 'out/extension.js',
 		daemonBinary(target), DAEMON_MANIFEST, ...(TARGETS[target].udevRule ? UDEV_RULES : [])].map((file) => file.toLowerCase()));
 }
 
 /** What a target's VSIX must hold, as entry names (vsce may add `.txt` to the license). */
-function required(target) {
+function required(target: string): string[] {
 	return [
 		'extension/package.json',
 		'extension/LICENSE',
@@ -150,6 +167,20 @@ function required(target) {
 		`extension/${DAEMON_MANIFEST}`,
 		...(TARGETS[target].udevRule ? UDEV_RULES.map((rule) => `extension/${rule}`) : []),
 	];
+}
+
+/** A daemon binary as {@link daemonProblems} reads it: its bytes, and its Unix mode where it is known. */
+export interface DaemonFile {
+	readonly data: Buffer;
+	readonly mode?: number;
+}
+
+/** What a daemon manifest records, as far as the checks read it. */
+interface DaemonManifest {
+	readonly binary?: unknown;
+	readonly sha256?: unknown;
+	readonly version?: unknown;
+	readonly buildKind?: unknown;
 }
 
 /**
@@ -162,39 +193,46 @@ function required(target) {
  * @param manifestText  the manifest's text
  * @param version  the version of the package carrying it
  */
-function daemonProblems(target, binary, manifestText, version) {
-	const problems = [];
-	let manifest;
+export function daemonProblems(target: string, binary: DaemonFile, manifestText: string, version: string): string[] {
+	const problems: string[] = [];
+	let manifest: DaemonManifest;
 	try {
-		manifest = JSON.parse(manifestText);
+		manifest = JSON.parse(manifestText) as DaemonManifest;
 	} catch {
 		return [`${DAEMON_MANIFEST} is not JSON.`];
 	}
 	const name = daemonBinary(target);
-	if (manifest.binary !== name) { problems.push(`${DAEMON_MANIFEST} names ${manifest.binary}, not ${name}.`); }
+	if (manifest.binary !== name) { problems.push(`${DAEMON_MANIFEST} names ${String(manifest.binary)}, not ${name}.`); }
 	const actual = sha256(binary.data);
-	if (manifest.sha256 !== actual) { problems.push(`${name} has SHA-256 ${actual}; ${DAEMON_MANIFEST} records ${manifest.sha256}, so the client would refuse it.`); }
-	if (manifest.version !== version) { problems.push(`${DAEMON_MANIFEST} records version ${manifest.version}; the package is ${version}.`); }
+	if (manifest.sha256 !== actual) { problems.push(`${name} has SHA-256 ${actual}; ${DAEMON_MANIFEST} records ${String(manifest.sha256)}, so the client would refuse it.`); }
+	if (manifest.version !== version) { problems.push(`${DAEMON_MANIFEST} records version ${String(manifest.version)}; the package is ${version}.`); }
 	// A development build in a published package makes every installed client a development one's peer.
-	if (manifest.buildKind !== 'release') { problems.push(`${DAEMON_MANIFEST} records a ${manifest.buildKind} build; a package carries a release build (EV3_COCKPIT_RELEASE_BUILD=1).`); }
+	if (manifest.buildKind !== 'release') { problems.push(`${DAEMON_MANIFEST} records a ${String(manifest.buildKind)} build; a package carries a release build (EV3_COCKPIT_RELEASE_BUILD=1).`); }
 	if (TARGETS[target].os !== 'win32' && binary.mode !== undefined && (binary.mode & 0o111) !== 0o111) {
 		problems.push(`${name} is not executable (mode ${(binary.mode & 0o777).toString(8)}); a Linux package is built on Linux, where the build keeps the mode.`);
 	}
 	return problems;
 }
 
+/** What {@link checkVsix} finds wrong with a VSIX. */
+export interface VsixCheck {
+	readonly missing: string[];
+	readonly unexpected: string[];
+	readonly problems: string[];
+}
+
 /**
  * Checks a built VSIX: what it lacks, what it carries that it should not, and whether its daemon
  * is the one its manifest records. `entries` are {@link readZip}'s; `version` is the package's.
  */
-function checkVsix(target, entries, version) {
+export function checkVsix(target: string, entries: readonly ZipEntry[], version: string): VsixCheck {
 	const names = entries.map((entry) => entry.name);
 	const missing = required(target).filter((need) => !names.some((name) => name === need || (need === 'extension/LICENSE' && name === `${need}.txt`)));
 	const allowed = allowedFiles(target);
 	const unexpected = names.filter((name) => name.startsWith('extension/') && !allowed.has(name.slice('extension/'.length).toLowerCase()));
-	const problems = [];
+	const problems: string[] = [];
 
-	const daemons = entries.filter((entry) => DAEMON_NAMES.includes(entry.name.split('/').pop()));
+	const daemons = entries.filter((entry) => DAEMON_NAMES.includes(entry.name.split('/').pop() ?? ''));
 	if (daemons.length !== 1) { problems.push(`The VSIX carries ${daemons.length} daemon binaries; it carries exactly one.`); }
 	const binary = entries.find((entry) => entry.name === `extension/${daemonBinary(target)}`);
 	const manifest = entries.find((entry) => entry.name === `extension/${DAEMON_MANIFEST}`);
@@ -212,8 +250,3 @@ function checkVsix(target, entries, version) {
 	}
 	return { missing, unexpected, problems };
 }
-
-module.exports = {
-	TARGETS, DAEMON_MANIFEST, NATIVE_MODULES, SHIPPED_FILES, SHIPPED_FILES_FOR, UDEV_RULES,
-	daemonBinary, requiredModules, readZip, listZipEntries, daemonProblems, checkVsix,
-};
