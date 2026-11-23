@@ -1,0 +1,780 @@
+{
+  "$comment": "The method table: every request, notification and error code of the daemon-client contract, naming types from contract/schema. contractVersion marks only breaking changes: raise it when a method, field or error code is removed or renamed, a field changes type or becomes required, or a meaning changes. Additive changes keep it. stableCore entries never change at all. callableBy lists the client kinds that may send a request; needsPerson marks requests the daemon runs only after a person said yes (some only in some cases, as their doc says); leased marks requests that take the brick's write lease for exactly their own length.",
+  "contractVersion": 2,
+  "hello": {
+    "hello/start": {
+      "params": "HelloStart",
+      "result": "HelloChallenge",
+      "doc": "Open the hello: the client's nonce and who it is; the daemon answers with its nonce and its proof."
+    },
+    "hello/finish": {
+      "params": "HelloFinish",
+      "result": "HelloAccepted",
+      "doc": "Finish the hello with the client's proof; any other request before this one closes the connection."
+    }
+  },
+  "methods": {
+    "daemon/status": {
+      "params": "EmptyParams",
+      "result": "DaemonStatus",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The daemon, its clients (with the brick each shows) and the bricks it holds."
+    },
+    "daemon/exit": {
+      "stableCore": true,
+      "params": "DaemonExitParams",
+      "result": "DaemonExitResult",
+      "leased": false,
+      "needsPerson": true,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "addon"
+      ],
+      "doc": "Ask the daemon to end once no write is in progress. A newer release client, or a development client meeting a release daemon, replaces it without asking anyone; any other request is a restart and runs only after a person said yes."
+    },
+    "log/notice": {
+      "params": "LogNoticeParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "A notification a client showed a person, for the daemon's log."
+    },
+    "bricks/list": {
+      "params": "BricksListParams",
+      "result": "BrickList",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Every brick the daemon knows; with waitForDiscovery, after the first discovery round."
+    },
+    "bricks/connect": {
+      "params": "BricksConnectParams",
+      "result": "ContractBrick",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Connect a brick for this client, pairing on the way; hold keeps it past this client."
+    },
+    "bricks/disconnect": {
+      "params": "BricksDisconnectParams",
+      "result": "BricksDisconnectResult",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Drop this client's hold; forEveryone signs the brick out whoever holds it."
+    },
+    "bricks/info": {
+      "params": "BrickParams",
+      "result": "BrickInfo",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The brick's name and versions."
+    },
+    "bricks/storage": {
+      "params": "BrickParams",
+      "result": "StorageUsage",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Total and free space on the brick."
+    },
+    "bricks/pair": {
+      "params": "BrickParams",
+      "result": "PairingResult",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Pair over Bluetooth; the person confirms on the brick."
+    },
+    "bricks/forget": {
+      "params": "BrickParams",
+      "result": "ForgetResult",
+      "leased": true,
+      "needsPerson": true,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Unpair on this computer and on the brick, after a person said yes."
+    },
+    "bricks/clearBluetoothList": {
+      "params": "BrickParams",
+      "result": "ClearListResult",
+      "leased": true,
+      "needsPerson": true,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Remove the entries of the brick's list of paired devices, after a person said yes."
+    },
+    "bricks/inquiry": {
+      "params": "EmptyParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Look for Bluetooth bricks now."
+    },
+    "files/list": {
+      "params": "PathParams",
+      "result": "FsListing",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The entries of a folder on the brick."
+    },
+    "files/exists": {
+      "params": "PathParams",
+      "result": "FileExists",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Whether a path exists on the brick."
+    },
+    "files/size": {
+      "params": "PathParams",
+      "result": "FileSize",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The size of a file or a folder on the brick."
+    },
+    "files/read": {
+      "params": "FilesReadParams",
+      "result": "FilesReadResult",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Read a file: to a local path the daemon writes, inline as base64 in the answer, or into a transfer handle the client then drains with transfer/read."
+    },
+    "files/write": {
+      "params": "FilesWriteParams",
+      "result": "FilesWriteResult",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Write a file: from a local path, from a filled transfer handle, or from inline base64 content."
+    },
+    "files/makeDirectory": {
+      "params": "PathParams",
+      "result": null,
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Make a folder on the brick."
+    },
+    "files/remove": {
+      "params": "FilesRemoveParams",
+      "result": "RemoveReport",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Remove a file or a folder."
+    },
+    "files/removePaths": {
+      "params": "FilesRemovePathsParams",
+      "result": "RemoveReport",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Remove several paths under one lease."
+    },
+    "files/move": {
+      "params": "FilesMoveParams",
+      "result": null,
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Move or rename a file on the brick."
+    },
+    "transfer/begin": {
+      "params": "TransferBeginParams",
+      "result": "TransferBeginResult",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Open an upload buffer of size bytes."
+    },
+    "transfer/write": {
+      "params": "TransferWriteParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Append base64 data to an upload buffer."
+    },
+    "transfer/read": {
+      "params": "TransferHandleParams",
+      "result": "TransferChunk",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Take the next chunk of a download; done with the last one."
+    },
+    "transfer/close": {
+      "params": "TransferHandleParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Close a transfer handle."
+    },
+    "programs/deployAndRun": {
+      "params": "DeployParams",
+      "result": "DeployResult",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Check nothing runs, upload the files, start the program: one lease, released at the verified start."
+    },
+    "programs/run": {
+      "params": "ProgramsRunParams",
+      "result": "DeployResult",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Start a program already on the brick; replace stops one that runs."
+    },
+    "programs/stop": {
+      "params": "BrickParams",
+      "result": "ProgramState",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Stop the running program; never waits for a lease."
+    },
+    "programs/emergencyStop": {
+      "params": "BrickParams",
+      "result": "ProgramState",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Stop the program and the motors; never waits for a lease."
+    },
+    "programs/status": {
+      "params": "ProgramsStatusParams",
+      "result": "ProgramState",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The program state now, or once it changes within waitMs."
+    },
+    "programs/subscribe": {
+      "params": "BrickParams",
+      "result": "ProgramSubscription",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Hear programs/stateChanged for a brick, across reconnects."
+    },
+    "shell/run": {
+      "params": "ShellRunParams",
+      "result": "ShellResult",
+      "leased": true,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Run a shell command on the brick; only with access full."
+    },
+    "settings/list": {
+      "params": "EmptyParams",
+      "result": "SettingList",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Every setting with its rules and value."
+    },
+    "settings/set": {
+      "params": "SettingsSetParams",
+      "result": "SettingValue",
+      "leased": false,
+      "needsPerson": true,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Change a setting; a dangerous one changes only after a person said yes."
+    },
+    "settings/accessMode": {
+      "params": "EmptyParams",
+      "result": "AccessModeState",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The access mode now."
+    },
+    "telemetry/rows": {
+      "params": "EmptyParams",
+      "result": "TelemetryRowList",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Every telemetry row a client can subscribe to."
+    },
+    "telemetry/subscribe": {
+      "params": "TelemetrySubscribeParams",
+      "result": "TelemetrySubscription",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Hear telemetry/update for rows of a brick, with a snapshot first."
+    },
+    "telemetry/foreground": {
+      "params": "TelemetryForegroundParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The brick whose telemetry this client shows in the foreground; daemon/status names it as the client's shows, and a change reaches every client as daemon/showsChanged."
+    },
+    "chain/get": {
+      "params": "BrickParams",
+      "result": "ContractChain",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "The brick's daisy chain."
+    },
+    "chain/follow": {
+      "params": "BrickParams",
+      "result": "ChainSubscription",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "Hear chain/changed for a brick."
+    },
+    "subscriptions/cancel": {
+      "params": "SubscriptionParams",
+      "result": null,
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": [
+        "vscode",
+        "cli",
+        "mcp",
+        "addon"
+      ],
+      "doc": "End any subscription by its id; an id is valid on its own connection only."
+    }
+  },
+  "notifications": {
+    "bricks/changed": {
+      "payload": "BrickList",
+      "doc": "The whole brick list, whenever anything in it changes."
+    },
+    "bricks/reconnected": {
+      "payload": "BrickIdPayload",
+      "doc": "A brick has a route again: after it was lost, and also when it is first connected. Subscriptions on it carry on."
+    },
+    "bricks/pairingStarted": {
+      "payload": "BrickIdPayload",
+      "doc": "A pairing started, whoever asked for it."
+    },
+    "bricks/pairingEvent": {
+      "payload": "PairingEvent",
+      "doc": "One step of a running pairing."
+    },
+    "bricks/pairingDone": {
+      "payload": "PairingResult",
+      "doc": "A pairing ended."
+    },
+    "bricks/oneSidedRepair": {
+      "payload": "OneSidedRepairNotice",
+      "doc": "The brick paired one-sidedly and the cockpit repaired it."
+    },
+    "programs/stateChanged": {
+      "payload": "ProgramStateChanged",
+      "doc": "A followed program's state changed."
+    },
+    "telemetry/update": {
+      "payload": "TelemetryUpdate",
+      "doc": "New telemetry values for a subscription."
+    },
+    "chain/changed": {
+      "payload": "ChainChanged",
+      "doc": "A followed daisy chain changed."
+    },
+    "settings/changed": {
+      "payload": "SettingChanged",
+      "doc": "A setting changed."
+    },
+    "settings/accessModeChanged": {
+      "payload": "AccessModeState",
+      "doc": "The access mode changed."
+    },
+    "question/withdrawn": {
+      "payload": "QuestionWithdrawn",
+      "doc": "A question this client was asked is no longer open."
+    },
+    "daemon/showsChanged": {
+      "payload": "ShowsChanged",
+      "doc": "The brick a client shows changed: it showed another or none, or it left while showing one. Carries every client as daemon/status names it."
+    }
+  },
+  "clientRequests": {
+    "question/ask": {
+      "params": "Question",
+      "result": "QuestionReply",
+      "doc": "The daemon asks a client with a person at it; a client without a person answers keep."
+    }
+  },
+  "errorFamilies": {
+    "brick": {
+      "number": 1000,
+      "doc": "The brick, its transport or the work on it failed."
+    },
+    "lease": {
+      "number": 1100,
+      "doc": "Another client holds the brick's write lease."
+    },
+    "person": {
+      "number": 1200,
+      "doc": "The operation needs a person's answer."
+    },
+    "daemon": {
+      "number": 1300,
+      "doc": "The daemon could not serve the request, or the outcome is unknown."
+    },
+    "cancelled": {
+      "number": 1400,
+      "doc": "The operation was cancelled."
+    },
+    "request": {
+      "number": 1500,
+      "doc": "The request was malformed or named something the daemon does not have."
+    },
+    "internal": {
+      "number": 1900,
+      "doc": "Anything else."
+    }
+  },
+  "errors": {
+    "transport_failed": {
+      "family": "brick",
+      "doc": "The transport failed."
+    },
+    "connection_failed": {
+      "family": "brick",
+      "doc": "The connection to the brick could not be made."
+    },
+    "timeout": {
+      "family": "brick",
+      "doc": "The brick did not answer in time."
+    },
+    "protocol_failed": {
+      "family": "brick",
+      "doc": "The brick's answer did not make sense."
+    },
+    "invalid_brick_key": {
+      "family": "brick",
+      "doc": "A brick key was malformed."
+    },
+    "session_failed": {
+      "family": "brick",
+      "doc": "The brick's session failed."
+    },
+    "heartbeat_failed": {
+      "family": "brick",
+      "doc": "The brick stopped answering the heartbeat."
+    },
+    "already_connected": {
+      "family": "brick",
+      "doc": "The brick is connected already."
+    },
+    "not_connected": {
+      "family": "brick",
+      "doc": "The brick is not connected."
+    },
+    "no_provider": {
+      "family": "brick",
+      "doc": "No transport serves the requested channel."
+    },
+    "invalid_transition": {
+      "family": "brick",
+      "doc": "The session cannot do that in its current state."
+    },
+    "channel_changed": {
+      "family": "brick",
+      "doc": "The brick's channel changed during the operation."
+    },
+    "connection_abandoned": {
+      "family": "brick",
+      "doc": "The connection attempt was abandoned."
+    },
+    "queue_unavailable": {
+      "family": "brick",
+      "doc": "The brick's command queue is closed."
+    },
+    "consumer_failed": {
+      "family": "brick",
+      "doc": "A consumer of the brick's data failed."
+    },
+    "subscription_failed": {
+      "family": "brick",
+      "doc": "The subscription could not be made."
+    },
+    "program_running": {
+      "family": "brick",
+      "doc": "A program runs on the brick already."
+    },
+    "program_not_found": {
+      "family": "brick",
+      "doc": "No such program on the brick."
+    },
+    "mode_conflict": {
+      "family": "brick",
+      "doc": "A sensor port is claimed in another mode."
+    },
+    "access_denied": {
+      "family": "brick",
+      "doc": "The access mode, or this client's kind, does not allow it; the message says which."
+    },
+    "brick_ambiguous": {
+      "family": "brick",
+      "doc": "A brick name matched several bricks; data.candidates lists them."
+    },
+    "brick_not_found": {
+      "family": "brick",
+      "doc": "No brick matches the name or id."
+    },
+    "brick_unreachable": {
+      "family": "brick",
+      "doc": "The brick never answered: switched off, out of range, or its radio is off."
+    },
+    "link_lost": {
+      "family": "brick",
+      "doc": "A link that worked dropped during the operation."
+    },
+    "backend_unavailable": {
+      "family": "brick",
+      "doc": "The operating system's Bluetooth or USB stack is not available."
+    },
+    "device_permission": {
+      "family": "brick",
+      "doc": "The operating system refused access to the device."
+    },
+    "brick_busy": {
+      "family": "lease",
+      "doc": "Another client holds the brick's write lease; data.holder names it."
+    },
+    "needs_person": {
+      "family": "person",
+      "doc": "The operation needs a person's answer, and no client with a person could be asked; data.command is what a person can run."
+    },
+    "daemon_unavailable": {
+      "family": "daemon",
+      "doc": "The daemon is not reachable, could not start, or went away during the call."
+    },
+    "outcome_unknown": {
+      "family": "daemon",
+      "doc": "The daemon went away during a call that changes a brick; whether it took effect is unknown. Do not retry blindly."
+    },
+    "replay_unmatched": {
+      "family": "daemon",
+      "doc": "A replay daemon has no recorded reply left for the request: the recording is stale."
+    },
+    "cancelled": {
+      "family": "cancelled",
+      "doc": "The caller, a stop or the daemon cancelled the operation."
+    },
+    "invalid_request": {
+      "family": "request",
+      "doc": "The request was malformed or named something the daemon does not have."
+    },
+    "internal": {
+      "family": "internal",
+      "doc": "Anything else; the message says what."
+    }
+  }
+}
