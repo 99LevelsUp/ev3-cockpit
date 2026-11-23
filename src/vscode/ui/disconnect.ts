@@ -1,7 +1,8 @@
 /**
  * "Disconnect a Brick" with holders: a disconnect drops only this window's hold. When others
  * still hold the brick it stays connected, the person is told who holds it, and is offered to
- * disconnect it for everyone.
+ * disconnect it for everyone. A window that let go of the brick it showed shows none any more, so
+ * `daemon/status` and `daemon/showsChanged` stop naming it for this window.
  *
  * Free of `vscode`: the command hands it a picker and a notification.
  */
@@ -13,6 +14,9 @@ export const FOR_EVERYONE_ACTION = 'Disconnect for everyone';
 export interface DisconnectClient {
 	bricks(): readonly ContractBrick[];
 	request(method: 'bricks/disconnect', params: { brick: string; forEveryone?: boolean }): Promise<{ readonly stillHeldBy: readonly string[] }>;
+	/** The brick this window shows, and the setter that tells the daemon. */
+	activeBrick(): string | undefined;
+	setActiveBrick(brickId: string | undefined): Promise<void>;
 }
 
 export interface DisconnectUi {
@@ -32,6 +36,7 @@ export async function disconnectBrick(client: DisconnectClient, ui: DisconnectUi
 	if (!picked) { return; }
 	const { brick } = picked;
 	const result = await client.request('bricks/disconnect', { brick: brick.brickId });
+	if (client.activeBrick() === brick.brickId) { await client.setActiveBrick(undefined); }
 	ui.log(`Disconnected ${brick.name} (${brick.brickId})${result.stillHeldBy.length > 0 ? `; still held by ${result.stillHeldBy.join(', ')}` : ''}`);
 	if (result.stillHeldBy.length === 0) { return; }
 	const choice = await ui.notify(
