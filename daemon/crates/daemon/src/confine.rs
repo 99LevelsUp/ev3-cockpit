@@ -215,19 +215,34 @@ fn identity_at(path: &Path) -> std::io::Result<FileIdentity> {
 /// How many entries a search of the cockpit's directories looks at before it gives up unsure.
 const SEARCH_BUDGET: usize = 10_000;
 
-/// Opens a folder, to ask its final path.
-#[cfg(unix)]
+/// Opens a folder, to ask its final path: as a place only (`O_PATH`), which needs no right to read
+/// the folder, so a folder the user may write into but not list still takes a new file.
+#[cfg(target_os = "linux")]
+fn open_folder(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_DIRECTORY)
+        .open(path)
+}
+
+/// Opens a folder, to ask its final path. macOS has no `O_PATH`: the folder is opened for reading.
+#[cfg(all(unix, not(target_os = "linux")))]
 fn open_folder(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-/// Opens a folder, to ask its final path (Windows opens a directory only with backup semantics).
+/// Opens a folder, to ask its final path: with the right to read its attributes only, so a folder
+/// the user may write into but not list still takes a new file (Windows opens a directory only
+/// with backup semantics).
 #[cfg(windows)]
 fn open_folder(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
+    };
     std::fs::OpenOptions::new()
-        .read(true)
+        .access_mode(FILE_READ_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
 }
@@ -736,6 +751,57 @@ mod tests {
             confinement.read(&base.join("b.txt"), &b).expect("read"),
             b"a"
         );
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// Takes the right to list `dir` away from the user, or gives it back; writing into it and
+    /// passing through it stay allowed.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn deny_listing(dir: &Path, deny: bool) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if deny { 0o300 } else { 0o700 };
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        }
+        #[cfg(windows)]
+        {
+            let me = std::process::Command::new("whoami")
+                .output()
+                .expect("whoami");
+            let me = String::from_utf8_lossy(&me.stdout).trim().to_string();
+            let mut icacls = std::process::Command::new("icacls");
+            icacls.arg(dir);
+            if deny {
+                icacls.args(["/deny", &format!("{me}:(RD)")]);
+            } else {
+                icacls.args(["/remove:d", &me]);
+            }
+            let status = icacls
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("icacls");
+            assert!(status.success(), "icacls failed");
+        }
+    }
+
+    /// A drop folder the user may write into but not list: a new file is created in it, since
+    /// asking the folder's final path needs no right to read the folder.
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_new_file_is_written_into_a_folder_that_cannot_be_listed() {
+        let base = temp_dir();
+        let drop = base.join("drop");
+        std::fs::create_dir_all(&drop).expect("drop");
+        let confinement = Confinement::new([base.join("state")]).expect("roots");
+        let named = drop.join("new.bin");
+        deny_listing(&drop, true);
+        let written = confinement
+            .check(&named)
+            .and_then(|resolved| confinement.write(&named, &resolved, b"dropped"));
+        deny_listing(&drop, false);
+        written.expect("written without listing the folder");
+        assert_eq!(std::fs::read(&named).expect("the new file"), b"dropped");
         std::fs::remove_dir_all(base).expect("clean");
     }
 
