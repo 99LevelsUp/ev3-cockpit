@@ -188,6 +188,8 @@ pub fn not_heard(reference: &str) -> CliError {
 }
 /// How long one reading waits for every row to have a value.
 const READING_WAIT: Duration = Duration::from_millis(5000);
+/// How long a connect runs before a person waiting is told it is under way.
+const SLOW_CONNECT: Duration = Duration::from_secs(3);
 
 /// What every command gets.
 pub struct Ctx {
@@ -304,20 +306,70 @@ impl Ctx {
 
     /// Connects the brick for this command alone, unless it is connected already; with none
     /// named, the one connected brick. Answers `(brickId, name)`.
+    ///
+    /// A brick connected already is used as it is. Asking the daemon to connect it again is what
+    /// a person does to bring its lost channels back: the daemon joins every channel the brick has
+    /// not connected, the paired Bluetooth one included, and waits for them. Done before every
+    /// command it made each one wait for that Bluetooth attempt, about 40 s for a brick held over
+    /// TCP with its Bluetooth off (U16, 23.11.2026).
     async fn connected_brick(&mut self, reference: Option<String>) -> Result<(String, String)> {
+        let connected =
+            |brick: &Value| brick.get("connected").and_then(Value::as_bool) == Some(true);
+        let known = match &reference {
+            Some(r) => self.client().await?.brick(r).await?.filter(connected),
+            None => {
+                let list = self
+                    .client()
+                    .await?
+                    .request("bricks/list", json!({}))
+                    .await?;
+                let mut on = array(&list, "bricks").into_iter().filter(connected);
+                match (on.next(), on.next()) {
+                    (Some(only), None) => Some(only),
+                    _ => None,
+                }
+            }
+        };
+        if let Some(brick) = known {
+            return Ok((
+                text(&brick, "brickId").to_owned(),
+                text(&brick, "name").to_owned(),
+            ));
+        }
         let params = match reference {
             Some(r) => json!({ "brick": r }),
             None => json!({}),
         };
-        let brick = self
-            .client()
-            .await?
-            .request("bricks/connect", params)
-            .await?;
+        let brick = self.connect_brick(params).await?;
         Ok((
             text(&brick, "brickId").to_owned(),
             text(&brick, "name").to_owned(),
         ))
+    }
+
+    /// Asks the daemon to connect a brick. A person waiting is told when it takes longer than a
+    /// moment: over Bluetooth a connect can take tens of seconds before it succeeds or fails (a
+    /// connect is 15 s at most on Windows, behind the other Bluetooth operations it queues after),
+    /// and a silent terminal for that long reads as hung (U16, 23.11.2026).
+    async fn connect_brick(&mut self, params: Value) -> Result<Value> {
+        let json = self.json;
+        let named = params
+            .get("brick")
+            .and_then(Value::as_str)
+            .map_or_else(|| "the brick".to_owned(), str::to_owned);
+        let client = self.client().await?;
+        let request = client.request("bricks/connect", params);
+        tokio::pin!(request);
+        tokio::select! {
+            result = &mut request => return result,
+            () = tokio::time::sleep(SLOW_CONNECT) => {}
+        }
+        if !json {
+            eprintln!(
+                "Connecting {named}; over Bluetooth this can take up to a minute before it succeeds or fails."
+            );
+        }
+        request.await
     }
 
     /// The brick a stop reaches: a connected brick is stopped as it is, never signed in again;
@@ -474,12 +526,7 @@ async fn connect(ctx: &mut Ctx) -> Result<Outcome> {
     ctx.at_most(1)?;
     let reference = ctx.required_brick("the brick to connect")?;
     let brick = ctx
-        .client()
-        .await?
-        .request(
-            "bricks/connect",
-            json!({ "brick": reference, "hold": true }),
-        )
+        .connect_brick(json!({ "brick": reference, "hold": true }))
         .await?;
     let name = text(&brick, "name").to_owned();
     Ok(Outcome::new(
@@ -933,6 +980,20 @@ async fn telemetry_command(ctx: &mut Ctx) -> Result<Outcome> {
     let missing = strings(&reading, "missing");
     if !missing.is_empty() {
         human.push(format!("No value yet for {}.", missing.join(", ")));
+    }
+    let unavailable = strings(&reading, "unavailable");
+    if !unavailable.is_empty() {
+        human.push(if rows.is_empty() {
+            format!(
+                "{} more rows have no value with nothing on their ports or no daisy chain.",
+                unavailable.len()
+            )
+        } else {
+            format!(
+                "No value for {}: nothing on the port, or no daisy chain that deep.",
+                unavailable.join(", ")
+            )
+        });
     }
     Ok(Outcome::new(reading, human))
 }

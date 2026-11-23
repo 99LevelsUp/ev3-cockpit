@@ -152,9 +152,41 @@ fn ended(update: &Value) -> bool {
     update.get("kind").and_then(Value::as_str) == Some("ended")
 }
 
+/// A port's type code from its occupancy row, as `port_state.rs` of the daemon reads it: below
+/// 124 a device whose value is read; 125 a device still being identified, a second or two after
+/// it is plugged in; 124, 126, 127 and above nothing whose value will come.
+const TYPE_TERMINAL: u64 = 124;
+const TYPE_UNKNOWN: u64 = 125;
+
+/// Whether `row` can get no value as the brick is now, by what `latest` says: the value of a
+/// port its occupancy shows empty or unreadable, or a row of a daisy-chain layer deeper than the
+/// chain. The daemon opens such rows only when that changes, so a reading need not wait for them.
+fn cannot_come(row: &str, latest: &BTreeMap<String, Value>) -> bool {
+    let number = |id: &str| {
+        latest
+            .get(id)
+            .and_then(|v| v.get("value"))
+            .and_then(Value::as_u64)
+    };
+    if let Some(rest) = row.strip_prefix("chain.")
+        && let Some(layer) = rest.split('.').next().and_then(|l| l.parse::<u64>().ok())
+        && layer > 0
+        && number("chain.depth").is_some_and(|depth| depth < layer)
+    {
+        return true;
+    }
+    if let Some(port) = row.strip_suffix(".value")
+        && let Some(code) = number(&format!("{port}.occupancy"))
+    {
+        return code >= TYPE_TERMINAL && code != TYPE_UNKNOWN;
+    }
+    false
+}
+
 /// Reads `rows` (every row when empty) of a connected brick once: the latest value of each row,
-/// ending as soon as every row has one, after `wait`, or when the connection closes. Answers
-/// `{brickId, values, missing}`.
+/// ending as soon as every row has one or cannot get one ([`cannot_come`]), after `wait`, or when
+/// the connection closes. Answers `{brickId, values, missing, unavailable}`: `missing` had no
+/// value yet, `unavailable` cannot have one as the brick is now.
 pub async fn read_once(
     endpoint: &Endpoint,
     brick: &str,
@@ -171,8 +203,11 @@ pub async fn read_once(
     for value in subscription.snapshot.iter().filter(|v| has_value(v)) {
         latest.insert(row_of(value), value.clone());
     }
-    let complete =
-        |latest: &BTreeMap<String, Value>| wanted.iter().all(|row| latest.contains_key(row));
+    let complete = |latest: &BTreeMap<String, Value>| {
+        wanted
+            .iter()
+            .all(|row| latest.contains_key(row) || cannot_come(row, latest))
+    };
     if !complete(&latest) {
         let _ = tokio::time::timeout(wait, async {
             while let Some(update) = subscription.next().await {
@@ -194,13 +229,14 @@ pub async fn read_once(
         .iter()
         .filter_map(|row| latest.get(row).cloned())
         .collect();
-    let missing: Vec<&String> = wanted
+    let (unavailable, missing): (Vec<&String>, Vec<&String>) = wanted
         .iter()
         .filter(|row| !latest.contains_key(*row))
-        .collect();
-    Ok(json!({ "brickId": brick_id, "values": values, "missing": missing }))
+        .partition(|row| cannot_come(row, &latest));
+    Ok(json!({
+        "brickId": brick_id, "values": values, "missing": missing, "unavailable": unavailable,
+    }))
 }
-
 /// Hears `rows` (every row when empty) until `stop` resolves or the daemon ends the subscription,
 /// handing each change to `on_values`, which answers `false` to stop (nobody reads the output any
 /// more). Resolves with how many updates came; fails when the connection closes first, since the
@@ -305,6 +341,22 @@ mod tests {
     /// `updates` after the subscribe answer, and records every request it was sent. With `hang_up`
     /// it closes the connection after the updates.
     fn scripted_daemon(updates: Vec<Value>, hang_up: bool) -> (Endpoint, Arc<Mutex<Vec<Value>>>) {
+        scripted_daemon_with(
+            &["a", "b"],
+            json!([{ "rowId": "a", "value": 1 }]),
+            updates,
+            hang_up,
+        )
+    }
+
+    /// As [`scripted_daemon`], with the rows the daemon lists and the snapshot it answers.
+    fn scripted_daemon_with(
+        rows: &[&str],
+        snapshot: Value,
+        updates: Vec<Value>,
+        hang_up: bool,
+    ) -> (Endpoint, Arc<Mutex<Vec<Value>>>) {
+        let rows: Vec<Value> = rows.iter().map(|id| json!({ "id": id })).collect();
         let (ours, theirs) = tokio::io::duplex(64 * 1024);
         let endpoint = Endpoint::new(Box::new(ours) as Box<dyn Duplex>, None);
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -314,10 +366,10 @@ mod tests {
             while let Some(Ok(request)) = source.next().await {
                 log.lock().expect("log").push(request.clone());
                 let result = match request["method"].as_str() {
-                    Some("telemetry/rows") => json!({ "rows": [{ "id": "a" }, { "id": "b" }] }),
+                    Some("telemetry/rows") => json!({ "rows": rows }),
                     Some("telemetry/subscribe") => json!({
                         "subscriptionId": "s1", "brickId": "usb:x", "grant": {},
-                        "snapshot": [{ "rowId": "a", "value": 1 }],
+                        "snapshot": snapshot,
                     }),
                     _ => Value::Null,
                 };
@@ -359,6 +411,64 @@ mod tests {
         assert_eq!(reading["missing"], json!([]));
         assert_eq!(reading["values"].as_array().expect("values").len(), 2);
         assert!(methods(&seen).contains(&"subscriptions/cancel".to_owned()));
+    }
+
+    #[test]
+    fn a_row_cannot_come_from_an_empty_port_or_a_chain_layer_deeper_than_the_chain() {
+        let latest: BTreeMap<String, Value> = [
+            ("ports.sensor.1.occupancy", 126),
+            ("ports.sensor.2.occupancy", 125),
+            ("ports.sensor.3.occupancy", 29),
+            ("ports.motor.A.occupancy", 127),
+            ("chain.depth", 1),
+        ]
+        .into_iter()
+        .map(|(id, value)| (id.to_owned(), json!({ "rowId": id, "value": value })))
+        .collect();
+        assert!(cannot_come("ports.sensor.1.value", &latest), "empty");
+        assert!(
+            !cannot_come("ports.sensor.2.value", &latest),
+            "still identifying"
+        );
+        assert!(!cannot_come("ports.sensor.3.value", &latest), "a device");
+        assert!(
+            !cannot_come("ports.sensor.4.value", &latest),
+            "nothing reported yet"
+        );
+        assert!(
+            !cannot_come("chain.1.sensor.1.occupancy", &latest),
+            "layer 1 of depth 1"
+        );
+        assert!(
+            cannot_come("chain.2.sensor.1.occupancy", &latest),
+            "layer 2 of depth 1"
+        );
+        assert!(!cannot_come("system.battery.voltage", &latest));
+    }
+
+    #[tokio::test]
+    async fn a_reading_does_not_wait_for_rows_the_brick_cannot_have_now() {
+        let rows = [
+            "ports.sensor.1.occupancy",
+            "ports.sensor.1.value",
+            "chain.depth",
+            "chain.1.sensor.1.value",
+        ];
+        let snapshot = json!([
+            { "rowId": "ports.sensor.1.occupancy", "value": 126 },
+            { "rowId": "chain.depth", "value": 0 },
+        ]);
+        let (endpoint, _seen) = scripted_daemon_with(&rows, snapshot, Vec::new(), false);
+        let started = tokio::time::Instant::now();
+        let reading = read_once(&endpoint, "CCC", &[], Duration::from_secs(30))
+            .await
+            .expect("read");
+        assert!(started.elapsed() < Duration::from_secs(5), "it waited");
+        assert_eq!(reading["missing"], json!([]));
+        assert_eq!(
+            reading["unavailable"],
+            json!(["ports.sensor.1.value", "chain.1.sensor.1.value"])
+        );
     }
 
     #[tokio::test]

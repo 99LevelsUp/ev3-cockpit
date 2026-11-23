@@ -98,7 +98,7 @@ update finishes without a "file in use" error; the daemon keeps running from its
 |---|---|---|---|
 | F2 USB | passed, AAA, BBB, CCC (23.11.) | | passed, CCC, from the pre-release npm packages (23.11.) |
 | F2 Bluetooth | passed, BBB and CCC with Wi-Fi off (23.11.) | passed, CCC, paired without sudo or the bluetooth group (23.11.) | passed, CCC (23.11.) |
-| F2 TCP (AAA) | works in one connection; per-command runs fail, see findings (23.11.) | | |
+| F2 TCP (AAA) | passed after the fixes below; 45–255 ms a step (23.11.) | | |
 | pairing, forget, list clearing | passed, CCC (23.11.) | | pairing passed, CCC, without the bluetooth group (23.11.) |
 | `ev3 mcp` agent | passed, BBB over USB: 16 tool calls and a refused path outside the root (23.11.) | | |
 | deploy-brick-off recorded | done, CCC (23.11.) | — | — |
@@ -114,16 +114,22 @@ update finishes without a "file in use" error; the daemon keeps running from its
 - **A broken pairing on the brick.** CCC listed six paired devices and no longer answered this
   computer (WSA 10051, no question on the display when pairing). `ev3 forget`, `ev3 bt-clear`
   over USB and `ev3 pair` brought it back.
-- **A failing Bluetooth command takes 30–40 s** before it gives up; too long for a person.
-- **`ev3 telemetry` without rows waits its full 5 s**: 40 of 69 rows (empty sensor ports, absent
-  daisy-chain layers) never get a value, so a single reading never completes early.
+- **A failing Bluetooth command takes 30–40 s** before it gives up; too long for a person. The
+  limits are measured (a 15 s connect, one Bluetooth queue), so `ev3` now says after 3 s that it
+  is connecting instead of staying silent.
+- **`ev3 telemetry` without rows waited its full 5 s**: 40 of 69 rows (empty sensor ports, absent
+  daisy-chain layers) never get a value. Fixed: a reading no longer waits for rows the brick
+  cannot have now; 1.1 s on AAA after the fix.
 - **An owner-run scenario beeped twice** (start notice and instruction); fixed, one beep now.
 - **A held brick waits for every channel on each command.** `connect_again` joins every channel
   a signed-in brick has not connected, the paired Bluetooth one included, and waits for them. AAA
   held over TCP with its Bluetooth switched off made every `ev3` command wait about 40 s for the
   Bluetooth attempt to fail; on HOSTA that attempt also starved the Wi-Fi the TCP link ran over,
   and the link dropped (10054). In one connection, without those attempts, the file round trip
-  over TCP passed in about a second.
+  over TCP passed in about a second. Fixed in `ev3`: a command uses a connected brick as it is;
+  the TCP round on AAA then passed all 15 steps.
 - **A join over Bluetooth makes a brick ask to pair.** On the RPi5, a brick connected over USB
   showed a pairing question by itself: the sign-in tried Bluetooth too, and the brick no longer
-  knew that computer. The owner refused it.
+  knew that computer. The owner refused it. Not reproduced yet; issue #3.
+- The Windows message for a brick that did not answer now says what helped here (Wi-Fi off on a
+  shared card; forget and pair again for WSA 10051).

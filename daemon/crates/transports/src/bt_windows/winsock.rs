@@ -45,6 +45,18 @@ pub const WSAETIMEDOUT: i32 = 10060;
 pub const WSAEHOSTDOWN: i32 = 10064;
 /// `WSAEHOSTUNREACH`.
 pub const WSAEHOSTUNREACH: i32 = 10065;
+/// `WSAENETUNREACH`: what a brick that no longer knew this computer's pairing answered on U16
+/// (23.11.2026), until it was forgotten and paired again.
+pub const WSAENETUNREACH: i32 = 10051;
+
+/// What helps a person when a brick did not answer, from U16 (23.11.2026): on HOSTA, whose Wi-Fi
+/// and Bluetooth are one card, the same brick and pairing failed with Wi-Fi on and passed with it
+/// off.
+const NOT_ANSWERED_HINT: &str = "Check that it is on with Bluetooth visible; if this computer's \
+     Wi-Fi and Bluetooth share one card, switching Wi-Fi off can help.";
+/// What helps when a brick cannot be reached at all although it is on and near.
+const UNREACHABLE_HINT: &str = "If it is on and near, its pairing with this computer may be \
+     broken on the brick: forget it (ev3 forget) and pair it again (ev3 pair).";
 
 /// Receive buffer per read: twice the firmware's frame, so a full reply lands whole.
 const RECV_CHUNK_BYTES: usize = 2048;
@@ -92,7 +104,12 @@ impl ConnectFailure {
         match self {
             Self::Unavailable(reason) => TransportError::transport_failed(reason),
             Self::Unreachable(code) => TransportError::transport_failed(format!(
-                "BT connect to {brick} failed (WSA error {code}): the brick did not answer."
+                "BT connect to {brick} failed (WSA error {code}): the brick did not answer. \
+                 {NOT_ANSWERED_HINT}"
+            )),
+            Self::Failed(WSAENETUNREACH) => TransportError::transport_failed(format!(
+                "BT connect to {brick} failed (WSA error {WSAENETUNREACH}): the brick could not \
+                 be reached. {UNREACHABLE_HINT}"
             )),
             Self::Failed(code) => TransportError::transport_failed(format!(
                 "BT connect to {brick} failed (WSA error {code})."
