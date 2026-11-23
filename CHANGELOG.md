@@ -12,8 +12,9 @@ Minor and major versions are bumped manually for significant milestones.
 
 ## [0.3.0-preview.1] — 2026-11-23
 
-A preview for early testers. Not on the VS Code Marketplace or npm: install the VSIX or the npm
-packages attached to the GitHub pre-release. The hardware sign-off (U16) is still to come.
+A preview for early testers of the backend (the daemon, `ev3` and `ev3 mcp`): install the npm
+packages attached to the GitHub pre-release. The VS Code extension is not part of it; its four
+VSIX packages, attached at first by mistake, were removed (23.11.2026) and wait for issue #5.
 
 ### Added
 - One native daemon per user, `ev3-cockpitd` (Rust), holds the bricks for every client: their
