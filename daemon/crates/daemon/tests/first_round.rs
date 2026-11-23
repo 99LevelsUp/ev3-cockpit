@@ -141,7 +141,7 @@ fn surface(tag: &str, bluetooth: Fake) -> (Arc<Surface>, PathBuf) {
         dir.join("key"),
         Log::open(&dir.join("log")),
         SettingsStore::load(&dir.join("settings.json"), |_| {}),
-        Confinement::new([dir.clone()]),
+        Confinement::new([dir.clone()]).expect("roots"),
     ));
     let providers = Providers {
         list: vec![

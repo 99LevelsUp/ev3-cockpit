@@ -137,17 +137,33 @@ pub fn run(options: &Options) -> i32 {
         }
     };
 
+    // The directories no client path may reach. One that cannot be found or resolved stops the
+    // start: serving with it unprotected would be a narrower protection nobody asked for.
     let mut roots = vec![paths.root.clone()];
-    if let Ok(default) = default_state_root()
-        && default != paths.root
-    {
-        roots.push(default);
+    match default_state_root() {
+        Ok(default) if default != paths.root => roots.push(default),
+        Ok(_) => {}
+        Err(message) => {
+            let message = format!(
+                "The daemon does not start: it cannot find the user's state root to keep client paths out of it ({message})."
+            );
+            log.error(&message);
+            return refuse(exit_code::FAILED, &message);
+        }
     }
     if let Some(dir) = exe.as_deref().and_then(Path::parent) {
         roots.push(dir.to_path_buf());
     }
     #[cfg(unix)]
     roots.push(paths.socket_dir.clone());
+    let confinement = match Confinement::new(roots) {
+        Ok(confinement) => confinement,
+        Err(error) => {
+            let message = format!("{} The daemon does not start.", error.0);
+            log.error(&message);
+            return refuse(exit_code::FAILED, &message);
+        }
+    };
 
     let identity = Identity {
         version: crate::build_info::VERSION.to_string(),
@@ -198,7 +214,7 @@ pub fn run(options: &Options) -> i32 {
             paths.key.clone(),
             log,
             settings,
-            Confinement::new(roots),
+            confinement,
         ));
         let questions = Arc::new(Questions::default());
         let (providers, end) = match Providers::for_source(

@@ -316,7 +316,9 @@ it carries no daemon of its own.
 Every file method that takes a local path a client names, to read from or to write to, runs it
 through one check. The daemon refuses a path that resolves, through links and junctions, into the
 cockpit's own state root (the platform's and a test's), the directory of its executable, or its
-socket directory, whoever the client is.
+socket directory, whoever the client is. Those directories are resolved the same way when the
+daemon starts; when it cannot find or resolve one of them, it does not start (exit code 1)
+rather than serve with that directory unprotected.
 
 - A relative path is refused.
 - A path that does not exist yet resolves through its deepest existing ancestor.
@@ -328,9 +330,12 @@ socket directory, whoever the client is.
   that check.
 - A file with more than one name (a hard link) is refused when one of its names lies in those
   directories, and when the daemon cannot make sure none does.
+- Only regular files are read or written. A device, a pipe (FIFO) or a socket is refused, a
+  second name of one included: by its type before the daemon opens it, and again by the type of
+  the open handle. The open never waits for the other end of a pipe.
 
 The check is on the file the path finally reaches. It is not a defence against another process
 of the same user swapping folders while the daemon opens a file: such a process can reach the
-cockpit's files directly (see the trust boundary under the hello). Links inside the cockpit's
-directories that lead back out, a local share naming the same volume, alternate data streams
-and special files are not covered either.
+cockpit's files directly (see the trust boundary under the hello). Out of scope as well: links
+inside the cockpit's directories that lead back out, a local share naming the same volume, and
+alternate data streams.

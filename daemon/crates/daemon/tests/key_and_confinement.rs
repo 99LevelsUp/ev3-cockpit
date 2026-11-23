@@ -77,6 +77,91 @@ fn link_dir(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).expect("symlink");
 }
 
+/// One of the directories the daemon keeps client paths out of cannot be resolved (the user's own
+/// state root runs through a link whose target is missing): the daemon does not start, rather
+/// than serve with that directory unprotected.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+#[test]
+fn a_protected_directory_that_cannot_be_resolved_stops_the_start() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("unresolved");
+    let platform = root.path().join("platform");
+    std::fs::create_dir_all(&platform).expect("platform");
+    link_dir(&root.path().join("nowhere"), &platform.join("ev3-cockpit"));
+    let variable = if cfg!(windows) {
+        "LOCALAPPDATA"
+    } else {
+        "XDG_STATE_HOME"
+    };
+    let state = root.path().join("state");
+    let mut child = common::spawn_binary(
+        common::bin(),
+        &state,
+        "t",
+        &[],
+        &[(variable, platform.to_str().expect("text"))],
+    );
+    // Generous: before it gets this far the daemon hashes its own executable, which is slow for
+    // a test binary run from another system's disk.
+    let status = common::wait_exit(&mut child, std::time::Duration::from_secs(30));
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let status = status.expect("the daemon ends instead of serving");
+    let stderr = common::stderr_of(&mut child);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("cannot resolve"), "{stderr}");
+    assert!(
+        !state
+            .join("channels")
+            .join("t")
+            .join("channel.json")
+            .exists()
+    );
+}
+
+/// The user's state root cannot be found at all (none of the variables that name it is set): on
+/// a test channel too the daemon does not start, rather than leave that root unprotected.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+#[test]
+fn a_user_state_root_that_cannot_be_found_stops_the_start() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("noroot");
+    let unset: &[&str] = if cfg!(windows) {
+        &["LOCALAPPDATA", "USERPROFILE"]
+    } else {
+        &["XDG_STATE_HOME", "HOME"]
+    };
+    let mut command = std::process::Command::new(common::bin());
+    command
+        .args(["--channel", "t", "--state-root"])
+        .arg(root.path().join("state"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    for name in unset {
+        command.env_remove(name);
+    }
+    let mut child = command.spawn().expect("the daemon starts");
+    let status = common::wait_exit(&mut child, std::time::Duration::from_secs(30));
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let status = status.expect("the daemon ends instead of serving");
+    let stderr = common::stderr_of(&mut child);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cannot find the user's state root"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
     if common::refuses_this_process() {
@@ -91,7 +176,7 @@ fn a_path_through_a_junction_or_link_into_the_state_root_is_refused() {
     let door = elsewhere.join("door");
     link_dir(&state, &door);
 
-    let confinement = Confinement::new([state.clone()]);
+    let confinement = Confinement::new([state.clone()]).expect("roots");
     for named in [door.join("key"), door.join("settings.json"), door.clone()] {
         let error = confinement.check(&named).expect_err("refused");
         assert_eq!(
@@ -118,7 +203,7 @@ fn a_file_link_or_a_dangling_link_into_the_state_root_is_refused() {
     std::fs::create_dir_all(&out).expect("out");
     std::os::unix::fs::symlink(state.join("key"), out.join("k")).expect("link");
     std::os::unix::fs::symlink(state.join("new"), out.join("dangling")).expect("dangling");
-    let confinement = Confinement::new([state]);
+    let confinement = Confinement::new([state]).expect("roots");
     assert_eq!(
         confinement
             .check(&out.join("k"))
