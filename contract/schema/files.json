@@ -76,7 +76,7 @@
         "brickId": { "type": "string" },
         "running": { "type": "boolean" },
         "runSeq": { "type": "integer", "minimum": 0, "description": "The number of the last start sent to this brick, by this daemon or one it replaced (0 before any)." },
-        "stoppedBy": { "type": "string", "description": "The client that stopped it, when a stop ended it." }
+        "endedBy": { "type": "string", "description": "How the latest start ended, when no program runs: the name of the client whose stop ended it, or brick when no client stopped it (it ran to its end, or was stopped with the brick's buttons; the daemon cannot tell these apart). Left out while a program runs, before any start, and when the start was sent by a daemon this one replaced." }
       }
     },
     "ShellResult": {
