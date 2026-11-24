@@ -73,13 +73,13 @@ pub fn shim_script(shim: &Path, text: &str) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn is_executable(file: &Path) -> bool {
+pub(crate) fn is_executable(file: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(file).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 /// The absolute directories on PATH, in order.
-fn path_dirs() -> Vec<PathBuf> {
+pub(crate) fn path_dirs() -> Vec<PathBuf> {
     let Some(value) = std::env::var_os("PATH") else {
         return Vec::new();
     };

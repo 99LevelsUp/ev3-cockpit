@@ -27,6 +27,9 @@ Minor and major versions are bumped manually for significant milestones.
   that answers `ev3-<name> mcp` as an MCP server is started once and its tools are offered as
   `<name>_<tool>`, with calls, cancellations, progress and the agent's roots passed through. An
   agent host needs one MCP entry for the cockpit and every add-on.
+- `ev3 mcp setup` registers `ev3 mcp` as the MCP server `ev3` in Claude Code (user scope) and
+  Codex, whichever are on PATH, by the absolute path of the `ev3` that runs it; `--replace`
+  replaces another `ev3` entry, `--remove` removes it (#16).
 
 ### Changed
 - **Contract 3.** `ProgramState.stoppedBy` is gone; `endedBy` says how the latest start ended once

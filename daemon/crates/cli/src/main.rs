@@ -17,6 +17,7 @@ mod error;
 mod install;
 mod mcp;
 mod mcp_addons;
+mod mcp_setup;
 mod output;
 mod telemetry;
 
@@ -179,6 +180,14 @@ async fn run(argv: Vec<String>) -> u8 {
         Err(error) => return print_error(json, &error),
     };
     if name == "mcp" {
+        if parsed.args.first().map(String::as_str) == Some("setup") {
+            let outcome = mcp_setup::setup(
+                parsed.flags.contains("remove"),
+                parsed.flags.contains("replace"),
+            );
+            output::print_result(json, &outcome);
+            return outcome.exit_code;
+        }
         return mcp::serve(paths).await;
     }
     let mut ctx = Ctx::new(json, parsed.brick, parsed.args, parsed.flags, paths, spec);
