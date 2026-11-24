@@ -17,6 +17,10 @@ use crate::holders::{Holder, holder_name};
 use crate::log::Level;
 use crate::rpc::RequestContext;
 
+/// How long a connect with `reuse` waits for the first channel of a brick whose sign-in another
+/// client has just begun: a Bluetooth join can take tens of seconds.
+const REUSE_ROUTE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The forget report as lines ready to show.
 fn forget_lines(report: &ForgetReport) -> Vec<String> {
     let contract = report.to_contract();
@@ -60,6 +64,9 @@ impl Surface {
         params: BricksConnectParams,
     ) -> Result<ContractBrick, ContractError> {
         let brick_id = self.brick_of(cx, params.brick.as_deref()).await?;
+        // A brick being signed out is signed in afresh once that ends, not taken as it goes, nor
+        // connected again over every channel while its channels close (#11).
+        self.signing_out_ended(&brick_id).await;
         let hold = params.hold == Some(true);
         let reuse = params.reuse == Some(true);
         let holder = if hold {
@@ -115,14 +122,12 @@ impl Surface {
                     state.connecting.remove(&brick);
                 }
                 // The last connect of the brick has ended, failed or not: one a gone client left
-                // behind is signed out unless somebody holds it now.
-                left == 0
-                    && Self::idle(&state, &brick, 0)
-                    && state.orphaned.remove(&brick)
-                    && !surface.holders.is_held(&brick)
+                // behind is signed out unless somebody holds or uses it now.
+                left == 0 && state.orphaned.remove(&brick)
             };
             if release {
-                surface.runtime.bricks.sign_out(&brick).await;
+                // This connect's own request still counts as using it.
+                surface.sign_out_unused(&brick, 1).await;
             }
             outcome
         })
@@ -165,7 +170,23 @@ impl Surface {
     ) -> Result<bool, ContractError> {
         let bricks = &self.runtime.bricks;
         if reuse && bricks.is_signed_in(brick_id) {
-            return Ok(false);
+            // Signed in, its first channel perhaps still joining (another client's sign-in has
+            // just begun): wait for a route, not for every channel. A sign-in that ends without
+            // one leaves the brick to be signed in afresh below.
+            let deadline = tokio::time::Instant::now() + REUSE_ROUTE_WAIT;
+            if bricks
+                .wait_for_route(brick_id, Some(deadline))
+                .await
+                .is_ok()
+            {
+                return Ok(false);
+            }
+            if bricks.is_signed_in(brick_id) {
+                return Err(ContractError::new(
+                    ErrorCode::NotConnected,
+                    format!("{brick_id} has no connected channel."),
+                ));
+            }
         }
         if bricks.is_signed_in(brick_id) {
             return bricks
@@ -226,16 +247,16 @@ impl Surface {
         self.holders_changed();
         // A brick another client's request is working on is signed out when that request ends
         // (#9); for everyone, at once: failing what runs on it is what was asked.
-        let sign_out = sign_out && {
-            let mut state = self.lock();
-            let at_once = params.for_everyone == Some(true) || Self::idle(&state, &brick_id, 1);
-            if !at_once {
-                state.orphaned.insert(brick_id.clone());
-            }
-            at_once
+        let signed_out = if !sign_out {
+            false
+        } else if params.for_everyone == Some(true) {
+            self.sign_out_marked(&brick_id).await;
+            true
+        } else {
+            // This disconnect's own request still counts as using it.
+            self.sign_out_unused(&brick_id, 1).await
         };
-        if sign_out {
-            self.runtime.bricks.sign_out(&brick_id).await;
+        if signed_out {
             self.lock().reconnecting.remove(&brick_id);
         }
         self.shared.log.write(
