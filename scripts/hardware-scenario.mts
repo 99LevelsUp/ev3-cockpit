@@ -543,6 +543,51 @@ async function programs(c: ScenarioContext): Promise<void> {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
+/** The file the follow scenario writes while it follows it. */
+const FOLLOW_BYTES = 10000;
+
+/**
+ * Follows a file while it is written: an empty file first (so the write's truncation never takes
+ * it below the offset reached), followed from 0, then overwritten with FOLLOW_BYTES, which the
+ * brick's file shows growing packet by packet as the upload lands; every byte must come back in
+ * order. Then the file is removed and the follow must end saying so.
+ */
+async function followFile(c: ScenarioContext): Promise<void> {
+	await findBrick(c);
+	await c.call('bricks/connect', { brick: c.brick });
+	await expectNoFolder(c);
+	await c.call('files/makeDirectory', { brick: c.brick, path: DIR });
+	const file = `${DIR}/out.txt`;
+	await c.call('files/write', { brick: c.brick, path: file, content: '' });
+	const appended: Notifications['files/appended'][] = [];
+	const ended: Notifications['files/followEnded'][] = [];
+	c.client.on((m) => {
+		if (m.method === 'files/appended') { appended.push(m.params); }
+		if (m.method === 'files/followEnded') { ended.push(m.params); }
+	});
+	const follow = await c.call('files/follow', { brick: c.brick, path: file, fromOffset: 0 });
+	const handle = await fillTransfer(c, FOLLOW_BYTES);
+	await c.call('files/write', { brick: c.brick, path: file, handle });
+	const expected = Buffer.from(text(FOLLOW_BYTES), 'utf8');
+	const deadline = Date.now() + 30_000;
+	const received = (): Buffer => Buffer.concat(
+		appended.filter((a) => a.subscriptionId === follow.subscriptionId).map((a) => Buffer.from(a.data, 'base64')),
+	);
+	while (received().length < FOLLOW_BYTES && Date.now() < deadline) { await wait(100); }
+	const got = received();
+	c.results.appendedHeard = appended.length;
+	say(`follow handed over ${got.length} of ${FOLLOW_BYTES} bytes in ${appended.length} files/appended`);
+	if (!got.equals(expected)) { throw new Error('the bytes followed are not the bytes written'); }
+	await c.call('files/remove', { brick: c.brick, path: file });
+	const endBy = Date.now() + 15_000;
+	while (ended.length === 0 && Date.now() < endBy) { await wait(100); }
+	say(`follow ended: ${brief(ended)}`);
+	if (ended[0]?.reason !== 'removed') { throw new Error('the follow did not end as removed within 15 s'); }
+	c.results.followEnded = ended[0].reason;
+	await c.call('files/remove', { brick: c.brick, path: DIR, recursive: true });
+	await c.call('bricks/disconnect', { brick: c.brick });
+}
+
 async function telemetryMinute(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
@@ -620,6 +665,10 @@ const SCENARIOS: Record<string, Scenario> = {
 	programs: {
 		summary: 'Write the program, subscribe, run it, stop it at once, read the status, remove it.',
 		run: programs,
+	},
+	follow: {
+		summary: `Write an empty file, follow it from 0, overwrite it with ${FOLLOW_BYTES} bytes and hear every byte in order, remove it and hear the follow end.`,
+		run: followFile,
 	},
 	'telemetry-minute': {
 		summary: 'Subscribe to the battery and program rows at 1000 ms for a minute.',

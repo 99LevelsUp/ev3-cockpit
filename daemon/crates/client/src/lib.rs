@@ -18,9 +18,9 @@ pub mod events;
 pub mod launch;
 
 pub use client::{Client, ClientOptions, Launch};
-pub use cockpit::{Cockpit, CockpitEvent, CockpitOptions, CockpitPrograms};
+pub use cockpit::{Cockpit, CockpitEvent, CockpitFile, CockpitOptions, CockpitPrograms};
 pub use ev3_channel::paths::Paths;
-pub use events::{Events, ProgramStates};
+pub use events::{Events, FileEvent, FileFollow, ProgramStates};
 
 /// The files of the user's channel, or of the test channel `channel` names, under the user's
 /// state root: what a client passes as [`ClientOptions::paths`].

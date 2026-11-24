@@ -5,7 +5,8 @@
 //!   again by itself, starting the daemon its [`Launch`] names when none runs.
 //! - No daemon hands anything to the next. The bricks this client connected without a hold are
 //!   connected again on the new daemon, and every program subscription is made again; its reader
-//!   gets the fresh state first, then the changes as before.
+//!   gets the fresh state first, then the changes as before. A followed file is followed again
+//!   from the offset its bytes reached.
 //! - [`CockpitEvent`] tells a reader what the daemon sends ([`CockpitEvent::Notification`]), that
 //!   the client is connected again ([`CockpitEvent::Reconnected`]), or that it could not connect
 //!   again ([`CockpitEvent::Lost`]); the next request then tries once more.
@@ -16,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use ev3_contract::{Notification, ProgramState};
+use ev3_contract::{FileFollowEndedReason, Notification, ProgramState};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -24,7 +25,7 @@ use tokio::task::JoinHandle;
 use crate::client::{Asker, Client, ClientOptions, Launch};
 use crate::connect::DaemonIdentity;
 use crate::error::{ClientError, Result};
-use crate::events::ProgramStates;
+use crate::events::{FileEvent, FileFollow, ProgramStates};
 use ev3_channel::paths::Paths;
 
 /// Who connects, owned: what [`ClientOptions`] says, kept for every reconnect.
@@ -58,11 +59,29 @@ pub enum CockpitEvent {
     Lost(ClientError),
 }
 
-/// A program subscription the cockpit renews: where its states go, and the one on the daemon now.
+/// A subscription the cockpit renews: what it is, where what it hears goes, and the task that
+/// forwards the one on the daemon now.
 struct Renewable {
     brick: String,
-    sender: mpsc::UnboundedSender<ProgramState>,
+    kind: Kind,
     forward: Option<JoinHandle<()>>,
+}
+
+/// A followed file's path and the offset its bytes reached.
+type FileAt = (String, u64);
+
+enum Kind {
+    Program {
+        sender: mpsc::UnboundedSender<ProgramState>,
+    },
+    /// A followed file: followed again from the offset its bytes reached.
+    File {
+        path: String,
+        reached: Arc<AtomicU64>,
+        /// The daemon ended it: it is not followed again.
+        ended: Arc<AtomicBool>,
+        sender: mpsc::UnboundedSender<FileEvent>,
+    },
 }
 
 struct Inner {
@@ -176,12 +195,52 @@ impl Cockpit {
             id,
             Renewable {
                 brick: brick.to_owned(),
-                sender,
+                kind: Kind::Program { sender },
                 forward: Some(forward),
             },
         );
         Ok(CockpitPrograms {
             state,
+            receiver,
+            id,
+            inner: Arc::downgrade(&self.inner),
+        })
+    }
+
+    /// Follows `path` on `brick` as it grows, across reconnects: every growth in order; after a
+    /// reconnect the follow is made again from the offset its bytes reached, so nothing is handed
+    /// over twice or skipped. A file gone meanwhile ends it with [`FileEvent::Ended`]. Dropping it
+    /// cancels it.
+    pub async fn follow_file(
+        &self,
+        brick: &str,
+        path: &str,
+        from_offset: Option<u64>,
+    ) -> Result<CockpitFile> {
+        let client = self.inner.client().await?;
+        let follow = client.follow_file(brick, path, from_offset).await?;
+        let (offset, size) = (follow.offset, follow.size);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let reached = Arc::new(AtomicU64::new(follow.reached()));
+        let ended = Arc::new(AtomicBool::new(false));
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let forward = forward_file(follow, sender.clone(), &reached, &ended);
+        self.inner.renewables.lock().expect("renewables").insert(
+            id,
+            Renewable {
+                brick: brick.to_owned(),
+                kind: Kind::File {
+                    path: path.to_owned(),
+                    reached,
+                    ended,
+                    sender,
+                },
+                forward: Some(forward),
+            },
+        );
+        Ok(CockpitFile {
+            offset,
+            size,
             receiver,
             id,
             inner: Arc::downgrade(&self.inner),
@@ -229,18 +288,68 @@ impl CockpitPrograms {
 
 impl Drop for CockpitPrograms {
     fn drop(&mut self) {
-        if let Some(inner) = self.inner.upgrade()
-            && let Some(renewable) = inner
-                .renewables
-                .lock()
-                .expect("renewables")
-                .remove(&self.id)
-            && let Some(forward) = renewable.forward
-        {
-            // The connection's subscription goes with its task, which cancels it on the daemon.
-            forward.abort();
-        }
+        forget(&self.inner, self.id);
     }
+}
+
+/// A followed file of a [`Cockpit`], followed again after every reconnect.
+pub struct CockpitFile {
+    /// Where the follow started.
+    pub offset: u64,
+    /// The file's size when the follow started.
+    pub size: u64,
+    receiver: mpsc::UnboundedReceiver<FileEvent>,
+    id: u64,
+    inner: Weak<Inner>,
+}
+
+impl CockpitFile {
+    /// The next growth, in order across reconnects, or the follow's end; `None` once the cockpit
+    /// was shut down or after the end.
+    pub async fn next(&mut self) -> Option<FileEvent> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for CockpitFile {
+    fn drop(&mut self) {
+        forget(&self.inner, self.id);
+    }
+}
+
+/// Stops renewing subscription `id`; its connection's subscription goes with its task, which
+/// cancels it on the daemon.
+fn forget(inner: &Weak<Inner>, id: u64) {
+    if let Some(inner) = inner.upgrade()
+        && let Some(renewable) = inner.renewables.lock().expect("renewables").remove(&id)
+        && let Some(forward) = renewable.forward
+    {
+        forward.abort();
+    }
+}
+
+/// Hands every growth of `follow` to `sender`, noting the offset reached; ends with the
+/// connection, the reader or the follow's end, which is noted too.
+fn forward_file(
+    mut follow: FileFollow,
+    sender: mpsc::UnboundedSender<FileEvent>,
+    reached: &Arc<AtomicU64>,
+    ended: &Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    let (reached, ended) = (Arc::clone(reached), Arc::clone(ended));
+    tokio::spawn(async move {
+        while let Some(event) = follow.next().await {
+            let last = matches!(event, FileEvent::Ended(_));
+            if last {
+                ended.store(true, Ordering::SeqCst);
+            } else {
+                reached.store(follow.reached(), Ordering::SeqCst);
+            }
+            if sender.send(event).is_err() || last {
+                return;
+            }
+        }
+    })
 }
 
 /// Dropping the last clone of a [`Cockpit`] closes it as [`Cockpit::shutdown`] does, without
@@ -376,27 +485,87 @@ impl Inner {
                 .request("bricks/connect", json!({ "brick": brick }))
                 .await;
         }
-        let wanted: Vec<(u64, String)> = self
+        // What to renew, read once: a program by its brick, a file by its brick, path and reach.
+        let wanted: Vec<(u64, String, Option<FileAt>)> = self
             .renewables
             .lock()
             .expect("renewables")
             .iter()
-            .map(|(id, renewable)| (*id, renewable.brick.clone()))
+            .filter_map(|(id, renewable)| {
+                let file = match &renewable.kind {
+                    Kind::Program { .. } => None,
+                    Kind::File { ended, .. } if ended.load(Ordering::SeqCst) => return None,
+                    Kind::File { path, reached, .. } => {
+                        Some((path.clone(), reached.load(Ordering::SeqCst)))
+                    }
+                };
+                Some((*id, renewable.brick.clone(), file))
+            })
             .collect();
-        for (id, brick) in wanted {
-            // A brick not back yet keeps its subscription unrenewed; the reader hears nothing new.
-            let Ok(states) = client.subscribe_programs(&brick).await else {
-                continue;
-            };
-            let mut renewables = self.renewables.lock().expect("renewables");
-            let Some(renewable) = renewables.get_mut(&id) else {
-                continue; // dropped meanwhile: `states` goes and cancels itself
-            };
-            let _ = renewable.sender.send(states.state.clone());
-            if let Some(old) = renewable.forward.take() {
-                old.abort();
+        for (id, brick, file) in wanted {
+            match file {
+                None => self.renew_program(client, id, &brick).await,
+                Some((path, reached)) => self.renew_file(client, id, &brick, &path, reached).await,
             }
-            renewable.forward = Some(forward(states, renewable.sender.clone()));
+        }
+    }
+
+    async fn renew_program(&self, client: &Arc<Client>, id: u64, brick: &str) {
+        // A brick not back yet keeps its subscription unrenewed; the reader hears nothing new.
+        let Ok(states) = client.subscribe_programs(brick).await else {
+            return;
+        };
+        let mut renewables = self.renewables.lock().expect("renewables");
+        let Some(renewable) = renewables.get_mut(&id) else {
+            return; // dropped meanwhile: `states` goes and cancels itself
+        };
+        let Kind::Program { sender } = &renewable.kind else {
+            return;
+        };
+        let _ = sender.send(states.state.clone());
+        let sender = sender.clone();
+        if let Some(old) = renewable.forward.take() {
+            old.abort();
+        }
+        renewable.forward = Some(forward(states, sender));
+    }
+
+    /// Follows a file again from the offset it reached. A file gone meanwhile ends the follow; a
+    /// brick not back yet keeps it unrenewed.
+    async fn renew_file(
+        &self,
+        client: &Arc<Client>,
+        id: u64,
+        brick: &str,
+        path: &str,
+        reached: u64,
+    ) {
+        let follow = client.follow_file(brick, path, Some(reached)).await;
+        let mut renewables = self.renewables.lock().expect("renewables");
+        let Some(renewable) = renewables.get_mut(&id) else {
+            return; // dropped meanwhile: `follow` goes and cancels itself
+        };
+        let Kind::File {
+            reached,
+            ended,
+            sender,
+            ..
+        } = &renewable.kind
+        else {
+            return;
+        };
+        match follow {
+            Ok(follow) => {
+                if let Some(old) = renewable.forward.take() {
+                    old.abort();
+                }
+                renewable.forward = Some(forward_file(follow, sender.clone(), reached, ended));
+            }
+            Err(error) if error.code() == Some("file_not_found") => {
+                ended.store(true, Ordering::SeqCst);
+                let _ = sender.send(FileEvent::Ended(FileFollowEndedReason::Removed));
+            }
+            Err(_) => {}
         }
     }
 

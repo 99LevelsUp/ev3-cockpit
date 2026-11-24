@@ -6,8 +6,12 @@
 //!   change, in order, for that subscription alone. Its notifications are heard from before the
 //!   subscribe request, so one the daemon sends before its answer is not lost; dropping it cancels
 //!   the subscription.
+//! - [`FileFollow`] follows a file on a brick as it grows, the same way.
 
-use ev3_contract::{Notification, ProgramState, ProgramStateChanged};
+use ev3_contract::{
+    FileAppended, FileFollowEnded, FileFollowEndedReason, FileFollowSubscription,
+    FilesFollowParams, Notification, ProgramState, ProgramStateChanged,
+};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -139,6 +143,158 @@ impl ProgramStates {
 }
 
 impl Drop for ProgramStates {
+    fn drop(&mut self) {
+        self.forward.abort();
+        if !self.endpoint.is_closed() {
+            self.endpoint.send_and_forget(
+                "subscriptions/cancel",
+                json!({ "subscriptionId": self.subscription_id }),
+            );
+        }
+    }
+}
+
+/// What a followed file says next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileEvent {
+    /// The bytes the file grew by, from `offset` on: bytes, not text, so a character may be split
+    /// between two.
+    Appended { offset: u64, data: Vec<u8> },
+    /// The follow ended without being cancelled, and why; nothing follows.
+    Ended(FileFollowEndedReason),
+}
+
+/// A file on a brick followed as it grows: [`FileFollow::next`] hands over every growth in order,
+/// then [`FileEvent::Ended`] if the daemon ends the follow. Dropping it cancels the follow.
+pub struct FileFollow {
+    /// Where the follow started.
+    pub offset: u64,
+    /// The file's size when the follow started.
+    pub size: u64,
+    /// The offset the bytes handed over so far reach.
+    reached: u64,
+    subscription_id: String,
+    events: mpsc::UnboundedReceiver<FileEvent>,
+    forward: JoinHandle<()>,
+    endpoint: Endpoint,
+}
+
+impl FileFollow {
+    /// Follows `path` on `brick` from `from_offset` (0 when `None`).
+    pub(crate) async fn follow(
+        endpoint: &Endpoint,
+        brick: &str,
+        path: &str,
+        from_offset: Option<u64>,
+    ) -> crate::Result<Self> {
+        // Heard from before the request: the daemon may send bytes before its answer.
+        let mut heard = endpoint.notifications();
+        let params = FilesFollowParams {
+            brick: Some(brick.to_owned()),
+            path: path.to_owned(),
+            from_offset,
+        };
+        let answer = endpoint
+            .request(
+                "files/follow",
+                serde_json::to_value(params).unwrap_or_default(),
+            )
+            .await?;
+        let followed: FileFollowSubscription = serde_json::from_value(answer).map_err(|error| {
+            crate::ClientError::contract(
+                "internal",
+                format!("The daemon's answer to files/follow does not decode ({error})."),
+            )
+        })?;
+        let id = followed.subscription_id.clone();
+        let (sender, events) = mpsc::unbounded_channel();
+        let closed = endpoint.closed();
+        let forward = tokio::spawn({
+            let id = id.clone();
+            async move {
+                tokio::pin!(closed);
+                loop {
+                    let next = tokio::select! {
+                        next = heard.recv() => next,
+                        () = &mut closed => return,
+                    };
+                    let event = match next {
+                        Ok((method, params)) if method == "files/appended" => {
+                            match serde_json::from_value::<FileAppended>(params) {
+                                Ok(appended) if appended.subscription_id == id => {
+                                    let Ok(data) =
+                                        ev3_contract::base64::decode(&appended.data, "data")
+                                    else {
+                                        continue;
+                                    };
+                                    FileEvent::Appended {
+                                        offset: appended.offset,
+                                        data,
+                                    }
+                                }
+                                _ => continue,
+                            }
+                        }
+                        Ok((method, params)) if method == "files/followEnded" => {
+                            match serde_json::from_value::<FileFollowEnded>(params) {
+                                Ok(ended) if ended.subscription_id == id => {
+                                    let _ = sender.send(FileEvent::Ended(ended.reason));
+                                    return;
+                                }
+                                _ => continue,
+                            }
+                        }
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return,
+                    };
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            offset: followed.offset,
+            size: followed.size,
+            reached: followed.offset,
+            subscription_id: id,
+            events,
+            forward,
+            endpoint: endpoint.clone(),
+        })
+    }
+
+    /// The next growth, or the follow's end; `None` once the connection closed. Bytes the daemon
+    /// sent again for an offset already reached are not handed over twice.
+    pub async fn next(&mut self) -> Option<FileEvent> {
+        loop {
+            let event = self.events.recv().await?;
+            if let FileEvent::Appended { offset, data } = &event {
+                let end = offset + data.len() as u64;
+                if end <= self.reached {
+                    continue;
+                }
+                let skip = self.reached.saturating_sub(*offset) as usize;
+                let (offset, data) = (offset + skip as u64, data[skip..].to_vec());
+                self.reached = end;
+                return Some(FileEvent::Appended { offset, data });
+            }
+            return Some(event);
+        }
+    }
+
+    /// The offset the bytes handed over so far reach: where to follow again from.
+    pub fn reached(&self) -> u64 {
+        self.reached
+    }
+
+    /// The daemon's id of this follow.
+    pub fn subscription_id(&self) -> &str {
+        &self.subscription_id
+    }
+}
+
+impl Drop for FileFollow {
     fn drop(&mut self) {
         self.forward.abort();
         if !self.endpoint.is_closed() {

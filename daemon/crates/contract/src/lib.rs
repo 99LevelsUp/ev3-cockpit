@@ -23,6 +23,7 @@ mod generated {
 }
 pub use generated::*;
 
+pub mod base64;
 pub mod hello;
 
 use serde::Serialize;

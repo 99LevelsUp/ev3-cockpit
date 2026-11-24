@@ -168,6 +168,17 @@ impl Client {
         crate::ProgramStates::subscribe(&self.endpoint, brick).await
     }
 
+    /// Follows `path` on `brick` as it grows, from `from_offset` (0 when `None`): every growth in
+    /// order (see [`crate::FileFollow`]). Dropping it cancels the follow.
+    pub async fn follow_file(
+        &self,
+        brick: &str,
+        path: &str,
+        from_offset: Option<u64>,
+    ) -> Result<crate::FileFollow> {
+        crate::FileFollow::follow(&self.endpoint, brick, path, from_offset).await
+    }
+
     /// A typed request: `client.call::<method::BricksList>(params)`. The answer is decoded into the
     /// method's result type; one that does not decode is an `internal` error naming the method.
     pub async fn call<M: ev3_contract::Method>(&self, params: M::Params) -> Result<M::Result> {
