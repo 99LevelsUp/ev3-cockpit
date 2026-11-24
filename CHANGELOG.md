@@ -10,6 +10,11 @@ Minor and major versions are bumped manually for significant milestones.
 
 ## [Unreleased]
 
+### Fixed
+- A file read and a folder listing on one brick at the same time no longer break each other
+  (#8): the firmware keeps one read cursor per channel, so the daemon now lets one read or
+  listing at a time hold it.
+
 ## [0.3.0-preview.1] — 2026-11-23
 
 A preview for early testers of the backend (the daemon, `ev3` and `ev3 mcp`): install the npm
