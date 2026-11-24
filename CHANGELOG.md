@@ -13,8 +13,11 @@ Minor and major versions are bumped manually for significant milestones.
 ### Added
 - `files/follow` follows a file on a brick as it grows, such as a program's output while it runs
   (#7): `files/appended` carries every growth in order, `files/followEnded` says why it ended. Each
-  poll reads only the new bytes with one direct command, so nothing stays open on the brick and a
-  lost link leaves nothing to settle. At most two follows per brick.
+  round asks the file's size first, which costs the brick nothing; a grown file is read from the
+  offset with one direct command, or whole when that costs less (a big backlog, or a long file
+  over USB), so nothing stays open on the brick between rounds. At most two follows per brick,
+  and a follow takes at most about half of the brick's or the link's time.
+- `ev3 follow <remote> [offset]` prints a file on the brick as it grows.
 - `ev3-client`: `Client::follow_file` and `Cockpit::follow_file`, which follows again from the
   offset reached after a reconnect.
 
