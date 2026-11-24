@@ -1,6 +1,6 @@
 {
   "$comment": "The method table: every request, notification and error code of the daemon-client contract, naming types from contract/schema. contractVersion marks only breaking changes: raise it when a method, field or error code is removed or renamed, a field changes type or becomes required, or a meaning changes. Additive changes keep it. stableCore entries never change at all. callableBy lists the client kinds that may send a request; needsPerson marks requests the daemon runs only after a person said yes (some only in some cases, as their doc says); leased marks requests that take the brick's write lease for exactly their own length.",
-  "contractVersion": 2,
+  "contractVersion": 3,
   "hello": {
     "hello/start": {
       "params": "HelloStart",

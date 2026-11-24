@@ -99,7 +99,11 @@ struct State {
     /// Per connection, the brick whose telemetry it shows in the foreground.
     foreground: HashMap<u64, String>,
     programs: HashMap<String, ProgramService>,
+    /// Per brick, the client whose stop came after the latest start.
     stopped_by: HashMap<String, String>,
+    /// Per brick, the number of the latest start this daemon sent itself: how a start a replaced
+    /// daemon sent ended is not known here.
+    started_here: HashMap<String, u64>,
     /// Bricks whose one-sided repair is pairing them now.
     repair_pairings: HashSet<String>,
 }

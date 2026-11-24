@@ -756,7 +756,7 @@ Model for the foreground panel:
 
 The contract does not use UI models or the runtime's internal ones. Its own models are JSON Schema
 in `contract/schema/`, generated into Rust and TypeScript: `ContractBrick` (a brick with its channels, holders, and whether it is
-reconnecting or blocked), `DaemonStatus`, `ProgramState` (with `runSeq` and `stoppedBy`),
+reconnecting or blocked), `DaemonStatus`, `ProgramState` (with `runSeq` and `endedBy`),
 `DeployResult`, `TelemetryRowInfo`, `TelemetryValue` (one row's value with its own `sampledAt`,
 `effectiveIntervalMs` and `stale`), `TelemetryUpdate` (a `snapshot` first, then each `change`, and
 `ended` when the brick goes), `ContractChain`, `SettingValue` and `Question`.

@@ -26,6 +26,29 @@ const START_DEADLINE: Duration = Duration::from_secs(15);
 /// The longest `programs/status` waits for a change.
 const MAX_STATUS_WAIT_MS: u64 = 120_000;
 
+/// What `endedBy` says once the latest start, number `run_seq`, is no longer running: the client
+/// whose stop came after it, or `brick` when none did (the program ran to its end, or the brick's
+/// buttons stopped it; the firmware does not tell these apart). Nothing while a program runs,
+/// before any start, or for a start this daemon did not send itself, whose ending it did not see.
+fn ended_by(
+    running: bool,
+    run_seq: u64,
+    started_here: Option<u64>,
+    stopped_by: Option<&String>,
+) -> Option<String> {
+    if running || run_seq == 0 || started_here != Some(run_seq) {
+        return None;
+    }
+    Some(
+        stopped_by
+            .cloned()
+            .unwrap_or_else(|| ENDED_ON_THE_BRICK.to_owned()),
+    )
+}
+
+/// `endedBy` of a program no client stopped.
+pub const ENDED_ON_THE_BRICK: &str = "brick";
+
 impl Surface {
     /// The brick's program service, made on first use.
     fn programs_of(&self, brick_id: &str) -> ProgramService {
@@ -61,11 +84,12 @@ impl Surface {
             brick_id: brick_id.to_owned(),
             running,
             run_seq,
-            stopped_by: if running {
-                None
-            } else {
-                state.stopped_by.get(brick_id).cloned()
-            },
+            ended_by: ended_by(
+                running,
+                run_seq,
+                state.started_here.get(brick_id).copied(),
+                state.stopped_by.get(brick_id),
+            ),
         }
     }
 
@@ -77,6 +101,7 @@ impl Surface {
         if let Err(warning) = written {
             self.shared.log.warn(&warning);
         }
+        self.lock().started_here.insert(brick_id.to_owned(), seq);
         seq
     }
 
@@ -355,5 +380,32 @@ impl Surface {
             })
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ended_by;
+
+    #[test]
+    fn ended_by_names_the_stopper_or_the_brick_only_for_a_start_this_daemon_sent() {
+        let client = "VS Code".to_owned();
+        assert_eq!(
+            ended_by(false, 3, Some(3), Some(&client)),
+            Some(client.clone())
+        );
+        assert_eq!(ended_by(false, 3, Some(3), None).as_deref(), Some("brick"));
+        assert_eq!(ended_by(true, 3, Some(3), None), None, "it still runs");
+        assert_eq!(ended_by(false, 0, None, None), None, "nothing started yet");
+        assert_eq!(
+            ended_by(false, 3, None, None),
+            None,
+            "a replaced daemon sent it"
+        );
+        assert_eq!(
+            ended_by(false, 4, Some(3), Some(&client)),
+            None,
+            "another daemon started 4"
+        );
     }
 }

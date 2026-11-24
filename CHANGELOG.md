@@ -24,6 +24,10 @@ Minor and major versions are bumped manually for significant milestones.
   replace what is there as before; `false` refuses it with the new error `file_exists` (#14).
 
 ### Changed
+- **Contract 3.** `ProgramState.stoppedBy` is gone; `endedBy` says how the latest start ended once
+  no program runs: the client whose stop ended it, or `brick` when no client stopped it (it ran
+  to its end, or the brick's buttons stopped it). It is left out for a start a replaced daemon
+  sent. `program_status` in `ev3 mcp`, `ev3 program` and `ev3 stop` say it too (#15).
 - `ev3 mcp`: `read_file` and `move_file` no longer replace a file already there unless the agent
   asks with `replace: true`; `write_file` (now with `replace`) and `deploy_and_run` say they are
   destructive, so an agent host can ask the person before they replace files on the brick (#14).

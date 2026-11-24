@@ -164,7 +164,7 @@
     },
     "programs/stop": {
       "params": { "brick": "AAA" },
-      "result": { "brickId": "001653f00a0a", "running": false, "runSeq": 8, "stoppedBy": "ev3 stop (terminal)" }
+      "result": { "brickId": "001653f00a0a", "running": false, "runSeq": 8, "endedBy": "ev3 stop (terminal)" }
     },
     "programs/emergencyStop": {
       "params": {},

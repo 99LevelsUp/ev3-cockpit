@@ -128,8 +128,8 @@ start outcome is one of:
 - `not_seen_running`;
 - `uncertain`: the program may have started. Do not start it again; check its state first.
 
-`runSeq` counts the starts on each brick. Program states carry it, and `stoppedBy` when a stop ended
-the program. The daemon writes each brick's last number to `runs.json` before it sends the start,
+`runSeq` counts the starts on each brick. Program states carry it, and `endedBy` once the latest start ended:
+the client whose stop ended it, or `brick`. The daemon writes each brick's last number to `runs.json` before it sends the start,
 so a daemon that replaces it counts on. A missing `runs.json` counts from 0; a damaged one is moved
 aside, said in the log, and counting starts from 0.
 
