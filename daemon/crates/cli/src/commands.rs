@@ -167,9 +167,9 @@ pub const COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "mcp",
-        usage: "ev3 mcp",
-        summary: "Serve the cockpit's tools to an agent over MCP (stdio).",
-        flags: &[],
+        usage: "ev3 mcp | ev3 mcp setup [--replace] [--remove]",
+        summary: "Serve the cockpit's tools, and its add-ons', to an agent over MCP (stdio); setup registers it in Claude Code and Codex.",
+        flags: &["replace", "remove"],
     },
 ];
 

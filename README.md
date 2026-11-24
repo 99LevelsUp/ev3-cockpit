@@ -39,7 +39,11 @@ ev3 daemon restart | log
 add-on's own commands run as `ev3 <name>` (the `ev3-<name>` program on the PATH).
 
 **For an AI agent**, `ev3 mcp` is an MCP server over stdio with tools for bricks, files,
-programs, telemetry and settings: point the agent at the command `ev3` with the argument `mcp`.
+programs, telemetry and settings, and the tools of every installed add-on beside them (as
+`<name>_<tool>`). `ev3 mcp setup` registers it as the MCP server `ev3` in Claude Code (for the
+user) and Codex, whichever are installed, on Windows and Linux; `--replace` replaces another
+server named `ev3`, `--remove` takes it out again. Other agents: point them at the command `ev3`
+with the argument `mcp`.
 
 Connecting a brick from a terminal or an agent does not start telemetry: the daemon reads a brick
 only for VS Code's panel showing it, or while `ev3 telemetry` or the `read_telemetry` tool runs. Forgetting a brick, clearing its Bluetooth list and switching to `full` run
