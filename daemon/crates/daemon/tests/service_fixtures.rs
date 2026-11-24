@@ -82,13 +82,8 @@ impl Replay {
         }
     }
 
-    /// A strict replay whose channel directory holds `files` (name, content) before the daemon
-    /// starts, as a previous daemon left them.
-    async fn start_seeded(name: &str, files: &[(&str, String)]) -> Self {
-        Self::start_seeded_as(name, true, files).await
-    }
-
-    /// The same, strict or matched.
+    /// A replay, strict or matched, whose channel directory holds `files` (name, content) before
+    /// the daemon starts, as a previous daemon left them.
     async fn start_seeded_as(name: &str, strict: bool, files: &[(&str, String)]) -> Self {
         let root = TempRoot::new("service");
         let dir = root.channel_dir("t");
@@ -760,11 +755,13 @@ async fn usb_deploy_and_run_replays_strictly_and_hears_the_program_end() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn usb_programs_run_stop_and_status_replay_strictly() {
+async fn usb_programs_run_stop_and_status_in_matched_replay() {
     if common::refuses_this_process() {
         return;
     }
-    let mut run = Replay::start("usb-programs-ccc").await;
+    // Matched: a program subscription's follower polls the status on a timer, with the bytes a
+    // request's own status check sends; on a slow runner it fires more often than when recorded (#12).
+    let mut run = Replay::start_as("usb-programs-ccc", false).await;
     programs_run_stop_and_status(&mut run, 0).await;
     let root = run.end().await;
     let runs: Value = serde_json::from_str(
@@ -780,7 +777,7 @@ async fn a_daemon_counts_run_seq_on_from_the_runs_json_the_previous_one_left() {
         return;
     }
     let left = format!("{{\"bricks\":{{\"{CCC_ID}\":41,\"001653F00B0B\":7}}}}");
-    let mut run = Replay::start_seeded("usb-programs-ccc", &[("runs.json", left)]).await;
+    let mut run = Replay::start_seeded_as("usb-programs-ccc", false, &[("runs.json", left)]).await;
     programs_run_stop_and_status(&mut run, 41).await;
     let root = run.end().await;
     let runs: Value = serde_json::from_str(

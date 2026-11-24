@@ -11,10 +11,10 @@
 //!   For client tests, whose counters and interleaving differ from the recorded run.
 //!
 //! Either way, a request with no recorded answer left fails with `replay_unmatched`, so a stale
-//! fixture shows up instead of hiding. Two calls a daemon makes on a timer, discovery and
-//! presence checks, are the one exception in matched mode: once their recorded answers run out
-//! they keep giving the last one, because how often a timer fires depends on how long a test
-//! runs, not on what it does.
+//! fixture shows up instead of hiding. The calls a daemon makes on a timer, discovery, presence
+//! checks and a program subscription's status polls, are the one exception in matched mode: once
+//! their recorded answers run out they keep giving the last one, because how often a timer fires
+//! depends on how long a test runs, not on what it does.
 //!
 //! Each call takes as long as it took when recorded, on tokio's clock, so a test with paused time
 //! runs at once. A call the recorded caller abandoned is never finished.
@@ -266,6 +266,28 @@ fn describe_event(event: &Event) -> String {
     text
 }
 
+/// Whether `request` asks the brick whether a user program runs: the direct command
+/// `opPROGRAM_INFO GET_STATUS` for the user slot, as `BrickCommand::ProgramStatus` builds it. A
+/// subscription's follower sends it on a timer, with the same bytes a request's own status check
+/// sends, so it is a polled call too.
+fn is_program_status_poll(request: &[u8]) -> bool {
+    use ev3_protocol::packet::{command, opcode, program_info_sub, program_slot};
+    // LC0 carries a value below 32 as the value itself, so the named codes are the bytes.
+    const GET_STATUS_USER_SLOT: [u8; 3] = [
+        opcode::PROGRAM_INFO,
+        program_info_sub::GET_STATUS,
+        program_slot::USER,
+    ];
+    // A direct command's payload starts with its two-byte global and local variable sizes.
+    ev3_protocol::decode_ev3_packet(request).is_ok_and(|packet| {
+        packet.packet_type == command::DIRECT_COMMAND_REPLY
+            && packet
+                .payload
+                .get(2..)
+                .is_some_and(|code| code.starts_with(&GET_STATUS_USER_SLOT))
+    })
+}
+
 /// The request with its message counter, bytes 2 and 3, zeroed.
 fn masked(request: &[u8]) -> Vec<u8> {
     let mut out = request.to_vec();
@@ -348,7 +370,8 @@ impl Shared {
                     call.via,
                     call.request.map(masked).unwrap_or_default(),
                 );
-                let polled = matches!(call.name, "discover" | "presence");
+                let polled = matches!(call.name, "discover" | "presence")
+                    || call.request.is_some_and(is_program_status_poll);
                 match state.matched.get_mut(&key).and_then(VecDeque::pop_front) {
                     Some(event) => {
                         if polled {
