@@ -520,6 +520,134 @@ async fn a_cockpit_dropped_without_shutdown_lets_go_of_its_brick() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_cockpits_file_follow_hands_over_every_byte_and_follows_again_from_where_it_reached() {
+    use ev3_client::FileEvent;
+    let root = std::env::temp_dir().join(format!(
+        "ev3c-follow-{}",
+        ev3_channel::hex(&ev3_channel::random_bytes::<6>())
+    ));
+    let paths = Paths::new(&root, Some("follow"));
+    let scenario = "service/usb-follow-bbb";
+    let Some(first) = ReplayDaemon::start(&paths, scenario) else {
+        return;
+    };
+    const DIR: &str = "/home/root/lms2012/prjs/CockpitFixture";
+    const LINE: &str = "the quick brown fox jumps over the lazy dog\n";
+    const BYTES: usize = 10_000;
+    let file = format!("{DIR}/out.txt");
+    let cockpit = ev3_client::Cockpit::connect(ev3_client::CockpitOptions {
+        name: "EVƎ C test".into(),
+        kind: "addon",
+        version: "1.0.0".into(),
+        build_kind: "release".into(),
+        daemon: Launch::Nothing,
+        paths: paths.clone(),
+        daemon_args: Vec::new(),
+        asker: None,
+        notice: std::sync::Arc::new(|_: &str| {}),
+    })
+    .await
+    .expect("connected");
+    cockpit
+        .request("bricks/list", json!({ "waitForDiscovery": true }))
+        .await
+        .expect("list");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !cockpit
+        .bricks()
+        .await
+        .expect("bricks")
+        .iter()
+        .any(|b| b.name == "BBB" && b.name_confirmed)
+    {
+        assert!(std::time::Instant::now() < until, "BBB was not listed");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let call = |method: &'static str, params: serde_json::Value| {
+        let cockpit = cockpit.clone();
+        async move {
+            cockpit
+                .request(method, params)
+                .await
+                .unwrap_or_else(|e| panic!("{method}: {e}"))
+        }
+    };
+    call("bricks/connect", json!({ "brick": "BBB" })).await;
+    let exists = call("files/exists", json!({ "brick": "BBB", "path": DIR })).await;
+    assert_eq!(exists["exists"], false);
+    call(
+        "files/makeDirectory",
+        json!({ "brick": "BBB", "path": DIR }),
+    )
+    .await;
+    call(
+        "files/write",
+        json!({ "brick": "BBB", "path": file, "content": "" }),
+    )
+    .await;
+    let mut follow = cockpit
+        .follow_file("BBB", &file, Some(0))
+        .await
+        .expect("follow");
+    assert_eq!((follow.offset, follow.size), (0, 0));
+    let content = LINE.repeat(BYTES / LINE.len() + 1)[..BYTES].to_owned();
+    let begun = call("transfer/begin", json!({ "size": BYTES })).await;
+    call(
+        "transfer/write",
+        json!({ "handle": begun["handle"],
+                "data": ev3_client::contract::base64::encode(content.as_bytes()) }),
+    )
+    .await;
+    call(
+        "files/write",
+        json!({ "brick": "BBB", "path": file, "handle": begun["handle"] }),
+    )
+    .await;
+    let mut followed = Vec::new();
+    while followed.len() < BYTES {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(30), follow.next())
+            .await
+            .expect("bytes within 30 s")
+            .expect("the follow is open");
+        let FileEvent::Appended { offset, data } = event else {
+            panic!("ended before every byte came: {event:?}");
+        };
+        assert_eq!(offset, followed.len() as u64, "in order, nothing twice");
+        followed.extend(data);
+    }
+    assert_eq!(String::from_utf8_lossy(&followed), content);
+
+    // The daemon goes and a new one comes. The follow is made again from 10000, where the new
+    // daemon's brick holds nothing more until the file is removed (as recorded): no byte comes
+    // twice, and the follow ends as removed.
+    let mut events = cockpit.events();
+    drop(first);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _second = ReplayDaemon::start(&paths, scenario).expect("again");
+    let reconnected = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        loop {
+            if let Ok(ev3_client::CockpitEvent::Reconnected(_)) = events.recv().await {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(reconnected.is_ok(), "not connected again");
+    let after = tokio::time::timeout(std::time::Duration::from_secs(30), follow.next())
+        .await
+        .expect("the follow's end within 30 s");
+    assert_eq!(
+        after,
+        Some(FileEvent::Ended(
+            ev3_client::contract::FileFollowEndedReason::Removed
+        )),
+        "nothing again after the reconnect, then the end"
+    );
+    cockpit.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_cockpit_keeps_trying_after_its_daemon_went_and_needs_no_request_to_come_back() {
     let root = std::env::temp_dir().join(format!(
         "ev3c-retry-{}",
