@@ -3,19 +3,27 @@
 //! Every local path a client names is confined before anything else about the request: before the
 //! brick is resolved, before a byte is read from it or written to it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use ev3_contract::{
-    ContractError, ErrorCode, FileExists, FileSize, FilesMoveParams, FilesReadParams,
+    ContractError, ErrorCode, FileAppended, FileExists, FileFollowEnded, FileFollowEndedReason,
+    FileFollowSubscription, FileSize, FilesFollowParams, FilesMoveParams, FilesReadParams,
     FilesReadResult, FilesRemoveParams, FilesRemovePathsParams, FilesWriteParams, FilesWriteResult,
-    FsEntry, FsEntryKind, FsListing, PathParams, RemoveReport, TransferBeginParams,
+    FsEntry, FsEntryKind, FsListing, Notification, PathParams, RemoveReport, TransferBeginParams,
     TransferBeginResult, TransferChunk, TransferHandleParams, TransferWriteParams,
 };
-use ev3_runtime::{CancelFlag, TransferOptions};
+use ev3_protocol::commands::READ_FROM_MAX_BYTES;
+use ev3_runtime::bricks::CommandOptions;
+use ev3_runtime::{
+    BrickSender, CancelFlag, FilesystemService, FsError, ReadFrom, TransferOptions,
+    read_from_budget,
+};
 use tokio_util::sync::CancellationToken;
 
-use super::{Handle, Surface, encoding, errors, new_id};
+use super::{Handle, Subscription, Surface, encoding, errors, new_id};
 use crate::access::Operation;
+use crate::log::Level;
 use crate::rpc::RequestContext;
 
 /// Small files are read inline up to this size.
@@ -421,5 +429,325 @@ impl Surface {
         {
             state.handles.remove(&params.handle);
         }
+    }
+
+    // ── Following a file ────────────────────────────────────────────
+
+    fn follows_on(state: &super::State, brick_id: &str) -> usize {
+        state
+            .subscriptions
+            .values()
+            .flat_map(|subscriptions| subscriptions.values())
+            .filter(|s| matches!(s, Subscription::Follow { brick_id: b, .. } if b == brick_id))
+            .count()
+    }
+
+    /// Follows a file as it grows: each poll is one read from the offset reached
+    /// ([`ev3_runtime::FilesystemService::read_from`]), so only new bytes cross the link, nothing
+    /// stays open on the brick between two polls, and nothing is owed when the link goes.
+    pub async fn files_follow(
+        self: &Arc<Self>,
+        cx: &RequestContext,
+        params: FilesFollowParams,
+    ) -> Result<FileFollowSubscription, ContractError> {
+        let from = params.from_offset.unwrap_or(0);
+        let offset = u32::try_from(from)
+            .ok()
+            .filter(|offset| i32::try_from(*offset).is_ok())
+            .ok_or_else(|| {
+                ContractError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("fromOffset {from} is past what the brick can skip to."),
+                )
+            })?;
+        let (folder, name) = match params.path.rsplit_once('/') {
+            Some((folder, name)) if !name.is_empty() => {
+                (if folder.is_empty() { "/" } else { folder }, name)
+            }
+            _ => {
+                return Err(ContractError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("{} does not name a file in a folder.", params.path),
+                ));
+            }
+        };
+        let brick_id = self.brick_of(cx, params.brick.as_deref()).await?;
+        if Self::follows_on(&self.lock(), &brick_id) >= MAX_FOLLOWS_PER_BRICK {
+            return Err(too_many_follows());
+        }
+        // The folder's listing tells a file from a folder, which a read from an offset cannot,
+        // and gives its exact size.
+        let not_found = || {
+            ContractError::new(
+                ErrorCode::FileNotFound,
+                format!("No file {} on the brick yet.", params.path),
+            )
+        };
+        let entries = match self.filesystem(cx, &brick_id).files.list(folder).await {
+            Ok(entries) => entries,
+            // The brick refused the folder: it is not there.
+            Err(error) if error.is_protocol() => return Err(not_found()),
+            Err(error) => return Err(errors::from_fs(&error)),
+        };
+        let size = match entries.iter().find(|entry| entry.name == name) {
+            None => return Err(not_found()),
+            Some(entry) if entry.kind != ev3_protocol::responses::FsEntryKind::File => {
+                return Err(ContractError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("{} is not a file.", params.path),
+                ));
+            }
+            Some(entry) => entry.bytes.map_or(0, u64::from),
+        };
+
+        let id = new_id();
+        let task = tokio::spawn(follow(
+            Arc::downgrade(self),
+            Followed {
+                client: cx.client.clone(),
+                subscription_id: id.clone(),
+                brick_id: brick_id.clone(),
+                path: params.path.clone(),
+            },
+            offset,
+        ))
+        .abort_handle();
+        {
+            let mut state = self.lock();
+            // Counted again with the insert: two follows asked for at once may not both pass.
+            if Self::follows_on(&state, &brick_id) >= MAX_FOLLOWS_PER_BRICK {
+                task.abort();
+                return Err(too_many_follows());
+            }
+            state.subscriptions.entry(cx.client.id).or_default().insert(
+                id.clone(),
+                Subscription::Follow {
+                    task,
+                    brick_id: brick_id.clone(),
+                },
+            );
+        }
+        self.shared.log.write(
+            Level::Info,
+            Some(&cx.client.info.name),
+            &format!("Following {} on {brick_id} from {from}", params.path),
+        );
+        Ok(FileFollowSubscription {
+            subscription_id: id,
+            offset: from,
+            size,
+        })
+    }
+
+    /// A follow ended on its own: it is no longer the client's, and the client hears why.
+    fn follow_ended(&self, followed: &Followed, reason: FileFollowEndedReason) {
+        let removed = self
+            .lock()
+            .subscriptions
+            .get_mut(&followed.client.id)
+            .and_then(|subscriptions| subscriptions.remove(&followed.subscription_id))
+            .is_some();
+        if !removed {
+            return;
+        }
+        self.shared.log.write(
+            Level::Info,
+            Some(&followed.client.info.name),
+            &format!(
+                "Stopped following {} on {}: {reason}",
+                followed.path, followed.brick_id
+            ),
+        );
+        let notification = Notification::FilesFollowEnded(FileFollowEnded {
+            subscription_id: followed.subscription_id.clone(),
+            reason,
+        });
+        if let Ok(params) = notification.params() {
+            followed.client.peer.notify(notification.method(), params);
+        }
+    }
+}
+
+/// Follows each brick may have, for every client together: each poll is a command the brick
+/// runs, between everything else it is asked.
+pub const MAX_FOLLOWS_PER_BRICK: usize = 2;
+/// The first poll, and the pause after one that found new bytes.
+const FOLLOW_GROWING: Duration = Duration::from_millis(250);
+/// The longest pause of a file that does not grow: each poll that finds nothing doubles it.
+const FOLLOW_IDLE: Duration = Duration::from_secs(2);
+/// The pause after a poll that failed: the link is away, or the brick did not answer.
+const FOLLOW_TROUBLE: Duration = Duration::from_secs(3);
+
+fn too_many_follows() -> ContractError {
+    ContractError::new(
+        ErrorCode::InvalidRequest,
+        format!("The brick has {MAX_FOLLOWS_PER_BRICK} follows already; cancel one first."),
+    )
+}
+
+/// What one follow hands over, and to whom.
+struct Followed {
+    client: Arc<crate::state::ClientEntry>,
+    subscription_id: String,
+    brick_id: String,
+    path: String,
+}
+
+/// The poll loop of one follow, until it ends or is aborted. Waits before its first poll, so
+/// the client has the follow's answer before its first `files/appended`.
+async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
+    let mut pause = FOLLOW_GROWING;
+    loop {
+        tokio::time::sleep(pause).await;
+        let Some(surface) = surface.upgrade() else {
+            return;
+        };
+        if !surface.runtime.bricks.is_signed_in(&followed.brick_id) {
+            surface.follow_ended(&followed, FileFollowEndedReason::SignedOut);
+            return;
+        }
+        let files = FilesystemService::new(
+            Arc::new(BrickSender::new(
+                surface.runtime.bricks.clone(),
+                followed.brick_id.as_str(),
+                CommandOptions {
+                    timeout: Some(read_from_budget(offset)),
+                    deadline: None,
+                },
+            )),
+            None,
+        );
+        let read = files
+            .read_from(&followed.path, offset, READ_FROM_MAX_BYTES)
+            .await;
+        match after_poll(read, offset, pause) {
+            Poll::Ended(reason) => {
+                surface.follow_ended(&followed, reason);
+                return;
+            }
+            Poll::Appended { data, next } => {
+                let notification = Notification::FilesAppended(FileAppended {
+                    subscription_id: followed.subscription_id.clone(),
+                    offset: u64::from(offset),
+                    data: encoding::encode(&data),
+                });
+                if let Ok(params) = notification.params() {
+                    followed.client.peer.notify(notification.method(), params);
+                }
+                offset += data.len() as u32;
+                pause = next;
+            }
+            Poll::Wait(next) => pause = next,
+        }
+    }
+}
+
+/// What a follow does after one poll.
+#[derive(Debug, PartialEq, Eq)]
+enum Poll {
+    /// Hand over the bytes the file grew by, then wait `next`.
+    Appended {
+        data: Vec<u8>,
+        next: Duration,
+    },
+    /// Nothing new, or the poll failed: wait `next` and ask again.
+    Wait(Duration),
+    Ended(FileFollowEndedReason),
+}
+
+/// The step after a poll at `offset` that waited `pause` before it: often while the file grows,
+/// less and less often while it does not, and at once while more waits on the brick than one
+/// poll brings.
+fn after_poll(read: Result<ReadFrom, FsError>, offset: u32, pause: Duration) -> Poll {
+    match read {
+        Ok(read) if !read.exists => Poll::Ended(FileFollowEndedReason::Removed),
+        Ok(read) if read.size < offset => Poll::Ended(FileFollowEndedReason::Replaced),
+        Ok(read) if !read.chunk.is_empty() => {
+            let reached = u64::from(offset) + read.chunk.len() as u64;
+            let next = if u64::from(read.size) > reached {
+                Duration::ZERO
+            } else {
+                FOLLOW_GROWING
+            };
+            Poll::Appended {
+                data: read.chunk,
+                next,
+            }
+        }
+        Ok(_) => Poll::Wait((pause * 2).clamp(FOLLOW_GROWING, FOLLOW_IDLE)),
+        Err(_) => Poll::Wait(FOLLOW_TROUBLE),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(exists: bool, size: u32, chunk: &[u8]) -> Result<ReadFrom, FsError> {
+        Ok(ReadFrom {
+            exists,
+            size,
+            chunk: chunk.to_vec(),
+        })
+    }
+
+    #[test]
+    fn hands_over_new_bytes_and_asks_again_at_once_while_more_waits() {
+        assert_eq!(
+            after_poll(read(true, 5000, b"abc"), 10, FOLLOW_IDLE),
+            Poll::Appended {
+                data: b"abc".to_vec(),
+                next: Duration::ZERO
+            }
+        );
+        assert_eq!(
+            after_poll(read(true, 13, b"abc"), 10, FOLLOW_IDLE),
+            Poll::Appended {
+                data: b"abc".to_vec(),
+                next: FOLLOW_GROWING
+            }
+        );
+    }
+
+    #[test]
+    fn asks_less_often_while_the_file_does_not_grow_and_again_often_once_it_does() {
+        let mut pause = FOLLOW_GROWING;
+        let mut pauses = Vec::new();
+        for _ in 0..5 {
+            let Poll::Wait(next) = after_poll(read(true, 10, b""), 10, pause) else {
+                panic!("nothing new is a wait");
+            };
+            pauses.push(next);
+            pause = next;
+        }
+        assert_eq!(
+            pauses,
+            [500, 1000, 2000, 2000, 2000].map(Duration::from_millis)
+        );
+        assert!(matches!(
+            after_poll(read(true, 11, b"x"), 10, pause),
+            Poll::Appended { next, .. } if next == FOLLOW_GROWING
+        ));
+    }
+
+    #[test]
+    fn ends_when_the_file_goes_or_is_replaced_by_a_shorter_one_and_waits_out_a_failed_poll() {
+        assert_eq!(
+            after_poll(read(false, 0, b""), 10, FOLLOW_GROWING),
+            Poll::Ended(FileFollowEndedReason::Removed)
+        );
+        assert_eq!(
+            after_poll(read(true, 4, b""), 10, FOLLOW_GROWING),
+            Poll::Ended(FileFollowEndedReason::Replaced)
+        );
+        // At the offset exactly: the same file, nothing new.
+        assert_eq!(
+            after_poll(read(true, 10, b""), 10, FOLLOW_GROWING),
+            Poll::Wait(Duration::from_millis(500))
+        );
+        assert_eq!(
+            after_poll(Err(FsError::Cancelled), 10, FOLLOW_GROWING),
+            Poll::Wait(FOLLOW_TROUBLE)
+        );
     }
 }

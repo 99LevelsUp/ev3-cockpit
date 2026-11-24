@@ -48,7 +48,7 @@ pub use forget::{
 };
 pub use fs::{
     BrickFilesystem, BrickSender, CommandSender, FileSize, FilesystemService, FsError,
-    MAX_PATH_BYTES, RemoveReport, StorageUsage, WriteReporter,
+    MAX_PATH_BYTES, ReadFrom, RemoveReport, StorageUsage, WriteReporter, read_from_budget,
 };
 pub use guard::{Guard, GuardConfig, brick_id_of};
 pub use heartbeat::{Beat, MIN_HEARTBEAT_INTERVAL, MissCounter, Probe};

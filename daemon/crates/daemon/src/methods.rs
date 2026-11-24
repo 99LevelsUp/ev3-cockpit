@@ -330,6 +330,14 @@ impl Methods for Daemon {
         self.surface.files_read(cx, params).await
     }
 
+    async fn files_follow(
+        &self,
+        cx: &RequestContext,
+        params: FilesFollowParams,
+    ) -> Result<FileFollowSubscription, ContractError> {
+        self.surface.files_follow(cx, params).await
+    }
+
     async fn files_write(
         &self,
         cx: &RequestContext,

@@ -314,6 +314,22 @@ pub struct FileSize {
     pub files: u32,
 }
 
+/// What a read from an offset found ([`FilesystemService::read_from`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadFrom {
+    pub exists: bool,
+    /// The file's size when the brick opened it; 0 when it does not exist.
+    pub size: u32,
+    /// The bytes from the offset on, at most as many as asked for.
+    pub chunk: Vec<u8>,
+}
+
+/// What a read from `offset` may take: the brick skips to it at about 12 µs a byte (measured on
+/// V1.10E), on top of an ordinary exchange.
+pub fn read_from_budget(offset: u32) -> Duration {
+    Duration::from_secs(3) + Duration::from_micros(25) * offset
+}
+
 /// The brick's storage totals, in kilobytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StorageUsage {
@@ -427,6 +443,36 @@ impl FilesystemService {
         let mut entries = parse_listing(&listing);
         entries.retain(|entry| entry.name != "." && entry.name != "..");
         Ok(entries)
+    }
+
+    /// Up to `max_bytes` of a file from `offset` on, with one direct command
+    /// ([`BrickCommand::FsReadFrom`]): the brick skips to the offset, so only new bytes cross the
+    /// link. Holds no read cursor and leaves nothing to settle. A folder is not told from a file
+    /// here: a caller that may name one checks the listing first.
+    pub async fn read_from(
+        &self,
+        path: &str,
+        offset: u32,
+        max_bytes: u16,
+    ) -> Result<ReadFrom, FsError> {
+        check_path(path)?;
+        let command = BrickCommand::FsReadFrom {
+            path: path.to_owned(),
+            offset,
+            max_bytes,
+        };
+        match self.send(&command).await? {
+            BrickResponse::FsReadFrom {
+                exists,
+                size,
+                chunk,
+            } => Ok(ReadFrom {
+                exists,
+                size,
+                chunk,
+            }),
+            reply => Err(unexpected(&command, &reply)),
+        }
     }
 
     /// Whether the path resolves on the brick, file or directory: from the reply, not from the
