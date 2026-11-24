@@ -205,6 +205,14 @@ pub enum BrickResponse {
     },
     FsCopy,
     FsRemoveTree,
+    /// What a read from an offset found: whether the path exists, the file's size when it was
+    /// opened, and the bytes from the offset on (at most the bytes asked for; none when the file
+    /// is no longer than the offset).
+    FsReadFrom {
+        exists: bool,
+        size: u32,
+        chunk: Vec<u8>,
+    },
 }
 
 // ── Public interface ────────────────────────────────────────────────
@@ -355,6 +363,9 @@ pub fn parse_response(
             Ok(BrickResponse::FsCloseHandle)
         }
         BrickCommand::FsListContinue { .. } => parse_fs_list_continue(payload),
+        BrickCommand::FsReadFrom {
+            offset, max_bytes, ..
+        } => parse_fs_read_from(payload, *offset, *max_bytes),
         BrickCommand::FsSize { .. } => {
             if payload.len() < 8 {
                 return Err(ProtocolError::new(format!(
@@ -558,6 +569,39 @@ fn parse_fs_list(payload: &[u8]) -> Result<BrickResponse, ProtocolError> {
 
 /// A continuation reply, whose header is `[echo][status][handle]`: three bytes, where the
 /// opening `LIST_FILES` reply carries a four-byte list size as well.
+/// The globals of a read from an offset ([`crate::commands::read_from_layout`]). The data area
+/// holds what the last `READ_BYTES` left, skipped bytes included, so only as much as the size
+/// says lies past the offset is taken.
+fn parse_fs_read_from(
+    payload: &[u8],
+    offset: u32,
+    max_bytes: u16,
+) -> Result<BrickResponse, ProtocolError> {
+    use crate::commands::read_from_layout::{DATA, EXISTS, SIZE};
+    let data = DATA as usize;
+    if payload.len() < data + usize::from(max_bytes) {
+        return Err(ProtocolError::new(format!(
+            "Malformed fs:readFrom reply: expected {} bytes, got {}.",
+            data + usize::from(max_bytes),
+            payload.len()
+        )));
+    }
+    if payload[EXISTS as usize] == 0 {
+        return Ok(BrickResponse::FsReadFrom {
+            exists: false,
+            size: 0,
+            chunk: Vec::new(),
+        });
+    }
+    let size = read_uint32le(payload, SIZE as usize)?;
+    let count = size.saturating_sub(offset).min(u32::from(max_bytes)) as usize;
+    Ok(BrickResponse::FsReadFrom {
+        exists: true,
+        size,
+        chunk: payload[data..data + count].to_vec(),
+    })
+}
+
 fn parse_fs_list_continue(payload: &[u8]) -> Result<BrickResponse, ProtocolError> {
     if payload.len() < 3 {
         return Err(ProtocolError::new(format!(

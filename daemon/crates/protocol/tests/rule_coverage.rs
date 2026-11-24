@@ -655,6 +655,86 @@ fn responses__short_direct_replies_are_refused() {
     }
 }
 
+/// The globals of a read from an offset: size at 0, exists at 16, data from 20.
+fn read_from_reply(exists: bool, size: u32, data: &[u8], max: u16) -> Vec<u8> {
+    let mut globals = vec![0xAA; 20 + usize::from(max)];
+    globals[..4].copy_from_slice(&size.to_le_bytes());
+    globals[16] = u8::from(exists);
+    globals[20..20 + data.len()].copy_from_slice(data);
+    globals
+}
+
+fn read_from(offset: u32, max_bytes: u16) -> BrickCommand {
+    BrickCommand::FsReadFrom {
+        path: "/p".into(),
+        offset,
+        max_bytes,
+    }
+}
+
+#[test]
+fn responses__fs_read_from_takes_only_what_lies_past_the_offset() {
+    let data: Vec<u8> = (0..64).collect();
+    // The data area also holds what the brick skipped: only size - offset of it is the file's.
+    let reply = read_from_reply(true, 1010, &data, 64);
+    assert_eq!(
+        parse(read_from(1000, 64), reply::DIRECT_REPLY, &reply),
+        BrickResponse::FsReadFrom {
+            exists: true,
+            size: 1010,
+            chunk: data[..10].to_vec(),
+        }
+    );
+    // More than asked for waits for the next read.
+    let reply = read_from_reply(true, 5000, &data, 64);
+    assert_eq!(
+        parse(read_from(1000, 64), reply::DIRECT_REPLY, &reply),
+        BrickResponse::FsReadFrom {
+            exists: true,
+            size: 5000,
+            chunk: data.clone(),
+        }
+    );
+    // A file no longer than the offset (it was replaced by a shorter one) gives nothing.
+    let reply = read_from_reply(true, 500, &data, 64);
+    assert_eq!(
+        parse(read_from(1000, 64), reply::DIRECT_REPLY, &reply),
+        BrickResponse::FsReadFrom {
+            exists: true,
+            size: 500,
+            chunk: Vec::new(),
+        }
+    );
+    // Missing: whatever the globals hold.
+    let reply = read_from_reply(false, 77, &data, 64);
+    assert_eq!(
+        parse(read_from(0, 64), reply::DIRECT_REPLY, &reply),
+        BrickResponse::FsReadFrom {
+            exists: false,
+            size: 0,
+            chunk: Vec::new(),
+        }
+    );
+    let message = parse_err(read_from(0, 64), reply::DIRECT_REPLY, &[0; 83]);
+    assert!(message.contains("Malformed fs:readFrom reply"), "{message}");
+}
+
+#[test]
+fn commands__fs_read_from_asks_for_the_globals_it_reads_and_refuses_what_does_not_fit() {
+    let command = build_command(&read_from(65536, 992)).unwrap();
+    assert_eq!(
+        command.packet_type,
+        ev3_protocol::packet::command::DIRECT_COMMAND_REPLY
+    );
+    // 20 bytes of layout and 992 of data: 1012, inside the firmware's 1024-byte buffer with the
+    // reply's envelope.
+    assert_eq!(&command.payload[..2], &1012u16.to_le_bytes());
+    assert!(build_command(&read_from(0, 64)).unwrap().payload[..2] == 84u16.to_le_bytes());
+    for refused in [read_from(0, 0), read_from(0, 993), read_from(u32::MAX, 64)] {
+        assert!(build_command(&refused).is_err(), "{refused:?}");
+    }
+}
+
 #[test]
 fn responses__fs_exists_and_make_directory_read_one_byte() {
     let exists = |b| {
