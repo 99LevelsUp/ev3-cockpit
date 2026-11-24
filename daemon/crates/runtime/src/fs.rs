@@ -22,7 +22,7 @@ use crate::bricks::{BrickError, BrickManager, CommandOptions};
 use crate::error::SessionError;
 use crate::ledger::Ledgers;
 use crate::ports::{ActivityPort, Requester, WriteActivity, WriteScope};
-use crate::transfer::{BrickRoute, FileTransferService};
+use crate::transfer::{BrickRoute, FileTransferService, ReadCursor};
 
 /// The firmware copies a path into a 60-byte buffer with `snprintf` rather than rejecting an
 /// over-long one, so it would act on a different path than the caller named.
@@ -333,12 +333,25 @@ pub struct RemoveReport {
 pub struct FilesystemService {
     sender: Arc<dyn CommandSender>,
     writes: Option<WriteReporter>,
+    cursor: Arc<ReadCursor>,
 }
 
 impl FilesystemService {
-    /// Writes are reported through `writes` when given.
+    /// Writes are reported through `writes` when given. Listings hold a cursor of their own;
+    /// [`FilesystemService::with_read_cursor`] shares the brick's with its reads.
     pub fn new(sender: Arc<dyn CommandSender>, writes: Option<WriteReporter>) -> Self {
-        Self { sender, writes }
+        Self {
+            sender,
+            writes,
+            cursor: Arc::new(ReadCursor::new()),
+        }
+    }
+
+    /// Listings hold `cursor`, the one the brick's reads hold too.
+    #[must_use]
+    pub fn with_read_cursor(mut self, cursor: Arc<ReadCursor>) -> Self {
+        self.cursor = cursor;
+        self
     }
 
     fn write_scope(&self, what: impl FnOnce() -> String) -> Option<WriteScope> {
@@ -358,8 +371,12 @@ impl FilesystemService {
     ///
     /// `.` and `..` are dropped: they are real entries in the brick's reply, but a caller walking
     /// a tree with them recurses forever.
+    ///
+    /// Holds the brick's read cursor from its first page to its last, a one-page listing too:
+    /// its `LIST_FILES` alone would take the cursor from a read in progress.
     pub async fn list(&self, path: &str) -> Result<Vec<FsEntry>, FsError> {
         check_path(path)?;
+        let _cursor = self.cursor.hold().await;
         let command = BrickCommand::FsList {
             path: path.to_owned(),
         };
@@ -677,11 +694,13 @@ impl BrickFilesystem {
         options: CommandOptions,
     ) -> Self {
         let sender = Arc::new(BrickSender::new(bricks.clone(), brick_id, options));
+        let ledger = ledgers.ledger_for(brick_id);
         Self {
-            files: FilesystemService::new(sender, Some(writes.clone())),
+            files: FilesystemService::new(sender, Some(writes.clone()))
+                .with_read_cursor(ledger.read_cursor()),
             transfer: FileTransferService::new(
                 Arc::new(BrickRoute::new(bricks.clone(), brick_id)),
-                ledgers.ledger_for(brick_id),
+                ledger,
                 writes,
             ),
         }
