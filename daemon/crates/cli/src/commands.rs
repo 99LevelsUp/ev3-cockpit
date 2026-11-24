@@ -955,11 +955,22 @@ fn state_line(name: &str, state: &Value) -> String {
     if state.get("running").and_then(Value::as_bool) == Some(true) {
         return format!("A program runs on {name}.");
     }
-    let by = text(state, "stoppedBy");
-    if by.is_empty() {
-        format!("No program runs on {name}.")
-    } else {
-        format!("No program runs on {name} (stopped by {by}).")
+    match ended_text(state) {
+        Some(ended) => format!("No program runs on {name}; the last one {ended}."),
+        None => format!("No program runs on {name}."),
+    }
+}
+
+/// How the latest start ended, from a program state's `endedBy`, as the end of a sentence: "was
+/// stopped by …" or "ended on the brick (…)". `None` when the state does not say.
+pub fn ended_text(state: &Value) -> Option<String> {
+    match text(state, "endedBy") {
+        "" => None,
+        "brick" => Some(
+            "ended on the brick: it ran to its end, or was stopped with the brick's buttons"
+                .to_owned(),
+        ),
+        by => Some(format!("was stopped by {by}")),
     }
 }
 

@@ -819,10 +819,6 @@ impl Server {
                     .await?
                     .request("programs/status", params)
                     .await?;
-                let by = state
-                    .get("stoppedBy")
-                    .and_then(Value::as_str)
-                    .filter(|b| !b.is_empty());
                 let text = format!(
                     "{} (last start number {}){}.",
                     if state["running"] == true {
@@ -831,7 +827,9 @@ impl Server {
                         "No program runs"
                     },
                     js_string(&state["runSeq"]),
-                    by.map(|b| format!("; stopped by {b}")).unwrap_or_default()
+                    crate::commands::ended_text(&state)
+                        .map(|ended| format!("; it {ended}"))
+                        .unwrap_or_default()
                 );
                 Ok(plain(&text, state))
             }

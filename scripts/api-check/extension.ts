@@ -40,7 +40,7 @@ const LOG_FILE = path.join(os.homedir(), 'ev3-api-check.txt');
 const LOCAL_DIR = path.join(os.tmpdir(), 'ev3-api-check');
 const REPO = process.env.EV3_COCKPIT_REPO || path.resolve(__dirname, '..', '..');
 const VERSION = (JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')) as { version: string }).version;
-/** What other clients read in `brick_busy` and `stoppedBy`. */
+/** What other clients read in `brick_busy` and `endedBy`. */
 const CLIENT_NAME = 'EVƎ Cockpit API check (VS Code)';
 
 /** An error as the client library raises it: a contract code, its kind and data. */
@@ -261,7 +261,7 @@ async function checkPrograms(client: CockpitClient, brickId: string): Promise<vo
 	if (!program) { line('skip  programs: no program picked'); return; }
 	line(`      program ${program}`);
 	const following = await client.subscribePrograms(brickId, (state) =>
-		line(`      program state: running ${state.running}, runSeq ${state.runSeq}${state.stoppedBy ? `, stopped by ${state.stoppedBy}` : ''}`));
+		line(`      program state: running ${state.running}, runSeq ${state.runSeq}${state.endedBy ? `, ended by ${state.endedBy}` : ''}`));
 	try {
 		let runSeq = following.state.runSeq;
 		// The program goes up again from its own copy: the brick holds the same bytes, so it is skipped.
@@ -287,8 +287,8 @@ async function checkPrograms(client: CockpitClient, brickId: string): Promise<vo
 		await step('programs: stop', async () => {
 			const state = await client.request('programs/stop', { brick: brickId });
 			assert(!state.running, 'still running');
-			assert(state.stoppedBy === CLIENT_NAME, `stopped by ${state.stoppedBy ?? '(nobody named)'}`);
-			return `stopped by ${state.stoppedBy}`;
+			assert(state.endedBy === CLIENT_NAME, `ended by ${state.endedBy ?? '(not said)'}`);
+			return `ended by ${state.endedBy}`;
 		});
 		await step('programs: deploy and run again for the emergency stop', async () => {
 			const result = await client.request('programs/deployAndRun', { brick: brickId, runPath: program, files: [] });
@@ -299,7 +299,7 @@ async function checkPrograms(client: CockpitClient, brickId: string): Promise<vo
 		await step('programs: emergency stop', async () => {
 			const state = await client.request('programs/emergencyStop', { brick: brickId });
 			assert(!state.running, 'still running');
-			return `not running, stopped by ${state.stoppedBy ?? '(nobody named)'}`;
+			return `not running, ended by ${state.endedBy ?? '(not said)'}`;
 		});
 		const stopped = await ask('Did the motor stop, and does the brick show its menu again?', 'Yes', 'No');
 		results.push({ name: 'programs: the motor stopped (person at the brick)', ok: stopped === 'Yes' });

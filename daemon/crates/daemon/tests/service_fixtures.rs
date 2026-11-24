@@ -700,7 +700,7 @@ async fn usb_writes_and_moves_without_replace_leave_files_there_as_they_are_repl
     run.end().await;
 }
 
-/// The program states a subscription heard, as `(runSeq, running, stoppedBy)`.
+/// The program states a subscription heard, as `(runSeq, running, endedBy)`.
 fn states(notes: &[Value]) -> Vec<(u64, bool, Option<String>)> {
     notes
         .iter()
@@ -709,7 +709,7 @@ fn states(notes: &[Value]) -> Vec<(u64, bool, Option<String>)> {
             (
                 s["runSeq"].as_u64().unwrap_or(u64::MAX),
                 s["running"].as_bool().unwrap_or(false),
-                s["stoppedBy"].as_str().map(str::to_owned),
+                s["endedBy"].as_str().map(str::to_owned),
             )
         })
         .collect()
@@ -742,7 +742,7 @@ async fn usb_deploy_and_run_replays_strictly_and_hears_the_program_end() {
         .await;
     assert_eq!(
         states(&heard),
-        [(1, true, None), (1, false, None)],
+        [(1, true, None), (1, false, Some("brick".to_string()))],
         "{heard:?}"
     );
     run.call(
@@ -810,6 +810,12 @@ async fn programs_run_stop_and_status(run: &mut Replay, before: u64) {
     assert_eq!(written, json!({"bytes": 36}));
     let subscription = run.call("programs/subscribe", json!({"brick": CCC})).await;
     assert_eq!(subscription["state"]["runSeq"], before);
+    // A start the daemon did not send itself: how it ended is not known here.
+    assert_eq!(
+        subscription["state"]["endedBy"],
+        Value::Null,
+        "{subscription}"
+    );
     let started = run
         .call("programs/run", json!({"brick": CCC, "path": program}))
         .await;
@@ -819,7 +825,7 @@ async fn programs_run_stop_and_status(run: &mut Replay, before: u64) {
     let stopped = run.call("programs/stop", json!({"brick": CCC})).await;
     assert_eq!(stopped["running"], false, "{stopped}");
     assert_eq!(stopped["runSeq"], before + 1);
-    assert_eq!(stopped["stoppedBy"], CLIENT);
+    assert_eq!(stopped["endedBy"], CLIENT);
     let status = run.call("programs/status", json!({"brick": CCC})).await;
     assert_eq!(status, stopped);
     let heard = run

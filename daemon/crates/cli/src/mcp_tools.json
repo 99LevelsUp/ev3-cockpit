@@ -487,7 +487,7 @@
   },
   {
     "name": "program_status",
-    "description": "Whether a program runs on a brick. With waitMs, waits up to that long (at most 30000 ms) for it to change, and answers at once when it does.",
+    "description": "Whether a program runs on a brick, and once none runs, how the last start ended (endedBy): the client that stopped it, or brick when no client did (it ran to its end, or was stopped with the brick's buttons). The firmware reports no exit code. With waitMs, waits up to that long (at most 30000 ms) for it to change, and answers at once when it does.",
     "inputSchema": {
       "type": "object",
       "$schema": "https://json-schema.org/draft/2020-12/schema",

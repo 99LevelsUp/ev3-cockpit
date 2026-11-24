@@ -24,7 +24,7 @@ client finds the daemon.
 import { CockpitClient, ContractError, WireErrorCode } from '@ev3-cockpit/client';
 
 const cockpit = await CockpitClient.connect({
-  name: 'EVƎ C (VS Code)',   // say where it runs: other clients read it in brick_busy, questions and stoppedBy
+  name: 'EVƎ C (VS Code)',   // say where it runs: other clients read it in brick_busy, questions and endedBy
   kind: 'addon',
   version: '1.4.0',          // your add-on's version
 });
@@ -35,7 +35,7 @@ context.subscriptions.push(cockpit);   // dispose() closes the connection and ev
   command alike.
 - `name` should say where the client runs, for example "EVƎ C (VS Code)" or "ev3 c run
   (terminal)". It appears in the daemon's log, in another client's `brick_busy` error, in the
-  questions your requests raise, and as `stoppedBy` when you stop a program.
+  questions your requests raise, and as `endedBy` when you stop a program.
 - A VS Code add-on needs no `extensionDependencies` on the cockpit to work; the cockpit must be
   installed for its daemon to exist.
 - The `channel` and `stateRoot` options put a client on a test channel, with a daemon and state of
@@ -238,7 +238,7 @@ even while another client holds the lease; they never wait. A stop also ends any
 the message naming who stopped, and nothing is started, so a stop pressed during an upload is
 never followed by a start.
 
-**State.** `ProgramState` is `{ brickId, running, runSeq, stoppedBy? }`:
+**State.** `ProgramState` is `{ brickId, running, runSeq, endedBy? }`:
 
 - `runSeq` counts the starts sent to the brick (0 before any). `DeployResult.runSeq` is your
   start's number. The daemon takes a number before the start is checked, so a refused or cancelled
@@ -250,8 +250,10 @@ never followed by a start.
   `runSeq` than yours means someone started again after you. The same number does not prove the
   state is about your program: when you start with `replace`, the previous program ending is told
   with your number, as `running: false`, just before your program shows as running.
-- `stoppedBy` names the client whose stop came after the latest start, when the program is not
-  running. A program that ended by itself has none.
+- `endedBy` says how the latest start ended, once no program runs: the name of the client whose
+  stop came after it, or `brick` when no client stopped it. `brick` covers a program that ran to
+  its end and one stopped with the brick's buttons: the firmware does not tell them apart. It is
+  left out while a program runs, before any start, and for a start a replaced daemon sent.
 - In the answers to `programs/stop`, `programs/emergencyStop`, `programs/status` and in the state
   `subscribePrograms` returns, `running` is what the brick said when asked just then. In
   `programs/stateChanged` it comes from the brick's telemetry, read at
