@@ -89,6 +89,8 @@ struct State {
     /// when its last holder lets go: it is orphaned, and the last of its requests signs it out
     /// unless somebody holds it by then.
     in_use: HashMap<String, usize>,
+    /// Bricks being signed out now: a connect waits for the sign-out to end.
+    signing_out: HashSet<String>,
     /// Bricks held across the daemon's start and not connected again yet.
     reconnecting: HashSet<String>,
     handles: HashMap<String, Handle>,
@@ -120,6 +122,8 @@ pub struct Surface {
     list_changed: Notify,
     /// Wakes whoever waits for a repair's pairing to end.
     repair_settled: Notify,
+    /// Wakes the connects waiting for a brick's sign-out to end.
+    signed_out: Notify,
     /// Held while the clients' shown bricks are read and sent, so the lists go out in order.
     shows_order: Mutex<()>,
     tasks: Mutex<Vec<AbortHandle>>,
@@ -172,6 +176,7 @@ impl Surface {
             state: Mutex::new(State::default()),
             list_changed: Notify::new(),
             repair_settled: Notify::new(),
+            signed_out: Notify::new(),
             shows_order: Mutex::new(()),
             tasks: Mutex::new(Vec::new()),
         });
@@ -457,7 +462,7 @@ impl Surface {
             && state.in_use.get(brick_id).copied().unwrap_or(0) <= own
     }
 
-    /// A request on rick_id ended: the last one signs out a brick orphaned meanwhile, unless
+    /// A request on `brick_id` ended: the last one signs out a brick orphaned meanwhile, unless
     /// somebody holds it now.
     fn request_ended(self: &Arc<Self>, brick_id: &str) {
         let release = {
@@ -468,19 +473,64 @@ impl Surface {
                     state.in_use.remove(brick_id);
                 }
             }
-            Self::idle(&state, brick_id, 0)
-                && state.orphaned.remove(brick_id)
-                && !self.holders.is_held(brick_id)
+            Self::idle(&state, brick_id, 0) && state.orphaned.remove(brick_id)
         };
         if release {
             let (surface, brick) = (self.clone(), brick_id.to_owned());
             tokio::spawn(async move {
-                surface.runtime.bricks.sign_out(&brick).await;
-                surface.shared.log.info(&format!(
-                    "Released {brick}: its last request ended and nobody holds it."
-                ));
-                surface.bricks_changed();
+                if surface.sign_out_unused(&brick, 0).await {
+                    surface.shared.log.info(&format!(
+                        "Released {brick}: its last request ended and nobody holds it."
+                    ));
+                    surface.bricks_changed();
+                }
             });
+        }
+    }
+
+    /// Signs `brick_id` out unless, checked now under the lock, somebody holds it or a connect or
+    /// a request (beyond the caller's `own`) works on it; one that works on it is orphaned, for
+    /// the last of them to sign out. Whether it signed out.
+    ///
+    /// Decided and marked under one lock: a release decided a moment ago (a client that left)
+    /// does not sign out a brick another client has started to use since, and a connect that
+    /// comes while the sign-out runs waits for it ([`Self::signing_out_ended`]) and then signs the
+    /// brick in afresh, rather than taking a brick that is going (#11).
+    async fn sign_out_unused(self: &Arc<Self>, brick_id: &str, own: usize) -> bool {
+        {
+            let mut state = self.lock();
+            if self.holders.is_held(brick_id) {
+                return false;
+            }
+            if !Self::idle(&state, brick_id, own) {
+                state.orphaned.insert(brick_id.to_owned());
+                return false;
+            }
+            state.signing_out.insert(brick_id.to_owned());
+        }
+        self.sign_out_marked(brick_id).await;
+        true
+    }
+
+    /// Signs out a brick, marked as signing out meanwhile, then lets the connects waiting for it
+    /// go on.
+    async fn sign_out_marked(&self, brick_id: &str) {
+        self.lock().signing_out.insert(brick_id.to_owned());
+        self.runtime.bricks.sign_out(brick_id).await;
+        self.lock().signing_out.remove(brick_id);
+        self.signed_out.notify_waiters();
+    }
+
+    /// Waits while `brick_id` is being signed out.
+    async fn signing_out_ended(&self, brick_id: &str) {
+        loop {
+            let ended = self.signed_out.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            if !self.lock().signing_out.contains(brick_id) {
+                return;
+            }
+            ended.await;
         }
     }
 
@@ -683,12 +733,14 @@ impl Surface {
             let name = client.info.name.clone();
             tokio::spawn(async move {
                 for brick in released {
-                    surface.runtime.bricks.sign_out(&brick).await;
-                    surface.shared.log.write(
-                        crate::log::Level::Info,
-                        Some(&name),
-                        &format!("Released {brick}: nobody else holds it."),
-                    );
+                    // Checked again: another client may have started to use it since.
+                    if surface.sign_out_unused(&brick, 0).await {
+                        surface.shared.log.write(
+                            crate::log::Level::Info,
+                            Some(&name),
+                            &format!("Released {brick}: nobody else holds it."),
+                        );
+                    }
                 }
                 surface.bricks_changed();
             });

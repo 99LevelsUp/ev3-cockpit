@@ -348,15 +348,11 @@ impl Ctx {
             let id = text(&brick, "brickId").to_owned();
             self.client()
                 .await?
-                .request("bricks/connect", json!({ "brick": id, "reuse": true }))
+                .request("bricks/connect", use_params(Some(&id)))
                 .await?;
             return Ok((id, text(&brick, "name").to_owned()));
         }
-        let params = match reference {
-            Some(r) => json!({ "brick": r }),
-            None => json!({}),
-        };
-        let brick = self.connect_brick(params).await?;
+        let brick = self.connect_brick(use_params(reference.as_deref())).await?;
         Ok((
             text(&brick, "brickId").to_owned(),
             text(&brick, "name").to_owned(),
@@ -1400,9 +1396,28 @@ async fn restart(ctx: &mut Ctx) -> Result<Outcome> {
     ))
 }
 
+/// The `bricks/connect` a command sends for a brick it needs: with `reuse`, so a brick another
+/// client connects meanwhile is held as it is rather than connected again over every channel,
+/// which waits out Bluetooth (#11). Only `ev3 connect` asks for every channel.
+fn use_params(reference: Option<&str>) -> Value {
+    match reference {
+        Some(r) => json!({ "brick": r, "reuse": true }),
+        None => json!({ "reuse": true }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_connects_the_brick_it_needs_with_reuse() {
+        assert_eq!(
+            use_params(Some("CCC")),
+            json!({ "brick": "CCC", "reuse": true })
+        );
+        assert_eq!(use_params(None), json!({ "reuse": true }));
+    }
 
     #[test]
     fn status_names_the_brick_each_client_shows() {

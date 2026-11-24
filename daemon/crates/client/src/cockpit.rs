@@ -482,7 +482,7 @@ impl Inner {
             .collect();
         for brick in bricks {
             let _ = client
-                .request("bricks/connect", json!({ "brick": brick }))
+                .request("bricks/connect", json!({ "brick": brick, "reuse": true }))
                 .await;
         }
         // What to renew, read once: a program by its brick, a file by its brick, path and reach.

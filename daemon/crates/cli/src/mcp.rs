@@ -287,7 +287,7 @@ impl Server {
                 .collect();
             for brick in bricks {
                 let _ = client
-                    .request("bricks/connect", json!({ "brick": brick }))
+                    .request("bricks/connect", json!({ "brick": brick, "reuse": true }))
                     .await;
             }
             self.rejoin.store(false, Ordering::SeqCst);
