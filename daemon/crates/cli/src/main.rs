@@ -16,6 +16,7 @@ mod confirm;
 mod error;
 mod install;
 mod mcp;
+mod mcp_addons;
 mod output;
 mod telemetry;
 
