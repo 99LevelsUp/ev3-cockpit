@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use crate::bricks::BrickError;
 use crate::fs::{FsError, brick_answered, may_have_run};
 use crate::ports::{ConsentAnswer, ConsentPort, ConsentRequest, ConsentSubject, Requester};
-use crate::transfer::FileLink;
+use crate::transfer::{FileLink, ReadCursor};
 
 // ── Debts ───────────────────────────────────────────────────────────
 
@@ -288,6 +288,8 @@ pub struct TransferLedger {
     /// transfer starts under a settlement and none is settled under a transfer. Fair, so a
     /// transfer that came first is let in first.
     admission: tokio::sync::Mutex<()>,
+    /// The brick's read cursor, kept here because the ledger is what lives with the brick.
+    read_cursor: Arc<ReadCursor>,
 }
 
 /// A transfer counted in: while one stands, nothing is settled. Counted out when dropped.
@@ -321,11 +323,17 @@ impl TransferLedger {
             store,
             state: Mutex::new(LedgerState { debts, active: 0 }),
             admission: tokio::sync::Mutex::new(()),
+            read_cursor: Arc::new(ReadCursor::new()),
         }
     }
 
     pub fn brick_id(&self) -> &str {
         &self.brick_id
+    }
+
+    /// The brick's read cursor, shared by its reads and its listings.
+    pub fn read_cursor(&self) -> Arc<ReadCursor> {
+        self.read_cursor.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, LedgerState> {
@@ -508,6 +516,10 @@ impl TransferLedger {
                 .await;
             match answer {
                 ConsentAnswer::Granted => {
+                    // A slot asked about may since be a listing's, which a close would end under
+                    // it; a certain slot is still ours, so nobody else can be using it.
+                    let cursor = self.read_cursor();
+                    let _cursor = cursor.hold().await;
                     if let Err(error) = release(link, &debts, &handles).await {
                         link_error = Some(error);
                     } else {

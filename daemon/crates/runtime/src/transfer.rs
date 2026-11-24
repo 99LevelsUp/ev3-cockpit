@@ -266,6 +266,34 @@ async fn step(
     }
 }
 
+// ── The read cursor ─────────────────────────────────────────────────
+
+/// The brick's read cursor, held for the whole length of every multi-step read.
+///
+/// The firmware keeps one read cursor per channel: `BEGIN_UPLOAD`, `BEGIN_GETFILE` and
+/// `LIST_FILES` point the channel's `pTxBuf->pFile` at their file, and `CONTINUE_UPLOAD`,
+/// `CONTINUE_GETFILE` and `CONTINUE_LIST_FILES` continue that file whatever handle they name
+/// (`c_com.c`: the handle is only checked for being 0 or more). A listing begun between two steps
+/// of a read takes the read's place, and the read fails with `UNKNOWN_HANDLE` or carries on with
+/// the listing's bytes. So a read and a listing of one brick never interleave: each holds this
+/// from its first command to its last. Held per brick rather than per channel, which costs
+/// nothing: one brick's reads do not run side by side anyway.
+///
+/// Writes go through the receive side (`pRxBuf->pFile`) and need not hold it.
+#[derive(Debug, Default)]
+pub struct ReadCursor(tokio::sync::Mutex<()>);
+
+impl ReadCursor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Waits for the reads before, in the order they came.
+    pub async fn hold(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.lock().await
+    }
+}
+
 // ── The open slot ───────────────────────────────────────────────────
 
 /// Where a transfer stands with its brick-side slot.
@@ -570,6 +598,9 @@ impl FileTransferService {
             .ledger
             .begin(link.as_ref(), &self.writes.requester)
             .await?;
+        // Taken after the settlement, which holds it itself while it releases slots.
+        let cursor = self.ledger.read_cursor();
+        let _cursor = cursor.hold().await;
         self.read(link.as_ref(), path, options).await
     }
 

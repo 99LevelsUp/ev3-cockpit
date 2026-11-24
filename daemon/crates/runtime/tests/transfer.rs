@@ -519,7 +519,15 @@ const AAA: &str = "00165300000A";
 #[derive(Default)]
 struct Disk {
     files: HashMap<String, Vec<u8>>,
+    /// Folders the brick lists, with the listing it gives for each.
+    folders: HashMap<String, Vec<u8>>,
     slots: HashMap<u8, (String, usize, Vec<u8>)>,
+    /// What a read or a listing hands over, and how far it got.
+    outgoing: HashMap<u8, (Vec<u8>, usize)>,
+    /// Each channel's read cursor, as the firmware keeps it (`pTxBuf->pFile`): the slot the last
+    /// `BEGIN_UPLOAD` or `LIST_FILES` on the channel took, which every continuation on that
+    /// channel continues, whatever handle it names.
+    cursor: HashMap<String, u8>,
     next: u8,
     /// `usb begin 1`, `bt close 1`: what the brick did, over which channel.
     log: Vec<String>,
@@ -551,6 +559,96 @@ struct FileBrick {
 }
 
 impl FileBrick {
+    /// The reply's type and payload.
+    fn reply(&self, command: u8, body: &[u8]) -> (u8, Vec<u8>) {
+        let mut disk = self.disk.lock().unwrap();
+        let label = self.inner.transport().as_str().to_owned();
+        let begin = |disk: &mut Disk, content: Option<Vec<u8>>, want: usize| {
+            let Some(content) = content else {
+                return (
+                    reply::SYSTEM_REPLY_ERROR,
+                    vec![command, system_status::ILLEGAL_PATH],
+                );
+            };
+            disk.next += 1;
+            let handle = disk.next;
+            disk.cursor.insert(label.clone(), handle);
+            let size = u32::try_from(content.len()).unwrap().to_le_bytes();
+            let end = want.min(content.len());
+            let eof = end >= content.len();
+            let mut payload = vec![
+                command,
+                if eof {
+                    system_status::END_OF_FILE
+                } else {
+                    system_status::OK
+                },
+            ];
+            payload.extend_from_slice(&size);
+            payload.push(handle);
+            payload.extend_from_slice(&content[..end]);
+            if !eof {
+                disk.outgoing.insert(handle, (content, end));
+            }
+            (reply::SYSTEM_REPLY, payload)
+        };
+        let next = |disk: &mut Disk, named: u8, want: usize| {
+            // The channel's cursor, not the handle named; a slot already freed is unknown.
+            let Some(handle) = disk.cursor.get(&label).copied() else {
+                return (
+                    reply::SYSTEM_REPLY_ERROR,
+                    vec![command, system_status::UNKNOWN_HANDLE],
+                );
+            };
+            let Some((content, at)) = disk.outgoing.get_mut(&handle) else {
+                return (
+                    reply::SYSTEM_REPLY_ERROR,
+                    vec![command, system_status::UNKNOWN_HANDLE],
+                );
+            };
+            let end = (*at + want).min(content.len());
+            let chunk = content[*at..end].to_vec();
+            *at = end;
+            let eof = end >= content.len();
+            if eof {
+                disk.outgoing.remove(&handle);
+            }
+            let mut payload = vec![
+                command,
+                if eof {
+                    system_status::END_OF_FILE
+                } else {
+                    system_status::OK
+                },
+                named,
+            ];
+            payload.extend_from_slice(&chunk);
+            (reply::SYSTEM_REPLY, payload)
+        };
+        let want = |bytes: &[u8]| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]));
+        match command {
+            system::BEGIN_UPLOAD => {
+                let (path, _) = c_path(&body[2..]);
+                disk.log.push(format!("{label} read {path}"));
+                let content = disk.files.get(&path).cloned();
+                begin(&mut disk, content, want(body))
+            }
+            system::LIST_FILES => {
+                let (path, _) = c_path(&body[2..]);
+                disk.log.push(format!("{label} list {path}"));
+                let content = disk.folders.get(&path).cloned();
+                begin(&mut disk, content, want(body))
+            }
+            system::CONTINUE_UPLOAD | system::CONTINUE_LIST_FILES => {
+                next(&mut disk, body[0], want(&body[1..]))
+            }
+            _ => {
+                drop(disk);
+                (reply::SYSTEM_REPLY, self.answer(command, body))
+            }
+        }
+    }
+
     fn answer(&self, command: u8, body: &[u8]) -> Vec<u8> {
         let mut disk = self.disk.lock().unwrap();
         let label = self.inner.transport().as_str().to_owned();
@@ -669,8 +767,11 @@ impl TransportProvider for FileBrick {
             }
         }
         let counter = u32::from(u16::from_le_bytes([packet[2], packet[3]]));
-        let payload = self.answer(packet[5], &packet[6..]);
-        Ok(encode_ev3_packet(counter, reply::SYSTEM_REPLY, &payload).unwrap())
+        let (kind, payload) = self.reply(packet[5], &packet[6..]);
+        // Each reply takes a turn of the runtime, as a link does: a read and a listing that run
+        // side by side get the chance to interleave their steps.
+        tokio::task::yield_now().await;
+        Ok(encode_ev3_packet(counter, kind, &payload).unwrap())
     }
 }
 
@@ -938,6 +1039,44 @@ async fn starts_an_upload_again_once_its_only_channel_comes_back_within_its_budg
     // that finds the channel still dead.
     assert_eq!(consent.count(), 1);
     assert_eq!(files.transfer.ledger().pending(), 0);
+}
+
+/// On the firmware a listing begun between two steps of a read takes the channel's read cursor
+/// from it (#8): the read then fails with `UNKNOWN_HANDLE`, or carries on with the listing's
+/// bytes. Seen on a brick over USB with `ev3 get` and `ev3 ls` from two processes.
+#[tokio::test(start_paused = true)]
+async fn a_read_and_listings_side_by_side_each_get_their_own_bytes() {
+    let w = world(false, granted()).await;
+    let content: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+    let listing = (0..60)
+        .map(|i| format!("a-folder-with-a-long-name-{i:02}/\n"))
+        .collect::<String>()
+        .into_bytes();
+    {
+        let mut disk = w.disk.lock().unwrap();
+        disk.files.insert("../prjs/big.bin".into(), content.clone());
+        disk.folders.insert("../prjs".into(), listing);
+    }
+    let (reader, lister) = (w.files(), w.files());
+    let options = TransferOptions::default();
+    let read = reader.transfer.read_file("../prjs/big.bin", &options);
+    let lists = async {
+        let mut lists = Vec::new();
+        for _ in 0..5 {
+            lists.push(lister.files.list("../prjs").await);
+        }
+        lists
+    };
+    let (read, lists) = tokio::join!(read, lists);
+    assert_eq!(read.unwrap(), content, "the read got its own file");
+    for list in lists {
+        assert_eq!(list.unwrap().len(), 60, "each listing got its own folder");
+    }
+    let log = w.disk.lock().unwrap().lines("usb ");
+    assert!(
+        log.iter().filter(|l| l.starts_with("list")).count() == 5 && log.len() == 6,
+        "the listings and the read ran: {log:?}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
