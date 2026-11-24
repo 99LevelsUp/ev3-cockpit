@@ -404,7 +404,7 @@ export class CockpitClient {
 				await this.open(SUCCESSOR_WAIT_MS);
 				// No daemon hands anything to the next: this client's own bricks are connected again.
 				for (const brickId of [...this.myBricks]) {
-					await this.connection.endpoint.request('bricks/connect', { brick: brickId }).catch(() => undefined);
+					await this.connection.endpoint.request('bricks/connect', { brick: brickId, reuse: true }).catch(() => undefined);
 				}
 				for (const [id, renewable] of this.renewables) {
 					try {

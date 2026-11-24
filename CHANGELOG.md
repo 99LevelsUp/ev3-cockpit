@@ -22,6 +22,10 @@ Minor and major versions are bumped manually for significant milestones.
   offset reached after a reconnect.
 
 ### Fixed
+- A command no longer waits for Bluetooth to give up on a brick that is on USB (#11): a connect
+  that came while the brick's last holder let it go waits for the sign-out and signs it in afresh,
+  and `reuse` waits only for a brick's first channel. `ev3`, `ev3 mcp` and the clients' rejoin after
+  a daemon replacement connect with `reuse`.
 - A brick a client uses is no longer signed out under it when its last holder leaves (#9):
   `ev3` holds a connected brick it uses (`bricks/connect` with `reuse`, which joins nothing),
   and a brick a request is working on is signed out only when that request ends.

@@ -39,7 +39,7 @@
       "properties": {
         "brick": { "type": "string" },
         "hold": { "type": "boolean", "description": "Keep the brick connected past this client, as ev3 connect does." },
-        "reuse": { "type": "boolean", "description": "When the brick is connected already, only make this client one of its holders: join no other channel and wait for nothing. A client that uses a brick holds it this way, so the brick is not signed out under it when its other holders leave." }
+        "reuse": { "type": "boolean", "description": "When the brick is connected already, only make this client one of its holders: join no other channel, and wait only for its first channel when its sign-in has just begun. A client that uses a brick holds it this way, so the brick is not signed out under it when its other holders leave." }
       }
     },
     "BricksDisconnectParams": {
