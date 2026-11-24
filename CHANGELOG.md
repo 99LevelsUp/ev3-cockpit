@@ -23,6 +23,11 @@ Minor and major versions are bumped manually for significant milestones.
 - `replace` on `files/read` (its local file), `files/write` and `files/move`: left out, they
   replace what is there as before; `false` refuses it with the new error `file_exists` (#14).
 
+- `ev3 mcp` offers the tools of installed add-ons beside its own (#2): each `ev3-<name>` on PATH
+  that answers `ev3-<name> mcp` as an MCP server is started once and its tools are offered as
+  `<name>_<tool>`, with calls, cancellations, progress and the agent's roots passed through. An
+  agent host needs one MCP entry for the cockpit and every add-on.
+
 ### Changed
 - **Contract 3.** `ProgramState.stoppedBy` is gone; `endedBy` says how the latest start ended once
   no program runs: the client whose stop ended it, or `brick` when no client stopped it (it ran

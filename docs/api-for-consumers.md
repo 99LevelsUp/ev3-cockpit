@@ -52,6 +52,32 @@ An add-on passes no daemon of its own (the `daemon` option is for the cockpit's 
 asks the daemon to exit and never compares package versions with it; see
 [Version notices](#version-notices).
 
+## Your tools in `ev3 mcp`
+
+An agent needs one MCP server for the cockpit and every add-on: `ev3 mcp` offers the tools of each
+installed add-on beside its own. An add-on is a program called `ev3-<name>` on PATH (the same one
+`ev3 <name>` runs; on Windows an `.exe` or the `.cmd` shim npm installs). To take part, it answers
+`ev3-<name> mcp` as an MCP server over stdio:
+
+- `ev3 mcp` starts it once, at its own `initialize`, and keeps it for the session. It must answer
+  `initialize` and `tools/list` within 5 s together, and must not reach the daemon for either:
+  starting an agent and listing tools never starts a daemon or connects a brick.
+- Its tools are offered as `<name>_<tool>` (a dash in the name becomes `_`), with your
+  descriptions, schemas and annotations as they are. A name the cockpit's own tools use stays the
+  cockpit's.
+- It gets the agent's `clientInfo` in `initialize`; connect to the daemon under that name with
+  kind `mcp`, so a person asked about the agent's request sees which agent it is.
+- Say which cockpit contract you speak: `capabilities.experimental["ev3-cockpit"] = { "contract": 3 }`
+  in your `initialize` result. An add-on that names another contract is left out with a notice to
+  the agent; one that names none is offered.
+- When the agent declared roots, `ev3 mcp` declares them to you and answers your `roots/list` with
+  the agent's. Keep your own confinement check. Any other request you send (sampling,
+  elicitation) is refused.
+- `notifications/cancelled` reaches you with the id you know the call by;
+  `notifications/progress` and `notifications/message` you send reach the agent as they are.
+- Standard error is yours for logs; standard output carries only the protocol. If your server ends
+  during a call, the call is answered with an error result and the next call starts it again.
+
 ## Naming a brick
 
 Every request that works on a brick takes `brick`: its id or its name. The daemon matches names

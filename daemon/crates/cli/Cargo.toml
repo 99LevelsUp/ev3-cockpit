@@ -20,7 +20,7 @@ ev3-contract = { path = "../contract" }
 futures-util = { version = "0.3.34", default-features = false, features = ["std", "sink"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
-tokio = { version = "1.54.1", features = ["rt", "net", "io-util", "io-std", "sync", "time", "macros", "signal"] }
+tokio = { version = "1.54.1", features = ["rt", "net", "io-util", "io-std", "sync", "time", "macros", "signal", "process"] }
 tokio-util = { version = "0.7.20", features = ["codec"] }
 
 [target.'cfg(windows)'.dependencies]

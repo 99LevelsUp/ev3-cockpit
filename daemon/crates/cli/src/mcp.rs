@@ -17,6 +17,9 @@
 //!   When Windows Smart App Control blocks the daemon, every later tool gets the same answer
 //!   without the blocked binary being started again.
 //!
+//! - Installed add-ons' tools are offered beside the cockpit's, as `<name>_<tool>`, through each
+//!   add-on's own MCP server started as a child (see [`crate::mcp_addons`]).
+//!
 //! The tools, their descriptions and input schemas are `mcp_tools.json`, taken verbatim from the
 //! TypeScript server this replaces.
 
@@ -34,6 +37,7 @@ use tokio::task::AbortHandle;
 
 use crate::error::{CliError, DAEMON_UNAVAILABLE, Failure};
 use crate::install;
+use crate::mcp_addons::{Addon, AgentSide, AskRoots, start_all};
 use crate::output::{js_string, strings};
 use crate::telemetry;
 use ev3_client::client::{Client, ClientOptions};
@@ -58,6 +62,17 @@ const PROTOCOL_VERSIONS: [&str; 5] = [
 /// How long `read_telemetry` waits for every row to have a value, unless told otherwise.
 const DEFAULT_TELEMETRY_WAIT_MS: u64 = 3000;
 const DO_NOT_RUN_AGAIN: &str = "Do not run it again; check program_status first.";
+
+/// Whether a `tools/call` names one of the cockpit's own tools (or no tool at all), which this
+/// server answers itself; any other name may be an add-on's.
+fn is_cockpit_tool(params: &Value) -> bool {
+    match params.get("name").and_then(Value::as_str) {
+        Some(name) => TOOLS
+            .iter()
+            .any(|t| t.get("name").and_then(Value::as_str) == Some(name)),
+        None => true,
+    }
+}
 
 /// A name the daemon's hello accepts: the MCP client's own, trimmed and bounded, else the server's.
 pub fn client_name_of(name: Option<&str>) -> String {
@@ -85,6 +100,14 @@ struct Server {
     asked: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     next_ask: AtomicU64,
     running: Mutex<HashMap<String, AbortHandle>>,
+    /// The agent's `clientInfo` and the protocol version agreed, for the add-ons' servers.
+    client_info: Mutex<Value>,
+    protocol_version: Mutex<String>,
+    /// The add-ons' servers, started at `initialize` (see [`crate::mcp_addons`]).
+    addons: tokio::sync::OnceCell<Vec<Arc<Addon>>>,
+    /// Forwarded calls by the agent's id: the add-on and the id its server knows the call by.
+    addon_calls: Mutex<HashMap<String, (Arc<Addon>, String)>>,
+    me: std::sync::Weak<Server>,
 }
 
 pub async fn serve(paths: Paths) -> u8 {
@@ -99,7 +122,7 @@ pub async fn serve(paths: Paths) -> u8 {
             }
         }
     });
-    let server = Arc::new(Server {
+    let server = Arc::new_cyclic(|me| Server {
         out,
         paths,
         client_name: Mutex::new(MCP_CLIENT_NAME.to_owned()),
@@ -113,6 +136,11 @@ pub async fn serve(paths: Paths) -> u8 {
         asked: Mutex::new(HashMap::new()),
         next_ask: AtomicU64::new(1),
         running: Mutex::new(HashMap::new()),
+        client_info: Mutex::new(json!({ "name": MCP_CLIENT_NAME, "version": install::VERSION })),
+        protocol_version: Mutex::new(PROTOCOL_VERSIONS[0].to_owned()),
+        addons: tokio::sync::OnceCell::new(),
+        addon_calls: Mutex::new(HashMap::new()),
+        me: me.clone(),
     });
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -132,6 +160,9 @@ pub async fn serve(paths: Paths) -> u8 {
     }
     for (_, task) in server.running.lock().expect("running").drain() {
         task.abort();
+    }
+    for addon in server.addons.get().into_iter().flatten() {
+        addon.stop().await;
     }
     if let Some(client) = server.client.lock().await.take() {
         client.shutdown().await;
@@ -170,10 +201,46 @@ impl Server {
                     "initialize" => {
                         let result = self.initialize(&params);
                         self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+                        // The add-ons' servers start now, so a tools/list soon after finds them.
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            server.addons().await;
+                        });
                     }
                     "ping" => self.send(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
                     "tools/list" => {
-                        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": *TOOLS } }));
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            let tools = server.tools().await;
+                            server.send(json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": tools } }));
+                        });
+                    }
+                    "tools/call" if !is_cockpit_tool(&params) => {
+                        let key = js_string(&id);
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+                            let addon = server
+                                .addons()
+                                .await
+                                .iter()
+                                .find(|a| a.offers(name))
+                                .cloned();
+                            let Some(addon) = addon else {
+                                server.send(json!({
+                                    "jsonrpc": "2.0", "id": id,
+                                    "error": { "code": -32602, "message": format!("Tool {name} not found") },
+                                }));
+                                return;
+                            };
+                            if let Some(child_id) = addon.forward(id, params).await {
+                                server
+                                    .addon_calls
+                                    .lock()
+                                    .expect("addon calls")
+                                    .insert(key, (addon, child_id));
+                            }
+                        });
                     }
                     "tools/call" => {
                         let key = js_string(&id);
@@ -203,11 +270,15 @@ impl Server {
                         .get("params")
                         .and_then(|p| p.get("requestId"))
                         .map(js_string);
-                    if let Some(task) =
-                        id.and_then(|id| self.running.lock().expect("running").remove(&id))
-                    {
+                    let Some(id) = id else { return };
+                    if let Some(task) = self.running.lock().expect("running").remove(&id) {
                         // A cancelled request gets no answer; its daemon request is cancelled with it.
                         task.abort();
+                    } else if let Some((addon, child_id)) =
+                        self.addon_calls.lock().expect("addon calls").remove(&id)
+                    {
+                        let reason = message.get("params").and_then(|p| p.get("reason")).cloned();
+                        tokio::spawn(async move { addon.cancel(&child_id, reason).await });
                     }
                 }
             }
@@ -221,6 +292,9 @@ impl Server {
             .and_then(|c| c.get("name"))
             .and_then(Value::as_str);
         *self.client_name.lock().expect("name") = client_name_of(name);
+        if let Some(info) = params.get("clientInfo").filter(|i| i.is_object()) {
+            *self.client_info.lock().expect("info") = info.clone();
+        }
         *self.roots_capable.lock().expect("roots") = params
             .get("capabilities")
             .and_then(|c| c.get("roots"))
@@ -234,6 +308,7 @@ impl Server {
         } else {
             PROTOCOL_VERSIONS[0]
         };
+        *self.protocol_version.lock().expect("version") = version.to_owned();
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": true } },
@@ -253,6 +328,66 @@ impl Server {
             .ok();
         self.asked.lock().expect("asked").remove(&id);
         answer
+    }
+
+    // --- add-ons ----------------------------------------------------------------------------
+
+    /// The add-ons' servers, started once. Each that is left out says why in a notice.
+    async fn addons(&self) -> &[Arc<Addon>] {
+        self.addons
+            .get_or_init(|| async {
+                let agent = self.agent_side();
+                let notice = |text: String| {
+                    eprintln!("ev3 mcp: {text}");
+                    self.notice(text);
+                };
+                start_all(crate::addons::installed(), &agent, &notice).await
+            })
+            .await
+    }
+
+    /// What an add-on's server needs from the agent's side.
+    fn agent_side(&self) -> AgentSide {
+        let roots: Option<AskRoots> = if *self.roots_capable.lock().expect("roots") {
+            let me = self.me.clone();
+            Some(Arc::new(move || {
+                let me = me.clone();
+                Box::pin(async move {
+                    let server = me.upgrade()?;
+                    server.ask("roots/list", json!({})).await
+                })
+            }))
+        } else {
+            None
+        };
+        AgentSide {
+            out: self.out.clone(),
+            roots,
+            client_info: self.client_info.lock().expect("info").clone(),
+            protocol_version: self.protocol_version.lock().expect("version").clone(),
+        }
+    }
+
+    /// The cockpit's tools, then each add-on's. A name the cockpit uses stays the cockpit's.
+    async fn tools(&self) -> Vec<Value> {
+        let mut tools = TOOLS.clone();
+        for addon in self.addons().await {
+            for tool in &addon.tools {
+                let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+                if tools
+                    .iter()
+                    .any(|t| t.get("name").and_then(Value::as_str) == Some(name))
+                {
+                    eprintln!(
+                        "ev3 mcp: the add-on ev3-{}'s tool {name} is not offered: the name is taken.",
+                        addon.name
+                    );
+                    continue;
+                }
+                tools.push(tool.clone());
+            }
+        }
+        tools
     }
 
     // --- the daemon connection ------------------------------------------------------------

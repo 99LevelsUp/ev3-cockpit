@@ -28,6 +28,14 @@ impl Home {
         self.0.join("ev3-cockpit").join("native")
     }
 
+    /// The only folder on `ev3 mcp`'s PATH: no add-on but those a test puts there, so an add-on
+    /// installed on this computer changes nothing.
+    fn bin(&self) -> PathBuf {
+        let bin = self.0.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        bin
+    }
+
     fn apply(&self, command: &mut Command, channel: &str) {
         command
             .env("EV3_COCKPIT_CHANNEL", channel)
@@ -107,10 +115,16 @@ struct Mcp {
 
 impl Mcp {
     fn start(home: &Home, channel: &str) -> Self {
+        Self::start_with(home, channel, &[])
+    }
+
+    fn start_with(home: &Home, channel: &str, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         let mut command = Command::new(ev3());
+        command.envs(env.iter().copied());
         command
             .arg("mcp")
             .current_dir(&home.0)
+            .env("PATH", home.bin())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -310,6 +324,152 @@ fn an_agent_replaces_a_local_file_only_when_it_asks_to_and_is_told_what_replaces
     );
     assert_eq!(std::fs::read(&kept).expect("read"), b"the person's file");
     assert!(mcp.end().success());
+}
+
+/// The stand-in add-on `examples/ev3-fake.rs`, built beside the tests by `cargo test`.
+fn fake_add_on() -> Option<PathBuf> {
+    let exe = ev3()
+        .parent()?
+        .join("examples")
+        .join(format!("ev3-fake{}", std::env::consts::EXE_SUFFIX));
+    exe.is_file().then_some(exe)
+}
+
+#[test]
+fn an_add_ons_tools_are_offered_and_its_calls_forwarded_with_roots_progress_and_cancellation() {
+    let home = Home::new("addons");
+    let fake = fake_add_on().expect("examples/ev3-fake is built: cargo test -p ev3-cli builds it, cargo test --test mcp_stdio alone does not (cargo build -p ev3-cli --example ev3-fake)");
+    let out = home.0.join("fake-out");
+    std::fs::create_dir_all(&out).expect("out");
+    // ev3-fake answers, ev3-old speaks another contract, ev3-mute never answers, and ev3-list's
+    // tool bricks would be offered as list_bricks, the cockpit's own name.
+    for name in ["fake", "old", "mute", "list"] {
+        let copy = home
+            .bin()
+            .join(format!("ev3-{name}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::copy(&fake, copy).expect("copy");
+    }
+    let mut mcp = Mcp::start_with(&home, "mcpaddons", &[("EV3_FAKE_OUT", out.as_os_str())]);
+    mcp.initialize(json!({ "roots": {} }));
+
+    mcp.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
+    let tools = mcp.answer(2, |_| Value::Null)["result"]["tools"]
+        .as_array()
+        .cloned()
+        .expect("tools");
+    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    for name in [
+        "fake_echo",
+        "fake_roots",
+        "fake_slow",
+        "fake_crash",
+        "list_echo",
+    ] {
+        assert!(names.contains(&name), "{name} offered: {names:?}");
+    }
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("old_") || n.starts_with("mute_")),
+        "an add-on on another contract, and one that never answered, offer nothing: {names:?}"
+    );
+    let list_bricks: Vec<&Value> = tools
+        .iter()
+        .filter(|t| t["name"] == "list_bricks")
+        .collect();
+    assert_eq!(
+        list_bricks.len(),
+        1,
+        "the cockpit's list_bricks stays the only one"
+    );
+    assert_ne!(
+        list_bricks[0]["description"],
+        "As ev3-list, a name the cockpit has."
+    );
+    let echo = tools
+        .iter()
+        .find(|t| t["name"] == "fake_echo")
+        .expect("echo");
+    assert_eq!(
+        echo["annotations"]["destructiveHint"], true,
+        "hints pass as given"
+    );
+
+    // A call reaches the add-on by its own name, with the agent's clientInfo.
+    let echoed = mcp.call(3, "fake_echo", json!({ "x": 1 }), |_| Value::Null);
+    let text = echoed["content"][0]["text"].as_str().unwrap_or("");
+    assert!(text.contains(r#""arguments":{"x":1}"#), "{echoed}");
+    assert!(text.contains("MCP test agent"), "{echoed}");
+
+    // The add-on's roots/list mid-call is answered with the agent's roots.
+    let rooted = mcp.call(4, "fake_roots", json!({}), |request| {
+        assert_eq!(request["method"], "roots/list");
+        reply(
+            request,
+            json!({ "roots": [{ "uri": "file:///agent/root", "name": "r" }] }),
+        )
+    });
+    assert!(
+        rooted["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("file:///agent/root"),
+        "{rooted}"
+    );
+
+    // Progress comes through with the agent's token; a cancellation reaches the add-on by its id.
+    mcp.send(
+        json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+        "name": "fake_slow", "arguments": {}, "_meta": { "progressToken": "tok-5" } } }),
+    );
+    let progress = mcp.next(Duration::from_secs(10));
+    assert_eq!(progress["method"], "notifications/progress", "{progress}");
+    assert_eq!(progress["params"]["progressToken"], "tok-5");
+    mcp.send(
+        json!({ "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": { "requestId": 5, "reason": "test" } }),
+    );
+    let cancelled = out.join("cancelled.txt");
+    let until = Instant::now() + Duration::from_secs(10);
+    while !cancelled.is_file() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let seen = std::fs::read_to_string(&cancelled).expect("the add-on heard the cancellation");
+    assert!(
+        seen.starts_with("\"ev3-mcp-"),
+        "by the id it knows the call by: {seen}"
+    );
+
+    // An add-on that ends during a call answers it with an error; the next call starts it again.
+    let crashed = mcp.call(6, "fake_crash", json!({}), |_| Value::Null);
+    assert_eq!(crashed["isError"], true, "{crashed}");
+    let again = mcp.call(7, "fake_echo", json!({}), |_| Value::Null);
+    assert!(
+        again["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("MCP test agent"),
+        "{again}"
+    );
+
+    mcp.send(json!({ "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": { "name": "nobody_x", "arguments": {} } }));
+    assert_eq!(mcp.answer(8, |_| Value::Null)["error"]["code"], -32602);
+    assert!(mcp.end().success());
+
+    // The add-ons' servers ended with ev3 mcp: a running program's file could not be removed on
+    // Windows.
+    let until = Instant::now() + Duration::from_secs(10);
+    let gone = || {
+        std::fs::read_dir(home.bin())
+            .expect("bin")
+            .flatten()
+            .all(|e| std::fs::remove_file(e.path()).is_ok())
+    };
+    while !gone() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(gone(), "no add-on server is left running");
 }
 
 /// `file:` URI of an absolute local path, as an MCP host sends it.

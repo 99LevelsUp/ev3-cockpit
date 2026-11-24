@@ -146,6 +146,46 @@ pub fn find(name: &str) -> Result<Option<AddonLaunch>> {
     Ok(None)
 }
 
+/// The cockpit's own programs named like add-ons, which are never run as one.
+const NOT_ADD_ONS: [&str; 1] = ["cockpitd"];
+
+/// Every add-on installed on PATH, by name, sorted: each `ev3-<name>` that [`find`] would start for
+/// `ev3 <name>`, under the same rules, so an add-on `ev3 mcp` runs is one `ev3 <name>` would run.
+pub fn installed() -> Vec<(String, AddonLaunch)> {
+    let mut names = std::collections::BTreeSet::new();
+    for dir in path_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            #[cfg(windows)]
+            let stem = {
+                let lower = file.to_lowercase();
+                lower
+                    .strip_suffix(".exe")
+                    .or_else(|| lower.strip_suffix(".cmd"))
+                    .map(str::to_owned)
+            };
+            #[cfg(unix)]
+            let stem = Some(file);
+            if let Some(name) = stem.as_deref().and_then(|s| s.strip_prefix("ev3-"))
+                && check_name(name).is_ok()
+                && !NOT_ADD_ONS.contains(&name)
+            {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|name| match find(&name) {
+            Ok(Some(launch)) => Some((name, launch)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Runs an add-on in this terminal and returns its exit code.
 pub fn run(launch: &AddonLaunch, args: &[String]) -> u8 {
     match Command::new(&launch.command)
