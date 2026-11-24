@@ -91,6 +91,7 @@ trip: `bricks()`, `brick(ref)`, `settings()`, `accessMode()`.
 | firmware version | `bricks/info` → name, firmware, OS |
 | storage | `bricks/storage` → `totalKb`, `freeKb` |
 | files | `files/list`, `exists`, `size`, `read`, `write`, `makeDirectory`, `remove` (`recursive`), `removePaths`, `move` |
+| a file as it grows (a program's output) | `files/follow` (`fromOffset`) → `files/appended`, `files/followEnded`; end it with `subscriptions/cancel` |
 | put files on the brick and start a program | `programs/deployAndRun` |
 | start an `.rbf` already on the brick | `programs/run` (`replace`) |
 | stop / emergency stop / state | `programs/stop`, `programs/emergencyStop` (also stops every motor), `programs/status` (`waitMs`), `subscribePrograms` |
@@ -448,6 +449,15 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
 - **A program's state:** `subscribe_programs(brick)` answers a `ProgramStates` with `state`, the
   state when it was made, and `next()` for every change, in order, for that subscription alone;
   a change the daemon sends before its answer is not lost. Dropping it cancels the subscription.
+- **A file as it grows** (a program's output while it runs): `follow_file(brick, path,
+  from_offset)` answers a `FileFollow` with `offset` and `size` (the file's size then) and
+  `next()`: `FileEvent::Appended { offset, data }` for every growth, in order, each starting where
+  the last ended (bytes, not text: a character may be split between two), then
+  `FileEvent::Ended(reason)` when the daemon ends it (`removed`, `replaced` by a shorter file,
+  `signedOut`). `file_not_found` when the file is not there yet: follow again a moment later. At
+  most two follows per brick, for every client together. `reached()` is where to follow again
+  from. Dropping it cancels the follow. The daemon polls the brick, often while the file grows
+  and up to every 2 s while it does not; each poll reads only what is new.
 - `ev3_client::CONTRACT_VERSION` and `ev3_client::contract` re-export `ev3-contract`.
 - Rust 1.100.0 (the repository's `rust-toolchain.toml`), edition 2024, tokio 1 with `rt`, `net`,
   `io-util`, `sync`, `time` and `macros`; no transport is linked. The static C runtime this
@@ -456,7 +466,9 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
   keeps for a long time, as the TypeScript `CockpitClient`: when the connection closes it
   connects again by itself, starting the daemon its `Launch` names; the bricks it connected
   without a hold are connected again and every `subscribe_programs` is renewed, its reader getting
-  the fresh state first. `events()` carries `CockpitEvent::Notification`, `Reconnected` and `Lost`
+  the fresh state first; every `follow_file` (`CockpitFile`) is followed again from the offset
+  its bytes reached, so nothing comes twice or is skipped, and a file gone meanwhile ends it as
+  `removed`. `events()` carries `CockpitEvent::Notification`, `Reconnected` and `Lost`
   (no daemon came back; the next request tries again). A write cut by the daemon going fails with
   `outcome_unknown` and is never sent again. `Client` stays the short-lived connection `ev3` uses,
   which never reconnects; its `events()` and `ProgramStates` end with `None` when it closes.

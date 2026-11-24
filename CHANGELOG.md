@@ -10,6 +10,14 @@ Minor and major versions are bumped manually for significant milestones.
 
 ## [Unreleased]
 
+### Added
+- `files/follow` follows a file on a brick as it grows, such as a program's output while it runs
+  (#7): `files/appended` carries every growth in order, `files/followEnded` says why it ended. Each
+  poll reads only the new bytes with one direct command, so nothing stays open on the brick and a
+  lost link leaves nothing to settle. At most two follows per brick.
+- `ev3-client`: `Client::follow_file` and `Cockpit::follow_file`, which follows again from the
+  offset reached after a reconnect.
+
 ### Fixed
 - A file read and a folder listing on one brick at the same time no longer break each other
   (#8): the firmware keeps one read cursor per channel, so the daemon now lets one read or
