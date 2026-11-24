@@ -351,6 +351,45 @@
         "chain": { "$ref": "#/definitions/ContractChain" }
       }
     },
+    "FilesFollowParams": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "brick": { "type": "string" },
+        "path": { "type": "string", "description": "Absolute path of a file on the brick." },
+        "fromOffset": { "type": "integer", "minimum": 0, "description": "The first byte to hand over; 0 when absent. A client that follows again after its daemon was replaced passes the offset it reached." }
+      }
+    },
+    "FileFollowSubscription": {
+      "type": "object",
+      "required": ["subscriptionId", "offset", "size"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0, "description": "Where the follow starts: the first files/appended carries the bytes from here." },
+        "size": { "type": "integer", "minimum": 0, "description": "The file's size when the follow started." }
+      }
+    },
+    "FileAppended": {
+      "type": "object",
+      "required": ["subscriptionId", "offset", "data"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0, "description": "Where data starts in the file: the previous files/appended's offset plus its length." },
+        "data": { "type": "string", "description": "Base64; bytes, not text: a character may be split between two." }
+      }
+    },
+    "FileFollowEnded": {
+      "type": "object",
+      "required": ["subscriptionId", "reason"],
+      "properties": {
+        "subscriptionId": { "type": "string" },
+        "reason": {
+          "description": "removed: the file is gone. replaced: the file is shorter than what was handed over, so it is another file now. signedOut: the brick was signed out. After this the subscription id is no longer valid.",
+          "type": "string",
+          "enum": ["removed", "replaced", "signedOut"]
+        }
+      }
+    },
     "SettingChanged": {
       "type": "object",
       "required": ["setting"],

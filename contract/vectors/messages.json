@@ -114,6 +114,10 @@
       "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/demo/data.txt", "toLocalPath": "/home/user/data.txt", "inline": false },
       "result": { "bytes": 5, "handle": "t-1", "content": "aGVsbG8=" }
     },
+    "files/follow": {
+      "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/demo/runs/3/out", "fromOffset": 120 },
+      "result": { "subscriptionId": "s-5", "offset": 120, "size": 128 }
+    },
     "files/write": {
       "params": { "brick": "AAA", "path": "/home/root/lms2012/prjs/demo/data.txt", "fromLocalPath": "/home/user/data.txt", "handle": "t-2", "content": "aGVsbG8=" },
       "result": { "bytes": 5 }
@@ -235,6 +239,8 @@
     "programs/stateChanged": { "subscriptionId": "s-1", "state": { "brickId": "001653f00a0a", "running": true, "runSeq": 9 } },
     "telemetry/update": { "subscriptionId": "s-2", "brickId": "001653f00a0a", "kind": "change", "values": [{ "rowId": "sensor.1.value", "value": "red", "sampledAt": 1764000000500, "stale": false }], "removed": ["brick.name"] },
     "chain/changed": { "subscriptionId": "s-3", "chain": { "brickId": "001653f00a0a", "read": true, "stale": false, "members": [] } },
+    "files/appended": { "subscriptionId": "s-5", "offset": 120, "data": "aGVsbG8K" },
+    "files/followEnded": { "subscriptionId": "s-5", "reason": "removed" },
     "settings/changed": { "setting": { "spec": { "key": "telemetry.throttle.enabled", "cliKey": "telemetry.throttle.enabled", "type": "boolean", "default": true, "description": "Slow a brick's telemetry while it answers slowly.", "dangerous": false, "stored": true }, "value": false } },
     "settings/accessModeChanged": { "mode": "full" },
     "question/withdrawn": { "questionId": "q-1" },
