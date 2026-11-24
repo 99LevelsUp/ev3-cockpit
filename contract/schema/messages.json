@@ -104,7 +104,8 @@
         "brick": { "type": "string" },
         "path": { "type": "string" },
         "toLocalPath": { "type": "string", "description": "A local path the daemon writes the file to." },
-        "inline": { "type": "boolean", "description": "Answer with the content as base64; at most 64 KiB, a larger file is refused." }
+        "inline": { "type": "boolean", "description": "Answer with the content as base64; at most 64 KiB, a larger file is refused." },
+        "replace": { "type": "boolean", "description": "Left out: true. With toLocalPath: replace a local file already there. false refuses it with file_exists before anything is read, and leaves it as it was." }
       }
     },
     "FilesReadResult": {
@@ -124,7 +125,8 @@
         "path": { "type": "string" },
         "fromLocalPath": { "type": "string" },
         "handle": { "type": "string", "description": "A filled transfer handle." },
-        "content": { "type": "string", "description": "Base64, at most 4 KiB once decoded." }
+        "content": { "type": "string", "description": "Base64, at most 4 KiB once decoded." },
+        "replace": { "type": "boolean", "description": "Left out: true. Replace a file already at path. false refuses it with file_exists and writes nothing." }
       }
     },
     "FilesWriteResult": {
@@ -158,7 +160,8 @@
       "properties": {
         "brick": { "type": "string" },
         "from": { "type": "string" },
-        "to": { "type": "string" }
+        "to": { "type": "string" },
+        "replace": { "type": "boolean", "description": "Left out: true. Move onto something already at to. false refuses it with file_exists and moves nothing." }
       }
     },
     "TransferBeginParams": {

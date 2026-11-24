@@ -141,7 +141,7 @@
       "leased": false,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "Read a file: to a local path the daemon writes, inline as base64 in the answer, or into a transfer handle the client then drains with transfer/read."
+      "doc": "Read a file: to a local path the daemon writes, inline as base64 in the answer, or into a transfer handle the client then drains with transfer/read. A local file already there is replaced unless replace is false."
     },
     "files/follow": {
       "params": "FilesFollowParams",
@@ -157,7 +157,7 @@
       "leased": true,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "Write a file: from a local path, from a filled transfer handle, or from inline base64 content."
+      "doc": "Write a file: from a local path, from a filled transfer handle, or from inline base64 content. A file already there is replaced unless replace is false."
     },
     "files/makeDirectory": {
       "params": "PathParams",
@@ -189,7 +189,7 @@
       "leased": true,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "Move or rename a file on the brick."
+      "doc": "Move or rename a file on the brick. Something already at the target is replaced unless replace is false."
     },
     "transfer/begin": {
       "params": "TransferBeginParams",
@@ -419,6 +419,7 @@
     "outcome_unknown": { "family": "daemon", "doc": "The daemon went away during a call that changes a brick; whether it took effect is unknown. Do not retry blindly." },
     "replay_unmatched": { "family": "daemon", "doc": "A replay daemon has no recorded reply left for the request: the recording is stale." },
     "cancelled": { "family": "cancelled", "doc": "The caller, a stop or the daemon cancelled the operation." },
+    "file_exists": { "family": "request", "doc": "The target is there already, and the request asked not to replace it." },
     "invalid_request": { "family": "request", "doc": "The request was malformed or named something the daemon does not have." },
     "internal": { "family": "internal", "doc": "Anything else; the message says what." }
   }

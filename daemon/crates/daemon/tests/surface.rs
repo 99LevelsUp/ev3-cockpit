@@ -218,6 +218,40 @@ async fn a_local_path_into_the_state_root_is_refused_for_every_client_kind() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_read_without_replace_leaves_a_local_file_there_as_it_is_before_asking_a_brick() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let root = TempRoot::new("keep");
+    let daemon = Daemon::start(&root, "t");
+    let mut c = client(&daemon, &root, "mcp", "an agent").await;
+    // Outside the daemon's own directories, which it refuses for every request.
+    let outside = TempRoot::new("keep-file");
+    let kept = outside.path().join("kept.bin");
+    std::fs::write(&kept, b"the person's file").expect("write");
+    let refused = c
+        .request(
+            "files/read",
+            json!({"brick": "AAA", "path": "/home/root/lms2012/prjs/a.rbf",
+                   "toLocalPath": kept, "replace": false}),
+        )
+        .await
+        .expect("answered");
+    // Refused before the brick is looked for: this daemon has no brick AAA at all.
+    assert_eq!(code(&refused), "file_exists", "{refused}");
+    assert_eq!(std::fs::read(&kept).expect("read"), b"the person's file");
+    // Without replace, the read goes on to the brick as before.
+    let replacing = c
+        .request(
+            "files/read",
+            json!({"brick": "AAA", "path": "/home/root/lms2012/prjs/a.rbf", "toLocalPath": kept}),
+        )
+        .await
+        .expect("answered");
+    assert_ne!(code(&replacing), "file_exists", "{replacing}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_second_leased_write_to_a_brick_gets_brick_busy_naming_the_holder() {
     if common::refuses_this_process() {
         return;

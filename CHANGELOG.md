@@ -20,6 +20,13 @@ Minor and major versions are bumped manually for significant milestones.
 - `ev3 follow <remote> [offset]` prints a file on the brick as it grows.
 - `ev3-client`: `Client::follow_file` and `Cockpit::follow_file`, which follows again from the
   offset reached after a reconnect.
+- `replace` on `files/read` (its local file), `files/write` and `files/move`: left out, they
+  replace what is there as before; `false` refuses it with the new error `file_exists` (#14).
+
+### Changed
+- `ev3 mcp`: `read_file` and `move_file` no longer replace a file already there unless the agent
+  asks with `replace: true`; `write_file` (now with `replace`) and `deploy_and_run` say they are
+  destructive, so an agent host can ask the person before they replace files on the brick (#14).
 
 ### Fixed
 - A command no longer waits for Bluetooth to give up on a brick that is on USB (#11): a connect

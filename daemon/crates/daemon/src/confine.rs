@@ -324,6 +324,18 @@ fn is_regular(file: &std::fs::File) -> std::io::Result<bool> {
 }
 
 /// The refusal of a path that names something other than a regular file.
+/// The refusal of a local file that is there already, for a request that asked not to replace it.
+pub fn file_exists(named: &Path) -> ContractError {
+    ContractError::new(
+        ErrorCode::FileExists,
+        format!(
+            "{} is there already; it was left as it is. Ask for it to be replaced, or choose \
+             another name.",
+            named.display()
+        ),
+    )
+}
+
 fn not_regular(named: &Path) -> ContractError {
     ContractError::new(
         ErrorCode::InvalidRequest,
@@ -501,6 +513,19 @@ impl Confinement {
     /// write leaves it as it was. A new file is created only after its folder, opened, passed the
     /// check; one created all the same where the check then refuses it is removed again.
     pub fn write(&self, named: &Path, resolved: &Path, data: &[u8]) -> Result<(), ContractError> {
+        self.write_file(named, resolved, data, true)
+    }
+
+    /// [`Confinement::write`], but a file already there is refused with `file_exists` and left as
+    /// it was unless `replace`. The refusal is decided by the create itself, so a file that
+    /// appears between a caller's own check and this write is not replaced either.
+    pub fn write_file(
+        &self,
+        named: &Path,
+        resolved: &Path,
+        data: &[u8],
+        replace: bool,
+    ) -> Result<(), ContractError> {
         use std::io::Write;
         let unwritable = |error: std::io::Error| {
             ContractError::new(
@@ -517,6 +542,9 @@ impl Confinement {
         }
         let (mut file, created) = match file_options().write(true).create_new(true).open(resolved) {
             Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && !replace => {
+                return Err(file_exists(named));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
                 file_options()
                     .write(true)
@@ -747,6 +775,23 @@ mod tests {
             .write(&named, &resolved, b"short")
             .expect("rewrite");
         assert_eq!(confinement.read(&named, &resolved).expect("read"), b"short");
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    #[test]
+    fn a_write_without_replace_creates_a_new_file_and_leaves_one_there_as_it_is() {
+        let base = temp_dir();
+        let confinement = Confinement::new([base.join("state")]).expect("roots");
+        let named = base.join("kept.bin");
+        let resolved = confinement.check(&named).expect("outside");
+        confinement
+            .write_file(&named, &resolved, b"first", false)
+            .expect("a new file is written");
+        let refused = confinement
+            .write_file(&named, &resolved, b"second", false)
+            .expect_err("refused");
+        assert_eq!(refused.data.code, ErrorCode::FileExists, "{refused:?}");
+        assert_eq!(confinement.read(&named, &resolved).expect("read"), b"first");
         std::fs::remove_dir_all(base).expect("clean");
     }
 

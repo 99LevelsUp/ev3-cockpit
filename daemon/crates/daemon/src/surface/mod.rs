@@ -597,16 +597,18 @@ impl Surface {
     }
 
     /// Writes a local file a client named, at the path [`Self::local_path`] confined, checking
-    /// the opened file's own path again before anything is written.
+    /// the opened file's own path again before anything is written. A file already there is
+    /// refused with `file_exists` unless `replace`.
     pub fn write_local(
         &self,
         named: &str,
         resolved: &Path,
         data: &[u8],
+        replace: bool,
     ) -> Result<(), ContractError> {
         self.shared
             .confinement
-            .write(Path::new(named), resolved, data)
+            .write_file(Path::new(named), resolved, data, replace)
     }
 
     // ── Holds across the daemon's start ─────────────────────────────

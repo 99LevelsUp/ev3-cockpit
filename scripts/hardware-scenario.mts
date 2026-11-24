@@ -588,6 +588,48 @@ async function followFile(c: ScenarioContext): Promise<void> {
 	await c.call('bricks/disconnect', { brick: c.brick });
 }
 
+/** Calls a method that must be refused with `code`, and says so. */
+async function expectRefused<M extends CallName>(c: ScenarioContext, method: M, params: CallParams<M>, code: string): Promise<void> {
+	let answer: unknown;
+	try {
+		answer = await c.call(method, params);
+	} catch (error) {
+		const failed = error as CallError;
+		if (failed.code !== code) { throw error; }
+		say(`${method} refused: ${failed.code}`);
+		return;
+	}
+	throw new Error(`${method} was not refused with ${code} (${brief(answer)})`);
+}
+
+/**
+ * Writes and moves onto files already there with `replace: false`: both are refused with
+ * `file_exists` and leave the brick's files as they were; a move onto a free name goes through.
+ */
+async function replaceRefused(c: ScenarioContext): Promise<void> {
+	await findBrick(c);
+	await c.call('bricks/connect', { brick: c.brick });
+	await expectNoFolder(c);
+	await c.call('files/makeDirectory', { brick: c.brick, path: DIR });
+	const [a, b, moved] = [`${DIR}/a.txt`, `${DIR}/b.txt`, `${DIR}/c.txt`];
+	const inline = (s: string): string => Buffer.from(s).toString('base64');
+	await c.call('files/write', { brick: c.brick, path: a, content: inline('first') });
+	await expectRefused(c, 'files/write', { brick: c.brick, path: a, content: inline('second'), replace: false }, 'file_exists');
+	const back = await c.call('files/read', { brick: c.brick, path: a, inline: true });
+	const kept = Buffer.from(back.content as string, 'base64').toString('utf8') === 'first';
+	c.results.writeKept = kept;
+	if (!kept) { throw new Error('the refused write changed the file'); }
+	await c.call('files/write', { brick: c.brick, path: b, content: inline('other') });
+	await expectRefused(c, 'files/move', { brick: c.brick, from: a, to: b, replace: false }, 'file_exists');
+	await c.call('files/move', { brick: c.brick, from: a, to: moved, replace: false });
+	const listing = await c.call('files/list', { brick: c.brick, path: DIR });
+	const names = listing.entries.map((e) => e.name).sort();
+	c.results.names = names;
+	if (names.join(',') !== 'b.txt,c.txt') { throw new Error(`the folder holds ${names.join(', ')}`); }
+	await c.call('files/remove', { brick: c.brick, path: DIR, recursive: true });
+	await c.call('bricks/disconnect', { brick: c.brick });
+}
+
 async function telemetryMinute(c: ScenarioContext): Promise<void> {
 	await findBrick(c);
 	await c.call('bricks/connect', { brick: c.brick });
@@ -669,6 +711,10 @@ const SCENARIOS: Record<string, Scenario> = {
 	follow: {
 		summary: `Write an empty file, follow it from 0, overwrite it with ${FOLLOW_BYTES} bytes and hear every byte in order, remove it and hear the follow end.`,
 		run: followFile,
+	},
+	replace: {
+		summary: 'Write and move onto files already there with replace false (both refused, the files kept), move onto a free name, remove the folder.',
+		run: replaceRefused,
 	},
 	'telemetry-minute': {
 		summary: 'Subscribe to the battery and program rows at 1000 ms for a minute.',
