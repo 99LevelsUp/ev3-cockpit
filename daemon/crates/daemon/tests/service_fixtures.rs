@@ -178,6 +178,11 @@ impl Replay {
     /// The first discovery round, then the brick listed on `transport` with its name confirmed,
     /// as the script waits before it connects.
     async fn find_brick(&mut self, transport: &str) -> Value {
+        self.find_named(transport, CCC).await
+    }
+
+    /// The same for the brick named `name`.
+    async fn find_named(&mut self, transport: &str, name: &str) -> Value {
         self.call("bricks/list", json!({"waitForDiscovery": true}))
             .await;
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -187,7 +192,7 @@ impl Replay {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|b| b["name"] == CCC)
+                .find(|b| b["name"] == name)
                 .cloned();
             if let Some(brick) = brick {
                 let on = brick["channels"]
@@ -199,7 +204,7 @@ impl Replay {
                     return brick;
                 }
             }
-            assert!(Instant::now() < deadline, "CCC never listed: {list}");
+            assert!(Instant::now() < deadline, "{name} never listed: {list}");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -704,6 +709,107 @@ async fn usb_cut_upload_fails_the_write_and_the_brick_comes_back_in_matched_repl
         .await;
     assert_eq!(removed["leftBehind"], json!([]));
     run.call("bricks/disconnect", json!({"brick": CCC})).await;
+    run.end().await;
+}
+
+/// The bytes the follow scenario writes while it follows the file.
+const FOLLOW_BYTES: usize = 10_000;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usb_follow_hands_over_every_byte_in_order_and_ends_when_the_file_goes_in_matched_replay() {
+    if common::refuses_this_process() {
+        return;
+    }
+    // Matched: how many polls find nothing depends on the host's pace, not on the scenario.
+    let mut run = Replay::start_as("usb-follow-bbb", false).await;
+    const BBB: &str = "BBB";
+    let file = format!("{DIR}/out.txt");
+    run.find_named("usb", BBB).await;
+    run.call("bricks/connect", json!({"brick": BBB})).await;
+    // A path the brick would cut (61 bytes; its folder alone passes) is refused at once, not
+    // polled in vain: nothing of it reaches the brick.
+    let long = format!("{DIR}/AVeryLongName/{}", "x".repeat(61 - DIR.len() - 15));
+    assert_eq!(long.len(), 61);
+    let refused = run
+        .answer("files/follow", json!({"brick": BBB, "path": long}))
+        .await;
+    assert_eq!(
+        refused["error"]["data"]["code"], "invalid_request",
+        "{refused}"
+    );
+    let exists = run
+        .call("files/exists", json!({"brick": BBB, "path": DIR}))
+        .await;
+    assert_eq!(exists["exists"], false);
+    run.call("files/makeDirectory", json!({"brick": BBB, "path": DIR}))
+        .await;
+    run.call(
+        "files/write",
+        json!({"brick": BBB, "path": file, "content": ""}),
+    )
+    .await;
+    let follow = run
+        .call(
+            "files/follow",
+            json!({"brick": BBB, "path": file, "fromOffset": 0}),
+        )
+        .await;
+    assert_eq!(
+        (follow["offset"].clone(), follow["size"].clone()),
+        (json!(0), json!(0))
+    );
+    let id = follow["subscriptionId"].clone();
+
+    let content = repeated(FOLLOW_BYTES);
+    let begun = run
+        .call("transfer/begin", json!({"size": FOLLOW_BYTES}))
+        .await;
+    let handle = begun["handle"].clone();
+    run.call(
+        "transfer/write",
+        json!({"handle": handle, "data": base64(content.as_bytes())}),
+    )
+    .await;
+    run.call(
+        "files/write",
+        json!({"brick": BBB, "path": file, "handle": handle}),
+    )
+    .await;
+
+    // Every byte, in order, each files/appended starting where the last one ended.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut followed = Vec::new();
+    while followed.len() < FOLLOW_BYTES && Instant::now() < deadline {
+        let appended = run
+            .notes_of("files/appended", usize::MAX, Duration::from_millis(200))
+            .await;
+        followed.clear();
+        for note in &appended {
+            assert_eq!(note["subscriptionId"], id);
+            assert_eq!(note["offset"], json!(followed.len()), "{note}");
+            followed.extend(
+                ev3_contract::base64::decode(note["data"].as_str().unwrap(), "data").unwrap(),
+            );
+        }
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&followed),
+        content,
+        "every byte, in order"
+    );
+
+    run.call("files/remove", json!({"brick": BBB, "path": file}))
+        .await;
+    let ended = run
+        .notes_of("files/followEnded", 1, Duration::from_secs(15))
+        .await;
+    assert_eq!(ended, [json!({"subscriptionId": id, "reason": "removed"})]);
+    run.call(
+        "files/remove",
+        json!({"brick": BBB, "path": DIR, "recursive": true}),
+    )
+    .await;
+    run.call("bricks/disconnect", json!({"brick": BBB})).await;
     run.end().await;
 }
 

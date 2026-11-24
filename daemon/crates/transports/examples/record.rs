@@ -128,6 +128,15 @@ pub const SCENARIOS: &[Scenario] = &[
         run: |p, b, s| Box::pin(file_round_trip(p, b, s)),
     },
     Scenario {
+        name: "usb-read-from",
+        transport: Transport::Usb,
+        summary: "Write a small file, read it from several offsets with one direct command each \
+                  (the brick skips to the offset), read a missing file, delete it.",
+        needs_owner: None,
+        inquiry_first: false,
+        run: |p, b, s| Box::pin(read_from(p, b, s)),
+    },
+    Scenario {
         name: "usb-stale-reply",
         transport: Transport::Usb,
         summary: "A slow command that times out and one dropped by its caller, each followed by \
@@ -531,22 +540,14 @@ pub async fn connect_commands(
     ))
 }
 
-pub async fn file_round_trip(
-    provider: Arc<dyn TransportProvider>,
-    brick: String,
-    seen: Seen,
-) -> Outcome {
-    let item = find_brick(provider.as_ref(), &brick, &seen).await?;
-    let mut session = Session::connect(provider, item.brick_key).await?;
+/// Writes `content` to `path`: BEGIN_DOWNLOAD names the file and its size, CONTINUE_DOWNLOAD
+/// carries the bytes in chunks that fill a frame. The continuations it took.
+async fn write_file(session: &mut Session, path: &str, content: &[u8]) -> Result<usize, String> {
     let frame = session.frame();
-    let content = round_trip_content();
     let total = u32::try_from(content.len()).map_err(|e| e.to_string())?;
-
-    // Write: BEGIN_DOWNLOAD names the file and its size, CONTINUE_DOWNLOAD carries the bytes in
-    // chunks that fill a frame.
     let (status, data) = session
         .system(&BrickCommand::FsBeginWrite {
-            path: ROUND_TRIP_FILE.into(),
+            path: path.into(),
             total_bytes: total,
             chunk: Vec::new(),
         })
@@ -568,6 +569,88 @@ pub async fn file_round_trip(
         }
         written += 1;
     }
+    Ok(written)
+}
+
+/// The reads from an offset the read-from scenario makes of the round-trip file: from the start,
+/// from the middle (the brick skips), its last bytes, at its end, past its end.
+pub const READ_FROM_STEPS: &[(u32, u16)] =
+    &[(0, 992), (1000, 992), (2990, 992), (3000, 992), (5000, 64)];
+
+/// One read from an offset: whether the path exists, the file's size and the bytes read.
+async fn read_one(
+    session: &mut Session,
+    path: &str,
+    offset: u32,
+    max_bytes: u16,
+) -> Result<(bool, u32, Vec<u8>), String> {
+    let command = BrickCommand::FsReadFrom {
+        path: path.into(),
+        offset,
+        max_bytes,
+    };
+    let answer = session
+        .exchange(&encode(&command)?, None)
+        .await?
+        .map_err(describe_error)?;
+    let packet = decode_ev3_packet(&answer).map_err(|e| e.to_string())?;
+    match ev3_protocol::parse_response(&command, &packet).map_err(|e| e.to_string())? {
+        ev3_protocol::BrickResponse::FsReadFrom {
+            exists,
+            size,
+            chunk,
+        } => Ok((exists, size, chunk)),
+        other => Err(format!("fs:readFrom answered {other:?}")),
+    }
+}
+
+pub async fn read_from(provider: Arc<dyn TransportProvider>, brick: String, seen: Seen) -> Outcome {
+    let item = find_brick(provider.as_ref(), &brick, &seen).await?;
+    let mut session = Session::connect(provider, item.brick_key).await?;
+    let content = round_trip_content();
+    write_file(&mut session, ROUND_TRIP_FILE, &content).await?;
+    let mut steps = Vec::new();
+    for &(offset, max_bytes) in READ_FROM_STEPS {
+        let (exists, size, chunk) =
+            read_one(&mut session, ROUND_TRIP_FILE, offset, max_bytes).await?;
+        let start = (offset as usize).min(content.len());
+        let end = (start + usize::from(max_bytes)).min(content.len());
+        if !exists || size as usize != content.len() || chunk != content[start..end] {
+            return Err(format!(
+                "from {offset}: exists {exists}, size {size}, {} bytes, not the file's {}",
+                chunk.len(),
+                end - start
+            ));
+        }
+        steps.push(format!("{offset}:{}", chunk.len()));
+    }
+    let missing = format!("{PROJECTS}nolinkfixture.txt");
+    let (exists, _, chunk) = read_one(&mut session, &missing, 0, 64).await?;
+    if exists || !chunk.is_empty() {
+        return Err("a missing file read as one".into());
+    }
+    let (deleted, _) = session
+        .system(&BrickCommand::FsDelete {
+            path: ROUND_TRIP_FILE.into(),
+        })
+        .await?;
+    session.disconnect().await?;
+    Ok(format!(
+        "read {} from offsets as asked, a missing file as missing; delete status {deleted}",
+        steps.join(" ")
+    ))
+}
+
+pub async fn file_round_trip(
+    provider: Arc<dyn TransportProvider>,
+    brick: String,
+    seen: Seen,
+) -> Outcome {
+    let item = find_brick(provider.as_ref(), &brick, &seen).await?;
+    let mut session = Session::connect(provider, item.brick_key).await?;
+    let frame = session.frame();
+    let content = round_trip_content();
+    let written = write_file(&mut session, ROUND_TRIP_FILE, &content).await?;
 
     // Read: BEGIN_UPLOAD answers the size and the first chunk, CONTINUE_UPLOAD the rest.
     let want = u16::try_from(frame - 12).map_err(|e| e.to_string())?;

@@ -88,6 +88,12 @@ pub const COMMANDS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        name: "follow",
+        usage: "ev3 follow <remote> [offset] [--brick <brick>]",
+        summary: "Print a file on the brick as it grows, such as a program's output, from offset (0); ends with Ctrl+C or when the file goes.",
+        flags: &[],
+    },
+    Spec {
         name: "put",
         usage: "ev3 put <local> <remote> [--brick <brick>]",
         summary: "Copy a file from this computer to the brick.",
@@ -484,6 +490,7 @@ pub async fn run(name: &str, ctx: &mut Ctx) -> Result<Outcome> {
         "bt-clear" => bt_clear(ctx).await,
         "ls" => ls(ctx).await,
         "get" => get(ctx).await,
+        "follow" => follow(ctx).await,
         "put" => put(ctx).await,
         "rm" => rm(ctx).await,
         "mkdir" => mkdir(ctx).await,
@@ -784,6 +791,79 @@ async fn get(ctx: &mut Ctx) -> Result<Outcome> {
         result,
         format!("Copied {remote} to {} ({bytes} bytes).", local.display()),
     ))
+}
+
+/// Prints a file as it grows: its bytes as they are to stdout, or with `--json` one object per
+/// growth (`offset`, `data` in base64) and one for the end (`ended`). Ends with Ctrl+C, when the
+/// daemon ends the follow, or when nobody reads the output any more.
+async fn follow(ctx: &mut Ctx) -> Result<Outcome> {
+    use std::io::Write;
+    ctx.at_most(2)?;
+    let remote = ctx.arg(0, "the file on the brick")?;
+    let from = match ctx.args.get(1) {
+        Some(offset) => Some(offset.parse::<u64>().map_err(|_| {
+            CliError::usage(format!(
+                "{offset} is not an offset in bytes. Usage: {}",
+                ctx.usage
+            ))
+        })?),
+        None => None,
+    };
+    let (id, name) = ctx.connected_brick(ctx.brick.clone()).await?;
+    let json = ctx.json;
+    let client = ctx.client().await?;
+    let mut follow = client.follow_file(&id, &remote, from).await?;
+    if !json {
+        eprintln!(
+            "Following {remote} on {name} ({} bytes now); Ctrl+C stops.",
+            follow.size
+        );
+    }
+    let stop = interrupted();
+    tokio::pin!(stop);
+    let mut ended = None;
+    loop {
+        let event = tokio::select! {
+            () = &mut stop => break,
+            event = follow.next() => event,
+        };
+        let Some(event) = event else {
+            return Err(CliError::unavailable(
+                "The connection to the cockpit daemon closed while the file was followed.",
+            ));
+        };
+        let heard = match event {
+            ev3_client::FileEvent::Appended { offset, data } if json => say(
+                &json!({ "offset": offset, "data": ev3_contract::base64::encode(&data) })
+                    .to_string(),
+            ),
+            ev3_client::FileEvent::Appended { data, .. } => {
+                let mut out = std::io::stdout().lock();
+                out.write_all(&data).and_then(|()| out.flush()).is_ok()
+            }
+            ev3_client::FileEvent::Ended(reason) => {
+                ended = Some(reason);
+                break;
+            }
+        };
+        if !heard {
+            break;
+        }
+    }
+    let reached = follow.reached();
+    drop(follow);
+    let reason = ended.map(|r| r.to_string());
+    if json && let Some(reason) = &reason {
+        say(&json!({ "ended": reason, "reached": reached }).to_string());
+    } else if let Some(reason) = &reason {
+        eprintln!("The follow ended: {reason}, at {reached} bytes.");
+    }
+    let mut outcome = Outcome::new(
+        json!({ "brickId": id, "reached": reached, "ended": reason }),
+        Vec::new(),
+    );
+    outcome.streamed = true;
+    Ok(outcome)
 }
 
 async fn put(ctx: &mut Ctx) -> Result<Outcome> {

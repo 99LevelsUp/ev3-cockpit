@@ -3,7 +3,9 @@
 //! Each builder returns an [`EncodedCommand`] ready for packet framing. Direct commands use a
 //! global variable allocation header (first 2 bytes) to reserve space for reply data.
 
-use crate::bytecode::{c_string, concat_bytes, gv0, gv1, lc0, lc1, lcs, uint16le, uint32le};
+use crate::bytecode::{
+    c_string, concat_bytes, gv0, gv1, lc0, lc1, lc2, lc4, lcs, uint16le, uint32le,
+};
 use crate::error::ProtocolError;
 use crate::packet::{
     MAX_BRICK_NAME_LENGTH, com_get_sub, com_hardware, com_set_sub, command, file_sub, filename_sub,
@@ -193,6 +195,14 @@ pub enum BrickCommand {
         handle: u8,
         want_bytes: u16,
     },
+    /// Reads up to `max_bytes` of a file from `offset` on, with one direct command: the brick
+    /// skips to the offset itself, so only the bytes asked for cross the link. Uses no system
+    /// command slot and not the channel's read cursor, and leaves nothing open behind it.
+    FsReadFrom {
+        path: String,
+        offset: u32,
+        max_bytes: u16,
+    },
 }
 
 impl BrickCommand {
@@ -231,6 +241,7 @@ impl BrickCommand {
             Self::FsCopy { .. } => "fs:copy",
             Self::FsRemoveTree { .. } => "fs:removeTree",
             Self::FsListContinue { .. } => "fs:listContinue",
+            Self::FsReadFrom { .. } => "fs:readFrom",
         }
     }
 }
@@ -356,6 +367,11 @@ pub fn build_command(cmd: &BrickCommand) -> Result<EncodedCommand, ProtocolError
             &[system::CONTINUE_LIST_FILES, assert_file_handle(*handle)?],
             &uint16le(*want_bytes),
         ])),
+        BrickCommand::FsReadFrom {
+            path,
+            offset,
+            max_bytes,
+        } => build_fs_read_from_command(path, *offset, *max_bytes),
     }
 }
 
@@ -754,6 +770,176 @@ fn build_fs_make_directory_command(path: &str) -> Result<EncodedCommand, Protoco
 /// `opFILE/MOVE`: a recursive copy that leaves the source. No output.
 fn build_fs_copy_command(from: &str, to: &str) -> Result<EncodedCommand, ProtocolError> {
     direct_command(0, &[&[opcode::FILE, file_sub::MOVE], &lcs(from), &lcs(to)])
+}
+
+/// The most [`BrickCommand::FsReadFrom`] brings back in one reply: the reply carries every global
+/// variable, and the firmware's 1024-byte buffer less the reply's envelope and the layout below
+/// leaves room for this much.
+pub const READ_FROM_MAX_BYTES: u16 = 992;
+
+/// The global variables of [`BrickCommand::FsReadFrom`]: the file's size, the bytes still to
+/// skip, the bytes the next read takes (as a 32-bit and a 16-bit value), the VM's file handle,
+/// whether the path exists, then the data.
+pub mod read_from_layout {
+    pub const SIZE: u32 = 0;
+    pub const SKIP: u32 = 4;
+    pub const COUNT: u32 = 8;
+    pub const HANDLE: u32 = 12;
+    pub const COUNT16: u32 = 14;
+    pub const EXISTS: u32 = 16;
+    pub const DATA: u32 = 20;
+}
+
+/// A little assembler for one direct command with forward and backward jumps. Every jump's offset
+/// is an LC2, so an instruction's length never depends on where it jumps.
+#[derive(Default)]
+struct Assembler {
+    code: Vec<u8>,
+    labels: Vec<(&'static str, usize)>,
+    /// Where an LC2 offset goes, and the label it jumps to.
+    jumps: Vec<(usize, &'static str)>,
+}
+
+impl Assembler {
+    fn put(&mut self, bytes: &[u8]) -> &mut Self {
+        self.code.extend_from_slice(bytes);
+        self
+    }
+
+    fn label(&mut self, name: &'static str) {
+        self.labels.push((name, self.code.len()));
+    }
+
+    /// The jump's offset, the last operand of its instruction: the VM adds it to the address
+    /// after the instruction (`opJR` and its conditional forms read it last).
+    fn jump_to(&mut self, label: &'static str) -> &mut Self {
+        self.jumps.push((self.code.len(), label));
+        self.code.extend_from_slice(&[0x82, 0, 0]);
+        self
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, ProtocolError> {
+        for (at, label) in &self.jumps {
+            let target = self
+                .labels
+                .iter()
+                .find(|(name, _)| name == label)
+                .map(|(_, position)| *position)
+                .ok_or_else(|| ProtocolError::new(format!("No label {label}.")))?;
+            let after = at + 3;
+            let offset = i16::try_from(target as i64 - after as i64)
+                .map_err(|_| ProtocolError::new(format!("The jump to {label} is too long.")))?;
+            self.code[at + 1..at + 3].copy_from_slice(&offset.to_le_bytes());
+        }
+        Ok(self.code)
+    }
+}
+
+/// Reads up to `max_bytes` of `path` from `offset` on, in one direct command:
+///
+/// ```text
+///   FILENAME EXIST path -> exists;  if !exists goto end
+///   FILE OPEN_READ path -> handle, size
+///   count = size - offset;  if count <= 0 goto close
+///   skip = offset
+/// skip:   if skip <= 0 goto skipped
+///   count = min(skip, max);  FILE READ_BYTES handle count -> data;  skip -= count;  goto skip
+/// skipped:
+///   count = min(size - offset, max);  FILE READ_BYTES handle count -> data
+/// close:  FILE CLOSE handle
+/// end:
+/// ```
+///
+/// The system commands have no seek, and a `BEGIN_UPLOAD` or `BEGIN_GETFILE` starts at 0, so the
+/// brick skips by reading and dropping what lies before the offset (`cMemoryReadFile` reads one
+/// byte per `read()`): only the bytes asked for cross the link. Skipping costs the brick about
+/// 12 µs a byte (measured on V1.10E: 0.8 s for 64 KiB, whatever the link), so a file no longer
+/// than the offset is not skipped at all. `OPEN_READ` reports the size from
+/// `stat` at its opening, and no more than that is read, so bytes a writer appends meanwhile wait
+/// for the next call. Existence is asked first because `OPEN_READ` of a missing file is not an
+/// error: it hands back handle 0, which `CLOSE` would then free whatever it is (`c_memory.c`).
+/// The brick runs the whole command once it has it, so a link lost meanwhile leaves no file open.
+fn build_fs_read_from_command(
+    path: &str,
+    offset: u32,
+    max_bytes: u16,
+) -> Result<EncodedCommand, ProtocolError> {
+    use read_from_layout::{COUNT, COUNT16, DATA, EXISTS, HANDLE, SIZE, SKIP};
+    if max_bytes == 0 || max_bytes > READ_FROM_MAX_BYTES {
+        return Err(ProtocolError::new(format!(
+            "fs:readFrom reads 1 to {READ_FROM_MAX_BYTES} bytes at a time, not {max_bytes}."
+        )));
+    }
+    let offset = i32::try_from(offset)
+        .map_err(|_| ProtocolError::new(format!("fs:readFrom cannot skip {offset} bytes.")))?;
+    let max = lc2(i32::from(max_bytes))?;
+    let (size, skip, count, handle, count16, exists, data) = (
+        gv0(SIZE)?,
+        gv0(SKIP)?,
+        gv0(COUNT)?,
+        gv0(HANDLE)?,
+        gv0(COUNT16)?,
+        gv0(EXISTS)?,
+        gv0(DATA)?,
+    );
+    let read_bytes = |a: &mut Assembler| {
+        a.put(&[opcode::MOVE32_16]).put(&count).put(&count16);
+        a.put(&[opcode::FILE, file_sub::READ_BYTES])
+            .put(&handle)
+            .put(&count16)
+            .put(&data);
+    };
+    let mut a = Assembler::default();
+    a.put(&[opcode::FILENAME, filename_sub::EXIST])
+        .put(&lcs(path))
+        .put(&exists);
+    a.put(&[opcode::JR_FALSE]).put(&exists).jump_to("end");
+    a.put(&[opcode::FILE, file_sub::OPEN_READ])
+        .put(&lcs(path))
+        .put(&handle)
+        .put(&size);
+    // Nothing new: no skip. A follow mostly finds nothing, and skipping is what costs.
+    a.put(&[opcode::SUB32])
+        .put(&size)
+        .put(&lc4(offset))
+        .put(&count);
+    a.put(&[opcode::JR_LTEQ32])
+        .put(&count)
+        .put(&lc0(0)?)
+        .jump_to("close");
+    a.put(&[opcode::MOVE32_32]).put(&lc4(offset)).put(&skip);
+    a.label("skip");
+    a.put(&[opcode::JR_LTEQ32])
+        .put(&skip)
+        .put(&lc0(0)?)
+        .jump_to("skipped");
+    a.put(&[opcode::MOVE32_32]).put(&skip).put(&count);
+    a.put(&[opcode::JR_LTEQ32])
+        .put(&count)
+        .put(&max)
+        .jump_to("skip_read");
+    a.put(&[opcode::MOVE32_32]).put(&max).put(&count);
+    a.label("skip_read");
+    read_bytes(&mut a);
+    a.put(&[opcode::SUB32]).put(&skip).put(&count).put(&skip);
+    a.put(&[opcode::JR]).jump_to("skip");
+    a.label("skipped");
+    a.put(&[opcode::SUB32])
+        .put(&size)
+        .put(&lc4(offset))
+        .put(&count);
+    a.put(&[opcode::JR_LTEQ32])
+        .put(&count)
+        .put(&max)
+        .jump_to("read");
+    a.put(&[opcode::MOVE32_32]).put(&max).put(&count);
+    a.label("read");
+    read_bytes(&mut a);
+    a.label("close");
+    a.put(&[opcode::FILE, file_sub::CLOSE]).put(&handle);
+    a.label("end");
+    let code = a.finish()?;
+    direct_command(DATA as u16 + max_bytes, &[&code])
 }
 
 /// `opFILE/REMOVE`: recursive delete by name. No output.

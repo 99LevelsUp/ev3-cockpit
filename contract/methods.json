@@ -143,6 +143,14 @@
       "callableBy": ["vscode", "cli", "mcp", "addon"],
       "doc": "Read a file: to a local path the daemon writes, inline as base64 in the answer, or into a transfer handle the client then drains with transfer/read."
     },
+    "files/follow": {
+      "params": "FilesFollowParams",
+      "result": "FileFollowSubscription",
+      "leased": false,
+      "needsPerson": false,
+      "callableBy": ["vscode", "cli", "mcp", "addon"],
+      "doc": "Hear files/appended for a file on the brick as it grows, from fromOffset on, until subscriptions/cancel or files/followEnded. file_not_found when the file is not there yet; at most two follows per brick, for every client together."
+    },
     "files/write": {
       "params": "FilesWriteParams",
       "result": "FilesWriteResult",
@@ -354,6 +362,8 @@
     "programs/stateChanged": { "payload": "ProgramStateChanged", "doc": "A followed program's state changed." },
     "telemetry/update": { "payload": "TelemetryUpdate", "doc": "New telemetry values for a subscription." },
     "chain/changed": { "payload": "ChainChanged", "doc": "A followed daisy chain changed." },
+    "files/appended": { "payload": "FileAppended", "doc": "A followed file grew: the bytes it grew by, in order." },
+    "files/followEnded": { "payload": "FileFollowEnded", "doc": "A follow ended without a subscriptions/cancel, and why." },
     "settings/changed": { "payload": "SettingChanged", "doc": "A setting changed." },
     "settings/accessModeChanged": { "payload": "AccessModeState", "doc": "The access mode changed." },
     "question/withdrawn": { "payload": "QuestionWithdrawn", "doc": "A question this client was asked is no longer open." },
@@ -394,6 +404,7 @@
     "subscription_failed": { "family": "brick", "doc": "The subscription could not be made." },
     "program_running": { "family": "brick", "doc": "A program runs on the brick already." },
     "program_not_found": { "family": "brick", "doc": "No such program on the brick." },
+    "file_not_found": { "family": "brick", "doc": "No such file on the brick." },
     "mode_conflict": { "family": "brick", "doc": "A sensor port is claimed in another mode." },
     "access_denied": { "family": "brick", "doc": "The access mode, or this client's kind, does not allow it; the message says which." },
     "brick_ambiguous": { "family": "brick", "doc": "A brick name matched several bricks; data.candidates lists them." },

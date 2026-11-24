@@ -96,6 +96,13 @@ pub fn lc2(value: i32) -> Result<Vec<u8>, ProtocolError> {
     Ok(vec![0x82, lo, hi])
 }
 
+/// Encodes a value as a 5-byte EV3 Local Constant (LC4).
+/// Wire format: `[0x83, int32LE]`.
+pub fn lc4(value: i32) -> Vec<u8> {
+    let [a, b, c, d] = value.to_le_bytes();
+    vec![0x83, a, b, c, d]
+}
+
 // ── String encodings ────────────────────────────────────────────────
 
 /// Encodes a string as a null-terminated C string in UTF-8.

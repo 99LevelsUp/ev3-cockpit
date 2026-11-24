@@ -151,6 +151,18 @@ pub mod opcode {
     pub const MEMORY_USAGE: u8 = 0xc5;
     pub const FILE: u8 = 0xc0;
     pub const FILENAME: u8 = 0xc6;
+    /// `opSUB32 (SOURCE1, SOURCE2, DESTINATION)`: `SOURCE1 - SOURCE2`.
+    pub const SUB32: u8 = 0x16;
+    /// `opMOVE32_16 (SOURCE, DESTINATION)`.
+    pub const MOVE32_16: u8 = 0x39;
+    /// `opMOVE32_32 (SOURCE, DESTINATION)`.
+    pub const MOVE32_32: u8 = 0x3a;
+    /// `opJR (OFFSET)`: jumps by `OFFSET` from the end of the instruction.
+    pub const JR: u8 = 0x40;
+    /// `opJR_FALSE (FLAG, OFFSET)`: jumps when the 8-bit flag is zero.
+    pub const JR_FALSE: u8 = 0x41;
+    /// `opJR_LTEQ32 (LEFT, RIGHT, OFFSET)`: jumps when `LEFT <= RIGHT`.
+    pub const JR_LTEQ32: u8 = 0x76;
     pub const PROGRAM_STOP: u8 = 0x02;
     /// `opPROGRAM_START` (`bytecodes.h` 170): slot, size (read and ignored), image address, debug.
     pub const PROGRAM_START: u8 = 0x03;

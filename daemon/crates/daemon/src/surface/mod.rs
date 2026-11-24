@@ -61,6 +61,11 @@ enum Subscription {
     Chain {
         brick_id: String,
     },
+    /// A file followed as it grows, on `brick_id`.
+    Follow {
+        task: AbortHandle,
+        brick_id: String,
+    },
 }
 
 /// One transfer buffer of one client.
@@ -646,7 +651,7 @@ impl Surface {
                     self.runtime.telemetry.release(&claim);
                 }
             }
-            Subscription::Program(task) => task.abort(),
+            Subscription::Program(task) | Subscription::Follow { task, .. } => task.abort(),
             Subscription::Chain { .. } => {}
         }
     }

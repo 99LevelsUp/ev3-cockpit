@@ -32,6 +32,8 @@ export const WireErrorCode = {
 	SubscriptionFailed: 'subscription_failed',
 	ProgramRunning: 'program_running',
 	ProgramNotFound: 'program_not_found',
+	/** No such file on the brick. */
+	FileNotFound: 'file_not_found',
 	ModeConflict: 'mode_conflict',
 	AccessDenied: 'access_denied',
 	/** A brick name matched several bricks; `data.candidates` lists them. */
