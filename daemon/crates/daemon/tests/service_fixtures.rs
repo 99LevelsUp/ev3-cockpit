@@ -686,7 +686,11 @@ async fn usb_writes_and_moves_without_replace_leave_files_there_as_they_are_repl
         .iter()
         .filter_map(|e| e["name"].as_str())
         .collect();
-    assert_eq!(names, ["b.txt", "c.txt"], "b.txt kept, a.txt moved to c.txt");
+    assert_eq!(
+        names,
+        ["b.txt", "c.txt"],
+        "b.txt kept, a.txt moved to c.txt"
+    );
     run.call(
         "files/remove",
         json!({"brick": AAA, "path": DIR, "recursive": true}),

@@ -86,7 +86,12 @@ async fn refuse_existing(
     fs: &ev3_runtime::BrickFilesystem,
     path: &str,
 ) -> Result<(), ContractError> {
-    if fs.files.exists(path).await.map_err(|e| errors::from_fs(&e))? {
+    if fs
+        .files
+        .exists(path)
+        .await
+        .map_err(|e| errors::from_fs(&e))?
+    {
         return Err(ContractError::new(
             ErrorCode::FileExists,
             format!(

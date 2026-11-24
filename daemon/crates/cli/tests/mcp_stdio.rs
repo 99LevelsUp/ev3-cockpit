@@ -259,7 +259,8 @@ fn a_path_outside_the_declared_roots_is_refused() {
 fn an_agent_replaces_a_local_file_only_when_it_asks_to_and_is_told_what_replaces_files() {
     let home = Home::new("replace");
     let channel = "mcpreplace";
-    let Some(_daemon) = Daemon::start(&home, channel, "service/usb-info-storage-listing-ccc") else {
+    let Some(_daemon) = Daemon::start(&home, channel, "service/usb-info-storage-listing-ccc")
+    else {
         eprintln!("skipped: build ev3-cockpitd first (npm run daemon:build)");
         return;
     };
@@ -270,26 +271,41 @@ fn an_agent_replaces_a_local_file_only_when_it_asks_to_and_is_told_what_replaces
         .as_array()
         .cloned()
         .expect("tools");
-    let tool = |name: &str| tools.iter().find(|t| t["name"] == name).cloned().expect(name);
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .cloned()
+            .expect(name)
+    };
     for name in ["write_file", "deploy_and_run"] {
         assert_eq!(tool(name)["annotations"]["destructiveHint"], true, "{name}");
     }
     for name in ["read_file", "move_file"] {
         let t = tool(name);
-        assert_eq!(t["inputSchema"]["properties"]["replace"]["default"], false, "{name}");
+        assert_eq!(
+            t["inputSchema"]["properties"]["replace"]["default"], false,
+            "{name}"
+        );
         assert_eq!(t["annotations"]["destructiveHint"], false, "{name}");
     }
 
     // The working directory is the agent's folder; the file there is the person's.
     let kept = home.0.join("kept.txt");
     std::fs::write(&kept, b"the person's file").expect("file");
-    let result = mcp.call(3, "read_file",
+    let result = mcp.call(
+        3,
+        "read_file",
         json!({ "brick": "CCC", "path": "/home/root/lms2012/prjs/x.txt", "localPath": kept }),
-        |_| Value::Null);
+        |_| Value::Null,
+    );
     assert_eq!(result["isError"], true, "{result}");
     assert_eq!(error_code(&result), "file_exists", "{result}");
     assert!(
-        result["structuredContent"]["next"].as_str().unwrap_or("").contains("replace: true"),
+        result["structuredContent"]["next"]
+            .as_str()
+            .unwrap_or("")
+            .contains("replace: true"),
         "the agent is told how to replace it: {result}"
     );
     assert_eq!(std::fs::read(&kept).expect("read"), b"the person's file");
