@@ -31,8 +31,9 @@ Out of scope:
 
 - **A process of the same user.** Any process running as the user can read the user's key and
   act as a client of the daemon; the trust boundary is the user account (see
-  [docs/channel.md](docs/channel.md)), so this is not a vulnerability. A report that crosses from one user to another, or from an agent limited to
-  `ev3 mcp` to more than its tools allow, is in scope.
+  [docs/channel.md](docs/channel.md)), so this is not a vulnerability. A report that crosses
+  from one user to another, or from an agent limited to `ev3 mcp` to more than its tools allow,
+  is in scope.
 - **The EV3 brick's firmware** and its protocols; report those to the firmware's maintainers.
 - **Physical access** to the brick or the computer.
 
