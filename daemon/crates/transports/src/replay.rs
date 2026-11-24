@@ -267,16 +267,25 @@ fn describe_event(event: &Event) -> String {
 }
 
 /// Whether `request` asks the brick whether a user program runs: the direct command
-/// `opPROGRAM_INFO GET_STATUS` for the user slot (`bytecodes.h` 179 and 740), after the packet's
-/// length, counter, type and global-variable header. A subscription's follower sends it on a timer,
-/// with the same bytes a request's own status check sends, so it is a polled call too.
+/// `opPROGRAM_INFO GET_STATUS` for the user slot, as `BrickCommand::ProgramStatus` builds it. A
+/// subscription's follower sends it on a timer, with the same bytes a request's own status check
+/// sends, so it is a polled call too.
 fn is_program_status_poll(request: &[u8]) -> bool {
-    const DIRECT_COMMAND_REPLY: u8 = 0x00;
-    const PROGRAM_INFO_GET_STATUS_USER_SLOT: [u8; 3] = [0x0c, 0x16, 0x01];
-    request.get(4) == Some(&DIRECT_COMMAND_REPLY)
-        && request
-            .get(7..)
-            .is_some_and(|code| code.starts_with(&PROGRAM_INFO_GET_STATUS_USER_SLOT))
+    use ev3_protocol::packet::{command, opcode, program_info_sub, program_slot};
+    // LC0 carries a value below 32 as the value itself, so the named codes are the bytes.
+    const GET_STATUS_USER_SLOT: [u8; 3] = [
+        opcode::PROGRAM_INFO,
+        program_info_sub::GET_STATUS,
+        program_slot::USER,
+    ];
+    // A direct command's payload starts with its two-byte global and local variable sizes.
+    ev3_protocol::decode_ev3_packet(request).is_ok_and(|packet| {
+        packet.packet_type == command::DIRECT_COMMAND_REPLY
+            && packet
+                .payload
+                .get(2..)
+                .is_some_and(|code| code.starts_with(&GET_STATUS_USER_SLOT))
+    })
 }
 
 /// The request with its message counter, bytes 2 and 3, zeroed.

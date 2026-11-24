@@ -305,7 +305,6 @@ async fn matched_replay_keeps_answering_a_program_status_poll_but_not_another_re
     let replay = Replay::from_text(&text, ReplayMode::Matched).unwrap();
     let provider = replay.provider(Transport::Usb).unwrap();
     provider.connect(&key()).await.unwrap();
-    // A follower that fired more often than when recorded gets the last answer again.
     for counter in 10..13 {
         let reply = provider
             .send_packet(
