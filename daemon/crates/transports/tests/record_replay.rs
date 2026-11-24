@@ -284,6 +284,51 @@ async fn matched_replay_keeps_answering_discovery_with_the_last_scan_but_not_a_c
     assert_eq!(again.code, ErrorCode::ReplayUnmatched);
 }
 
+/// `opPROGRAM_INFO GET_STATUS` for the user slot, behind the global-variable header: what a
+/// program subscription's follower asks on a timer.
+const PROGRAM_STATUS: [u8; 6] = [0x01, 0x00, 0x0c, 0x16, 0x01, 0x60];
+
+#[tokio::test(start_paused = true)]
+async fn matched_replay_keeps_answering_a_program_status_poll_but_not_another_request() {
+    let text = record("status", |provider, key| async move {
+        provider.connect(&key()).await.unwrap();
+        provider
+            .send_packet(&key(), &request(1, &PROGRAM_STATUS), &expecting(1))
+            .await
+            .unwrap();
+        provider
+            .send_packet(&key(), &request(2, &[COUNTING]), &expecting(2))
+            .await
+            .unwrap();
+    })
+    .await;
+    let replay = Replay::from_text(&text, ReplayMode::Matched).unwrap();
+    let provider = replay.provider(Transport::Usb).unwrap();
+    provider.connect(&key()).await.unwrap();
+    // A follower that fired more often than when recorded gets the last answer again.
+    for counter in 10..13 {
+        let reply = provider
+            .send_packet(
+                &key(),
+                &request(counter, &PROGRAM_STATUS),
+                &expecting(counter),
+            )
+            .await
+            .unwrap();
+        let answer: Vec<u8> = PROGRAM_STATUS.iter().map(|b| b.wrapping_add(1)).collect();
+        assert_eq!(reply, reply_packet(counter, &answer));
+    }
+    provider
+        .send_packet(&key(), &request(20, &[COUNTING]), &expecting(20))
+        .await
+        .unwrap();
+    let again = provider
+        .send_packet(&key(), &request(21, &[COUNTING]), &expecting(21))
+        .await
+        .unwrap_err();
+    assert_eq!(again.code, ErrorCode::ReplayUnmatched);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_replayed_scan_is_as_fresh_as_when_it_was_recorded() {
     let text = record("fresh", |provider, _key| async move {
