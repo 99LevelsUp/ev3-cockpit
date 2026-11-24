@@ -618,9 +618,14 @@ struct Followed {
 
 /// The poll loop of one follow, until it ends or is aborted. Waits before its first poll, so
 /// the client has the follow's answer before its first `files/appended`.
+///
+/// Each round first asks the file's size, which costs the brick nothing to skip (a read from past
+/// its end); only a file that grew is read, from the offset reached or whole, whichever costs
+/// less ([`whole_read_pays`]). After a round that took `d` the follow rests at least `d`, so it
+/// never takes more than about half of the brick's or the link's time.
 async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
     let mut pause = FOLLOW_GROWING;
-    // Polls the brick refused in a row: what it refuses three times it will refuse for good.
+    // Rounds the brick refused in a row: what it refuses three times it will refuse for good.
     let mut refused = 0;
     loop {
         tokio::time::sleep(pause).await;
@@ -631,39 +636,62 @@ async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
             surface.follow_ended(&followed, FileFollowEndedReason::SignedOut, None);
             return;
         }
-        let files = FilesystemService::new(
-            Arc::new(BrickSender::new(
-                surface.runtime.bricks.clone(),
-                followed.brick_id.as_str(),
-                CommandOptions {
-                    timeout: Some(read_from_budget(offset)),
-                    deadline: None,
-                },
-            )),
-            None,
-        );
-        let read = files
-            .read_from(&followed.path, offset, READ_FROM_MAX_BYTES)
+        let began = tokio::time::Instant::now();
+        let files = |budget: Duration| {
+            FilesystemService::new(
+                Arc::new(BrickSender::new(
+                    surface.runtime.bricks.clone(),
+                    followed.brick_id.as_str(),
+                    CommandOptions {
+                        timeout: Some(budget),
+                        deadline: None,
+                    },
+                )),
+                None,
+            )
+        };
+        let transport = surface
+            .runtime
+            .bricks
+            .route_of(&followed.brick_id)
+            .map(|key| key.transport());
+        let probe = files(read_from_budget(0))
+            .read_from(&followed.path, SIZE_PROBE, 1)
             .await;
-        let size = read.as_ref().ok().map(|read| read.size);
-        if !matches!(read, Err(ref e) if e.is_protocol()) {
+        let step = match next_step(probe, offset, pause, transport) {
+            Step::Read => {
+                let read = files(read_from_budget(offset))
+                    .read_from(&followed.path, offset, READ_FROM_MAX_BYTES)
+                    .await;
+                after_read(read, offset)
+            }
+            Step::Whole => match catch_up_whole(&surface, &followed, offset).await {
+                CatchUp::Reached(reached) => {
+                    offset = reached;
+                    Step::Wait(FOLLOW_GROWING)
+                }
+                CatchUp::Replaced => Step::Ended(FileFollowEndedReason::Replaced),
+                CatchUp::Failed => Step::Wait(FOLLOW_TROUBLE),
+            },
+            other => other,
+        };
+        if !matches!(step, Step::Refused(_)) {
             refused = 0;
         }
-        match after_poll(read, offset, pause) {
-            Poll::Ended(reason) => {
+        pause = match step {
+            Step::Ended(reason) => {
                 surface.follow_ended(&followed, reason, None);
                 return;
             }
-            Poll::Refused(message) => {
+            Step::Refused(message) => {
                 refused += 1;
                 if refused >= FOLLOW_REFUSALS {
                     surface.follow_ended(&followed, FileFollowEndedReason::Failed, Some(message));
                     return;
                 }
-                pause = FOLLOW_TROUBLE;
-                continue;
+                FOLLOW_TROUBLE
             }
-            Poll::Appended { data, next } => {
+            Step::Appended { data, next } => {
                 let notification = Notification::FilesAppended(FileAppended {
                     subscription_id: followed.subscription_id.clone(),
                     offset: u64::from(offset),
@@ -673,34 +701,17 @@ async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
                     followed.client.peer.notify(notification.method(), params);
                 }
                 offset += data.len() as u32;
-                pause = next;
-                // A backlog that poll by poll would cost more than reading the whole file once.
-                let transport = surface
-                    .runtime
-                    .bricks
-                    .route_of(&followed.brick_id)
-                    .map(|key| key.transport());
-                if let (Some(size), Some(transport)) = (size, transport)
-                    && whole_read_pays(size, offset, transport)
-                {
-                    match catch_up_whole(&surface, &followed, offset).await {
-                        CatchUp::Reached(reached) => {
-                            offset = reached;
-                            pause = FOLLOW_GROWING;
-                        }
-                        CatchUp::Replaced => {
-                            surface.follow_ended(&followed, FileFollowEndedReason::Replaced, None);
-                            return;
-                        }
-                        // Poll by poll after all.
-                        CatchUp::Failed => {}
-                    }
-                }
+                next
             }
-            Poll::Wait(next) => pause = next,
-        }
+            Step::Wait(next) => next,
+            Step::Read | Step::Whole => FOLLOW_GROWING,
+        };
+        pause = pause.max(began.elapsed());
     }
 }
+
+/// A read from here only says the file's size: the brick never skips past a file's end.
+const SIZE_PROBE: u32 = i32::MAX as u32;
 
 /// The largest file a follow reads whole to catch up; past it, poll by poll only.
 const WHOLE_READ_MAX: u32 = 1024 * 1024;
@@ -728,14 +739,15 @@ fn link_us_per_byte(transport: Transport) -> f64 {
 /// the file once and goes step by step, so a stop gets in between.
 fn whole_read_pays(size: u32, offset: u32, transport: Transport) -> bool {
     let backlog = size.saturating_sub(offset);
-    if backlog <= 2 * u32::from(READ_FROM_MAX_BYTES) || size > WHOLE_READ_MAX {
+    if backlog == 0 || size > WHOLE_READ_MAX {
         return false;
     }
     let polls = f64::from(backlog.div_ceil(u32::from(READ_FROM_MAX_BYTES)));
     let mean_offset = (f64::from(offset) + f64::from(size)) / 2.0;
     let by_polls = polls * (mean_offset * SKIP_US_PER_BYTE + POLL_US);
-    let whole = f64::from(size) * link_us_per_byte(transport);
-    whole < by_polls
+    // With a margin: a read from the offset leaves nothing to settle if the link goes.
+    let whole = POLL_US + f64::from(size) * link_us_per_byte(transport);
+    2.0 * whole < by_polls
 }
 
 /// How a whole read to catch up went.
@@ -782,15 +794,19 @@ async fn catch_up_whole(surface: &Arc<Surface>, followed: &Followed, offset: u32
     CatchUp::Reached(content.len() as u32)
 }
 
-/// What a follow does after one poll.
+/// What a follow does next.
 #[derive(Debug, PartialEq, Eq)]
-enum Poll {
+enum Step {
+    /// Read the new bytes from the offset reached.
+    Read,
+    /// Read the whole file once and hand over what lies past the offset.
+    Whole,
     /// Hand over the bytes the file grew by, then wait `next`.
     Appended {
         data: Vec<u8>,
         next: Duration,
     },
-    /// Nothing new, or the link failed the poll: wait `next` and ask again.
+    /// Nothing new, or the link failed the round: wait and ask again.
     Wait(Duration),
     /// The brick refused the read, or it was refused before it left: a few times in a row end the
     /// follow, so a client does not wait on one that can never deliver.
@@ -798,13 +814,33 @@ enum Poll {
     Ended(FileFollowEndedReason),
 }
 
-/// The step after a poll at `offset` that waited `pause` before it: often while the file grows,
-/// less and less often while it does not, and at once while more waits on the brick than one
-/// poll brings.
-fn after_poll(read: Result<ReadFrom, FsError>, offset: u32, pause: Duration) -> Poll {
+/// The step after asking the file's size at `offset`, the last round having waited `pause`:
+/// less and less often while the file does not grow, and a grown file read the cheaper way.
+fn next_step(
+    probe: Result<ReadFrom, FsError>,
+    offset: u32,
+    pause: Duration,
+    transport: Option<Transport>,
+) -> Step {
+    match probe {
+        Ok(read) if !read.exists => Step::Ended(FileFollowEndedReason::Removed),
+        Ok(read) if read.size < offset => Step::Ended(FileFollowEndedReason::Replaced),
+        Ok(read) if read.size == offset => {
+            Step::Wait((pause * 2).clamp(FOLLOW_GROWING, FOLLOW_IDLE))
+        }
+        Ok(read) if transport.is_some_and(|t| whole_read_pays(read.size, offset, t)) => Step::Whole,
+        Ok(_) => Step::Read,
+        Err(error) if error.is_protocol() => Step::Refused(error.to_string()),
+        Err(_) => Step::Wait(FOLLOW_TROUBLE),
+    }
+}
+
+/// The step after reading from `offset`: hand over what came, at once again while more waits on
+/// the brick than one read brings.
+fn after_read(read: Result<ReadFrom, FsError>, offset: u32) -> Step {
     match read {
-        Ok(read) if !read.exists => Poll::Ended(FileFollowEndedReason::Removed),
-        Ok(read) if read.size < offset => Poll::Ended(FileFollowEndedReason::Replaced),
+        Ok(read) if !read.exists => Step::Ended(FileFollowEndedReason::Removed),
+        Ok(read) if read.size < offset => Step::Ended(FileFollowEndedReason::Replaced),
         Ok(read) if !read.chunk.is_empty() => {
             let reached = u64::from(offset) + read.chunk.len() as u64;
             let next = if u64::from(read.size) > reached {
@@ -812,14 +848,14 @@ fn after_poll(read: Result<ReadFrom, FsError>, offset: u32, pause: Duration) -> 
             } else {
                 FOLLOW_GROWING
             };
-            Poll::Appended {
+            Step::Appended {
                 data: read.chunk,
                 next,
             }
         }
-        Ok(_) => Poll::Wait((pause * 2).clamp(FOLLOW_GROWING, FOLLOW_IDLE)),
-        Err(error) if error.is_protocol() => Poll::Refused(error.to_string()),
-        Err(_) => Poll::Wait(FOLLOW_TROUBLE),
+        Ok(_) => Step::Wait(FOLLOW_GROWING),
+        Err(error) if error.is_protocol() => Step::Refused(error.to_string()),
+        Err(_) => Step::Wait(FOLLOW_TROUBLE),
     }
 }
 
@@ -835,30 +871,14 @@ mod tests {
         })
     }
 
-    #[test]
-    fn hands_over_new_bytes_and_asks_again_at_once_while_more_waits() {
-        assert_eq!(
-            after_poll(read(true, 5000, b"abc"), 10, FOLLOW_IDLE),
-            Poll::Appended {
-                data: b"abc".to_vec(),
-                next: Duration::ZERO
-            }
-        );
-        assert_eq!(
-            after_poll(read(true, 13, b"abc"), 10, FOLLOW_IDLE),
-            Poll::Appended {
-                data: b"abc".to_vec(),
-                next: FOLLOW_GROWING
-            }
-        );
-    }
+    const USB: Option<Transport> = Some(Transport::Usb);
 
     #[test]
-    fn asks_less_often_while_the_file_does_not_grow_and_again_often_once_it_does() {
+    fn asks_less_often_while_the_file_does_not_grow_and_reads_it_once_it_does() {
         let mut pause = FOLLOW_GROWING;
         let mut pauses = Vec::new();
         for _ in 0..5 {
-            let Poll::Wait(next) = after_poll(read(true, 10, b""), 10, pause) else {
+            let Step::Wait(next) = next_step(read(true, 10, b""), 10, pause, USB) else {
                 panic!("nothing new is a wait");
             };
             pauses.push(next);
@@ -868,49 +888,109 @@ mod tests {
             pauses,
             [500, 1000, 2000, 2000, 2000].map(Duration::from_millis)
         );
-        assert!(matches!(
-            after_poll(read(true, 11, b"x"), 10, pause),
-            Poll::Appended { next, .. } if next == FOLLOW_GROWING
-        ));
+        assert_eq!(next_step(read(true, 11, b""), 10, pause, USB), Step::Read);
     }
 
     #[test]
-    fn ends_when_the_file_goes_or_is_replaced_by_a_shorter_one_and_waits_out_a_failed_poll() {
+    fn a_line_at_the_end_of_a_long_file_is_read_whole_over_usb_and_from_the_offset_over_bluetooth()
+    {
+        // The live run: 7 bytes more at 61 KiB. From the offset the brick skips 0.75 s; over USB
+        // the whole file is 0.2 s of link, over Bluetooth 5.5 s.
         assert_eq!(
-            after_poll(read(false, 0, b""), 10, FOLLOW_GROWING),
-            Poll::Ended(FileFollowEndedReason::Removed)
+            next_step(read(true, 61_650, b""), 61_643, FOLLOW_IDLE, USB),
+            Step::Whole
         );
         assert_eq!(
-            after_poll(read(true, 4, b""), 10, FOLLOW_GROWING),
-            Poll::Ended(FileFollowEndedReason::Replaced)
+            next_step(
+                read(true, 61_650, b""),
+                61_643,
+                FOLLOW_IDLE,
+                Some(Transport::Bt)
+            ),
+            Step::Read
         );
-        // At the offset exactly: the same file, nothing new.
+        // No route now: from the offset.
         assert_eq!(
-            after_poll(read(true, 10, b""), 10, FOLLOW_GROWING),
-            Poll::Wait(Duration::from_millis(500))
-        );
-        assert_eq!(
-            after_poll(Err(FsError::Cancelled), 10, FOLLOW_GROWING),
-            Poll::Wait(FOLLOW_TROUBLE)
+            next_step(read(true, 61_650, b""), 61_643, FOLLOW_IDLE, None),
+            Step::Read
         );
     }
 
     #[test]
-    fn a_read_the_brick_refuses_is_told_apart_from_a_lost_link() {
-        // A path the brick would cut fails every poll the same way: not a link to wait for.
-        let refused = after_poll(Err(FsError::PathTooLong { bytes: 61 }), 10, FOLLOW_GROWING);
-        assert!(
-            matches!(refused, Poll::Refused(ref m) if m.contains("61 bytes")),
-            "{refused:?}"
+    fn hands_over_new_bytes_and_reads_again_at_once_while_more_waits() {
+        assert_eq!(
+            after_read(read(true, 5000, b"abc"), 10),
+            Step::Appended {
+                data: b"abc".to_vec(),
+                next: Duration::ZERO
+            }
         );
-        let stalled = FsError::Stalled {
+        assert_eq!(
+            after_read(read(true, 13, b"abc"), 10),
+            Step::Appended {
+                data: b"abc".to_vec(),
+                next: FOLLOW_GROWING
+            }
+        );
+    }
+
+    #[test]
+    fn ends_when_the_file_goes_or_is_replaced_by_a_shorter_one_and_waits_out_a_lost_link() {
+        for step in [
+            next_step(read(false, 0, b""), 10, FOLLOW_GROWING, USB),
+            after_read(read(false, 0, b""), 10),
+        ] {
+            assert_eq!(step, Step::Ended(FileFollowEndedReason::Removed));
+        }
+        for step in [
+            next_step(read(true, 4, b""), 10, FOLLOW_GROWING, USB),
+            after_read(read(true, 4, b""), 10),
+        ] {
+            assert_eq!(step, Step::Ended(FileFollowEndedReason::Replaced));
+        }
+        let stalled = || FsError::Stalled {
             timeout: Duration::from_secs(3),
             transferred: 0,
         };
         assert_eq!(
-            after_poll(Err(stalled), 10, FOLLOW_GROWING),
-            Poll::Wait(FOLLOW_TROUBLE)
+            next_step(Err(stalled()), 10, FOLLOW_GROWING, USB),
+            Step::Wait(FOLLOW_TROUBLE)
         );
+        assert_eq!(after_read(Err(stalled()), 10), Step::Wait(FOLLOW_TROUBLE));
+    }
+
+    #[test]
+    fn a_read_the_brick_refuses_is_told_apart_from_a_lost_link() {
+        // A path the brick would cut fails every round the same way: not a link to wait for.
+        for step in [
+            next_step(
+                Err(FsError::PathTooLong { bytes: 61 }),
+                10,
+                FOLLOW_GROWING,
+                USB,
+            ),
+            after_read(Err(FsError::PathTooLong { bytes: 61 }), 10),
+        ] {
+            assert!(
+                matches!(step, Step::Refused(ref m) if m.contains("61 bytes")),
+                "{step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cheaper_way_is_chosen_for_a_backlog() {
+        // The recorded burst: 61 KiB waiting from the start. Whole: 0.2 s over USB, 5.6 s over
+        // Bluetooth, against 25 s from the offset poll by poll.
+        assert!(whole_read_pays(61_650, 992, Transport::Usb));
+        assert!(whole_read_pays(61_650, 992, Transport::Bt));
+        // A small file: from the offset, whatever the link; a read leaves nothing to settle.
+        assert!(!whole_read_pays(300, 290, Transport::Usb));
+        // A few KiB behind in a long file: the whole file over Bluetooth costs more.
+        assert!(!whole_read_pays(600_000, 594_000, Transport::Bt));
+        assert!(whole_read_pays(600_000, 594_000, Transport::Usb));
+        // Past the largest whole read: from the offset.
+        assert!(!whole_read_pays(WHOLE_READ_MAX + 1, 0, Transport::Usb));
     }
 
     fn follow_of(brick: &str) -> Subscription {
@@ -918,24 +998,6 @@ mod tests {
             task: tokio::spawn(std::future::pending::<()>()).abort_handle(),
             brick_id: brick.to_owned(),
         }
-    }
-
-    #[test]
-    fn a_big_backlog_is_read_whole_where_that_costs_less_and_a_small_one_poll_by_poll() {
-        // The recorded burst: 61 KiB waiting from the start. Over USB the whole file is 0.2 s
-        // against 25 s poll by poll; over Bluetooth 5.6 s against the same.
-        assert!(whole_read_pays(61_650, 992, Transport::Usb));
-        assert!(whole_read_pays(61_650, 992, Transport::Bt));
-        // A line or two behind: poll by poll, whatever the link.
-        assert!(!whole_read_pays(61_650, 61_000, Transport::Usb));
-        assert!(!whole_read_pays(3_000, 1_500, Transport::Usb));
-        // A small file a few polls behind: over USB reading it whole is cheaper still.
-        assert!(whole_read_pays(3_000, 1_000, Transport::Usb));
-        // A few KiB behind in a long file: the whole file over Bluetooth costs more.
-        assert!(!whole_read_pays(600_000, 594_000, Transport::Bt));
-        assert!(whole_read_pays(600_000, 594_000, Transport::Usb));
-        // Past the largest whole read: poll by poll.
-        assert!(!whole_read_pays(WHOLE_READ_MAX + 1, 0, Transport::Usb));
     }
 
     #[tokio::test]

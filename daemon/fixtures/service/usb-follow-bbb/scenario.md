@@ -11,16 +11,16 @@ A file followed while it is written, through the daemon's `files/follow` over US
 5. `transfer/begin` of 10000 bytes and one `transfer/write`, then `files/write` of the file from
    that handle: the line `the quick brown fox jumps over the lazy dog` plus a newline, repeated
    and cut at 10000 bytes. The brick's file grows packet by packet as the upload lands;
-6. the follow's `files/appended`: all 10000 bytes, in order, in 2 notifications, each starting
-   where the last ended: the first poll (one `fs:readFrom` direct command) brings 992 bytes and
-   finds more waiting, so the follow reads the whole file once (`BEGIN_UPLOAD`) and hands over
-   the rest, 0.3 s after the write began;
+6. the follow's `files/appended`: all 10000 bytes, in one notification. Each round of the follow
+   first asks the file's size with an `fs:readFrom` from past its end, which skips nothing;
+   once the file has grown, reading it whole (`BEGIN_UPLOAD`) costs less over USB than polling it
+   from the offset, so the follow reads it whole and hands over what lies past its offset;
 7. `files/remove` of the file: the follow ends with `files/followEnded`, reason `removed`, 0.2 s
    later;
 8. `files/remove` of the folder, recursive; `bricks/disconnect`.
 
 - **Inputs:** the brick name `BBB`, the folder and file names above, the content in step 5.
-- **Recorded** 24.11.2026 through the native daemon 0.3.32 in record mode on a test channel, on
+- **Recorded** 24.11.2026 through the native daemon 0.3.33 in record mode on a test channel, on
   Windows 11 (HOSTA), with `scripts/hardware-scenario.mts` as the only client. The run ends with
   `bricks/disconnect` and `daemon/exit`, whose restart question the script answers yes.
 - **Brick state:** BBB on the USB cable, on the main menu, firmware V1.10E. The recorder replaced
