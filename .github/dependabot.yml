@@ -1,0 +1,37 @@
+# Dependency updates (#82): one pull request a week per ecosystem for the minor and patch updates,
+# and one per major update, so the repository is not flooded. Each pull request runs the whole CI,
+# the cargo-deny gate included.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /daemon
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build(deps)
+    groups:
+      rust-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directories: [/, /scripts/api-check]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build(deps)
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        update-types: [minor, patch, major]
