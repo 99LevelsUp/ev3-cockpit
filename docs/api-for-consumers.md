@@ -87,7 +87,7 @@ trip: `bricks()`, `brick(ref)`, `settings()`, `accessMode()`.
 | Need | Method or call |
 |---|---|
 | bricks, including ones not connected | `bricks()`, `onBricksChanged`; `bricks/list` (`waitForDiscovery`) → `{ bricks }` |
-| connect / disconnect | `bricks/connect` (pairs on the way if needed), `bricks/disconnect` |
+| connect / disconnect | `bricks/connect` (pairs on the way if needed; `reuse` holds a brick connected already as it is, joining nothing), `bricks/disconnect` |
 | firmware version | `bricks/info` → name, firmware, OS |
 | storage | `bricks/storage` → `totalKb`, `freeKb` |
 | files | `files/list`, `exists`, `size`, `read`, `write`, `makeDirectory`, `remove` (`recursive`), `removePaths`, `move` |

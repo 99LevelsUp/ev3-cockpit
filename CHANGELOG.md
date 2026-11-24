@@ -22,6 +22,9 @@ Minor and major versions are bumped manually for significant milestones.
   offset reached after a reconnect.
 
 ### Fixed
+- A brick a client uses is no longer signed out under it when its last holder leaves (#9):
+  `ev3` holds a connected brick it uses (`bricks/connect` with `reuse`, which joins nothing),
+  and a brick a request is working on is signed out only when that request ends.
 - A file read and a folder listing on one brick at the same time no longer break each other
   (#8): the firmware keeps one read cursor per channel, so the daemon now lets one read or
   listing at a time hold it.
