@@ -34,7 +34,7 @@
       "result": { "bricks": [{ "brickId": "001653f00a0a", "name": "AAA", "nameConfirmed": true, "connected": true, "paired": true, "channels": [{ "transport": "usb", "state": "connected" }, { "transport": "bt", "state": "available" }], "holders": [{ "kind": "hold" }], "reconnecting": false }] }
     },
     "bricks/connect": {
-      "params": { "brick": "AAA", "hold": true },
+      "params": { "brick": "AAA", "hold": true, "reuse": true },
       "result": { "brickId": "001653f00a0a", "name": "AAA", "nameConfirmed": true, "connected": true, "paired": false, "channels": [{ "transport": "tcp", "state": "connected" }], "holders": [{ "kind": "client", "client": "ev3 connect (terminal)" }, { "kind": "remembered" }] }
     },
     "bricks/disconnect": {

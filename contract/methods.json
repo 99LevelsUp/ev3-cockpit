@@ -53,7 +53,7 @@
       "leased": false,
       "needsPerson": false,
       "callableBy": ["vscode", "cli", "mcp", "addon"],
-      "doc": "Connect a brick for this client, pairing on the way; hold keeps it past this client."
+      "doc": "Connect a brick for this client, pairing on the way; hold keeps it past this client; reuse takes a brick connected already as it is, only adding this client as a holder."
     },
     "bricks/disconnect": {
       "params": "BricksDisconnectParams",

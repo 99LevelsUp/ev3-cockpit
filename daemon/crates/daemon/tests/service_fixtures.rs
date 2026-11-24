@@ -85,6 +85,11 @@ impl Replay {
     /// A strict replay whose channel directory holds `files` (name, content) before the daemon
     /// starts, as a previous daemon left them.
     async fn start_seeded(name: &str, files: &[(&str, String)]) -> Self {
+        Self::start_seeded_as(name, true, files).await
+    }
+
+    /// The same, strict or matched.
+    async fn start_seeded_as(name: &str, strict: bool, files: &[(&str, String)]) -> Self {
         let root = TempRoot::new("service");
         let dir = root.channel_dir("t");
         std::fs::create_dir_all(&dir).expect("channel dir");
@@ -92,12 +97,10 @@ impl Replay {
             std::fs::write(dir.join(file), text).expect("seeded file");
         }
         let fixture = service_fixture(name);
-        let args: [&std::ffi::OsStr; 4] = [
-            "--fixtures".as_ref(),
-            fixture.as_os_str(),
-            "--replay".as_ref(),
-            "strict".as_ref(),
-        ];
+        let mut args: Vec<&std::ffi::OsStr> = vec!["--fixtures".as_ref(), fixture.as_os_str()];
+        if strict {
+            args.extend::<[&std::ffi::OsStr; 2]>(["--replay".as_ref(), "strict".as_ref()]);
+        }
         let daemon = Daemon::start_with(&root, "t", &args);
         let client = Self::client_of(&root, &daemon).await;
         Self {
@@ -105,7 +108,7 @@ impl Replay {
             daemon,
             client,
             notes: Vec::new(),
-            strict: true,
+            strict,
         }
     }
 
@@ -347,6 +350,132 @@ fn assert_firmware_folder(listing: &Value) {
     assert_eq!(firmware["md5"], "cb16168f4d1d317cc15074772e021876");
 }
 
+/// Whether `client` lists CCC as connected.
+async fn ccc_connected(client: &mut Client) -> bool {
+    let list = client
+        .request("bricks/list", json!({}))
+        .await
+        .expect("answered");
+    list["result"]["bricks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|b| b["name"] == CCC && b["connected"] == true)
+}
+
+/// #9: a client that uses a brick connected already holds it with `reuse`, joining nothing, so
+/// the brick stays when the client that connected it leaves.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brick_taken_with_reuse_stays_when_the_client_that_connected_it_leaves() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let mut run = Replay::start_as("usb-info-storage-listing-ccc", false).await;
+    run.find_brick("usb").await;
+    let mut first = run.other_client().await;
+    let connected = first
+        .request("bricks/connect", json!({"brick": CCC}))
+        .await
+        .expect("answered");
+    assert_eq!(connected["result"]["connected"], true, "{connected}");
+    let mut second = run.other_client().await;
+    let started = Instant::now();
+    let reused = second
+        .request("bricks/connect", json!({"brick": CCC, "reuse": true}))
+        .await
+        .expect("answered");
+    assert_eq!(
+        reused["result"]["holders"].as_array().map(Vec::len),
+        Some(2),
+        "{reused}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "taken as it is, nothing joined"
+    );
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        ccc_connected(&mut second).await,
+        "still held by the second client"
+    );
+    let info = second
+        .request("bricks/info", json!({"brick": CCC}))
+        .await
+        .expect("answered");
+    assert_eq!(info["result"]["name"], CCC, "{info}");
+    drop(second);
+    run.end().await;
+}
+
+/// #9: a brick a request of a client that does not hold it is working on is not signed out under
+/// that request when its last holder leaves; the request's end signs it out. The request is held
+/// on the brick by a question with no exchange before it: the transfer's settlement asks whether
+/// to release a slot the seeded ledger owes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brick_in_use_by_a_request_is_signed_out_only_when_that_request_ends() {
+    in_use_until_the_request_ends(false).await;
+}
+
+/// The same when the last holder lets go with bricks/disconnect rather than by leaving.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_brick_in_use_by_a_request_stays_through_its_last_holders_disconnect() {
+    in_use_until_the_request_ends(true).await;
+}
+
+async fn in_use_until_the_request_ends(disconnect: bool) {
+    if common::refuses_this_process() {
+        return;
+    }
+    let ledger = json!({ CCC_ID: [{"kind": "unknown"}] }).to_string();
+    let mut run = Replay::start_seeded_as(
+        "usb-info-storage-listing-ccc",
+        false,
+        &[("ledger.json", ledger)],
+    )
+    .await;
+    run.find_brick("usb").await;
+    let mut holder = run.other_client().await;
+    holder
+        .request("bricks/connect", json!({"brick": CCC}))
+        .await
+        .expect("answered");
+    let mut user = run.other_client().await;
+    let reading = user
+        .send_request(
+            "files/read",
+            json!({"brick": CCC, "path": "/home/root/lms2012/prjs/x.txt", "inline": true}),
+        )
+        .await;
+    let question = user.question().await.expect("the release is asked");
+    if disconnect {
+        let gone = holder
+            .request("bricks/disconnect", json!({"brick": CCC}))
+            .await
+            .expect("answered");
+        assert_eq!(gone["result"]["stillHeldBy"], json!([]), "{gone}");
+    }
+    drop(holder);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut watcher = run.other_client().await;
+    assert!(
+        ccc_connected(&mut watcher).await,
+        "signed out under the running request"
+    );
+    user.reply(&question, json!({"answer": "no"})).await;
+    user.answer_to(reading).await.expect("answered");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ccc_connected(&mut watcher).await {
+        assert!(
+            Instant::now() < deadline,
+            "never signed out after the request"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(user);
+    drop(watcher);
+    run.end().await;
+}
 #[tokio::test(flavor = "multi_thread")]
 async fn tcp_info_storage_and_a_listing_replay_strictly() {
     if common::refuses_this_process() {
