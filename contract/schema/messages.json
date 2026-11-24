@@ -384,10 +384,11 @@
       "properties": {
         "subscriptionId": { "type": "string" },
         "reason": {
-          "description": "removed: the file is gone. replaced: the file is shorter than what was handed over, so it is another file now. signedOut: the brick was signed out. After this the subscription id is no longer valid.",
+          "description": "removed: the file is gone. replaced: the file is shorter than what was handed over, so it is another file now. signedOut: the brick was signed out. failed: the brick refused the reads several times in a row; message says why. After this the subscription id is no longer valid.",
           "type": "string",
-          "enum": ["removed", "replaced", "signedOut"]
-        }
+          "enum": ["removed", "replaced", "signedOut", "failed"]
+        },
+        "message": { "type": "string", "description": "Why, for failed." }
       }
     },
     "SettingChanged": {

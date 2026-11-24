@@ -450,6 +450,9 @@ impl Surface {
         cx: &RequestContext,
         params: FilesFollowParams,
     ) -> Result<FileFollowSubscription, ContractError> {
+        // The whole path, not only its folder: every poll names it, and a path the brick would cut
+        // would fail every poll.
+        ev3_runtime::fs::check_path(&params.path).map_err(|e| errors::from_fs(&e))?;
         let from = params.from_offset.unwrap_or(0);
         let offset = u32::try_from(from)
             .ok()
@@ -472,9 +475,7 @@ impl Surface {
             }
         };
         let brick_id = self.brick_of(cx, params.brick.as_deref()).await?;
-        if Self::follows_on(&self.lock(), &brick_id) >= MAX_FOLLOWS_PER_BRICK {
-            return Err(too_many_follows());
-        }
+        room_for_follow(&self.lock(), &brick_id)?;
         // The folder's listing tells a file from a folder, which a read from an offset cannot,
         // and gives its exact size.
         let not_found = || {
@@ -515,9 +516,9 @@ impl Surface {
         {
             let mut state = self.lock();
             // Counted again with the insert: two follows asked for at once may not both pass.
-            if Self::follows_on(&state, &brick_id) >= MAX_FOLLOWS_PER_BRICK {
+            if let Err(error) = room_for_follow(&state, &brick_id) {
                 task.abort();
-                return Err(too_many_follows());
+                return Err(error);
             }
             state.subscriptions.entry(cx.client.id).or_default().insert(
                 id.clone(),
@@ -540,7 +541,12 @@ impl Surface {
     }
 
     /// A follow ended on its own: it is no longer the client's, and the client hears why.
-    fn follow_ended(&self, followed: &Followed, reason: FileFollowEndedReason) {
+    fn follow_ended(
+        &self,
+        followed: &Followed,
+        reason: FileFollowEndedReason,
+        message: Option<String>,
+    ) {
         let removed = self
             .lock()
             .subscriptions
@@ -554,13 +560,19 @@ impl Surface {
             Level::Info,
             Some(&followed.client.info.name),
             &format!(
-                "Stopped following {} on {}: {reason}",
-                followed.path, followed.brick_id
+                "Stopped following {} on {}: {reason}{}",
+                followed.path,
+                followed.brick_id,
+                message
+                    .as_deref()
+                    .map(|m| format!(" ({m})"))
+                    .unwrap_or_default()
             ),
         );
         let notification = Notification::FilesFollowEnded(FileFollowEnded {
             subscription_id: followed.subscription_id.clone(),
             reason,
+            message,
         });
         if let Ok(params) = notification.params() {
             followed.client.peer.notify(notification.method(), params);
@@ -577,6 +589,16 @@ const FOLLOW_GROWING: Duration = Duration::from_millis(250);
 const FOLLOW_IDLE: Duration = Duration::from_secs(2);
 /// The pause after a poll that failed: the link is away, or the brick did not answer.
 const FOLLOW_TROUBLE: Duration = Duration::from_secs(3);
+/// Refused polls in a row that end a follow as failed.
+const FOLLOW_REFUSALS: u32 = 3;
+
+/// Refuses a follow when the brick has its follows already.
+fn room_for_follow(state: &super::State, brick_id: &str) -> Result<(), ContractError> {
+    if Surface::follows_on(state, brick_id) >= MAX_FOLLOWS_PER_BRICK {
+        return Err(too_many_follows());
+    }
+    Ok(())
+}
 
 fn too_many_follows() -> ContractError {
     ContractError::new(
@@ -597,13 +619,15 @@ struct Followed {
 /// the client has the follow's answer before its first `files/appended`.
 async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
     let mut pause = FOLLOW_GROWING;
+    // Polls the brick refused in a row: what it refuses three times it will refuse for good.
+    let mut refused = 0;
     loop {
         tokio::time::sleep(pause).await;
         let Some(surface) = surface.upgrade() else {
             return;
         };
         if !surface.runtime.bricks.is_signed_in(&followed.brick_id) {
-            surface.follow_ended(&followed, FileFollowEndedReason::SignedOut);
+            surface.follow_ended(&followed, FileFollowEndedReason::SignedOut, None);
             return;
         }
         let files = FilesystemService::new(
@@ -620,10 +644,22 @@ async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
         let read = files
             .read_from(&followed.path, offset, READ_FROM_MAX_BYTES)
             .await;
+        if !matches!(read, Err(ref e) if e.is_protocol()) {
+            refused = 0;
+        }
         match after_poll(read, offset, pause) {
             Poll::Ended(reason) => {
-                surface.follow_ended(&followed, reason);
+                surface.follow_ended(&followed, reason, None);
                 return;
+            }
+            Poll::Refused(message) => {
+                refused += 1;
+                if refused >= FOLLOW_REFUSALS {
+                    surface.follow_ended(&followed, FileFollowEndedReason::Failed, Some(message));
+                    return;
+                }
+                pause = FOLLOW_TROUBLE;
+                continue;
             }
             Poll::Appended { data, next } => {
                 let notification = Notification::FilesAppended(FileAppended {
@@ -650,8 +686,11 @@ enum Poll {
         data: Vec<u8>,
         next: Duration,
     },
-    /// Nothing new, or the poll failed: wait `next` and ask again.
+    /// Nothing new, or the link failed the poll: wait `next` and ask again.
     Wait(Duration),
+    /// The brick refused the read, or it was refused before it left: a few times in a row end the
+    /// follow, so a client does not wait on one that can never deliver.
+    Refused(String),
     Ended(FileFollowEndedReason),
 }
 
@@ -675,6 +714,7 @@ fn after_poll(read: Result<ReadFrom, FsError>, offset: u32, pause: Duration) -> 
             }
         }
         Ok(_) => Poll::Wait((pause * 2).clamp(FOLLOW_GROWING, FOLLOW_IDLE)),
+        Err(error) if error.is_protocol() => Poll::Refused(error.to_string()),
         Err(_) => Poll::Wait(FOLLOW_TROUBLE),
     }
 }
@@ -749,5 +789,64 @@ mod tests {
             after_poll(Err(FsError::Cancelled), 10, FOLLOW_GROWING),
             Poll::Wait(FOLLOW_TROUBLE)
         );
+    }
+
+    #[test]
+    fn a_read_the_brick_refuses_is_told_apart_from_a_lost_link() {
+        // A path the brick would cut fails every poll the same way: not a link to wait for.
+        let refused = after_poll(Err(FsError::PathTooLong { bytes: 61 }), 10, FOLLOW_GROWING);
+        assert!(
+            matches!(refused, Poll::Refused(ref m) if m.contains("61 bytes")),
+            "{refused:?}"
+        );
+        let stalled = FsError::Stalled {
+            timeout: Duration::from_secs(3),
+            transferred: 0,
+        };
+        assert_eq!(
+            after_poll(Err(stalled), 10, FOLLOW_GROWING),
+            Poll::Wait(FOLLOW_TROUBLE)
+        );
+    }
+
+    fn follow_of(brick: &str) -> Subscription {
+        Subscription::Follow {
+            task: tokio::spawn(std::future::pending::<()>()).abort_handle(),
+            brick_id: brick.to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_brick_takes_two_follows_of_every_client_together_and_one_cancelled_frees_a_place() {
+        let mut state = super::super::State::default();
+        state
+            .subscriptions
+            .entry(1)
+            .or_default()
+            .insert("a".into(), follow_of("AAA"));
+        assert!(room_for_follow(&state, "AAA").is_ok());
+        state
+            .subscriptions
+            .entry(2)
+            .or_default()
+            .insert("b".into(), follow_of("AAA"));
+        // Another brick's follow, and another kind of subscription, take no place of AAA's.
+        state
+            .subscriptions
+            .entry(2)
+            .or_default()
+            .insert("c".into(), follow_of("BBB"));
+        state.subscriptions.entry(1).or_default().insert(
+            "d".into(),
+            Subscription::Chain {
+                brick_id: "AAA".into(),
+            },
+        );
+        let refused = room_for_follow(&state, "AAA").expect_err("a third");
+        assert_eq!(refused.data.code, ErrorCode::InvalidRequest);
+        assert!(refused.message.contains("2 follows"), "{}", refused.message);
+        assert!(room_for_follow(&state, "BBB").is_ok());
+        state.subscriptions.get_mut(&2).unwrap().remove("b");
+        assert!(room_for_follow(&state, "AAA").is_ok());
     }
 }

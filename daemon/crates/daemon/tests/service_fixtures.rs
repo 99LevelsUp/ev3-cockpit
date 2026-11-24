@@ -726,6 +726,17 @@ async fn usb_follow_hands_over_every_byte_in_order_and_ends_when_the_file_goes_i
     let file = format!("{DIR}/out.txt");
     run.find_named("usb", BBB).await;
     run.call("bricks/connect", json!({"brick": BBB})).await;
+    // A path the brick would cut (61 bytes; its folder alone passes) is refused at once, not
+    // polled in vain: nothing of it reaches the brick.
+    let long = format!("{DIR}/AVeryLongName/{}", "x".repeat(61 - DIR.len() - 15));
+    assert_eq!(long.len(), 61);
+    let refused = run
+        .answer("files/follow", json!({"brick": BBB, "path": long}))
+        .await;
+    assert_eq!(
+        refused["error"]["data"]["code"], "invalid_request",
+        "{refused}"
+    );
     let exists = run
         .call("files/exists", json!({"brick": BBB, "path": DIR}))
         .await;
