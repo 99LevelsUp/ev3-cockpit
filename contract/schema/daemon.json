@@ -107,7 +107,7 @@
         "transport_failed", "connection_failed", "timeout", "protocol_failed", "invalid_brick_key",
         "session_failed", "heartbeat_failed", "already_connected", "not_connected", "no_provider",
         "invalid_transition", "channel_changed", "connection_abandoned", "queue_unavailable",
-        "consumer_failed", "subscription_failed", "program_running", "program_not_found", "file_not_found",
+        "consumer_failed", "subscription_failed", "program_running", "program_not_found", "file_not_found", "file_exists",
         "mode_conflict", "access_denied", "brick_ambiguous", "brick_not_found", "brick_unreachable",
         "link_lost", "backend_unavailable", "device_permission",
         "brick_busy", "needs_person", "daemon_unavailable", "outcome_unknown", "replay_unmatched",

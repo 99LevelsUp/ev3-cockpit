@@ -34,6 +34,8 @@ export const WireErrorCode = {
 	ProgramNotFound: 'program_not_found',
 	/** No such file on the brick. */
 	FileNotFound: 'file_not_found',
+	/** The target is there already, and the request asked not to replace it. */
+	FileExists: 'file_exists',
 	ModeConflict: 'mode_conflict',
 	AccessDenied: 'access_denied',
 	/** A brick name matched several bricks; `data.candidates` lists them. */
