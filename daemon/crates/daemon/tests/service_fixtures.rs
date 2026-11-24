@@ -621,6 +621,81 @@ async fn usb_file_round_trip_replays_strictly() {
     run.end().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn usb_writes_and_moves_without_replace_leave_files_there_as_they_are_replays_strictly() {
+    if common::refuses_this_process() {
+        return;
+    }
+    let mut run = Replay::start("usb-replace-aaa").await;
+    const AAA: &str = "AAA";
+    let (a, b, c) = (
+        format!("{DIR}/a.txt"),
+        format!("{DIR}/b.txt"),
+        format!("{DIR}/c.txt"),
+    );
+    run.find_named("usb", AAA).await;
+    run.call("bricks/connect", json!({"brick": AAA})).await;
+    let exists = run
+        .call("files/exists", json!({"brick": AAA, "path": DIR}))
+        .await;
+    assert_eq!(exists["exists"], false);
+    run.call("files/makeDirectory", json!({"brick": AAA, "path": DIR}))
+        .await;
+    run.call(
+        "files/write",
+        json!({"brick": AAA, "path": a, "content": base64(b"first")}),
+    )
+    .await;
+    let refused = run
+        .answer(
+            "files/write",
+            json!({"brick": AAA, "path": a, "content": base64(b"second"), "replace": false}),
+        )
+        .await;
+    assert_eq!(refused["error"]["data"]["code"], "file_exists", "{refused}");
+    let back = run
+        .call(
+            "files/read",
+            json!({"brick": AAA, "path": a, "inline": true}),
+        )
+        .await;
+    assert_eq!(back["content"], base64(b"first"), "the file is as it was");
+    run.call(
+        "files/write",
+        json!({"brick": AAA, "path": b, "content": base64(b"other")}),
+    )
+    .await;
+    let refused = run
+        .answer(
+            "files/move",
+            json!({"brick": AAA, "from": a, "to": b, "replace": false}),
+        )
+        .await;
+    assert_eq!(refused["error"]["data"]["code"], "file_exists", "{refused}");
+    run.call(
+        "files/move",
+        json!({"brick": AAA, "from": a, "to": c, "replace": false}),
+    )
+    .await;
+    let listing = run
+        .call("files/list", json!({"brick": AAA, "path": DIR}))
+        .await;
+    let names: Vec<&str> = listing["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert_eq!(names, ["b.txt", "c.txt"], "b.txt kept, a.txt moved to c.txt");
+    run.call(
+        "files/remove",
+        json!({"brick": AAA, "path": DIR, "recursive": true}),
+    )
+    .await;
+    run.call("bricks/disconnect", json!({"brick": AAA})).await;
+    run.end().await;
+}
+
 /// The program states a subscription heard, as `(runSeq, running, stoppedBy)`.
 fn states(notes: &[Value]) -> Vec<(u64, bool, Option<String>)> {
     notes

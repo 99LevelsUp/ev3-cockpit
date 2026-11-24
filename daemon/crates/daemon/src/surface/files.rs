@@ -79,6 +79,25 @@ fn entry_of(entry: ev3_protocol::responses::FsEntry) -> FsEntry {
     }
 }
 
+/// Refuses a write or a move onto `path` with `file_exists` when the brick has something there,
+/// for a request that asked not to replace it. It runs under the request's lease, so no other
+/// client's write lands between this check and the write it guards.
+async fn refuse_existing(
+    fs: &ev3_runtime::BrickFilesystem,
+    path: &str,
+) -> Result<(), ContractError> {
+    if fs.files.exists(path).await.map_err(|e| errors::from_fs(&e))? {
+        return Err(ContractError::new(
+            ErrorCode::FileExists,
+            format!(
+                "{path} is there already on the brick; it was left as it is. Ask for it to be \
+                 replaced, or choose another name."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn no_handle(kind: &str) -> ContractError {
     ContractError::new(ErrorCode::InvalidRequest, format!("No such {kind} handle."))
 }
@@ -144,6 +163,15 @@ impl Surface {
             .as_deref()
             .map(|path| self.local_path(path, "toLocalPath"))
             .transpose()?;
+        let replace = params.replace != Some(false);
+        // Refused before the brick is asked for anything; the write refuses it again, by the
+        // create itself, should the file appear while the read runs.
+        if let (Some(target), Some(named), false) =
+            (&target, params.to_local_path.as_deref(), replace)
+            && std::fs::symlink_metadata(target).is_ok()
+        {
+            return Err(crate::confine::file_exists(std::path::Path::new(named)));
+        }
         let brick_id = self.brick_of(cx, params.brick.as_deref()).await?;
         let cancel = cancel_flag(&cx.cancel);
         // An inline read refuses a larger file as soon as the brick says its size, rather than
@@ -161,7 +189,7 @@ impl Surface {
             .map_err(|e| errors::from_fs(&e))?;
         let bytes = data.len() as u64;
         if let (Some(target), Some(named)) = (target, params.to_local_path.as_deref()) {
-            self.write_local(named, &target, &data)?;
+            self.write_local(named, &target, &data, replace)?;
             return Ok(FilesReadResult {
                 bytes,
                 content: None,
@@ -247,7 +275,11 @@ impl Surface {
         let bytes = data.len() as u64;
         let fs = self.filesystem(cx, &brick_id);
         let path = params.path.clone();
+        let replace = params.replace != Some(false);
         self.leased(cx, &brick_id, move |token| async move {
+            if !replace {
+                refuse_existing(&fs, &path).await?;
+            }
             let cancel = cancel_flag(&token);
             fs.transfer
                 .write_file(&path, &data, &transfer_options(&cancel))
@@ -340,7 +372,11 @@ impl Surface {
         self.allowed(Operation::Write, Some(&params.to))?;
         let fs = self.filesystem(cx, &brick_id);
         let (from, to) = (params.from, params.to);
+        let replace = params.replace != Some(false);
         self.leased(cx, &brick_id, move |_| async move {
+            if !replace {
+                refuse_existing(&fs, &to).await?;
+            }
             fs.files
                 .move_path(&from, &to)
                 .await
