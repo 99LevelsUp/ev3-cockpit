@@ -19,6 +19,7 @@ use ev3_runtime::{
     BrickSender, CancelFlag, FilesystemService, FsError, ReadFrom, TransferOptions,
     read_from_budget,
 };
+use ev3_transports::Transport;
 use tokio_util::sync::CancellationToken;
 
 use super::{Handle, Subscription, Surface, encoding, errors, new_id};
@@ -644,6 +645,7 @@ async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
         let read = files
             .read_from(&followed.path, offset, READ_FROM_MAX_BYTES)
             .await;
+        let size = read.as_ref().ok().map(|read| read.size);
         if !matches!(read, Err(ref e) if e.is_protocol()) {
             refused = 0;
         }
@@ -672,10 +674,112 @@ async fn follow(surface: Weak<Surface>, followed: Followed, mut offset: u32) {
                 }
                 offset += data.len() as u32;
                 pause = next;
+                // A backlog that poll by poll would cost more than reading the whole file once.
+                let transport = surface
+                    .runtime
+                    .bricks
+                    .route_of(&followed.brick_id)
+                    .map(|key| key.transport());
+                if let (Some(size), Some(transport)) = (size, transport)
+                    && whole_read_pays(size, offset, transport)
+                {
+                    match catch_up_whole(&surface, &followed, offset).await {
+                        CatchUp::Reached(reached) => {
+                            offset = reached;
+                            pause = FOLLOW_GROWING;
+                        }
+                        CatchUp::Replaced => {
+                            surface.follow_ended(&followed, FileFollowEndedReason::Replaced, None);
+                            return;
+                        }
+                        // Poll by poll after all.
+                        CatchUp::Failed => {}
+                    }
+                }
             }
             Poll::Wait(next) => pause = next,
         }
     }
+}
+
+/// The largest file a follow reads whole to catch up; past it, poll by poll only.
+const WHOLE_READ_MAX: u32 = 1024 * 1024;
+/// What the brick spends skipping one byte in a read from an offset (measured on V1.10E).
+const SKIP_US_PER_BYTE: f64 = 12.0;
+/// One poll's exchange, apart from the skip.
+const POLL_US: f64 = 20_000.0;
+/// The most one `files/appended` carries when a whole read hands a backlog over.
+const APPENDED_MAX_BYTES: usize = 16 * 1024;
+
+/// What reading a file costs per byte on a link, in microseconds: measured over USB (200 KiB in
+/// about 0.5 s); Bluetooth about 11 KB/s (a 1 MB file takes 90 s); TCP over Wi-Fi in between.
+fn link_us_per_byte(transport: Transport) -> f64 {
+    match transport {
+        Transport::Usb | Transport::Mock => 3.0,
+        Transport::Tcp => 40.0,
+        Transport::Bt => 90.0,
+    }
+}
+
+/// Whether catching up from `offset` to `size` costs less as one read of the whole file than
+/// poll by poll. Each poll brings at most [`READ_FROM_MAX_BYTES`] and has the brick skip to its
+/// offset again, so a backlog caught up poll by poll costs the brick about the square of its
+/// length (61 KiB took 25.8 s over USB, the brick busy all along); a whole read costs the link
+/// the file once and goes step by step, so a stop gets in between.
+fn whole_read_pays(size: u32, offset: u32, transport: Transport) -> bool {
+    let backlog = size.saturating_sub(offset);
+    if backlog <= 2 * u32::from(READ_FROM_MAX_BYTES) || size > WHOLE_READ_MAX {
+        return false;
+    }
+    let polls = f64::from(backlog.div_ceil(u32::from(READ_FROM_MAX_BYTES)));
+    let mean_offset = (f64::from(offset) + f64::from(size)) / 2.0;
+    let by_polls = polls * (mean_offset * SKIP_US_PER_BYTE + POLL_US);
+    let whole = f64::from(size) * link_us_per_byte(transport);
+    whole < by_polls
+}
+
+/// How a whole read to catch up went.
+enum CatchUp {
+    /// Handed over up to here.
+    Reached(u32),
+    /// The file is shorter than the offset: another file.
+    Replaced,
+    /// The read failed; the follow goes on poll by poll.
+    Failed,
+}
+
+/// Reads the whole file once and hands over what lies past `offset`, in pieces of at most
+/// [`APPENDED_MAX_BYTES`].
+async fn catch_up_whole(surface: &Arc<Surface>, followed: &Followed, offset: u32) -> CatchUp {
+    let fs = ev3_runtime::BrickFilesystem::new(
+        &surface.runtime.bricks,
+        &followed.brick_id,
+        &surface.runtime.ledgers,
+        surface.writes(&followed.client),
+        CommandOptions::default(),
+    );
+    let options = TransferOptions {
+        max_bytes: Some(WHOLE_READ_MAX as usize),
+        ..TransferOptions::default()
+    };
+    let Ok(content) = fs.transfer.read_file(&followed.path, &options).await else {
+        return CatchUp::Failed;
+    };
+    let start = offset as usize;
+    if content.len() < start {
+        return CatchUp::Replaced;
+    }
+    for (index, piece) in content[start..].chunks(APPENDED_MAX_BYTES).enumerate() {
+        let notification = Notification::FilesAppended(FileAppended {
+            subscription_id: followed.subscription_id.clone(),
+            offset: (start + index * APPENDED_MAX_BYTES) as u64,
+            data: encoding::encode(piece),
+        });
+        if let Ok(params) = notification.params() {
+            followed.client.peer.notify(notification.method(), params);
+        }
+    }
+    CatchUp::Reached(content.len() as u32)
 }
 
 /// What a follow does after one poll.
@@ -814,6 +918,24 @@ mod tests {
             task: tokio::spawn(std::future::pending::<()>()).abort_handle(),
             brick_id: brick.to_owned(),
         }
+    }
+
+    #[test]
+    fn a_big_backlog_is_read_whole_where_that_costs_less_and_a_small_one_poll_by_poll() {
+        // The recorded burst: 61 KiB waiting from the start. Over USB the whole file is 0.2 s
+        // against 25 s poll by poll; over Bluetooth 5.6 s against the same.
+        assert!(whole_read_pays(61_650, 992, Transport::Usb));
+        assert!(whole_read_pays(61_650, 992, Transport::Bt));
+        // A line or two behind: poll by poll, whatever the link.
+        assert!(!whole_read_pays(61_650, 61_000, Transport::Usb));
+        assert!(!whole_read_pays(3_000, 1_500, Transport::Usb));
+        // A small file a few polls behind: over USB reading it whole is cheaper still.
+        assert!(whole_read_pays(3_000, 1_000, Transport::Usb));
+        // A few KiB behind in a long file: the whole file over Bluetooth costs more.
+        assert!(!whole_read_pays(600_000, 594_000, Transport::Bt));
+        assert!(whole_read_pays(600_000, 594_000, Transport::Usb));
+        // Past the largest whole read: poll by poll.
+        assert!(!whole_read_pays(WHOLE_READ_MAX + 1, 0, Transport::Usb));
     }
 
     #[tokio::test]
