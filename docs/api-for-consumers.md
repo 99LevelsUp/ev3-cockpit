@@ -454,7 +454,7 @@ let bricks = client.call::<method::BricksList>(params).await?;   // typed, from 
   `next()`: `FileEvent::Appended { offset, data }` for every growth, in order, each starting where
   the last ended (bytes, not text: a character may be split between two), then
   `FileEvent::Ended(reason)` when the daemon ends it (`removed`, `replaced` by a shorter file,
-  `signedOut`). `file_not_found` when the file is not there yet: follow again a moment later. At
+  `signedOut`, or `failed` when the brick refused its reads three times in a row). `file_not_found` when the file is not there yet: follow again a moment later. At
   most two follows per brick, for every client together. `reached()` is where to follow again
   from. Dropping it cancels the follow. The daemon polls the brick, often while the file grows
   and up to every 2 s while it does not; each poll reads only what is new.
