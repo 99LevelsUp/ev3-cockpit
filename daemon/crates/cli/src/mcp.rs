@@ -662,7 +662,7 @@ impl Server {
                 let result = self
                     .transfer(
                         "files/read",
-                        json!({ "brick": brick, "path": s("path"), "toLocalPath": target }),
+                        json!({ "brick": brick, "path": s("path"), "toLocalPath": target, "replace": flag("replace") }),
                         progress,
                     )
                     .await?;
@@ -681,7 +681,7 @@ impl Server {
                 let result = self
                     .transfer(
                         "files/write",
-                        json!({ "brick": brick, "path": path, "fromLocalPath": source }),
+                        json!({ "brick": brick, "path": path, "fromLocalPath": source, "replace": args.get("replace").and_then(Value::as_bool) != Some(false) }),
                         progress,
                     )
                     .await?;
@@ -737,7 +737,7 @@ impl Server {
                     .await?
                     .request(
                         "files/move",
-                        json!({ "brick": brick, "from": from, "to": to }),
+                        json!({ "brick": brick, "from": from, "to": to, "replace": flag("replace") }),
                     )
                     .await?;
                 Ok(plain(
@@ -1077,6 +1077,7 @@ pub fn error_result(error: &CliError) -> Value {
             ),
             None => "Name the brick by its id.".into(),
         }),
+        "file_exists" => Some("Nothing was replaced. Choose another name, or call the tool again with replace: true if the user wants that file replaced.".into()),
         "not_connected" => Some("If the brick is not connected, connect it with connect_brick.".into()),
         "brick_not_found" => Some("Check the name with list_bricks. A brick never paired needs pair, with the brick on and its Bluetooth and visibility on.".into()),
         "access_denied" => Some(match command {

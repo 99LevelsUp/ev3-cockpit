@@ -200,6 +200,13 @@ File content never travels as one large message:
 A write or a deployment to a path whose folders do not exist yet creates them. Rename is
 `files/move`: a copy and a removal on the brick, not atomic.
 
+`files/write`, `files/move` and `files/read` with `toLocalPath` replace what is already at their
+target, as `cp` does. With `replace: false` they refuse it with `file_exists` (family `request`)
+and leave it as it was: a write or a move asks the brick first, under the request's lease; a read
+refuses an existing local file before it asks the brick for anything. `ev3 mcp` offers an agent
+`read_file` and `move_file` with `replace: false` as their default, and `write_file` and
+`deploy_and_run` as tools that replace files.
+
 ## Programs
 
 `programs/deployAndRun` takes the files and the program to start:

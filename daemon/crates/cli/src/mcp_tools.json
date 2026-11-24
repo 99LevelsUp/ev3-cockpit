@@ -132,7 +132,7 @@
   },
   {
     "name": "read_file",
-    "description": "Copy a file from a connected brick to a local file. The local file is created or replaced.",
+    "description": "Copy a file from a connected brick to a new local file. A local file already there is left as it is and refused with file_exists, unless replace is true.",
     "inputSchema": {
       "type": "object",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -151,6 +151,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Where to save it on this computer. It must lie inside the folders this agent host lets you work in."
+        },
+        "replace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Replace a local file already at localPath. Only when the user wants that file replaced."
         }
       },
       "required": [
@@ -167,7 +172,7 @@
   },
   {
     "name": "write_file",
-    "description": "Copy a local file to a connected brick. Folders on the brick are created as needed; an existing file is replaced.",
+    "description": "Copy a local file to a connected brick. Folders on the brick are created as needed; a file already there is replaced, unless replace is false.",
     "inputSchema": {
       "type": "object",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -186,6 +191,11 @@
           "type": "string",
           "minLength": 1,
           "description": "The file to send on this computer. It must lie inside the folders this agent host lets you work in."
+        },
+        "replace": {
+          "type": "boolean",
+          "default": true,
+          "description": "false refuses a file already at path with file_exists and writes nothing."
         }
       },
       "required": [
@@ -196,7 +206,7 @@
     },
     "annotations": {
       "readOnlyHint": false,
-      "destructiveHint": false,
+      "destructiveHint": true,
       "openWorldHint": false
     }
   },
@@ -301,7 +311,7 @@
   },
   {
     "name": "move_file",
-    "description": "Move or rename a file or folder on a connected brick.",
+    "description": "Move or rename a file or folder on a connected brick. Something already at to is left as it is and refused with file_exists, unless replace is true.",
     "inputSchema": {
       "type": "object",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -320,6 +330,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Where to on the brick, absolute, for example /home/root/lms2012/prjs/Demo/Demo.rbf."
+        },
+        "replace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Move onto something already at to. Only when the user wants it replaced."
         }
       },
       "required": [
@@ -336,7 +351,7 @@
   },
   {
     "name": "deploy_and_run",
-    "description": "Upload local files to a connected brick and start a program, as one step: it checks nothing runs, uploads, starts and confirms the start. If the result says the start is uncertain, do not run it again; check program_status first.",
+    "description": "Upload local files to a connected brick and start a program, as one step: it checks nothing runs, uploads, replacing files already there, starts and confirms the start. If the result says the start is uncertain, do not run it again; check program_status first.",
     "inputSchema": {
       "type": "object",
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -387,7 +402,7 @@
     },
     "annotations": {
       "readOnlyHint": false,
-      "destructiveHint": false,
+      "destructiveHint": true,
       "openWorldHint": false
     }
   },
