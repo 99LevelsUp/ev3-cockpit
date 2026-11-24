@@ -1,0 +1,47 @@
+# The Rust dependency gate (cargo-deny), run by the Native daemon workflow: a crate with a known
+# vulnerability or a yanked version fails the build, every licence must be one an MIT project may
+# ship, and crates come from crates.io only.
+#
+# What it cannot see: libusb1-sys declares MIT but bundles libusb's C sources under the LGPL-2.1,
+# which `rusb`'s `vendored` feature links into the daemon statically. That is tracked in #94.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+# Reached only through typify, the code generator ev3-contract's build script runs: it shapes the
+# generated Rust and is not linked into any binary.
+[[licenses.exceptions]]
+crate = "version-ranges"
+allow = ["MPL-2.0"]
+
+[licenses.private]
+# The workspace's own crates are not published; their licence is the repository's.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates name each other by path, without a version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
