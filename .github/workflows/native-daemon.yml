@@ -4,6 +4,9 @@
 # built on the x64 runners for its own target and its tests run there; it ships npm packages only,
 # since VS Code has no 32-bit build.
 #
+# - dependencies: cargo-deny over the Rust dependencies (daemon/deny.toml): a known vulnerability
+#   or a yanked version fails, every licence must be allowed, crates come from crates.io only.
+#   A vulnerability published later fails the next run too, whatever the commit changed.
 # - rust: the daemon's gate on each platform: format, clippy with warnings as errors, all tests.
 # - package: the release build (EV3_COCKPIT_RELEASE_BUILD=1, the only builds marked as release),
 #   its manifest, the platform VSIX and npm platform package (each checked: exactly one daemon,
@@ -33,6 +36,20 @@ permissions:
   contents: read
 
 jobs:
+  dependencies:
+    name: Rust dependencies (cargo-deny)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Advisories, licences, bans and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: daemon/Cargo.toml
+          command: check
+
   rust:
     name: Rust gate (${{ matrix.target }})
     strategy:
