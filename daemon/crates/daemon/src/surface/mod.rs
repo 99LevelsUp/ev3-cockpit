@@ -85,6 +85,10 @@ struct State {
     /// Bricks a gone client connected; signed out when their last connect ends and nobody holds
     /// them.
     orphaned: HashSet<String>,
+    /// Requests working on each brick now. A brick in use is not signed out under its request
+    /// when its last holder lets go: it is orphaned, and the last of its requests signs it out
+    /// unless somebody holds it by then.
+    in_use: HashMap<String, usize>,
     /// Bricks held across the daemon's start and not connected again yet.
     reconnecting: HashSet<String>,
     handles: HashMap<String, Handle>,
@@ -100,6 +104,8 @@ struct State {
 
 /// What one daemon's surface shares between its clients.
 pub struct Surface {
+    /// This surface, for what runs after a request: a request's end lets go of its brick.
+    me: std::sync::Weak<Surface>,
     pub shared: Arc<Shared>,
     pub questions: Arc<Questions>,
     pub runtime: Runtime,
@@ -151,7 +157,8 @@ impl Surface {
         let runs = RunSeqs::open(Some(state_dir.join("runs.json")), |warning| {
             shared.log.warn(&warning);
         });
-        let surface = Arc::new(Self {
+        let surface = Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             runs,
             activity: Arc::new(DaemonActivity {
                 shared: shared.clone(),
@@ -425,13 +432,56 @@ impl Surface {
                 })
                 .collect()
         };
-        resolve_brick(
+        let brick_id = resolve_brick(
             bricks,
             || self.runtime.discovery_settled(DISCOVERY_WAIT),
             wanted,
             cx.client.kind(),
         )
-        .await
+        .await?;
+        // In use until the request ends, whoever holds the brick meanwhile (#9).
+        *self.lock().in_use.entry(brick_id.clone()).or_default() += 1;
+        let (me, brick) = (self.me.clone(), brick_id.clone());
+        cx.after_reply(move || {
+            if let Some(surface) = me.upgrade() {
+                surface.request_ended(&brick);
+            }
+        });
+        Ok(brick_id)
+    }
+
+    /// Whether a brick may be signed out now: no connect of it and no request beyond `own` (the
+    /// request asking, if it is one of the brick's) is working on it.
+    fn idle(state: &State, brick_id: &str, own: usize) -> bool {
+        !state.connecting.contains_key(brick_id)
+            && state.in_use.get(brick_id).copied().unwrap_or(0) <= own
+    }
+
+    /// A request on rick_id ended: the last one signs out a brick orphaned meanwhile, unless
+    /// somebody holds it now.
+    fn request_ended(self: &Arc<Self>, brick_id: &str) {
+        let release = {
+            let mut state = self.lock();
+            match state.in_use.get_mut(brick_id) {
+                Some(count) if *count > 1 => *count -= 1,
+                _ => {
+                    state.in_use.remove(brick_id);
+                }
+            }
+            Self::idle(&state, brick_id, 0)
+                && state.orphaned.remove(brick_id)
+                && !self.holders.is_held(brick_id)
+        };
+        if release {
+            let (surface, brick) = (self.clone(), brick_id.to_owned());
+            tokio::spawn(async move {
+                surface.runtime.bricks.sign_out(&brick).await;
+                surface.shared.log.info(&format!(
+                    "Released {brick}: its last request ended and nobody holds it."
+                ));
+                surface.bricks_changed();
+            });
+        }
     }
 
     /// Runs `work` under the brick's write lease for exactly its length.
@@ -609,15 +659,16 @@ impl Surface {
         }
         self.leases.client_left(connection);
         self.questions.client_left(connection);
-        // Under the surface's lock, as a connect adds its holder: a brick being connected now is
-        // left to that connect's end, which signs it out unless somebody holds it by then.
+        // Under the surface's lock, as a connect adds its holder: a brick being connected now, or
+        // that a request of another client is working on, is left to the end of the last of them,
+        // which signs it out unless somebody holds it by then.
         let released: Vec<String> = {
             let mut state = self.lock();
             self.holders
                 .client_left(connection)
                 .into_iter()
                 .filter(|brick| {
-                    if state.connecting.contains_key(brick) {
+                    if !Self::idle(&state, brick, 0) {
                         state.orphaned.insert(brick.clone());
                         false
                     } else {

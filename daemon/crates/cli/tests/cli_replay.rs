@@ -246,7 +246,7 @@ fn a_hold_lasts_past_ev3_connect_shows_in_status_and_ends_with_disconnect() {
 }
 
 #[test]
-fn a_command_uses_a_connected_brick_as_it_is_without_connecting_it_again() {
+fn a_command_holds_a_connected_brick_as_it_is_without_connecting_it_again() {
     let home = Home::new("asis");
     let Some(_daemon) = Daemon::start(&home, "service/usb-info-storage-listing-ccc") else {
         return;
@@ -271,6 +271,15 @@ fn a_command_uses_a_connected_brick_as_it_is_without_connecting_it_again() {
         again.is_empty(),
         "a command connected the brick again: {again:?}"
     );
+    // Each holds it while it works, as it is (#9): a brick used without being held is signed out
+    // under the command when its last holder lets go.
+    for command in ["[ev3 info", "[ev3 storage"] {
+        assert!(
+            log.lines()
+                .any(|l| l.contains(command) && l.contains("] Holding 0")),
+            "{command} did not hold the brick: {log}"
+        );
+    }
     home.ev3(&["--json", "disconnect", "CCC"]).expect(0);
 }
 #[test]

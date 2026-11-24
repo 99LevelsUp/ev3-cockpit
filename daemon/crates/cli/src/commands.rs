@@ -342,10 +342,15 @@ impl Ctx {
             }
         };
         if let Some(brick) = known {
-            return Ok((
-                text(&brick, "brickId").to_owned(),
-                text(&brick, "name").to_owned(),
-            ));
+            // Held for this command's length, as it is: joining its other channels could take a
+            // minute over Bluetooth, and a brick used without being held is signed out under the
+            // command when its last holder lets go (#9).
+            let id = text(&brick, "brickId").to_owned();
+            self.client()
+                .await?
+                .request("bricks/connect", json!({ "brick": id, "reuse": true }))
+                .await?;
+            return Ok((id, text(&brick, "name").to_owned()));
         }
         let params = match reference {
             Some(r) => json!({ "brick": r }),

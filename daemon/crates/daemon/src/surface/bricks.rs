@@ -61,6 +61,7 @@ impl Surface {
     ) -> Result<ContractBrick, ContractError> {
         let brick_id = self.brick_of(cx, params.brick.as_deref()).await?;
         let hold = params.hold == Some(true);
+        let reuse = params.reuse == Some(true);
         let holder = if hold {
             Holder::Hold
         } else {
@@ -81,9 +82,9 @@ impl Surface {
         // On a task of its own: a client that goes away mid-connect leaves no brick connected
         // with no holder, whatever await the request was dropped at.
         let connected = tokio::spawn(async move {
-            let outcome = surface.connect_now(&brick).await;
+            let outcome = surface.connect_now(&brick, reuse).await;
             let outcome = match outcome {
-                Ok(()) => {
+                Ok(joined) => {
                     // Under the surface's lock, which the client's teardown takes to drop its
                     // holds: either the holder lands first and goes with them, or the teardown
                     // ran first and its cancel is seen here.
@@ -98,6 +99,7 @@ impl Surface {
                         surface
                             .holders
                             .add(&brick, holder)
+                            .map(|()| joined)
                             .map_err(|e| ContractError::new(ErrorCode::Internal, e))
                     }
                 }
@@ -114,7 +116,10 @@ impl Surface {
                 }
                 // The last connect of the brick has ended, failed or not: one a gone client left
                 // behind is signed out unless somebody holds it now.
-                left == 0 && state.orphaned.remove(&brick) && !surface.holders.is_held(&brick)
+                left == 0
+                    && Self::idle(&state, &brick, 0)
+                    && state.orphaned.remove(&brick)
+                    && !surface.holders.is_held(&brick)
             };
             if release {
                 surface.runtime.bricks.sign_out(&brick).await;
@@ -128,14 +133,18 @@ impl Surface {
                 format!("The connect ended without an answer ({e})."),
             ))
         });
-        connected?;
+        let joined = connected?;
         self.shared.log.write(
             Level::Info,
             Some(&cx.client.info.name),
-            &format!(
-                "Connected {brick_id}{}",
-                if hold { " and held" } else { "" }
-            ),
+            &if joined {
+                format!(
+                    "Connected {brick_id}{}",
+                    if hold { " and held" } else { "" }
+                )
+            } else {
+                format!("Holding {brick_id} as it is")
+            },
         );
         let entry = self.runtime.list.brick(&brick_id).ok_or_else(|| {
             ContractError::new(
@@ -147,13 +156,22 @@ impl Surface {
     }
 
     /// Connects a brick: every channel not connected yet when it is signed in already, else signs
-    /// it in, pairing first a brick only an inquiry has heard.
-    async fn connect_now(self: &Arc<Self>, brick_id: &str) -> Result<(), ContractError> {
+    /// it in, pairing first a brick only an inquiry has heard. With `reuse`, a brick signed in
+    /// already is taken as it is. Whether it connected anything.
+    async fn connect_now(
+        self: &Arc<Self>,
+        brick_id: &str,
+        reuse: bool,
+    ) -> Result<bool, ContractError> {
         let bricks = &self.runtime.bricks;
+        if reuse && bricks.is_signed_in(brick_id) {
+            return Ok(false);
+        }
         if bricks.is_signed_in(brick_id) {
             return bricks
                 .connect_again(brick_id)
                 .await
+                .map(|()| true)
                 .map_err(|e| errors::from_brick(&e));
         }
         // A brick only an inquiry has heard has nothing to connect over until it is paired; a
@@ -181,6 +199,7 @@ impl Surface {
         bricks
             .sign_in(brick_id)
             .await
+            .map(|()| true)
             .map_err(|e| errors::from_brick(&e))
     }
 
@@ -205,6 +224,16 @@ impl Surface {
             )
         };
         self.holders_changed();
+        // A brick another client's request is working on is signed out when that request ends
+        // (#9); for everyone, at once: failing what runs on it is what was asked.
+        let sign_out = sign_out && {
+            let mut state = self.lock();
+            let at_once = params.for_everyone == Some(true) || Self::idle(&state, &brick_id, 1);
+            if !at_once {
+                state.orphaned.insert(brick_id.clone());
+            }
+            at_once
+        };
         if sign_out {
             self.runtime.bricks.sign_out(&brick_id).await;
             self.lock().reconnecting.remove(&brick_id);
