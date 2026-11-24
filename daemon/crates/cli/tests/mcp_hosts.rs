@@ -1,5 +1,9 @@
 //! `ev3 mcp setup` against stand-in agent hosts (`examples/mcp-host-fake.rs`) on a PATH of the
 //! test's own, so no real Claude Code or Codex configuration is read or changed.
+//!
+//! The file is not called mcp_setup: Windows takes a program whose name holds "setup" (or
+//! "install", "update", "patch") for an installer and starts it only elevated, so its test binary
+//! would not run as a standard user.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
