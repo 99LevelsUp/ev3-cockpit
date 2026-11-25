@@ -103,19 +103,19 @@
     "prepare": "node scripts/install-hooks.mts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^20.14.0",
-    "@types/vscode": "^1.95.0",
+    "@types/vscode": "^1.146.0",
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.2.0",
-    "esbuild": "^0.21.0",
+    "esbuild": "^0.28.2",
     "eslint": "^8.57.0",
     "json-schema-to-typescript": "16.0.0",
     "typescript": "^5.5.0"
   },
   "dependencies": {
-    "vscode-jsonrpc": "10.0.0"
+    "vscode-jsonrpc": "10.0.1"
   }
 }
