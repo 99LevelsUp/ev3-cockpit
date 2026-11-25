@@ -109,7 +109,7 @@
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "@vscode/test-electron": "^3.1.0",
-    "@vscode/vsce": "^3.2.0",
+    "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.21.0",
     "eslint": "^8.57.0",
     "json-schema-to-typescript": "16.0.0",
